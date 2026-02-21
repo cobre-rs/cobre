@@ -49,29 +49,29 @@ Power system computation today is split between closed-source commercial tools a
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Applications                             │
+│                     Applications                            │
 │  ┌──────────┐  ┌──────────────┐  ┌────────────────────────┐ │
 │  │   CLI    │  │  TUI Monitor │  │  Web Dashboard (future)│ │
 │  └────┬─────┘  └──────┬───────┘  └────────┬───────────────┘ │
-├───────┼────────────────┼──────────────────┼─────────────────┤
-│       │         Solvers│                  │                  │
-│  ┌────┴─────┐  ┌──────┴───────┐  ┌───────┴──────────────┐  │
-│  │   SDDP   │  │ Power Flow   │  │ Transient Stability  │  │
-│  │          │  │   (future)   │  │      (future)        │  │
-│  └────┬─────┘  └──────┬───────┘  └───────┬──────────────┘  │
-├───────┼────────────────┼──────────────────┼─────────────────┤
-│       │        Shared  │Infrastructure    │                  │
-│  ┌────┴────────────────┴──────────────────┴──────────────┐  │
-│  │                    cobre-core                          │  │
-│  │         Data model, topology, validation               │  │
-│  └───────────────────────┬───────────────────────────────┘  │
-│  ┌──────────┐  ┌─────────┴──────┐  ┌───────────┐           │
-│  │ Solver   │  │  Stochastic    │  │    IO     │           │
-│  │ (HiGHS)  │  │  (PAR, Monte   │  │ (NEWAVE, │           │
-│  │          │  │   Carlo)       │  │  PSS/E)   │           │
-│  └──────────┘  └────────────────┘  └───────────┘           │
+├───────┼───────────────┼───────────────────┼─────────────────┤
+│       │        Solvers│                   │                 │
+│  ┌────┴─────┐  ┌──────┴───────┐  ┌────────┴──────────────┐  │
+│  │   SDDP   │  │ Power Flow   │  │ Transient Stability   │  │
+│  │          │  │   (future)   │  │      (future)         │  │
+│  └────┬─────┘  └──────┬───────┘  └────────┬──────────────┘  │
+├───────┼───────────────┼───────────────────┼─────────────────┤
+│       │        Shared │Infrastructure     │                 │
+│  ┌────┴───────────────┴───────────────────┴───────────────┐ │
+│  │                    cobre-core                          │ │
+│  │         Data model, topology, validation               │ │
+│  └───────────────────────┬────────────────────────────────┘ │
+│  ┌──────────┐  ┌─────────┴──────┐  ┌───────────┐            │
+│  │ Solver   │  │  Stochastic    │  │    IO     │            │
+│  │ (HiGHS)  │  │  (PAR, Monte   │  │ (NEWAVE,  │            │
+│  │          │  │   Carlo)       │  │  PSS/E)   │            │
+│  └──────────┘  └────────────────┘  └───────────┘            │
 ├─────────────────────────────────────────────────────────────┤
-│                 Optional: ferrompi (MPI)                     │
+│                 Optional: ferrompi (MPI)                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -193,7 +193,7 @@ If you use Cobre in academic work, please cite:
 
 ```bibtex
 @software{cobre,
-  author = {Malves, Rogério J.},
+  author = {Alves, Rogerio J. M.},
   title = {Cobre: Open Infrastructure for Power System Computation},
   url = {https://github.com/cobre-rs/cobre},
   license = {Apache-2.0}

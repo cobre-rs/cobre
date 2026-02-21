@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+  <defs>
+    <linearGradient id="copper" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4956A"/>
+      <stop offset="50%" style="stop-color:#B87333"/>
+      <stop offset="100%" style="stop-color:#8B5E3C"/>
+    </linearGradient>
+    <linearGradient id="copperLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#E8B88A"/>
+      <stop offset="100%" style="stop-color:#D4956A"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="400" height="120" fill="#0F1419" rx="8"/>
+  
+  <!-- Icon: Stylized circuit/conductor symbol -->
+  <!-- Three horizontal copper bars representing conductors/busbars -->
+  <g transform="translate(24, 20)">
+    <!-- Top conductor -->
+    <rect x="8" y="12" width="52" height="5" rx="2.5" fill="url(#copper)"/>
+    <!-- Middle conductor -->
+    <rect x="8" y="38" width="52" height="5" rx="2.5" fill="url(#copper)"/>
+    <!-- Bottom conductor -->  
+    <rect x="8" y="64" width="52" height="5" rx="2.5" fill="url(#copper)"/>
+    
+    <!-- Vertical connector left -->
+    <rect x="8" y="12" width="5" height="57" rx="2.5" fill="url(#copperLight)"/>
+    
+    <!-- Node dots (representing buses/connection points) -->
+    <circle cx="60" cy="14.5" r="5" fill="url(#copper)"/>
+    <circle cx="60" cy="40.5" r="5" fill="url(#copper)"/>
+    <circle cx="60" cy="66.5" r="5" fill="url(#copper)"/>
+    
+    <!-- Small spark/energy accent -->
+    <path d="M 66 36 L 72 32 L 69 39 L 75 35" stroke="#F5A623" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Wordmark -->
+  <text x="112" y="72" font-family="'SF Mono', 'Fira Code', 'JetBrains Mono', monospace" font-size="42" font-weight="700" fill="#E8E6E3" letter-spacing="3">
+    COBRE
+  </text>
+  
+  <!-- Tagline -->
+  <text x="114" y="94" font-family="'SF Mono', 'Fira Code', 'JetBrains Mono', monospace" font-size="11" fill="#8B9298" letter-spacing="4">
+    POWER SYSTEMS IN RUST
+  </text>
+</svg>

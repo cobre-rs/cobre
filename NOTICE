@@ -1,0 +1,10 @@
+Cobre — Open Infrastructure for Power System Computation
+Copyright 2025 Rogério J. M. Alves and Cobre Contributors
+
+This product includes software developed at
+https://github.com/cobre-rs
+
+This product includes or depends on the following third-party software:
+
+- HiGHS (https://highs.dev) — MIT License
+- MPICH (https://www.mpich.org) — MPICH License (permissive)

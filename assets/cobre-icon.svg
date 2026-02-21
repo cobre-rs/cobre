@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="copper" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4956A"/>
+      <stop offset="50%" style="stop-color:#B87333"/>
+      <stop offset="100%" style="stop-color:#8B5E3C"/>
+    </linearGradient>
+    <linearGradient id="copperLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#E8B88A"/>
+      <stop offset="100%" style="stop-color:#D4956A"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="128" height="128" fill="#0F1419" rx="24"/>
+  
+  <!-- Conductor bars + busbar icon, centered -->
+  <g transform="translate(22, 20)">
+    <!-- Top conductor -->
+    <rect x="10" y="14" width="62" height="7" rx="3.5" fill="url(#copper)"/>
+    <!-- Middle conductor -->
+    <rect x="10" y="44" width="62" height="7" rx="3.5" fill="url(#copper)"/>
+    <!-- Bottom conductor -->  
+    <rect x="10" y="74" width="62" height="7" rx="3.5" fill="url(#copper)"/>
+    
+    <!-- Vertical connector left -->
+    <rect x="10" y="14" width="7" height="67" rx="3.5" fill="url(#copperLight)"/>
+    
+    <!-- Node dots -->
+    <circle cx="72" cy="17.5" r="6.5" fill="url(#copper)"/>
+    <circle cx="72" cy="47.5" r="6.5" fill="url(#copper)"/>
+    <circle cx="72" cy="77.5" r="6.5" fill="url(#copper)"/>
+    
+    <!-- Spark accent -->
+    <path d="M 80 42 L 88 36 L 84 46 L 92 40" stroke="#F5A623" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

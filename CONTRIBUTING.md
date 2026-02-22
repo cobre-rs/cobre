@@ -11,6 +11,7 @@ Thanks for your interest in contributing. Cobre is an open-source ecosystem for 
 - **CMake** (for building HiGHS from source): `cmake >= 3.15`
 
 Optional:
+
 - **MPICH** (for ferrompi/distributed execution): `libmpich-dev` on Debian/Ubuntu
 - **mdBook** (for building documentation): `cargo install mdbook`
 
@@ -54,12 +55,14 @@ cobre/
 ### Reporting Bugs
 
 Open an issue with:
+
 1. What you did (steps to reproduce, input data if possible)
 2. What you expected
 3. What actually happened
 4. Cobre version (`cargo --version`, `rustc --version`, and the crate version)
 
 For numerical issues (wrong results, convergence failures), include:
+
 - The study configuration (TOML or code snippet)
 - System size (number of hydros, thermals, stages, scenarios)
 - Expected values and source (e.g., "NEWAVE produces X for the same case")
@@ -67,6 +70,7 @@ For numerical issues (wrong results, convergence failures), include:
 ### Suggesting Features
 
 Open an issue describing:
+
 - The use case — what problem are you trying to solve?
 - Which crate(s) it would affect
 - Whether you'd be willing to implement it
@@ -94,6 +98,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 ```
 
 Types:
+
 - `feat` — new feature
 - `fix` — bug fix
 - `docs` — documentation only
@@ -117,6 +122,7 @@ refactor(core): extract topology validation into separate module
 ### Improving Documentation
 
 Documentation improvements are always welcome. This includes:
+
 - Fixing typos or unclear explanations
 - Adding examples to rustdoc comments
 - Improving the mdBook user guide
@@ -139,20 +145,24 @@ Documentation improvements are always welcome. This includes:
 ### Crate-Specific Guidelines
 
 #### cobre-core
+
 - Types here are shared across all solvers. Changes require careful consideration of downstream impact.
 - All public types must implement `Clone`, `Debug`. Implement `Serialize`/`Deserialize` (serde) where appropriate.
 - Validation logic lives here. A `System` should be self-consistent when constructed — invalid states should be caught at construction time, not at solve time.
 
 #### cobre-io
+
 - Every parser must have round-trip tests: parse → serialize → parse should produce identical data.
 - Include sample input files in `tests/data/` for each supported format.
 - Document the source format specification in comments (field widths, units, conventions).
 
 #### cobre-sddp
+
 - Algorithmic changes should reference the relevant literature (paper, section, equation number).
 - Numerical changes require validation against reference outputs. Include the test case and expected bounds.
 
 #### cobre-solver
+
 - The solver trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag.
 - Benchmark any solver interface changes with `cargo bench`.
 
@@ -174,15 +184,18 @@ Documentation improvements are always welcome. This includes:
 Cobre sits at the intersection of power systems engineering, stochastic optimization, and systems programming. Not all contributors will have expertise in all three areas. That's fine.
 
 If you're a **power systems engineer** new to Rust:
+
 - The [Rust Book](https://doc.rust-lang.org/book/) is the standard learning resource
 - Focus on `cobre-core` and `cobre-io` — these are the most domain-heavy crates
 
 If you're a **Rust developer** new to power systems:
+
 - The `specs/` directory contains background on the algorithms and domain
 - The `cobre-docs` repository has algorithm documentation
 - Ask questions in [Discussions](https://github.com/cobre-rs/cobre/discussions) — no question is too basic
 
 If you're a **researcher** with algorithmic improvements:
+
 - Open an issue describing the algorithm, with references
 - We can help translate the math into Rust
 
@@ -192,4 +205,4 @@ Cobre is currently maintained by [@rjmalves](https://github.com/rjmalves). Major
 
 ## License
 
-By contributing to Cobre, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing to Cobre, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).

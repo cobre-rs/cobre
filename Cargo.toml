@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cobre",
+    "crates/cobre-core",
+    "crates/cobre-io",
+    "crates/cobre-stochastic",
+    "crates/cobre-solver",
+    "crates/cobre-sddp",
+    "crates/cobre-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/cobre-rs/cobre"
+homepage = "https://github.com/cobre-rs/cobre"
+authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]

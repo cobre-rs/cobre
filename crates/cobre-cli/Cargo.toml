@@ -1,0 +1,17 @@
+[package]
+name = "cobre-cli"
+description = "Command-line interface for Cobre power system studies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["power-systems", "cli", "energy", "sddp", "simulation"]
+categories = ["command-line-utilities", "science"]
+
+[[bin]]
+name = "cobre"
+path = "src/main.rs"

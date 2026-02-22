@@ -1,0 +1,13 @@
+[package]
+name = "cobre-stochastic"
+description = "Stochastic process models for power systems — PAR(p), scenario generation, Monte Carlo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["stochastic", "monte-carlo", "time-series", "autoregressive", "scenarios"]
+categories = ["science", "simulation", "mathematics"]

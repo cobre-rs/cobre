@@ -1,0 +1,13 @@
+[package]
+name = "cobre-core"
+description = "Power system data model — buses, branches, generators, loads, and network topology"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["power-systems", "energy", "electrical-engineering", "data-model"]
+categories = ["science", "simulation"]

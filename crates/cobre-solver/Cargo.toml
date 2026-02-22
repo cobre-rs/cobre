@@ -1,0 +1,13 @@
+[package]
+name = "cobre-solver"
+description = "LP/MIP solver abstraction layer with HiGHS backend for power system optimization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["linear-programming", "optimization", "solver", "highs", "lp"]
+categories = ["science", "mathematics"]

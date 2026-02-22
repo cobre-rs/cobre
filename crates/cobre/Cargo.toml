@@ -1,0 +1,13 @@
+[package]
+name = "cobre"
+description = "Open infrastructure for power system computation — umbrella crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["power-systems", "energy", "sddp", "electrical-engineering", "optimization"]
+categories = ["science", "simulation", "mathematics"]

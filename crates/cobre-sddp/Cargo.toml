@@ -1,0 +1,13 @@
+[package]
+name = "cobre-sddp"
+description = "Stochastic Dual Dynamic Programming (SDDP) for hydrothermal dispatch and energy planning"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["sddp", "hydrothermal", "dispatch", "stochastic-optimization", "energy"]
+categories = ["science", "simulation", "mathematics"]

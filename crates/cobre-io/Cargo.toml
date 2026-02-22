@@ -1,0 +1,13 @@
+[package]
+name = "cobre-io"
+description = "File parsers and serializers for power system data formats (NEWAVE, PSS/E, CSV, Arrow)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["power-systems", "newave", "psse", "parser", "serialization"]
+categories = ["science", "parser-implementations"]

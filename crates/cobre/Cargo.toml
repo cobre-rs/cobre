@@ -9,5 +9,5 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 readme = "README.md"
-keywords = ["power-systems", "energy", "sddp", "electrical-engineering", "optimization"]
+keywords = ["power-systems", "energy", "sddp", "electrical", "optimization"]
 categories = ["science", "simulation", "mathematics"]

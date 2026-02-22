@@ -9,5 +9,5 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 readme = "README.md"
-keywords = ["sddp", "hydrothermal", "dispatch", "stochastic-optimization", "energy"]
+keywords = ["sddp", "hydrothermal", "dispatch", "optimization", "energy"]
 categories = ["science", "simulation", "mathematics"]

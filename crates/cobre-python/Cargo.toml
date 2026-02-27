@@ -1,0 +1,19 @@
+[package]
+name = "cobre-python"
+description = "Python bindings for the Cobre power systems solver — import cobre from Python scripts and Jupyter notebooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["python", "bindings", "pyo3", "power-systems", "energy"]
+categories = ["science", "api-bindings"]
+
+[lib]
+name = "cobre"
+crate-type = ["cdylib"]
+
+[dependencies]

@@ -6,8 +6,12 @@ members = [
     "crates/cobre-io",
     "crates/cobre-stochastic",
     "crates/cobre-solver",
+    "crates/cobre-comm",
     "crates/cobre-sddp",
     "crates/cobre-cli",
+    "crates/cobre-mcp",
+    "crates/cobre-python",
+    "crates/cobre-tui",
 ]
 
 [workspace.package]

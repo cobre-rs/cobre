@@ -1,0 +1,20 @@
+[package]
+name = "cobre-comm"
+description = "Pluggable communication backend abstraction for distributed SDDP execution (MPI, TCP, shared-memory, local)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["mpi", "distributed", "communication", "hpc", "parallelism"]
+categories = ["science", "network-programming"]
+
+[dependencies]
+
+[features]
+mpi = []
+tcp = []
+shm = []

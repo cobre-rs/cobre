@@ -11,11 +11,23 @@ name = "cobre-cli"
 version = "0.0.1"
 
 [[package]]
+name = "cobre-comm"
+version = "0.0.1"
+
+[[package]]
 name = "cobre-core"
 version = "0.0.1"
 
 [[package]]
 name = "cobre-io"
+version = "0.0.1"
+
+[[package]]
+name = "cobre-mcp"
+version = "0.0.1"
+
+[[package]]
+name = "cobre-python"
 version = "0.0.1"
 
 [[package]]
@@ -28,4 +40,8 @@ version = "0.0.1"
 
 [[package]]
 name = "cobre-stochastic"
+version = "0.0.1"
+
+[[package]]
+name = "cobre-tui"
 version = "0.0.1"

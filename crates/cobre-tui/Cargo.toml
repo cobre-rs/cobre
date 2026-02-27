@@ -1,0 +1,15 @@
+[package]
+name = "cobre-tui"
+description = "Interactive terminal UI for real-time SDDP training monitoring, convergence visualization, and cut inspection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["tui", "terminal", "monitoring", "ratatui", "visualization"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]

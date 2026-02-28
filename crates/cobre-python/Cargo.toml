@@ -15,6 +15,7 @@ categories = ["science", "api-bindings"]
 [lib]
 name = "cobre"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 

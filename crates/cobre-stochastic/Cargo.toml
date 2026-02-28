@@ -11,3 +11,6 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["stochastic", "monte-carlo", "time-series", "autoregressive", "scenarios"]
 categories = ["science", "simulation", "mathematics"]
+
+[lints]
+workspace = true

@@ -13,3 +13,6 @@ keywords = ["tui", "terminal", "monitoring", "ratatui", "visualization"]
 categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
+
+[lints]
+workspace = true

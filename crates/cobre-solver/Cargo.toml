@@ -11,3 +11,6 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["linear-programming", "optimization", "solver", "highs", "lp"]
 categories = ["science", "mathematics"]
+
+[lints]
+workspace = true

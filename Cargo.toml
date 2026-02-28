@@ -20,5 +20,21 @@ edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/cobre-rs/cobre"
-homepage = "https://github.com/cobre-rs/cobre"
+homepage = "https://cobre-rs.github.io/cobre-docs/"
+documentation = "https://docs.rs/cobre"
 authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

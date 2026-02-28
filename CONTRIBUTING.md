@@ -7,13 +7,14 @@ Thanks for your interest in contributing. Cobre is an open-source ecosystem for 
 ### Prerequisites
 
 - **Rust** (stable, latest): https://rustup.rs
-- **C compiler** (for HiGHS solver FFI): `gcc` or `clang`
+- **C compiler** (for HiGHS/CLP solver FFI): `gcc` or `clang`
 - **CMake** (for building HiGHS from source): `cmake >= 3.15`
 
-Optional:
+Optional (needed for specific crates):
 
-- **MPICH** (for ferrompi/distributed execution): `libmpich-dev` on Debian/Ubuntu
-- **mdBook** (for building documentation): `cargo install mdbook`
+- **MPICH** (for `cobre-comm` MPI backend): `libmpich-dev` on Debian/Ubuntu
+- **Python 3.8+** and **maturin** (for `cobre-python` builds): `pip install maturin`
+- **mdBook** (for the documentation site): `cargo install mdbook mdbook-katex`
 
 ### Building
 
@@ -30,7 +31,7 @@ cargo test --workspace
 # Run tests for a specific crate
 cargo test -p cobre-sddp
 
-# Build documentation locally
+# Build Rust API documentation
 cargo doc --workspace --no-deps --open
 ```
 
@@ -39,16 +40,21 @@ cargo doc --workspace --no-deps --open
 ```
 cobre/
 ├── crates/
-│   ├── cobre-core/         # Data model (buses, generators, topology)
-│   ├── cobre-io/           # File parsers and serializers
-│   ├── cobre-stochastic/   # Stochastic process models (PAR(p), scenarios)
-│   ├── cobre-solver/       # LP solver abstraction + HiGHS bindings
-│   ├── cobre-sddp/         # SDDP algorithm
-│   └── cobre-cli/          # Command-line interface
-├── specs/                   # Specification documents
-├── examples/                # Example studies and configurations
-└── assets/                  # Logos, diagrams
+│   ├── cobre-core/         # Entity model (buses, hydros, thermals, lines…)
+│   ├── cobre-io/           # JSON/Parquet input, FlatBuffers/Parquet output
+│   ├── cobre-stochastic/   # PAR(p) models, scenario generation
+│   ├── cobre-solver/       # LP solver abstraction (HiGHS, CLP backends)
+│   ├── cobre-comm/         # Communication abstraction (MPI, TCP, shm, local)
+│   ├── cobre-sddp/         # SDDP training loop, simulation, cut management
+│   ├── cobre-cli/          # Binary: run/validate/report/compare/serve
+│   ├── cobre-mcp/          # Binary: MCP server for AI agent integration
+│   ├── cobre-python/       # cdylib: PyO3 Python bindings
+│   └── cobre-tui/          # Library: ratatui terminal UI
+├── assets/                  # Logos and diagrams
+└── docs/                    # Internal project documentation
 ```
+
+The full specification corpus lives in the separate [cobre-docs](https://github.com/cobre-rs/cobre-docs) repository ([deployed docs](https://cobre-rs.github.io/cobre-docs/)).
 
 ## How to Contribute
 
@@ -63,7 +69,7 @@ Open an issue with:
 
 For numerical issues (wrong results, convergence failures), include:
 
-- The study configuration (TOML or code snippet)
+- The study configuration (`config.json`)
 - System size (number of hydros, thermals, stages, scenarios)
 - Expected values and source (e.g., "NEWAVE produces X for the same case")
 
@@ -108,25 +114,22 @@ Types:
 - `ci` — CI/CD changes
 - `chore` — maintenance (dependencies, tooling)
 
-Scope is the crate name without the `cobre-` prefix:
+Scope is the crate name without the `cobre-` prefix (use `ferrompi` for the MPI bindings):
 
 ```
 feat(sddp): implement multi-cut strategy
 fix(core): correct reservoir volume bounds validation
-docs(io): document NEWAVE HIDR.DAT field mapping
+docs(io): document Parquet schema for hydro inflows
 test(stochastic): add PAR(p) coefficient estimation tests
 perf(solver): reduce allocations in basis reuse path
-refactor(core): extract topology validation into separate module
+refactor(comm): extract MPI backend into separate module
+ci: add cargo-deny license check
+chore(ferrompi): update to v0.3.0
 ```
 
 ### Improving Documentation
 
-Documentation improvements are always welcome. This includes:
-
-- Fixing typos or unclear explanations
-- Adding examples to rustdoc comments
-- Improving the mdBook user guide
-- Translating documentation to Portuguese
+Documentation improvements are always welcome. The Rust API docs live inline in source code (rustdoc). The user guide and specification corpus live in [cobre-docs](https://github.com/cobre-rs/cobre-docs).
 
 ## Coding Guidelines
 
@@ -147,37 +150,52 @@ Documentation improvements are always welcome. This includes:
 #### cobre-core
 
 - Types here are shared across all solvers. Changes require careful consideration of downstream impact.
-- All public types must implement `Clone`, `Debug`. Implement `Serialize`/`Deserialize` (serde) where appropriate.
-- Validation logic lives here. A `System` should be self-consistent when constructed — invalid states should be caught at construction time, not at solve time.
+- All public types must implement `Clone`, `Debug`. Implement `serde::Serialize`/`Deserialize` where appropriate.
+- Entity collections must be stored in ID-sorted (canonical) order. **Declaration-order invariance** is a hard requirement: results must be bit-for-bit identical regardless of input file ordering.
+- Validation logic lives here. A resolved system should be self-consistent — invalid states should be caught at load time, not at solve time.
 
 #### cobre-io
 
 - Every parser must have round-trip tests: parse → serialize → parse should produce identical data.
 - Include sample input files in `tests/data/` for each supported format.
-- Document the source format specification in comments (field widths, units, conventions).
+- The 5-layer validation pipeline (structural → schema → referential → dimensional → semantic) must collect all errors before failing; never short-circuit on the first error.
 
 #### cobre-sddp
 
-- Algorithmic changes should reference the relevant literature (paper, section, equation number).
-- Numerical changes require validation against reference outputs. Include the test case and expected bounds.
+- Algorithmic changes must reference the relevant literature (paper, section, equation number).
+- Numerical changes require validation against reference outputs. Include the test case and expected bounds in the PR.
+- The four algorithm parameterization points (risk measure, cut formulation, horizon mode, sampling scheme) must remain generic — no hard-coding of specific strategies.
 
 #### cobre-solver
 
-- The solver trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag.
+- The `Solver` trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag; CLP-specific code behind `clp`.
 - Benchmark any solver interface changes with `cargo bench`.
+- Basis warm-starting is a correctness feature, not just a performance optimization — validate it in tests.
+
+#### cobre-comm
+
+- The `Communicator` trait must remain implementable by all four backends (MPI, TCP, shared-memory, local).
+- Local backend has zero overhead — do not add indirection that penalizes single-process users.
+- MPI code requires an MPI installation to test; gate MPI tests appropriately.
+
+#### cobre-mcp and cobre-python
+
+- These crates are **single-process only** — they must never initialize MPI or depend on `ferrompi`.
+- `cobre-python` must release the GIL (`py.allow_threads()`) during all Rust computation.
 
 ### Testing
 
 - **Unit tests** go in the same file as the code (`#[cfg(test)] mod tests`).
 - **Integration tests** go in `tests/` at the crate root.
 - **Use `approx` for floating-point comparisons:** `assert_relative_eq!(actual, expected, epsilon = 1e-6)`.
-- **Property-based tests** (proptest) are encouraged for numerical code — if a function should preserve an invariant, test it over random inputs.
+- **Property-based tests** (proptest) are encouraged for numerical code.
+- **Order-invariance tests:** for any function that processes entity collections, test that reordering the input produces identical output.
 
 ### Dependencies
 
 - Prefer well-maintained crates with minimal transitive dependencies.
-- New dependencies that add >5s to clean build time need justification.
-- Feature-gate optional heavy dependencies (e.g., `serde`, solver backends, MPI).
+- New dependencies are checked for license compliance by `cargo-deny` in CI.
+- Feature-gate optional heavy dependencies (solver backends, MPI, PyO3, ratatui).
 
 ## Domain Knowledge
 
@@ -190,8 +208,7 @@ If you're a **power systems engineer** new to Rust:
 
 If you're a **Rust developer** new to power systems:
 
-- The `specs/` directory contains background on the algorithms and domain
-- The `cobre-docs` repository has algorithm documentation
+- The [cobre-docs site](https://cobre-rs.github.io/cobre-docs/) has algorithm documentation and a user guide
 - Ask questions in [Discussions](https://github.com/cobre-rs/cobre/discussions) — no question is too basic
 
 If you're a **researcher** with algorithmic improvements:

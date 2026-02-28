@@ -15,3 +15,6 @@ categories = ["command-line-utilities", "science"]
 [[bin]]
 name = "cobre"
 path = "src/main.rs"
+
+[lints]
+workspace = true

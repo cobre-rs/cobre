@@ -11,3 +11,6 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["power-systems", "energy", "electrical", "data-model"]
 categories = ["science", "simulation"]
+
+[lints]
+workspace = true

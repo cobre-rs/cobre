@@ -60,3 +60,40 @@ jobs:
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -Dwarnings
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  deny:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --locked
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

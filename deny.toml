@@ -1,0 +1,52 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+
+# ------------------------------------------------------------------ advisories
+[advisories]
+# Deny crates with known security vulnerabilities.
+version = 2
+ignore = []
+
+# ------------------------------------------------------------------ licenses
+[licenses]
+version = 2
+# Allow these SPDX identifiers.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+]
+# Confidence threshold for license detection (0.0 - 1.0).
+confidence-threshold = 0.8
+
+# ------------------------------------------------------------------ bans
+[bans]
+# Deny multiple versions of the same crate.
+multiple-versions = "warn"
+# Deny crates with wildcard dependencies.
+wildcards = "deny"
+# Deny known problematic crates.
+deny = []
+# Skip duplicate version checks for these (common transitive deps with
+# multiple versions in the wild).
+skip = []
+skip-tree = []
+
+# ------------------------------------------------------------------ sources
+[sources]
+# Only allow crates from crates.io by default.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

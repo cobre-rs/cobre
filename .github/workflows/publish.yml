@@ -1,0 +1,99 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Publish in dependency order so each crate is available when the next
+      # one is submitted. The --no-verify flag is intentionally omitted so that
+      # crates.io runs its own validation pass. The 30-second sleeps give the
+      # index time to propagate before the next crate tries to resolve the
+      # previous one as a dependency.
+
+      - name: Publish cobre-core
+        run: cargo publish -p cobre-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for cobre-core index propagation
+        run: sleep 30
+
+      # These four crates depend only on cobre-core and can be published in
+      # any order relative to each other.
+      - name: Publish cobre-io
+        run: cargo publish -p cobre-io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-stochastic
+        run: cargo publish -p cobre-stochastic
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-solver
+        run: cargo publish -p cobre-solver
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-comm
+        run: cargo publish -p cobre-comm
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-tui
+        run: cargo publish -p cobre-tui
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for infrastructure crates index propagation
+        run: sleep 30
+
+      - name: Publish cobre-sddp
+        run: cargo publish -p cobre-sddp
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for cobre-sddp index propagation
+        run: sleep 30
+
+      # Application-layer crates depend on cobre-sddp.
+      - name: Publish cobre-cli
+        run: cargo publish -p cobre-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-mcp
+        run: cargo publish -p cobre-mcp
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish cobre-python
+        run: cargo publish -p cobre-python
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for application crates index propagation
+        run: sleep 30
+
+      # Umbrella crate depends on all of the above.
+      - name: Publish cobre (umbrella)
+        run: cargo publish -p cobre
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # GitHub Release creation and binary artifact distribution are handled
+  # by cargo-dist in .github/workflows/release.yml.

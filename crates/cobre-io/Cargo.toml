@@ -11,3 +11,6 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["power-systems", "newave", "psse", "parser", "serialization"]
 categories = ["science", "parser-implementations"]
+
+[lints]
+workspace = true

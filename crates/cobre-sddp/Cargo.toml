@@ -11,3 +11,6 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["sddp", "hydrothermal", "dispatch", "optimization", "energy"]
 categories = ["science", "simulation", "mathematics"]
+
+[lints]
+workspace = true

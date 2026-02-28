@@ -9,7 +9,7 @@
 //! - **Backward pass**: Benders cut generation for the cost-to-go function.
 //! - **Cut management**: single-cut and multi-cut strategies, cut selection,
 //!   and dominance pruning.
-//! - **Risk measures**: expected value, CVaR, and convex combinations.
+//! - **Risk measures**: expected value, `CVaR`, and convex combinations.
 //! - **Convergence**: statistical stopping criteria and bound gap monitoring.
 //! - **Parallelism**: designed for hybrid MPI + thread-level parallelism
 //!   via [ferrompi](https://github.com/cobre-rs/ferrompi).

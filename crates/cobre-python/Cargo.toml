@@ -17,3 +17,6 @@ name = "cobre"
 crate-type = ["cdylib"]
 
 [dependencies]
+
+[lints]
+workspace = true

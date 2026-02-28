@@ -7,8 +7,8 @@
 //!
 //! - **Solver trait**: unified API for LP and MIP problem construction, solving,
 //!   and dual/basis extraction.
-//! - **HiGHS backend**: production-grade open-source solver, well-suited for
-//!   the LP subproblems in SDDP.
+//! - **`HiGHS` backend**: production-grade open-source solver, well-suited for
+//!   the LP subproblems in `SDDP`.
 //! - **Basis management**: warm-starting support for iterative algorithms
 //!   that solve sequences of related LPs.
 //!

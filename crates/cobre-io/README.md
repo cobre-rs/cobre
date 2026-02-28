@@ -2,7 +2,7 @@
 
 File parsers and serializers for the [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
 
-Provides interoperability with NEWAVE (CEPEL), PSS/E, CSV, Arrow/Parquet, and other power system data formats.
+Provides interoperability with PSS/E, CSV, Arrow/Parquet, and other power system data formats.
 
 ## Status
 

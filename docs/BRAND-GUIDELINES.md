@@ -101,7 +101,7 @@ Inter is fine but overused in developer tooling. IBM Plex has a more distinctive
 ### Writing style for docs, README, blog:
 - **Direct.** No marketing fluff. Say what it does, how, and why.
 - **Technical-first.** Assume the reader knows what SDDP, power flow, and LP solvers are. Provide context for Rust-specific concepts (not everyone in power systems knows Rust).
-- **Bilingual awareness.** Primary docs in English, but key terms in Portuguese should be preserved where they're domain-standard (e.g., "subsistema" when discussing the Brazilian grid structure, "usina" for plants in NEWAVE context).
+- **Bilingual awareness.** Primary docs in English, but key terms in Portuguese should be preserved where they're domain-standard (e.g., "subsistema" when discussing the Brazilian grid structure, "usina" for plants).
 - **Honest about maturity.** Mark crates clearly as `experimental`, `alpha`, `beta`, or `stable`. Don't oversell.
 
 ### Crate status badges:

@@ -4,8 +4,6 @@
 //!
 //! This crate provides interoperability with existing power system data formats:
 //!
-//! - **NEWAVE/CEPEL**: HIDR.DAT, TERM.DAT, DGER.DAT, and other formats used
-//!   by the Brazilian regulatory tools.
 //! - **PSS/E**: `.raw` and `.dyr` files for steady-state and dynamic data.
 //! - **CSV/Arrow/Parquet**: modern columnar formats for time series and results.
 //! - **JSON/TOML**: human-readable study configuration.

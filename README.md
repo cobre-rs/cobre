@@ -66,15 +66,15 @@ The ecosystem is organized in five layers. `cobre-core` is the shared foundation
 │  ┌───────────┐  ┌───────────────┐  ┌───────────┐  ┌──────────┐   │
 │  │ cobre-cli │  │  cobre-python │  │ cobre-mcp │  │cobre-tui │   │
 │  └─────┬─────┘  └───────┬───────┘  └─────┬─────┘  └────┬─────┘   │
-├────────┼────────────────┼───────────────┼──────────────┼─────────┤
-│        │        Solver  │ Vertical      │              │         │
-│  ┌─────┴────────────────┴───────────────┴──────────────┘         │
+├────────┼────────────────┼────────────────┼─────────────┼─────────┤
+│        │        Solver  │ Vertical       │             │         │
+│  ┌─────┴────────────────┴────────────────┴─────────────┘         │
 │  │                      cobre-sddp                               │
 │  │     Training loop · Simulation · Cut management · CVaR        │
 │  └────┬────────────────────────────────┬──────────────┘          │
 ├───────┼────────────────────────────────┼─────────────────────────┤
 │       │        Infrastructure          │                         │
-│  ┌────┴──────┐  ┌───────────┐  ┌──────┴───────┐  ┌──────────┐    │
+│  ┌────┴──────┐  ┌───────────┐  ┌───────┴──────┐  ┌──────────┐    │
 │  │cobre-     │  │cobre-     │  │cobre-        │  │cobre-    │    │
 │  │stochastic │  │solver     │  │comm          │  │io        │    │
 │  │PAR(p) ·   │  │HiGHS · CLP│  │MPI · TCP ·   │  │JSON ·    │    │
@@ -143,7 +143,7 @@ See the [full documentation](https://cobre-rs.github.io/cobre-docs/) for the com
 
 ## Context
 
-Cobre was born from the need for an open, modern alternative to the legacy FORTRAN-based tools used for power system planning in Brazil (NEWAVE, DECOMP, DESSEM) and alongside the commercial PSR SDDP suite. While those tools are mature and production-proven, they present challenges in auditability, extensibility, and integration with modern computational infrastructure.
+Cobre was born from the need for an open, modern alternative for enabling power system planning research in Brazil. While those tools are mature and production-proven, they present challenges in auditability, extensibility, and integration with modern computational infrastructure.
 
 The project draws inspiration from:
 
@@ -176,7 +176,7 @@ Specification complete. Implementation underway.
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
 - [ ] Benchmark suite with published results
-- [ ] Comparison study: Cobre vs. NEWAVE on public test cases
+- [ ] Comparison study: Cobre vs. others on public test cases
 
 ### Phase 2 — Power Flow
 

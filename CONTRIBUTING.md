@@ -71,7 +71,7 @@ For numerical issues (wrong results, convergence failures), include:
 
 - The study configuration (`config.json`)
 - System size (number of hydros, thermals, stages, scenarios)
-- Expected values and source (e.g., "NEWAVE produces X for the same case")
+- Expected values and source (e.g., "produces X for this input")
 
 ### Suggesting Features
 

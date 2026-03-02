@@ -1,0 +1,26 @@
+[book]
+title = "Cobre"
+description = "Open infrastructure for power system computation"
+authors = ["Rogério J. M. Alves"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "output"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/cobre-rs/cobre"
+edit-url-template = "https://github.com/cobre-rs/cobre/edit/main/book/{path}"
+site-url = "/cobre/"
+additional-css = ["theme/css/custom.css"]
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20

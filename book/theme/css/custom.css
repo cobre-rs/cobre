@@ -1,0 +1,298 @@
+/* ==========================================================================
+   Cobre Documentation — Custom Theme
+   Applied on top of mdBook's "coal" (dark) theme.
+   Colors from cobre-brand-guidelines.md
+   ========================================================================== */
+
+/* --- Fonts ---------------------------------------------------------------- */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+:root {
+  /* Brand colors */
+  --copper: #b87333;
+  --copper-light: #d4956a;
+  --copper-dark: #8b5e3c;
+  --patina: #4a8b6f;
+  --spark-amber: #f5a623;
+  --signal-red: #dc4c4c;
+  --flow-blue: #4a90b8;
+
+  /* Dark theme neutrals */
+  --midnight: #0f1419;
+  --surface: #1a2028;
+  --border: #2d3440;
+  --muted: #8b9298;
+  --body: #c8c6c2;
+  --bright: #e8e6e3;
+}
+
+/* --- Typography ----------------------------------------------------------- */
+
+.content main,
+.content,
+body {
+  font-family: "IBM Plex Sans", "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+code,
+pre,
+.hljs {
+  font-family:
+    "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", monospace;
+  font-size: 0.875em;
+}
+
+/* --- Coal theme overrides ------------------------------------------------- */
+
+.coal {
+  --bg: var(--midnight);
+  --fg: var(--body);
+  --sidebar-bg: var(--surface);
+  --sidebar-fg: var(--body);
+  --sidebar-active: var(--copper-light);
+  --links: var(--copper-light);
+  --inline-code-color: var(--copper);
+  --theme-popup-bg: var(--surface);
+  --theme-popup-border: var(--border);
+  --quote-bg: var(--surface);
+  --quote-border: var(--copper-dark);
+  --table-border-color: var(--border);
+  --table-header-bg: var(--surface);
+  --searchbar-bg: var(--surface);
+  --searchbar-fg: var(--body);
+  --searchbar-border-color: var(--border);
+}
+
+/* --- Sidebar -------------------------------------------------------------- */
+
+.sidebar {
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar .sidebar-scrollbox {
+  background-color: var(--surface);
+}
+
+.sidebar a {
+  color: var(--muted);
+}
+
+.sidebar a:hover,
+.sidebar a.active {
+  color: var(--copper-light);
+}
+
+.sidebar .chapter li.active > a {
+  color: var(--copper-light);
+  border-left: 2px solid var(--copper);
+  padding-left: 10px;
+}
+
+/* --- Links ---------------------------------------------------------------- */
+
+.content a {
+  color: var(--copper-light);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+
+.content a:hover {
+  color: var(--copper);
+  border-bottom-color: var(--copper);
+}
+
+/* --- Headings ------------------------------------------------------------- */
+
+.content main h1,
+.content main h2,
+.content main h3,
+.content main h4 {
+  color: var(--bright);
+  font-weight: 600;
+}
+
+.content main h1 {
+  border-bottom: 2px solid var(--copper-dark);
+  padding-bottom: 0.3em;
+}
+
+.content main h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25em;
+}
+
+/* --- Code blocks ---------------------------------------------------------- */
+
+.content pre {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1em;
+}
+
+.content code {
+  color: var(--copper);
+}
+
+.content pre > code {
+  color: var(--body);
+}
+
+/* --- Blockquotes (admonitions) -------------------------------------------- */
+
+.content blockquote {
+  border-left: 4px solid var(--copper);
+  background-color: var(--surface);
+  padding: 0.75em 1em;
+  margin: 1em 0;
+  color: var(--body);
+}
+
+/* --- Tables --------------------------------------------------------------- */
+
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.content table th {
+  background-color: var(--surface);
+  color: var(--bright);
+  font-weight: 600;
+  border-bottom: 2px solid var(--copper-dark);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+
+.content table td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.5em 0.75em;
+}
+
+.content table tr:hover {
+  background-color: rgba(184, 115, 51, 0.05);
+}
+
+/* --- Search --------------------------------------------------------------- */
+
+.searchbar input {
+  border: 1px solid var(--border) !important;
+}
+
+.searchbar input:focus {
+  border-color: var(--copper) !important;
+  box-shadow: 0 0 0 2px rgba(184, 115, 51, 0.2);
+}
+
+.searchresults a {
+  color: var(--copper-light);
+}
+
+/* --- Nav buttons ---------------------------------------------------------- */
+
+.nav-chapters:hover {
+  color: var(--copper-light);
+}
+
+/* --- Warning / info boxes (custom classes) -------------------------------- */
+/* Usage in markdown:
+   <div class="warning">Content</div>
+   <div class="info">Content</div>
+*/
+
+.warning {
+  background-color: rgba(245, 166, 35, 0.1);
+  border-left: 4px solid var(--spark-amber);
+  padding: 0.75em 1em;
+  margin: 1em 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.warning::before {
+  content: "⚠ ";
+  font-weight: 600;
+}
+
+.info {
+  background-color: rgba(74, 144, 184, 0.1);
+  border-left: 4px solid var(--flow-blue);
+  padding: 0.75em 1em;
+  margin: 1em 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.info::before {
+  content: "ℹ ";
+  font-weight: 600;
+}
+
+/* --- Status badges (for crate docs) --------------------------------------- */
+
+.status-experimental {
+  display: inline-block;
+  background-color: var(--signal-red);
+  color: white;
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.status-alpha {
+  display: inline-block;
+  background-color: var(--spark-amber);
+  color: var(--midnight);
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.status-beta {
+  display: inline-block;
+  background-color: var(--flow-blue);
+  color: white;
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.status-stable {
+  display: inline-block;
+  background-color: var(--patina);
+  color: white;
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* --- Responsive tweaks ---------------------------------------------------- */
+
+@media (max-width: 768px) {
+  .content main {
+    padding: 0.5em;
+  }
+}
+
+/* --- KaTeX math rendering (dark theme compatibility) --------------------- */
+
+.katex {
+  color: inherit;
+  font-size: 1.1em;
+}
+
+.katex-display {
+  color: inherit;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}

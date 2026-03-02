@@ -713,7 +713,7 @@ fn validate_ncs_refs(
 fn validate_filling_configs(hydros: &[Hydro], errors: &mut Vec<ValidationError>) {
     for hydro in hydros {
         if let Some(filling) = &hydro.filling {
-            if filling.filling_inflow_m3s <= 0.0 {
+            if filling.filling_inflow_m3s.is_nan() || filling.filling_inflow_m3s <= 0.0 {
                 errors.push(ValidationError::InvalidFillingConfig {
                     hydro_id: hydro.id,
                     reason: "filling_inflow_m3s must be positive".to_string(),
@@ -800,6 +800,7 @@ mod tests {
         }
     }
 
+    /// Creates a hydro on bus 0. Caller must supply `make_bus(0)`.
     fn make_hydro(id: i32) -> Hydro {
         make_hydro_on_bus(id, 0)
     }
@@ -821,6 +822,7 @@ mod tests {
         }
     }
 
+    /// Creates a thermal on bus 0. Caller must supply `make_bus(0)`.
     fn make_thermal(id: i32) -> Thermal {
         make_thermal_on_bus(id, 0)
     }

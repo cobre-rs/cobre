@@ -4,7 +4,8 @@
 //! relationships. It is built during case loading after all `Hydro` entities have
 //! been validated and their `downstream_id` cross-references verified.
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 use crate::{EntityId, Hydro};
 
@@ -87,17 +88,15 @@ impl CascadeTopology {
             }
         }
 
-        let mut ready: Vec<i32> = in_degree
+        let mut ready: BinaryHeap<Reverse<i32>> = in_degree
             .iter()
             .filter(|&(_, deg)| *deg == 0)
-            .map(|(id, _)| id.0)
+            .map(|(id, _)| Reverse(id.0))
             .collect();
-        ready.sort_unstable();
 
         let mut topological_order: Vec<EntityId> = Vec::with_capacity(hydros.len());
 
-        while !ready.is_empty() {
-            let current_raw = ready.remove(0);
+        while let Some(Reverse(current_raw)) = ready.pop() {
             let current = EntityId(current_raw);
             topological_order.push(current);
 
@@ -105,10 +104,7 @@ impl CascadeTopology {
                 if let Some(deg) = in_degree.get_mut(&ds_id) {
                     *deg -= 1;
                     if *deg == 0 {
-                        let pos = ready
-                            .binary_search(&ds_id.0)
-                            .unwrap_or_else(|insert_pos| insert_pos);
-                        ready.insert(pos, ds_id.0);
+                        ready.push(Reverse(ds_id.0));
                     }
                 }
             }
@@ -175,8 +171,8 @@ impl CascadeTopology {
 mod tests {
     use super::CascadeTopology;
     use crate::{
-        EntityId, Hydro,
         entities::{HydroGenerationModel, HydroPenalties},
+        EntityId, Hydro,
     };
 
     fn make_hydro(id: i32, downstream_id: Option<i32>) -> Hydro {

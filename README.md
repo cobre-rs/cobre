@@ -156,21 +156,21 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Roadmap
 
-### Phase 0 — Foundation (current)
+The minimal viable solver is built through an [8-phase implementation sequence](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html) defined in cobre-docs. Each phase produces a testable intermediate.
 
-Specification complete. Implementation underway.
+### v0.1 — Minimal Viable SDDP Solver (current)
 
 - [x] Complete SDDP specification corpus ([cobre-docs](https://github.com/cobre-rs/cobre-docs))
 - [x] Workspace scaffolding (all 11 crates)
-- [ ] `cobre-core` — entity model, validation, resolution of cascaded defaults
+- [x] `cobre-core` — entity model, topology, validation, penalty resolution (108 tests)
 - [ ] `cobre-io` — JSON/Parquet input, FlatBuffers policy output, 5-layer validation
 - [ ] `cobre-stochastic` — PAR(p) models, correlated scenario generation
 - [ ] `cobre-solver` — LP abstraction, HiGHS/CLP backends, warm-start
+- [ ] `cobre-comm` — communicator trait, MPI backend, local backend
 - [ ] `cobre-sddp` — training loop, simulation, cut management, CVaR
 - [ ] `cobre-cli` — run/validate/report/compare/serve subcommands
-- [ ] v0.1.0 — working SDDP solver validated against reference cases
 
-### Phase 1 — Ecosystem Hardening
+### v0.2 — Ecosystem Hardening
 
 - [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
@@ -178,7 +178,7 @@ Specification complete. Implementation underway.
 - [ ] Benchmark suite with published results
 - [ ] Comparison study: Cobre vs. others on public test cases
 
-### Phase 2 — Power Flow
+### v0.3 — Power Flow
 
 - [ ] Newton-Raphson AC power flow
 - [ ] DC power flow and OPF

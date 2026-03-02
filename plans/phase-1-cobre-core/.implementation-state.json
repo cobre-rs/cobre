@@ -1,0 +1,185 @@
+{
+  "plan": "phase-1-cobre-core",
+  "last_updated": "2026-03-02T18:30:00Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-scaffold-crate-and-define-entity-id.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "agent": "hpc-rust-developer",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.4
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        }
+      },
+      "workflow_step": null
+    },
+    "ticket-002-define-bus-and-line-entities.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "agent": "hpc-rust-developer",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null
+    },
+    "ticket-003-define-hydro-entity.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "agent": "hpc-rust-developer",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null
+    },
+    "ticket-004-define-remaining-entities.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "agent": "hpc-rust-developer",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null
+    },
+    "ticket-005-penalty-resolution.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    },
+    "ticket-006-cascade-topology.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      }
+    },
+    "ticket-007-network-topology.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      }
+    },
+    "ticket-008-system-builder-and-system-struct.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    },
+    "ticket-009-cross-reference-validation.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-010-cascade-and-filling-validation.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-011-integration-and-order-invariance-tests.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    }
+  },
+  "epics": {
+    "epic-01-foundation-types": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-02-system-struct-and-topology": {
+      "phase": "executing",
+      "learning_extracted": false
+    },
+    "epic-03-validation-and-testing": {
+      "phase": "outline",
+      "learning_extracted": false
+    }
+  }
+}

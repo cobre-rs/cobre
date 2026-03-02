@@ -110,7 +110,10 @@ impl fmt::Display for ValidationError {
                 )
             }
             Self::DisconnectedBus { bus_id } => {
-                write!(f, "bus {bus_id} is disconnected (no lines, generators, or loads)")
+                write!(
+                    f,
+                    "bus {bus_id} is disconnected (no lines, generators, or loads)"
+                )
             }
             Self::InvalidPenalty {
                 entity_type,

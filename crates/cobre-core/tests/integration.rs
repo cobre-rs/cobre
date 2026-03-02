@@ -10,6 +10,14 @@
 //! - Validation rejection: known-invalid configurations produce the correct
 //!   `ValidationError` variants.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::too_many_lines
+)]
+
 use cobre_core::{
     ContractType, DeficitSegment, DiversionChannel, EnergyContract, EntityId, FillingConfig, Hydro,
     HydroGenerationModel, HydroPenalties, Line, NonControllableSource, PumpingStation,

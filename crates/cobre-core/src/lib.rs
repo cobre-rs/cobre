@@ -39,3 +39,10 @@ pub use entities::{
 };
 pub use entity_id::EntityId;
 pub use error::ValidationError;
+pub use penalty::{
+    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
+    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
+    HydroPenaltyOverrides,
+};
+pub use system::{System, SystemBuilder};
+pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};

@@ -6,3 +6,6 @@
 
 pub mod cascade;
 pub mod network;
+
+pub use cascade::CascadeTopology;
+pub use network::{BusGenerators, BusLineConnection, BusLoads, NetworkTopology};

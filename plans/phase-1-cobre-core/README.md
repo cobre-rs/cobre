@@ -26,10 +26,10 @@ Phase 1 implements the `cobre-core` crate -- the foundation data model for the C
 | ticket-002 | Define Bus and Line entities                        | epic-01 | completed | Detailed     | 0.98      | 1.00    | EXCELLENT |
 | ticket-003 | Define Hydro entity and supporting types            | epic-01 | completed | Detailed     | 0.98      | 1.00    | EXCELLENT |
 | ticket-004 | Define Thermal, PumpingStation, EnergyContract, NCS | epic-01 | completed | Detailed     | 0.96      | 1.00    | EXCELLENT |
-| ticket-005 | Implement penalty resolution                        | epic-02 | pending   | Detailed     | 0.98      | --      | --        |
-| ticket-006 | Implement CascadeTopology                           | epic-02 | pending   | Detailed     | 1.00      | --      | --        |
-| ticket-007 | Implement NetworkTopology                           | epic-02 | pending   | Detailed     | 1.00      | --      | --        |
-| ticket-008 | Implement SystemBuilder and System struct           | epic-02 | pending   | Detailed     | 0.98      | --      | --        |
+| ticket-005 | Implement penalty resolution                        | epic-02 | completed | Detailed     | 0.98      | 1.00    | EXCELLENT |
+| ticket-006 | Implement CascadeTopology                           | epic-02 | completed | Detailed     | 1.00      | 1.00    | EXCELLENT |
+| ticket-007 | Implement NetworkTopology                           | epic-02 | completed | Detailed     | 1.00      | 1.00    | EXCELLENT |
+| ticket-008 | Implement SystemBuilder and System struct           | epic-02 | completed | Detailed     | 0.98      | 1.00    | EXCELLENT |
 | ticket-009 | Cross-reference validation                          | epic-03 | pending   | Outline      | --        | --      | --        |
 | ticket-010 | Cascade and filling validation                      | epic-03 | pending   | Outline      | --        | --      | --        |
 | ticket-011 | Integration and order-invariance tests              | epic-03 | pending   | Outline      | --        | --      | --        |

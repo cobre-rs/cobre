@@ -13,13 +13,13 @@ Cobre is an ecosystem of Rust crates for power system analysis and optimization.
 
 ## Current status
 
-Cobre is in early development. The architecture is specified, the crate boundaries are defined, and implementation is progressing through the [8-phase build sequence](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html).
+Phase 1 (`cobre-core`) is complete. The foundation data model delivers 7 entity types (Bus, Line, Hydro, Thermal, PumpingStation, EnergyContract, NonControllableSource), the System container with SystemBuilder, CascadeTopology and NetworkTopology validation, three-tier penalty resolution, and a 4-phase validation pipeline -- verified by 108 tests. Implementation continues through the [8-phase build sequence](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html), with Phases 2 (`cobre-io`), 3 (`ferrompi` + `cobre-solver`), and 5 (`cobre-stochastic`) as the next parallel candidates.
 
 ## Quick links
 
-| | |
-|---|---|
-| GitHub | [github.com/cobre-rs/cobre](https://github.com/cobre-rs/cobre) |
-| API docs (rustdoc) | `cargo doc --workspace --no-deps --open` |
+|                       |                                                                         |
+| --------------------- | ----------------------------------------------------------------------- |
+| GitHub                | [github.com/cobre-rs/cobre](https://github.com/cobre-rs/cobre)          |
+| API docs (rustdoc)    | `cargo doc --workspace --no-deps --open`                                |
 | Methodology reference | [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/) |
-| License | [Apache-2.0](https://github.com/cobre-rs/cobre/blob/main/LICENSE) |
+| License               | [Apache-2.0](https://github.com/cobre-rs/cobre/blob/main/LICENSE)       |

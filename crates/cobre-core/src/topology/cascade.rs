@@ -53,7 +53,7 @@ impl CascadeTopology {
     ///
     /// Constructs the downstream adjacency map, derives upstream adjacency,
     /// and computes topological order using Kahn's algorithm. Does not validate
-    /// (no cycle detection) -- validation is separate (Epic 3).
+    /// (no cycle detection) -- validation is separate.
     ///
     /// If a `downstream_id` references a non-existent hydro, the downstream
     /// entry is stored as-is; the validation layer catches dangling references.

@@ -130,20 +130,20 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 <!-- UPDATE THIS TABLE as phases are completed -->
 
-| Phase | Status      | Notes                                        |
-| ----- | ----------- | -------------------------------------------- |
-| 1     | not started | All crates are empty stubs                   |
-| 2     | not started | Blocked by Phase 1                           |
-| 3     | not started | Can start after Phase 1 (parallel with 2, 5) |
-| 4     | not started | Blocked by Phase 3                           |
-| 5     | not started | Can start after Phase 1 (parallel with 2, 3) |
-| 6     | not started | Blocked by Phases 1-5                        |
-| 7     | not started | Blocked by Phase 6                           |
-| 8     | not started | Blocked by Phase 7                           |
+| Phase | Status      | Notes                                                                       |
+| ----- | ----------- | --------------------------------------------------------------------------- |
+| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 108 tests |
+| 2     | not started | Ready to start (depends on Phase 1, complete)                               |
+| 3     | not started | Ready to start (depends on Phase 1, complete; parallel with 2, 5)           |
+| 4     | not started | Blocked by Phase 3                                                          |
+| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 2, 3)           |
+| 6     | not started | Blocked by Phases 1-5                                                       |
+| 7     | not started | Blocked by Phase 6                                                          |
+| 8     | not started | Blocked by Phase 7                                                          |
 
 ### Current phase
 
-**Phase 1: cobre-core** -- Implementation begins with the foundation data model.
+**Phase 1: cobre-core -- Complete.** The foundation data model is implemented and all 108 tests pass. Next candidates are Phases 2 (`cobre-io`), 3 (`ferrompi` + `cobre-solver`), and 5 (`cobre-stochastic`), which can proceed in parallel.
 
 ### Parallelizable phases
 

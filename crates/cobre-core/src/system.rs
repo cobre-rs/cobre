@@ -47,21 +47,14 @@ use crate::{
 /// ```
 #[derive(Debug, PartialEq)]
 pub struct System {
-    // Entity collections (canonical ordering by ID) -- public for read access
-    /// All bus entities, sorted by `EntityId` inner `i32`.
-    pub buses: Vec<Bus>,
-    /// All line entities, sorted by `EntityId` inner `i32`.
-    pub lines: Vec<Line>,
-    /// All hydro plant entities, sorted by `EntityId` inner `i32`.
-    pub hydros: Vec<Hydro>,
-    /// All thermal plant entities, sorted by `EntityId` inner `i32`.
-    pub thermals: Vec<Thermal>,
-    /// All pumping station entities, sorted by `EntityId` inner `i32`.
-    pub pumping_stations: Vec<PumpingStation>,
-    /// All energy contract entities, sorted by `EntityId` inner `i32`.
-    pub contracts: Vec<EnergyContract>,
-    /// All non-controllable source entities, sorted by `EntityId` inner `i32`.
-    pub non_controllable_sources: Vec<NonControllableSource>,
+    // Entity collections (canonical ordering by ID)
+    buses: Vec<Bus>,
+    lines: Vec<Line>,
+    hydros: Vec<Hydro>,
+    thermals: Vec<Thermal>,
+    pumping_stations: Vec<PumpingStation>,
+    contracts: Vec<EnergyContract>,
+    non_controllable_sources: Vec<NonControllableSource>,
 
     // O(1) lookup indices (entity ID -> position in collection) -- private
     bus_index: HashMap<EntityId, usize>,

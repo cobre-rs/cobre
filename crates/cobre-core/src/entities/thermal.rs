@@ -19,7 +19,7 @@ pub struct ThermalCostSegment {
     pub cost_per_mwh: f64,
 }
 
-/// Generation-Network-Link (GNL) configuration for staged dispatch anticipation.
+/// Gás Natural Liquefeito (GNL) configuration for staged dispatch anticipation.
 ///
 /// GNL models the commitment and start-up lag of thermal units that require
 /// advance scheduling over multiple stages.

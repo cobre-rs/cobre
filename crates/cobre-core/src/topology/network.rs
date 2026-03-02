@@ -113,6 +113,7 @@ impl NetworkTopology {
         let mut bus_generators: HashMap<EntityId, BusGenerators> = HashMap::new();
         let mut bus_loads: HashMap<EntityId, BusLoads> = HashMap::new();
 
+        // TODO(phase-2): use `buses` for disconnected-bus validation (ValidationError::DisconnectedBus)
         let _ = buses;
 
         for line in lines {

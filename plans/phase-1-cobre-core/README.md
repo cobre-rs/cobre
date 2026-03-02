@@ -12,11 +12,12 @@ Phase 1 implements the `cobre-core` crate -- the foundation data model for the C
 
 ## Epics
 
-| Epic    | Name                       | Tickets     | Detail Level | Status    |
-| ------- | -------------------------- | ----------- | ------------ | --------- |
-| epic-01 | Foundation Types           | 4 (001-004) | Detailed     | Completed |
-| epic-02 | System Struct and Topology | 4 (005-008) | Detailed     | Completed |
-| epic-03 | Validation and Testing     | 3 (009-011) | Refined      | Executing |
+| Epic    | Name                         | Tickets     | Detail Level | Status    |
+| ------- | ---------------------------- | ----------- | ------------ | --------- |
+| epic-01 | Foundation Types             | 4 (001-004) | Detailed     | Completed |
+| epic-02 | System Struct and Topology   | 4 (005-008) | Detailed     | Completed |
+| epic-03 | Validation and Testing       | 3 (009-011) | Refined      | Completed |
+| epic-04 | Spec Audit and Documentation | 3 (012-014) | Detailed     | Completed |
 
 ## Progress
 
@@ -33,6 +34,9 @@ Phase 1 implements the `cobre-core` crate -- the foundation data model for the C
 | ticket-009 | Cross-reference validation                          | epic-03 | completed | Refined      | 1.00      | 0.75    | ACCEPTABLE |
 | ticket-010 | Cascade and filling validation                      | epic-03 | completed | Refined      | 0.98      | 0.96    | EXCELLENT  |
 | ticket-011 | Integration and order-invariance tests              | epic-03 | completed | Refined      | 0.98      | 1.00    | EXCELLENT  |
+| ticket-012 | Audit cobre-core against Phase 1 specs              | epic-04 | completed | Detailed     | 1.00      | 1.00    | EXCELLENT  |
+| ticket-013 | Write cobre-core software book page                 | epic-04 | completed | Detailed     | 1.00      | 1.00    | EXCELLENT  |
+| ticket-014 | Update introduction and phase tracker               | epic-04 | completed | Detailed     | 1.00      | 1.00    | EXCELLENT  |
 
 ## Dependency Graph
 
@@ -52,6 +56,9 @@ ticket-001 (EntityId, module structure)
     ticket-008 ---> ticket-009 (Cross-reference validation)
     ticket-008 + ticket-009 ---> ticket-010 (Cascade + filling validation)
     ticket-009 + ticket-010 ---> ticket-011 (Integration tests)
+    ticket-011 ---> ticket-012 (Spec audit)
+    ticket-012 ---> ticket-013 (Software book page)
+    ticket-013 ---> ticket-014 (Introduction + phase tracker update)
 ```
 
 ## Spec References
@@ -62,3 +69,8 @@ All specs are in `/home/rogerio/git/cobre-docs/src/specs/`:
 - `data-model/input-system-entities.md` -- JSON schemas for all 7 entity types
 - `data-model/penalty-system.md` -- Three-tier penalty cascade
 - `overview/design-principles.md` -- Declaration-order invariance, numeric representation
+- `overview/notation-conventions.md` -- Mathematical notation and index sets
+- `math/hydro-production-models.md` -- Constant productivity, FPHA, linearized head
+- `data-model/input-hydro-extensions.md` -- Hydro geometry, production models, FPHA hyperplanes
+- `math/system-elements.md` -- System element modeling overview
+- `math/equipment-formulations.md` -- Per-equipment LP constraint details

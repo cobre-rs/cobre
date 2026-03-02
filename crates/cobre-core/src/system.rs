@@ -1055,9 +1055,15 @@ mod tests {
 
         let order = system.cascade().topological_order();
         assert!(!order.is_empty(), "topological order must be non-empty");
-        let pos_0 = order.iter().position(|&id| id == EntityId(0));
-        let pos_2 = order.iter().position(|&id| id == EntityId(2));
-        assert!(pos_0 < pos_2);
+        let pos_0 = order
+            .iter()
+            .position(|&id| id == EntityId(0))
+            .expect("EntityId(0) must be in topological order");
+        let pos_2 = order
+            .iter()
+            .position(|&id| id == EntityId(2))
+            .expect("EntityId(2) must be in topological order");
+        assert!(pos_0 < pos_2, "EntityId(0) must precede EntityId(2)");
     }
 
     #[test]

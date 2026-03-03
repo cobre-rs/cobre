@@ -57,7 +57,7 @@ pub struct BusLoads {
 /// and bus-to-load maps. Built from entity collections during System
 /// construction and immutable thereafter.
 ///
-/// Used by cobre-sddp for power balance constraint generation.
+/// Used for power balance constraint generation.
 // The three private fields all share the `bus_` prefix intentionally: they form a
 // cohesive group keyed by bus identity. The prefix mirrors the public accessor names
 // and the spec's field names, making the code self-documenting.

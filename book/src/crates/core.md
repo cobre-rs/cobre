@@ -18,7 +18,7 @@ and penalty resolution utilities.
 readable to a human engineer: nested JSON concepts are flattened into named
 fields with explicit unit suffixes, optional sub-models appear as `Option<Enum>`
 variants, and every `f64` field carries a unit in its name and doc comment.
-Performance-adapted views (packed arrays, LP variable indices) live in `cobre-sddp`,
+Performance-adapted views (packed arrays, LP variable indices) live in downstream solver crates,
 not here.
 
 **Validate at construction.** The `SystemBuilder` catches invalid states during
@@ -39,8 +39,8 @@ be shared across threads without synchronization.
 
 ### Fully modeled entities
 
-These four entity types contribute LP variables and constraints in the SDDP
-training and simulation passes.
+These four entity types contribute LP variables and constraints in optimization
+and simulation procedures.
 
 #### Bus
 
@@ -152,10 +152,9 @@ and optional cascade connectivity. It has 22 fields.
 
 ### Stub entities
 
-These three entity types are data-complete in Phase 1 but contribute no LP
-variables or constraints in the minimal viable solver. Their type definitions
-exist in the registry so that LP construction code can iterate over all entity
-types from the start without requiring special cases.
+These three entity types are data-complete but do not contribute LP variables or
+constraints in the minimal viable implementation. Their type definitions exist in
+the registry so analysis code can iterate over all entity types uniformly.
 
 #### PumpingStation
 
@@ -189,10 +188,9 @@ Fields: `id`, `name`, `bus_id`, `entry_stage_id`, `exit_stage_id`,
 | `EfficiencyModel`      | `Constant { value }`                                                                                     | Turbine-generator efficiency                          |
 | `ContractType`         | `Import`, `Export`                                                                                       | Energy flow direction for bilateral contracts         |
 
-`ConstantProductivity` is used in both SDDP training and simulation.
-`LinearizedHead` is used in simulation only (not SDDP training), because the
-head-dependent term introduces a bilinear product in the training LP.
-`Fpha` is the full production function with head-area-productivity tables.
+`ConstantProductivity` is used universally and is the minimal viable model.
+`LinearizedHead` is for high-fidelity analyses where head-dependent terms matter.
+`Fpha` is the full production function with head-area-productivity tables for detailed modeling.
 
 ### Structs
 
@@ -241,8 +239,7 @@ assert_eq!(id.to_string(), "42");
 
 `System` is the top-level in-memory representation of a validated, resolved
 case. It is produced by `SystemBuilder` (directly in tests) and by
-`cobre-io::load_case()` in production. It is consumed read-only by `cobre-sddp`
-and `cobre-stochastic`.
+`cobre-io::load_case()` in production. It is consumed read-only by downstream solver and analysis crates.
 
 ```rust
 use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
@@ -361,8 +358,8 @@ order for determinism.
 ## Penalty resolution
 
 Penalty values are resolved from a three-tier cascade: global defaults,
-entity-level overrides, and stage-level overrides. Phase 1 implements the first
-two tiers. Stage-varying overrides are a Phase 2 concern.
+entity-level overrides, and stage-level overrides. The first two tiers are
+implemented in Phase 1. Stage-varying overrides are deferred to Phase 2.
 
 `GlobalPenaltyDefaults` holds system-wide fallback values for all penalty fields:
 

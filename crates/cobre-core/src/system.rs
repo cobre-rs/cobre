@@ -2,8 +2,7 @@
 //!
 //! The `System` struct is the top-level in-memory representation of a fully loaded,
 //! validated, and resolved case. It is produced by `cobre-io::load_case()` and consumed
-//! by `cobre-sddp::train()`, `cobre-sddp::simulate()`, and `cobre-stochastic` scenario
-//! generation.
+//! by solvers and analysis tools (e.g., optimization, simulation, power flow).
 //!
 //! All entity collections in `System` are stored in canonical ID-sorted order to ensure
 //! declaration-order invariance: results are bit-for-bit identical regardless of input
@@ -18,9 +17,9 @@ use crate::{
 
 /// Top-level system representation.
 ///
-/// Produced by `cobre-io` (Phase 2) or [`SystemBuilder`] (Phase 1 tests).
-/// Consumed by `cobre-sddp` and `cobre-stochastic` by shared reference.
-/// Immutable after construction. Shared read-only across threads.
+/// Produced by `cobre-io::load_case()` or [`SystemBuilder`] in tests.
+/// Consumed by solvers and analysis tools via shared reference.
+/// Immutable and thread-safe after construction.
 ///
 /// Entity collections are in canonical order (sorted by [`EntityId`]'s inner `i32`).
 /// Lookup indices provide O(1) access by [`EntityId`].

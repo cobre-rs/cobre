@@ -5,8 +5,8 @@
 //! This crate defines the fundamental types used across all Cobre tools:
 //! buses, branches, generators (hydro, thermal, renewable), loads, network
 //! topology, and the top-level [`system`] struct. A power system defined with
-//! `cobre-core` types can be used for SDDP optimization, power flow analysis,
-//! dynamic simulation, and any future solver in the ecosystem.
+//! `cobre-core` types can be used for power flow analysis, optimization, dynamic
+//! simulation, and any other analysis procedure in the ecosystem.
 //!
 //! ## Design principles
 //!
@@ -14,7 +14,7 @@
 //! - **Validate at construction**: invalid states are caught when building
 //!   the system, not at solve time.
 //! - **Shared types**: a `Hydro` is the same struct whether used in
-//!   stochastic dispatch or steady-state analysis.
+//!   stochastic optimization or steady-state analysis.
 //! - **Declaration-order invariance**: all entity collections are stored in
 //!   canonical ID-sorted order so results are identical regardless of input ordering.
 //!
@@ -53,9 +53,9 @@ pub use entities::{
 pub use entity_id::EntityId;
 pub use error::ValidationError;
 pub use penalty::{
-    GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
-    resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
-    resolve_ncs_curtailment_cost,
+    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
+    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
+    HydroPenaltyOverrides,
 };
 pub use system::{System, SystemBuilder};
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};

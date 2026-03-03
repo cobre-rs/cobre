@@ -1,7 +1,7 @@
 //! Hydro plant entity — reservoir, turbine, spillage, and cascade topology.
 //!
 //! A `Hydro` represents a hydroelectric power plant with a reservoir. Hydro plants
-//! have a generation model (constant productivity for training), reservoir storage
+//! have a generation model (constant productivity for optimization), reservoir storage
 //! bounds, turbine and spillage variables, and may participate in a cascade topology
 //! via a downstream reference.
 
@@ -77,29 +77,28 @@ pub struct HydroPenalties {
 
 /// Production function model for a hydro plant.
 ///
-/// Selects how turbine power output is computed from water flow and head.
+/// Defines how turbine power output is computed from water flow and head.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HydroGenerationModel {
     /// Constant power per unit flow, independent of reservoir head.
     ///
-    /// Used in both SDDP training and simulation. This is the minimal viable
-    /// model: `power_mw = productivity_mw_per_m3s * turbined_m3s`.
+    /// This is the minimal viable model: `power_mw = productivity_mw_per_m3s * turbined_m3s`.
+    /// Applicable to any analysis procedure.
     ConstantProductivity {
         /// Power output per unit of turbined flow \[MW/(m³/s)\].
         productivity_mw_per_m3s: f64,
     },
     /// Head-dependent productivity linearized around an operating point.
     ///
-    /// Used in simulation only (not SDDP training). The linearization is
-    /// computed from the current head at the start of each simulation stage.
+    /// The linearization is computed from the current head at the start
+    /// of each time step.
     LinearizedHead {
         /// Nominal power output per unit of turbined flow at reference head \[MW/(m³/s)\].
         productivity_mw_per_m3s: f64,
     },
     /// Full production function with head-area-productivity tables (FPHA model).
     ///
-    /// Used in both SDDP training and simulation when high-fidelity head effects
-    /// are required. Requires forebay and tailrace elevation tables.
+    /// Requires forebay and tailrace elevation tables for high-fidelity head effects.
     Fpha,
 }
 

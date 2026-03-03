@@ -32,14 +32,26 @@
 
 pub mod config;
 pub mod error;
+pub mod extensions;
 pub mod initial_conditions;
 pub mod penalties;
+pub mod system;
 pub mod validation;
 
 pub use config::{Config, parse_config};
 pub use error::LoadError;
+pub use extensions::{
+    FittingWindow, FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
+    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_production_models,
+    parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
+};
 pub use initial_conditions::parse_initial_conditions;
 pub use penalties::parse_penalties;
+pub use system::{
+    load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
+    parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,
+    parse_pumping_stations, parse_thermals,
+};
 pub use validation::structural::{FileManifest, validate_structure};
 pub use validation::{ErrorKind, Severity, ValidationContext, ValidationEntry};
 

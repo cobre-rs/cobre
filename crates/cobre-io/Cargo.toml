@@ -14,12 +14,15 @@ categories = ["science", "parser-implementations"]
 
 [dependencies]
 cobre-core = { path = "../cobre-core", features = ["serde"] }
+arrow = { version = "55", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
+parquet = { version = "55", default-features = false, features = ["arrow"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
+parquet = { version = "55", default-features = false, features = ["arrow"] }
 tempfile = "3"
 
 [lints]

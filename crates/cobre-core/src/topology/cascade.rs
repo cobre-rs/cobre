@@ -32,6 +32,7 @@ use crate::{EntityId, Hydro};
 /// // assert_eq!(topo.topological_order().last(), Some(&EntityId::from(2)));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CascadeTopology {
     /// Downstream adjacency: `hydro_id` -> downstream `hydro_id`.
     /// Terminal nodes are not present in the map.
@@ -171,8 +172,8 @@ impl CascadeTopology {
 mod tests {
     use super::CascadeTopology;
     use crate::{
-        entities::{HydroGenerationModel, HydroPenalties},
         EntityId, Hydro,
+        entities::{HydroGenerationModel, HydroPenalties},
     };
 
     fn make_hydro(id: i32, downstream_id: Option<i32>) -> Hydro {
@@ -403,5 +404,20 @@ mod tests {
         ];
         let topo = CascadeTopology::build(&hydros);
         assert_eq!(topo.len(), 3);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_topology_serde_roundtrip_cascade() {
+        // Linear cascade: A(0) -> B(1) -> C(2, terminal).
+        let hydros = vec![
+            make_hydro(0, Some(1)),
+            make_hydro(1, Some(2)),
+            make_hydro(2, None),
+        ];
+        let topo = CascadeTopology::build(&hydros);
+        let json = serde_json::to_string(&topo).unwrap();
+        let deserialized: CascadeTopology = serde_json::from_str(&json).unwrap();
+        assert_eq!(topo, deserialized);
     }
 }

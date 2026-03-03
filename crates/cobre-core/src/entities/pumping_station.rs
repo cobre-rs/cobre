@@ -15,6 +15,7 @@ use crate::EntityId;
 ///
 /// Source: `system/pumping_stations.json`. See Input System Entities SS1.9.6.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PumpingStation {
     /// Unique pumping station identifier.
     pub id: EntityId,

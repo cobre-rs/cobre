@@ -11,6 +11,7 @@ use crate::EntityId;
 /// `Import` means external energy enters the modeled system at the contract bus.
 /// `Export` means system energy exits at the contract bus to the external entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContractType {
     /// External energy flows into the modeled system.
     Import,
@@ -28,6 +29,7 @@ pub enum ContractType {
 ///
 /// Source: `system/energy_contracts.json`. See Input System Entities SS1.9.7.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EnergyContract {
     /// Unique contract identifier.
     pub id: EntityId,

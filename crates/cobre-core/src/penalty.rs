@@ -16,6 +16,7 @@ use crate::entities::{DeficitSegment, HydroPenalties};
 /// fallbacks when entity-level overrides are not specified.
 /// See Penalty System spec section 3.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GlobalPenaltyDefaults {
     // Bus defaults
     /// Default piecewise-linear deficit cost segments for buses.
@@ -45,6 +46,7 @@ pub struct GlobalPenaltyDefaults {
 /// This is an intermediate type used during System construction; the resolved
 /// [`HydroPenalties`] (with no `Option`s) is stored on the `Hydro` entity.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HydroPenaltyOverrides {
     /// Override for spillage cost [$/m³/s]. `None` = use global default.
     pub spillage_cost: Option<f64>,

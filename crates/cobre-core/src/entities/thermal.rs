@@ -12,6 +12,7 @@ use crate::EntityId;
 /// `cost_per_mwh`, the next segment's `capacity_mw` costs that segment's
 /// `cost_per_mwh`, and so on.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThermalCostSegment {
     /// Generation capacity of this segment \[MW\].
     pub capacity_mw: f64,
@@ -24,6 +25,7 @@ pub struct ThermalCostSegment {
 /// GNL models the commitment and start-up lag of thermal units that require
 /// advance scheduling over multiple stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GnlConfig {
     /// Number of stages of dispatch anticipation.
     pub lag_stages: i32,
@@ -37,6 +39,7 @@ pub struct GnlConfig {
 ///
 /// Source: system/thermals.json. See Input System Entities SS1.9.5.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Thermal {
     /// Unique thermal plant identifier.
     pub id: EntityId,
@@ -149,5 +152,33 @@ mod tests {
         };
 
         assert_eq!(thermal.gnl_config, None);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_thermal_serde_roundtrip() {
+        let thermal = Thermal {
+            id: EntityId::from(2),
+            name: "Pecém I".to_string(),
+            bus_id: EntityId::from(20),
+            entry_stage_id: Some(1),
+            exit_stage_id: Some(120),
+            cost_segments: vec![
+                ThermalCostSegment {
+                    capacity_mw: 200.0,
+                    cost_per_mwh: 80.0,
+                },
+                ThermalCostSegment {
+                    capacity_mw: 160.0,
+                    cost_per_mwh: 120.0,
+                },
+            ],
+            min_generation_mw: 100.0,
+            max_generation_mw: 360.0,
+            gnl_config: Some(GnlConfig { lag_stages: 2 }),
+        };
+        let json = serde_json::to_string(&thermal).unwrap();
+        let deserialized: Thermal = serde_json::from_str(&json).unwrap();
+        assert_eq!(thermal, deserialized);
     }
 }

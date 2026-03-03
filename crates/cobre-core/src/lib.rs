@@ -40,8 +40,13 @@
 pub mod entities;
 pub mod entity_id;
 pub mod error;
+pub mod generic_constraint;
+pub mod initial_conditions;
 pub mod penalty;
+pub mod resolved;
+pub mod scenario;
 pub mod system;
+pub mod temporal;
 pub mod topology;
 
 pub use entities::{
@@ -52,10 +57,29 @@ pub use entities::{
 };
 pub use entity_id::EntityId;
 pub use error::ValidationError;
+pub use generic_constraint::{
+    ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig, VariableRef,
+};
+pub use initial_conditions::{HydroStorage, InitialConditions};
 pub use penalty::{
-    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
-    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
-    HydroPenaltyOverrides,
+    GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
+    resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
+    resolve_ncs_curtailment_cost,
+};
+pub use resolved::{
+    BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,
+    LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds, ResolvedPenalties,
+    ThermalStageBounds,
+};
+pub use scenario::{
+    CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+    CorrelationScheduleEntry, ExternalSelectionMode, InflowModel, LoadModel, SamplingScheme,
+    ScenarioSource,
 };
 pub use system::{System, SystemBuilder};
+pub use temporal::{
+    Block, BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig,
+    SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig,
+    Transition,
+};
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};

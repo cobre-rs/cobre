@@ -31,6 +31,7 @@ use core::fmt;
 /// assert_eq!(raw, 42);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntityId(pub i32);
 
 impl fmt::Display for EntityId {
@@ -105,5 +106,14 @@ mod tests {
     fn test_into_i32() {
         let raw: i32 = i32::from(EntityId(7));
         assert_eq!(raw, 7);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_entity_id_serde_roundtrip() {
+        let id = EntityId(42);
+        let json = serde_json::to_string(&id).unwrap();
+        let deserialized: EntityId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, deserialized);
     }
 }

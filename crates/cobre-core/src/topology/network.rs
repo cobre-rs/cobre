@@ -17,6 +17,7 @@ use crate::{
 /// Describes whether a bus is the source or target end of a transmission line,
 /// and which line it refers to. Used in bus-line incidence lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BusLineConnection {
     /// The line's entity ID.
     pub line_id: EntityId,
@@ -30,6 +31,7 @@ pub struct BusLineConnection {
 /// Groups hydro, thermal, and non-controllable source IDs by type. All ID
 /// lists are in canonical ascending-`i32` order for determinism.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BusGenerators {
     /// Hydro plant IDs connected to this bus.
     pub hydro_ids: Vec<EntityId>,
@@ -44,6 +46,7 @@ pub struct BusGenerators {
 /// Groups energy contract and pumping station IDs. All ID lists are in
 /// canonical ascending-`i32` order for determinism.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BusLoads {
     /// Energy contract IDs at this bus.
     pub contract_ids: Vec<EntityId>,
@@ -63,6 +66,7 @@ pub struct BusLoads {
 // and the spec's field names, making the code self-documenting.
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NetworkTopology {
     /// Bus-line incidence: `bus_id` -> list of (`line_id`, `is_source`).
     /// `is_source` is true when the bus is the source (direct flow direction).
@@ -478,5 +482,19 @@ mod tests {
         let loads = topo.bus_loads(EntityId(0));
         // Contract IDs must be sorted ascending: 7, 10.
         assert_eq!(loads.contract_ids, vec![EntityId(7), EntityId(10)]);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_topology_serde_roundtrip_network() {
+        // Build a network with buses, lines, hydros, and thermals.
+        let buses = vec![make_bus(0), make_bus(1)];
+        let lines = vec![make_line(0, 0, 1)];
+        let hydros = vec![make_hydro(0, 0)];
+        let thermals = vec![make_thermal(0, 1)];
+        let topo = NetworkTopology::build(&buses, &lines, &hydros, &thermals, &[], &[], &[]);
+        let json = serde_json::to_string(&topo).unwrap();
+        let deserialized: NetworkTopology = serde_json::from_str(&json).unwrap();
+        assert_eq!(topo, deserialized);
     }
 }

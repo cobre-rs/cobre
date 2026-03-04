@@ -53,8 +53,8 @@
 //! registry) is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    entities::{ContractType, EnergyContract},
     EntityId,
+    entities::{ContractType, EnergyContract},
 };
 use serde::Deserialize;
 use std::collections::HashSet;

@@ -16,12 +16,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cobre_core::{
-    scenario::{InflowModel, LoadModel},
     EntityId,
+    scenario::{InflowModel, LoadModel},
 };
 
-use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 use crate::LoadError;
+use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 
 // ── assemble_inflow_models ────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ pub fn assemble_inflow_models(
                 message: format!(
                     "orphaned AR coefficients for (hydro_id={}, stage_id={}) \
                      have no matching inflow_seasonal_stats row",
-                    orphan.0 .0, orphan.1,
+                    orphan.0.0, orphan.1,
                 ),
             });
         }

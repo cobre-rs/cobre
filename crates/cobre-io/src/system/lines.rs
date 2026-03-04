@@ -43,9 +43,9 @@
 //! exist in the bus registry) is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    entities::Line,
-    penalty::{resolve_line_exchange_cost, GlobalPenaltyDefaults},
     EntityId,
+    entities::Line,
+    penalty::{GlobalPenaltyDefaults, resolve_line_exchange_cost},
 };
 use serde::Deserialize;
 use std::collections::HashSet;

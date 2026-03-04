@@ -16,7 +16,7 @@ distributed solver for long-term energy planning.
 - **License**: Apache-2.0
 - **Workspace**: 11 crates (10 workspace + 1 external `ferrompi`)
 - **Build**: `cargo build --workspace`
-- **Test**: `cargo test --workspace`
+- **Test**: `cargo test --workspace --all-features`
 
 See `CONTRIBUTING.md` for build prerequisites, project structure, commit message
 format, and crate-specific coding guidelines.

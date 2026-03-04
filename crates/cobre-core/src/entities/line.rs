@@ -13,6 +13,7 @@ use crate::EntityId;
 ///
 /// Source: system/lines.json. See Input System Entities SS2.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Line {
     /// Unique line identifier.
     pub id: EntityId,
@@ -129,5 +130,25 @@ mod tests {
         };
 
         assert_ne!(line_a, line_c);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_line_serde_roundtrip() {
+        let line = Line {
+            id: EntityId::from(3),
+            name: "Temporary Line".to_string(),
+            source_bus_id: EntityId::from(1),
+            target_bus_id: EntityId::from(2),
+            entry_stage_id: Some(5),
+            exit_stage_id: Some(120),
+            direct_capacity_mw: 200.0,
+            reverse_capacity_mw: 200.0,
+            losses_percent: 2.5,
+            exchange_cost: 1.0,
+        };
+        let json = serde_json::to_string(&line).unwrap();
+        let deserialized: Line = serde_json::from_str(&json).unwrap();
+        assert_eq!(line, deserialized);
     }
 }

@@ -1,7 +1,7 @@
 //! Hydro plant entity — reservoir, turbine, spillage, and cascade topology.
 //!
 //! A `Hydro` represents a hydroelectric power plant with a reservoir. Hydro plants
-//! have a generation model (constant productivity for training), reservoir storage
+//! have a generation model (constant productivity for optimization), reservoir storage
 //! bounds, turbine and spillage variables, and may participate in a cascade topology
 //! via a downstream reference.
 
@@ -11,6 +11,7 @@ use crate::EntityId;
 ///
 /// Relates total outflow to downstream water level (tailrace height).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TailracePoint {
     /// Total outflow at this point \[m³/s\].
     pub outflow_m3s: f64,
@@ -23,6 +24,7 @@ pub struct TailracePoint {
 /// Diverted flow bypasses turbines and spillways and is routed directly to
 /// the downstream reservoir identified by `downstream_id`.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DiversionChannel {
     /// Identifier of the downstream hydro plant receiving diverted water.
     pub downstream_id: EntityId,
@@ -36,6 +38,7 @@ pub struct DiversionChannel {
 /// from a fixed inflow source (e.g., diversion works) during a defined stage
 /// window.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FillingConfig {
     /// Stage index at which filling begins (inclusive).
     pub start_stage_id: i32,
@@ -50,6 +53,7 @@ pub struct FillingConfig {
 ///
 /// See DEC-006 for the three-tier penalty resolution design.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HydroPenalties {
     /// Penalty per m³/s of water spilled over the spillway \[$/m³/s\].
     pub spillage_cost: f64,
@@ -77,29 +81,29 @@ pub struct HydroPenalties {
 
 /// Production function model for a hydro plant.
 ///
-/// Selects how turbine power output is computed from water flow and head.
+/// Defines how turbine power output is computed from water flow and head.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HydroGenerationModel {
     /// Constant power per unit flow, independent of reservoir head.
     ///
-    /// Used in both SDDP training and simulation. This is the minimal viable
-    /// model: `power_mw = productivity_mw_per_m3s * turbined_m3s`.
+    /// This is the minimal viable model: `power_mw = productivity_mw_per_m3s * turbined_m3s`.
+    /// Applicable to any analysis procedure.
     ConstantProductivity {
         /// Power output per unit of turbined flow \[MW/(m³/s)\].
         productivity_mw_per_m3s: f64,
     },
     /// Head-dependent productivity linearized around an operating point.
     ///
-    /// Used in simulation only (not SDDP training). The linearization is
-    /// computed from the current head at the start of each simulation stage.
+    /// The linearization is computed from the current head at the start
+    /// of each time step.
     LinearizedHead {
         /// Nominal power output per unit of turbined flow at reference head \[MW/(m³/s)\].
         productivity_mw_per_m3s: f64,
     },
     /// Full production function with head-area-productivity tables (FPHA model).
     ///
-    /// Used in both SDDP training and simulation when high-fidelity head effects
-    /// are required. Requires forebay and tailrace elevation tables.
+    /// Requires forebay and tailrace elevation tables for high-fidelity head effects.
     Fpha,
 }
 
@@ -108,6 +112,7 @@ pub enum HydroGenerationModel {
 /// Models the relationship between total outflow and tailrace elevation,
 /// which affects net head and therefore turbine productivity.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TailraceModel {
     /// Polynomial tailrace curve: `height = a₀ + a₁·Q + a₂·Q² + …`
     ///
@@ -131,6 +136,7 @@ pub enum TailraceModel {
 ///
 /// Hydraulic losses reduce the effective head available at the turbine.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HydraulicLossesModel {
     /// Losses as a fraction of net head: `loss = factor * head`.
     Factor {
@@ -148,6 +154,7 @@ pub enum HydraulicLossesModel {
 ///
 /// Efficiency scales the power output from the hydraulic power available.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EfficiencyModel {
     /// Constant efficiency across all operating points.
     Constant {
@@ -166,6 +173,7 @@ pub enum EfficiencyModel {
 /// Source: system/hydro.json. See Input System Entities SS3 and
 /// Internal Structures §1.9.4.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Hydro {
     /// Unique hydro plant identifier.
     pub id: EntityId,
@@ -456,5 +464,61 @@ mod tests {
 
         assert_eq!(channel.downstream_id, EntityId::from(7));
         assert!((channel.max_flow_m3s - 350.0).abs() < f64::EPSILON);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_hydro_serde_roundtrip() {
+        let hydro = Hydro {
+            id: EntityId::from(2),
+            name: "Tucuruí".to_string(),
+            bus_id: EntityId::from(20),
+            downstream_id: Some(EntityId::from(3)),
+            entry_stage_id: Some(1),
+            exit_stage_id: Some(600),
+            min_storage_hm3: 50.0,
+            max_storage_hm3: 45_000.0,
+            min_outflow_m3s: 1000.0,
+            max_outflow_m3s: Some(100_000.0),
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.8765,
+            },
+            min_turbined_m3s: 500.0,
+            max_turbined_m3s: 22_500.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 8370.0,
+            tailrace: Some(TailraceModel::Polynomial {
+                coefficients: vec![5.0, 0.001],
+            }),
+            hydraulic_losses: Some(HydraulicLossesModel::Factor { value: 0.03 }),
+            efficiency: Some(EfficiencyModel::Constant { value: 0.93 }),
+            evaporation_coefficients_mm: Some([
+                80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0,
+            ]),
+            diversion: Some(DiversionChannel {
+                downstream_id: EntityId::from(4),
+                max_flow_m3s: 200.0,
+            }),
+            filling: Some(FillingConfig {
+                start_stage_id: 48,
+                filling_inflow_m3s: 100.0,
+            }),
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.02,
+                fpha_turbined_cost: 0.03,
+                storage_violation_below_cost: 1.0,
+                filling_target_violation_cost: 2.0,
+                turbined_violation_below_cost: 3.0,
+                outflow_violation_below_cost: 4.0,
+                outflow_violation_above_cost: 5.0,
+                generation_violation_below_cost: 6.0,
+                evaporation_violation_cost: 7.0,
+                water_withdrawal_violation_cost: 8.0,
+            },
+        };
+        let json = serde_json::to_string(&hydro).unwrap();
+        let deserialized: Hydro = serde_json::from_str(&json).unwrap();
+        assert_eq!(hydro, deserialized);
     }
 }

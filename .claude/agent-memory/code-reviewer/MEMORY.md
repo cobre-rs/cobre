@@ -35,6 +35,25 @@
   `DisconnectedBus` and `InvalidPenalty`. Both have TODO/Phase-2 deferred comments.
   These are pre-declared for Phase 2. Don't flag as dead code.
 
+### Phase 2 cobre-io key facts
+
+- `Stage.index` (0-based positional) ≠ `Stage.id` (user-facing domain ID, can be non-zero/non-contiguous).
+  `Stage.index` is documented as the key for penalty/bounds array indexing. Override rows carry `stage_id`.
+- `resolve_penalties` and `resolve_bounds` treat `stage_id` from override rows as positional `stage_idx`
+  via `usize::try_from(row.stage_id)`. This is correct ONLY if stage IDs happen to equal their 0-based index.
+  This is the most important correctness risk identified in Phase 2.
+- `n_stages` in pipeline.rs counts only study stages (id >= 0); pre-study stages excluded.
+- `dead_code` allowances on `config`, `penalties`, `load_factors`, `exchange_factors` in `ParsedData` are
+  intentional: these fields are parsed for Layer 2 validation but not forwarded to `System` yet (Phase 3+).
+- `ValidationContext::into_result()` silently discards warnings — this is explicitly documented behavior.
+- `ValidationContext.errors()` returns `Vec<&ValidationEntry>` (heap-allocated filter), not a slice.
+  This is slightly inefficient but clean. Called at most once per file parse in validate_schema.
+- `#[allow(clippy::struct_excessive_bools)]` on `FileManifest` is necessary and correct.
+- `unreachable!` in pipeline.rs line 52 is actually sound — it maps the `Ok(())` branch of
+  `into_result()` when validate_schema returned `None` (no errors added), which logically cannot happen.
+  But in practice it CAN be reached if no new errors were added by validate_schema (pre-existing errors
+  from Layer 1 caused validate_schema to return None). This is a logic flaw — see FINDING.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

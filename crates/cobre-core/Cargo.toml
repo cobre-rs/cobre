@@ -12,5 +12,23 @@ readme = "README.md"
 keywords = ["power-systems", "energy", "electrical", "data-model"]
 categories = ["science", "simulation"]
 
+[features]
+default = []
+## Enable `serde::Serialize`/`serde::Deserialize` for all public types.
+##
+## When enabled, activates `chrono/serde` so that `NaiveDate` fields (added in
+## Phase 2) also implement the serde traits. Required by `cobre-io` for JSON
+## input loading and by MPI broadcast via `postcard`.
+serde = ["dep:serde", "chrono/serde"]
+
+[dependencies]
+## `NaiveDate` is used in `Stage` and `SeasonDefinition` types (added in Phase 2).
+## Kept as a mandatory dependency because date handling is core domain data.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = { version = "1", optional = false }
+
 [lints]
 workspace = true

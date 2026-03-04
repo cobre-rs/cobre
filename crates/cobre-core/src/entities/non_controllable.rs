@@ -16,6 +16,7 @@ use crate::EntityId;
 ///
 /// Source: `system/non_controllable.json`. See Input System Entities SS1.9.8.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NonControllableSource {
     /// Unique source identifier.
     pub id: EntityId,

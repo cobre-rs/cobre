@@ -1,0 +1,2905 @@
+//! Layer 5 — Semantic validation: hydro, thermal, stage, penalty, and scenario rules.
+//!
+//! Validates all domain-specific business rules after Layers 2-4 have
+//! ensured schema correctness, referential integrity, and dimensional
+//! consistency.
+//!
+//! ## Layer 5a rules (hydro and thermal domain) — `validate_semantic_hydro_thermal`
+//!
+//! | # | Rule                                              | Source file                           | `ErrorKind`            |
+//! |---|---------------------------------------------------|---------------------------------------|------------------------|
+//! | 1 | Hydro cascade graph must be acyclic               | `system/hydros.json`                  | `CycleDetected`        |
+//! | 2 | `min_storage_hm3 <= max_storage_hm3`              | `system/hydros.json`                  | `InvalidValue`         |
+//! | 3 | `min_turbined_m3s <= max_turbined_m3s`            | `system/hydros.json`                  | `InvalidValue`         |
+//! | 4 | `min_outflow_m3s <= max_outflow_m3s` (when Some)  | `system/hydros.json`                  | `InvalidValue`         |
+//! | 5 | `min_generation_mw <= max_generation_mw` (hydro)  | `system/hydros.json`                  | `InvalidValue`         |
+//! | 6 | `entry_stage_id < exit_stage_id` (when both Some) | hydros/lines/thermals                 | `InvalidValue`         |
+//! | 7 | Filling `start_stage_id` in study stage set       | `system/hydros.json`                  | `InvalidValue`         |
+//! | 8 | Geometry `volume_hm3` strictly increasing         | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
+//! | 9 | Geometry `height_m` non-decreasing                | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
+//! |10 | Geometry `area_km2` non-decreasing                | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
+//! |11 | FPHA: at least 3 planes per (hydro, stage)        | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
+//! |12 | FPHA: `gamma_v > 0`, `gamma_s <= 0`               | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
+//! |13 | `min_generation_mw <= max_generation_mw` (thermal)| `system/thermals.json`                | `InvalidValue`         |
+//!
+//! ## Layer 5b rules (stages, penalties, and scenario domain) — `validate_semantic_stages_penalties_scenarios`
+//!
+//! | #  | Rule                                                                    | Source file                                    | `ErrorKind`              |
+//! |----|-------------------------------------------------------------------------|------------------------------------------------|--------------------------|
+//! | 1  | Every transition `source_id`/`target_id` must refer to an existing stage| `stages.json`                                  | `InvalidValue`           |
+//! | 2  | Outgoing transition probabilities sum to 1.0 (±1e-6) per source stage  | `stages.json`                                  | `InvalidValue`           |
+//! | 3  | Cyclic graph: `annual_discount_rate > 0.0`                              | `stages.json`                                  | `InvalidValue`           |
+//! | 4  | Every `Block.duration_hours > 0.0`                                      | `stages.json`                                  | `InvalidValue`           |
+//! | 5  | CVaR: `alpha` in (0, 1], `lambda` in [0, 1]                             | `stages.json`                                  | `InvalidValue`           |
+//! | 6  | `filling_target_violation_cost > storage_violation_below_cost`          | `penalties.json`                               | `ModelQuality` (warning) |
+//! | 7  | `storage_violation_below_cost > max(deficit_segment_costs)`             | `penalties.json`                               | `ModelQuality` (warning) |
+//! | 8  | `max(deficit_segment_costs) > max(constraint_violation_costs)`          | `penalties.json`                               | `ModelQuality` (warning) |
+//! | 9  | `min(constraint_violation_costs) > max(resource_costs)`                 | `penalties.json`                               | `ModelQuality` (warning) |
+//! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
+//! |11  | FPHA hydros: `fpha_turbined_cost > spillage_cost`                       | `penalties.json`                               | `BusinessRuleViolation`  |
+//! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow)            | `scenarios/inflow_seasonal_stats.parquet`      | `ModelQuality` (warning) |
+//! |13  | AR coefficient count equals `ar_order`                                  | `scenarios/inflow_ar_coefficients.parquet`     | `InvalidValue`           |
+//! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+
+use std::collections::{HashMap, HashSet};
+
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
+
+// ── validate_semantic_hydro_thermal ──────────────────────────────────────────
+
+/// Performs Layer 5a semantic validation: all hydro and thermal domain rules.
+///
+/// All 13 rules are checked regardless of failures in earlier rules — every
+/// violation is collected before returning.  This function is infallible; it
+/// never returns a `Result`.  All violations are pushed to `ctx` as
+/// [`ErrorKind::CycleDetected`], [`ErrorKind::InvalidValue`], or
+/// [`ErrorKind::BusinessRuleViolation`] entries.
+///
+/// # Arguments
+///
+/// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
+/// * `ctx`  — mutable validation context that accumulates diagnostics.
+///
+/// # Geometry and FPHA rules
+///
+/// Rules 8-12 are only checked when the corresponding data is non-empty.  An
+/// empty `hydro_geometry` or empty `fpha_hyperplanes` slice produces no errors.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
+    check_cascade_acyclic(data, ctx);
+    check_hydro_bounds(data, ctx);
+    check_lifecycle_consistency(data, ctx);
+    check_filling_config(data, ctx);
+    check_geometry_monotonicity(data, ctx);
+    check_fpha_constraints(data, ctx);
+    check_thermal_generation_bounds(data, ctx);
+}
+
+// ── Rule 1: Cascade acyclicity ────────────────────────────────────────────────
+
+/// Checks that the hydro cascade graph is acyclic using Kahn's algorithm.
+///
+/// Builds a downstream adjacency map from `hydro.downstream_id` and runs
+/// topological sort.  If any node is unvisited after the sort, a cycle exists.
+/// Reports all cycle-participant hydro IDs in one error entry.
+fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.hydros.is_empty() {
+        return;
+    }
+
+    // Collect all hydro IDs.
+    let all_ids: Vec<i32> = data.hydros.iter().map(|h| h.id.0).collect();
+
+    // Build adjacency map: upstream_id -> list of downstream_ids (within the
+    // hydro set only -- Layer 3 has already validated that downstream_id
+    // references exist, but be defensive).
+    let downstream_set: HashSet<i32> = all_ids.iter().copied().collect();
+
+    // adjacency[u] = Vec of v such that u -> v (u is upstream, v is downstream)
+    let mut adjacency: HashMap<i32, Vec<i32>> = HashMap::new();
+    for id in &all_ids {
+        adjacency.insert(*id, Vec::new());
+    }
+    for hydro in &data.hydros {
+        if let Some(ds) = hydro.downstream_id {
+            // Only add edges within the hydro registry.
+            if downstream_set.contains(&ds.0) {
+                adjacency.entry(hydro.id.0).or_default().push(ds.0);
+            }
+        }
+    }
+
+    // Compute in-degrees: in_degree[v] = number of upstream nodes pointing to v.
+    let mut in_degree: HashMap<i32, usize> = HashMap::new();
+    for id in &all_ids {
+        in_degree.insert(*id, 0);
+    }
+    for hydro in &data.hydros {
+        if let Some(ds) = hydro.downstream_id {
+            if downstream_set.contains(&ds.0) {
+                *in_degree.entry(ds.0).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm: start with all zero-in-degree nodes.
+    let mut queue: std::collections::VecDeque<i32> = in_degree
+        .iter()
+        .filter(|&(_, deg)| *deg == 0)
+        .map(|(&id, _)| id)
+        .collect();
+
+    let mut visited_count: usize = 0;
+
+    while let Some(node) = queue.pop_front() {
+        visited_count += 1;
+        if let Some(neighbors) = adjacency.get(&node) {
+            for &neighbor in neighbors {
+                let deg = in_degree.entry(neighbor).or_insert(0);
+                if *deg > 0 {
+                    *deg -= 1;
+                }
+                if *deg == 0 {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+
+    // If visited_count < total, a cycle exists.
+    if visited_count < all_ids.len() {
+        // Collect all nodes still in the cycle (in_degree > 0 after Kahn's).
+        let mut cycle_participants: Vec<i32> = in_degree
+            .iter()
+            .filter(|&(_, deg)| *deg > 0)
+            .map(|(&id, _)| id)
+            .collect();
+        cycle_participants.sort_unstable();
+
+        ctx.add_error(
+            ErrorKind::CycleDetected,
+            "system/hydros.json",
+            None::<&str>,
+            format!(
+                "hydro cascade contains a cycle involving hydro IDs: [{}]",
+                cycle_participants
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
+}
+
+// ── Rules 2-5: Hydro bound consistency ───────────────────────────────────────
+
+/// Checks storage, turbine, outflow, and generation bound consistency for every hydro.
+fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
+    for hydro in &data.hydros {
+        let entity_str = format!("Hydro {}", hydro.id.0);
+
+        // Rule 2: min_storage_hm3 <= max_storage_hm3
+        if hydro.min_storage_hm3 > hydro.max_storage_hm3 {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "system/hydros.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: min_storage_hm3 ({}) > max_storage_hm3 ({}); storage bounds are inconsistent",
+                    hydro.min_storage_hm3, hydro.max_storage_hm3
+                ),
+            );
+        }
+
+        // Rule 3: min_turbined_m3s <= max_turbined_m3s
+        if hydro.min_turbined_m3s > hydro.max_turbined_m3s {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "system/hydros.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: min_turbined_m3s ({}) > max_turbined_m3s ({}); turbine bounds are inconsistent",
+                    hydro.min_turbined_m3s, hydro.max_turbined_m3s
+                ),
+            );
+        }
+
+        // Rule 4: min_outflow_m3s <= max_outflow_m3s (when Some)
+        if let Some(max_outflow) = hydro.max_outflow_m3s {
+            if hydro.min_outflow_m3s > max_outflow {
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "system/hydros.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: min_outflow_m3s ({}) > max_outflow_m3s ({}); outflow bounds are inconsistent",
+                        hydro.min_outflow_m3s, max_outflow
+                    ),
+                );
+            }
+        }
+
+        // Rule 5: min_generation_mw <= max_generation_mw
+        if hydro.min_generation_mw > hydro.max_generation_mw {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "system/hydros.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: min_generation_mw ({}) > max_generation_mw ({}); generation bounds are inconsistent",
+                    hydro.min_generation_mw, hydro.max_generation_mw
+                ),
+            );
+        }
+    }
+}
+
+// ── Rule 6: Entity lifecycle consistency ──────────────────────────────────────
+
+/// Checks that `entry_stage_id < exit_stage_id` for all entities with both fields set.
+fn check_lifecycle_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
+    // Hydros
+    for hydro in &data.hydros {
+        if let (Some(entry), Some(exit)) = (hydro.entry_stage_id, hydro.exit_stage_id) {
+            if entry >= exit {
+                let entity_str = format!("Hydro {}", hydro.id.0);
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "system/hydros.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: entry_stage_id ({entry}) >= exit_stage_id ({exit}); entry must precede exit"
+                    ),
+                );
+            }
+        }
+    }
+
+    // Lines
+    for line in &data.lines {
+        if let (Some(entry), Some(exit)) = (line.entry_stage_id, line.exit_stage_id) {
+            if entry >= exit {
+                let entity_str = format!("Line {}", line.id.0);
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "system/lines.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: entry_stage_id ({entry}) >= exit_stage_id ({exit}); entry must precede exit"
+                    ),
+                );
+            }
+        }
+    }
+
+    // Thermals
+    for thermal in &data.thermals {
+        if let (Some(entry), Some(exit)) = (thermal.entry_stage_id, thermal.exit_stage_id) {
+            if entry >= exit {
+                let entity_str = format!("Thermal {}", thermal.id.0);
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "system/thermals.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: entry_stage_id ({entry}) >= exit_stage_id ({exit}); entry must precede exit"
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rule 7: Filling configuration validity ────────────────────────────────────
+
+/// Checks that every hydro's `filling.start_stage_id` is a valid study stage ID.
+fn check_filling_config(data: &ParsedData, ctx: &mut ValidationContext) {
+    // Build the set of study stage IDs (non-negative IDs only — pre-study stages
+    // have negative IDs and are not valid targets for filling operations).
+    let study_stage_ids: HashSet<i32> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+
+    for hydro in &data.hydros {
+        if let Some(filling) = &hydro.filling {
+            if !study_stage_ids.contains(&filling.start_stage_id) {
+                let entity_str = format!("Hydro {}", hydro.id.0);
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "system/hydros.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: filling.start_stage_id ({}) is not a valid study stage ID",
+                        filling.start_stage_id
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 8-10: Geometry monotonicity ────────────────────────────────────────
+
+/// Checks monotonicity of VHA curves for all hydros with geometry data.
+///
+/// Rows are pre-sorted by `(hydro_id, volume_hm3)` ascending, so groups are
+/// contiguous.  Iterates with a `current_key` variable rather than collecting
+/// into a map — O(n) with no extra allocation.
+fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.hydro_geometry.is_empty() {
+        return;
+    }
+
+    let mut i = 0;
+    let rows = &data.hydro_geometry;
+
+    while i < rows.len() {
+        let current_hydro_id = rows[i].hydro_id.0;
+        let group_start = i;
+
+        // Find end of this hydro's group (rows are sorted by hydro_id then volume_hm3).
+        while i < rows.len() && rows[i].hydro_id.0 == current_hydro_id {
+            i += 1;
+        }
+        let group = &rows[group_start..i];
+
+        // Check consecutive pairs within the group.
+        for pair in group.windows(2) {
+            let prev = &pair[0];
+            let curr = &pair[1];
+            let entity_str = format!("Hydro {current_hydro_id}");
+
+            // Rule 8: volume_hm3 must be strictly increasing.
+            // (rows are pre-sorted by volume_hm3, so consecutive values should never
+            // be equal either)
+            if curr.volume_hm3 <= prev.volume_hm3 {
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "system/hydro_geometry.parquet",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: volume_hm3 values are not strictly increasing ({} then {}); geometry curve must have strictly increasing volume",
+                        prev.volume_hm3, curr.volume_hm3
+                    ),
+                );
+            }
+
+            // Rule 9: height_m must be non-decreasing.
+            if curr.height_m < prev.height_m {
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "system/hydro_geometry.parquet",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: height_m values are not non-decreasing ({} then {}); geometry curve must have non-decreasing height with volume",
+                        prev.height_m, curr.height_m
+                    ),
+                );
+            }
+
+            // Rule 10: area_km2 must be non-decreasing.
+            if curr.area_km2 < prev.area_km2 {
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "system/hydro_geometry.parquet",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: area_km2 values are not non-decreasing ({} then {}); geometry curve must have non-decreasing area with volume",
+                        prev.area_km2, curr.area_km2
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 11-12: FPHA hyperplane constraints ──────────────────────────────────
+
+/// Checks FPHA hyperplane minimum plane count and gamma sign constraints.
+///
+/// Rows are pre-sorted by `(hydro_id, stage_id, plane_id)` ascending (null
+/// `stage_id` sorts first).  Groups are contiguous.  Uses a `current_key`
+/// variable for O(n) grouping without extra allocation.
+fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.fpha_hyperplanes.is_empty() {
+        return;
+    }
+
+    // Rule 12: Check gamma_v > 0 and gamma_s <= 0 for every row.
+    for row in &data.fpha_hyperplanes {
+        let entity_str = format!("Hydro {}", row.hydro_id.0);
+
+        if row.gamma_v <= 0.0 {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "system/fpha_hyperplanes.parquet",
+                Some(&entity_str),
+                format!(
+                    "{entity_str} (stage={}, plane={}): gamma_v ({}) must be positive (> 0); power must increase with volume/head",
+                    row.stage_id.map_or_else(|| "all".to_string(), |s| s.to_string()),
+                    row.plane_id,
+                    row.gamma_v
+                ),
+            );
+        }
+
+        if row.gamma_s > 0.0 {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "system/fpha_hyperplanes.parquet",
+                Some(&entity_str),
+                format!(
+                    "{entity_str} (stage={}, plane={}): gamma_s ({}) must be non-positive (<= 0); power must not increase with spillage",
+                    row.stage_id.map_or_else(|| "all".to_string(), |s| s.to_string()),
+                    row.plane_id,
+                    row.gamma_s
+                ),
+            );
+        }
+    }
+
+    // Rule 11: Each (hydro_id, stage_id) group must have at least 3 planes.
+    // Rows are sorted by (hydro_id, stage_id, plane_id).
+    let rows = &data.fpha_hyperplanes;
+    let mut i = 0;
+
+    while i < rows.len() {
+        let current_hydro_id = rows[i].hydro_id.0;
+        let current_stage_id = rows[i].stage_id;
+
+        let group_start = i;
+
+        // Find end of this (hydro_id, stage_id) group.
+        while i < rows.len()
+            && rows[i].hydro_id.0 == current_hydro_id
+            && rows[i].stage_id == current_stage_id
+        {
+            i += 1;
+        }
+
+        let plane_count = i - group_start;
+
+        if plane_count < 3 {
+            let entity_str = format!("Hydro {current_hydro_id}");
+            let stage_label = current_stage_id.map_or_else(|| "all".to_string(), |s| s.to_string());
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "system/fpha_hyperplanes.parquet",
+                Some(&entity_str),
+                format!(
+                    "{entity_str} (stage={stage_label}): only {plane_count} FPHA plane(s) defined, at least 3 are required for valid piecewise-linear approximation"
+                ),
+            );
+        }
+    }
+}
+
+// ── Rule 13: Thermal generation bound consistency ─────────────────────────────
+
+/// Checks that `min_generation_mw <= max_generation_mw` for every thermal.
+fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
+    for thermal in &data.thermals {
+        if thermal.min_generation_mw > thermal.max_generation_mw {
+            let entity_str = format!("Thermal {}", thermal.id.0);
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "system/thermals.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: min_generation_mw ({}) > max_generation_mw ({}); generation bounds are inconsistent",
+                    thermal.min_generation_mw, thermal.max_generation_mw
+                ),
+            );
+        }
+    }
+}
+
+// ── validate_semantic_stages_penalties_scenarios ──────────────────────────────
+
+/// Performs Layer 5b semantic validation: stage structure, penalty ordering,
+/// and scenario model rules.
+///
+/// All 16 rules are checked regardless of failures in earlier rules — every
+/// violation is collected before returning.  This function is infallible; it
+/// never returns a `Result`.  Errors are pushed to `ctx` as
+/// [`ErrorKind::InvalidValue`] or [`ErrorKind::BusinessRuleViolation`] entries;
+/// penalty ordering warnings use [`ErrorKind::ModelQuality`].
+///
+/// # Arguments
+///
+/// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
+/// * `ctx`  — mutable validation context that accumulates diagnostics.
+///
+/// # Conditional checks
+///
+/// Rules 12-13 are only checked when `data.inflow_seasonal_stats` is non-empty.
+/// Rules 14-16 are only checked when `data.correlation` is `Some`.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn validate_semantic_stages_penalties_scenarios(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+) {
+    check_stage_structure(data, ctx);
+    check_penalty_ordering(data, ctx);
+    check_fpha_penalty_rule(data, ctx);
+    check_scenario_models(data, ctx);
+    check_correlation_matrices(data, ctx);
+}
+
+// ── Tolerances ────────────────────────────────────────────────────────────────
+
+/// Tolerance for floating-point probability sum comparisons.
+const PROB_TOLERANCE: f64 = 1e-6;
+
+/// Tolerance for floating-point correlation matrix comparisons.
+const CORR_TOLERANCE: f64 = 1e-9;
+
+// ── Rules 1-5: Stage structure ────────────────────────────────────────────────
+
+/// Validates policy graph transitions, block durations, and `CVaR` parameters.
+#[allow(clippy::too_many_lines)]
+fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationContext) {
+    use cobre_core::temporal::{PolicyGraphType, StageRiskConfig};
+
+    let graph = &data.stages.policy_graph;
+    let stages = &data.stages.stages;
+
+    // Build a set of all valid stage IDs for fast membership tests.
+    let stage_ids: HashSet<i32> = stages.iter().map(|s| s.id).collect();
+
+    // Rule 1: Every source_id and target_id in transitions must be a valid stage ID.
+    for transition in &graph.transitions {
+        if !stage_ids.contains(&transition.source_id) {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "stages.json",
+                None::<&str>,
+                format!(
+                    "transition source_id {} does not refer to a valid stage ID",
+                    transition.source_id
+                ),
+            );
+        }
+        if !stage_ids.contains(&transition.target_id) {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "stages.json",
+                None::<&str>,
+                format!(
+                    "transition target_id {} does not refer to a valid stage ID",
+                    transition.target_id
+                ),
+            );
+        }
+    }
+
+    // Rule 2: For each unique source_id, outgoing probability sum must be ≈ 1.0.
+    // Group transitions by source_id and sum probabilities.
+    let mut prob_sums: HashMap<i32, f64> = HashMap::new();
+    for transition in &graph.transitions {
+        *prob_sums.entry(transition.source_id).or_insert(0.0) += transition.probability;
+    }
+    let mut sorted_sources: Vec<i32> = prob_sums.keys().copied().collect();
+    sorted_sources.sort_unstable();
+    for source_id in sorted_sources {
+        let total = prob_sums[&source_id];
+        if (total - 1.0).abs() > PROB_TOLERANCE {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "stages.json",
+                None::<&str>,
+                format!(
+                    "outgoing transition probabilities from stage {source_id} sum to {total:.8} \
+                     (expected 1.0 ±{PROB_TOLERANCE}); probability must sum to 1.0"
+                ),
+            );
+        }
+    }
+
+    // Rule 3: Cyclic graphs require annual_discount_rate > 0.0.
+    if graph.graph_type == PolicyGraphType::Cyclic && graph.annual_discount_rate <= 0.0 {
+        ctx.add_error(
+            ErrorKind::InvalidValue,
+            "stages.json",
+            None::<&str>,
+            format!(
+                "cyclic policy graph requires annual_discount_rate > 0.0 for convergence, \
+                 got {}",
+                graph.annual_discount_rate
+            ),
+        );
+    }
+
+    // Rule 4: Every Block.duration_hours must be > 0.0.
+    for stage in stages {
+        for block in &stage.blocks {
+            if block.duration_hours <= 0.0 {
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "stages.json",
+                    Some(format!("Stage {}", stage.id)),
+                    format!(
+                        "Stage {}: block has duration_hours {} which is not > 0.0; \
+                         block duration must be positive",
+                        stage.id, block.duration_hours
+                    ),
+                );
+            }
+        }
+    }
+
+    // Rule 5: CVaR alpha must be in (0, 1] and lambda must be in [0, 1].
+    for stage in stages {
+        if let StageRiskConfig::CVaR { alpha, lambda } = stage.risk_config {
+            if alpha <= 0.0 || alpha > 1.0 {
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "stages.json",
+                    Some(format!("Stage {}", stage.id)),
+                    format!(
+                        "Stage {}: CVaR alpha ({alpha}) must be in (0, 1]; \
+                         alpha must be a valid tail probability",
+                        stage.id
+                    ),
+                );
+            }
+            if !(0.0..=1.0).contains(&lambda) {
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "stages.json",
+                    Some(format!("Stage {}", stage.id)),
+                    format!(
+                        "Stage {}: CVaR lambda ({lambda}) must be in [0, 1]; \
+                         lambda is the CVaR mixing weight",
+                        stage.id
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 6-10: Penalty ordering ──────────────────────────────────────────────
+
+/// Checks the penalty hierarchy ordering across all hydros and buses.
+///
+/// Emits one `ModelQuality` warning per violated ordering check, aggregating
+/// all violating entities into a single warning with the count and worst-case ID.
+#[allow(clippy::too_many_lines)]
+fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationContext) {
+    // Collect max deficit cost across all buses (combining all deficit segments).
+    // When no deficit segments exist on any bus, the max is 0.0.
+    let max_deficit_cost: f64 = data
+        .buses
+        .iter()
+        .flat_map(|b| b.deficit_segments.iter().map(|s| s.cost_per_mwh))
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0);
+
+    // For each hydro, collect the relevant cost groups.
+    // We aggregate violations per check across all hydros.
+
+    // Check 6: filling_target_violation_cost > storage_violation_below_cost
+    {
+        let mut violations: Vec<(i32, f64, f64)> = Vec::new(); // (id, higher, lower)
+        for hydro in &data.hydros {
+            let higher = hydro.penalties.filling_target_violation_cost;
+            let lower = hydro.penalties.storage_violation_below_cost;
+            if higher <= lower {
+                violations.push((hydro.id.0, higher, lower));
+            }
+        }
+        // Worst case: the hydro with the largest (lower - higher) gap.
+        if let Some(worst) = violations.iter().max_by(|a, b| {
+            (b.2 - b.1)
+                .partial_cmp(&(a.2 - a.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            let count = violations.len();
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "penalties.json",
+                None::<&str>,
+                format!(
+                    "Penalty ordering violation: filling_target_violation_cost ({}) should be > \
+                     storage_violation_below_cost ({}) -- {count} hydro(s) affected, \
+                     worst case: Hydro {}",
+                    worst.1, worst.2, worst.0
+                ),
+            );
+        }
+    }
+
+    // Check 7: storage_violation_below_cost > max(deficit_segment_costs)
+    {
+        let mut violations: Vec<(i32, f64)> = Vec::new(); // (id, storage_violation_cost)
+        for hydro in &data.hydros {
+            let higher = hydro.penalties.storage_violation_below_cost;
+            if higher <= max_deficit_cost {
+                violations.push((hydro.id.0, higher));
+            }
+        }
+        if let Some(worst) = violations
+            .iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            let count = violations.len();
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "penalties.json",
+                None::<&str>,
+                format!(
+                    "Penalty ordering violation: storage_violation_below_cost ({}) should be > \
+                     max(deficit_segment_costs) ({max_deficit_cost}) -- {count} hydro(s) affected, \
+                     worst case: Hydro {}",
+                    worst.1, worst.0
+                ),
+            );
+        }
+    }
+
+    // Check 8: max(deficit_segment_costs) > max(constraint_violation_costs)
+    // Constraint violation costs: turbined_violation_below_cost, outflow_violation_below_cost,
+    // outflow_violation_above_cost, generation_violation_below_cost, evaporation_violation_cost,
+    // water_withdrawal_violation_cost.
+    {
+        // Helper: compute max constraint violation cost for a hydro.
+        let max_cv = |h: &cobre_core::entities::Hydro| {
+            let p = &h.penalties;
+            p.turbined_violation_below_cost
+                .max(p.outflow_violation_below_cost)
+                .max(p.outflow_violation_above_cost)
+                .max(p.generation_violation_below_cost)
+                .max(p.evaporation_violation_cost)
+                .max(p.water_withdrawal_violation_cost)
+        };
+
+        let max_constraint_cost: f64 = data
+            .hydros
+            .iter()
+            .map(max_cv)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .max(0.0);
+
+        if !data.hydros.is_empty() && max_deficit_cost <= max_constraint_cost {
+            // Find the hydro with the highest constraint_violation_cost.
+            if let Some(worst_hydro) = data.hydros.iter().max_by(|a, b| {
+                max_cv(a)
+                    .partial_cmp(&max_cv(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                ctx.add_warning(
+                    ErrorKind::ModelQuality,
+                    "penalties.json",
+                    None::<&str>,
+                    format!(
+                        "Penalty ordering violation: max(deficit_segment_costs) \
+                         ({max_deficit_cost}) should be > max(constraint_violation_costs) \
+                         ({max_constraint_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
+                        worst_hydro.id.0
+                    ),
+                );
+            }
+        }
+    }
+
+    // Check 9: min(constraint_violation_costs) > max(resource_costs)
+    // Resource costs: spillage_cost, diversion_cost.
+    {
+        if !data.hydros.is_empty() {
+            // Helper: compute min constraint violation cost for a hydro.
+            let min_cv = |h: &cobre_core::entities::Hydro| {
+                let p = &h.penalties;
+                p.turbined_violation_below_cost
+                    .min(p.outflow_violation_below_cost)
+                    .min(p.outflow_violation_above_cost)
+                    .min(p.generation_violation_below_cost)
+                    .min(p.evaporation_violation_cost)
+                    .min(p.water_withdrawal_violation_cost)
+            };
+
+            let min_constraint_cost: f64 =
+                data.hydros.iter().map(min_cv).fold(f64::INFINITY, f64::min);
+
+            let max_resource_cost: f64 = data
+                .hydros
+                .iter()
+                .map(|h| h.penalties.spillage_cost.max(h.penalties.diversion_cost))
+                .fold(f64::NEG_INFINITY, f64::max)
+                .max(0.0);
+
+            if min_constraint_cost <= max_resource_cost {
+                // Find the hydro with the lowest constraint cost (the worst offender).
+                if let Some(worst_hydro) = data.hydros.iter().min_by(|a, b| {
+                    min_cv(a)
+                        .partial_cmp(&min_cv(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    ctx.add_warning(
+                        ErrorKind::ModelQuality,
+                        "penalties.json",
+                        None::<&str>,
+                        format!(
+                            "Penalty ordering violation: min(constraint_violation_costs) \
+                             ({min_constraint_cost}) should be > max(resource_costs) \
+                             ({max_resource_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
+                            worst_hydro.id.0
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // Check 10: min(resource_costs) > 0 (regularization costs must be positive)
+    {
+        let mut violations: Vec<(i32, f64)> = Vec::new(); // (id, min_resource_cost)
+        for hydro in &data.hydros {
+            let min_resource = hydro
+                .penalties
+                .spillage_cost
+                .min(hydro.penalties.diversion_cost);
+            if min_resource <= 0.0 {
+                violations.push((hydro.id.0, min_resource));
+            }
+        }
+        if let Some(worst) = violations
+            .iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            let count = violations.len();
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "penalties.json",
+                None::<&str>,
+                format!(
+                    "Penalty ordering violation: min(resource_costs) ({}) should be > 0 \
+                     (regularization costs must be positive to prevent LP degeneracy) -- \
+                     {count} hydro(s) affected, worst case: Hydro {}",
+                    worst.1, worst.0
+                ),
+            );
+        }
+    }
+}
+
+// ── Rule 11: FPHA penalty rule ─────────────────────────────────────────────────
+
+/// Checks that FPHA hydros have `fpha_turbined_cost > spillage_cost`.
+///
+/// This is an error (not a warning) because violating it causes incorrect LP solutions.
+fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationContext) {
+    use cobre_core::entities::HydroGenerationModel;
+    for hydro in &data.hydros {
+        if hydro.generation_model == HydroGenerationModel::Fpha {
+            let fpha_cost = hydro.penalties.fpha_turbined_cost;
+            let spillage = hydro.penalties.spillage_cost;
+            if fpha_cost <= spillage {
+                let entity_str = format!("Hydro {}", hydro.id.0);
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "penalties.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str}: fpha_turbined_cost ({fpha_cost}) must be > spillage_cost \
+                         ({spillage}) for FPHA hydros; violating this causes incorrect LP solutions"
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 12-13: Scenario model rules ─────────────────────────────────────────
+
+/// Validates inflow model standard deviation and AR coefficient count consistency.
+fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.inflow_seasonal_stats.is_empty() {
+        return;
+    }
+
+    // Rule 12: std_m3s >= 0.0; warn when == 0.0 (deterministic inflow).
+    // Note: std_m3s < 0 is already caught by the schema parser. However, the
+    // schema parser only produces a SchemaError; here we emit a ModelQuality
+    // warning for std_m3s == 0.0 (valid but unusual deterministic inflow).
+    for row in &data.inflow_seasonal_stats {
+        if row.std_m3s == 0.0 {
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "scenarios/inflow_seasonal_stats.parquet",
+                Some(format!("Hydro {}", row.hydro_id.0)),
+                format!(
+                    "Hydro {} stage {}: std_m3s is 0.0, indicating deterministic inflow \
+                     (no stochastic component); verify this is intentional",
+                    row.hydro_id.0, row.stage_id
+                ),
+            );
+        }
+    }
+
+    // Rule 13: AR coefficient count must equal ar_order.
+    // Group inflow_ar_coefficients rows by (hydro_id, stage_id), counting entries.
+    if !data.inflow_ar_coefficients.is_empty() {
+        let mut ar_coeff_counts: HashMap<(i32, i32), usize> = HashMap::new();
+        for row in &data.inflow_ar_coefficients {
+            *ar_coeff_counts
+                .entry((row.hydro_id.0, row.stage_id))
+                .or_insert(0) += 1;
+        }
+
+        for stats_row in &data.inflow_seasonal_stats {
+            if stats_row.ar_order <= 0 {
+                continue;
+            }
+            let Ok(expected) = usize::try_from(stats_row.ar_order) else {
+                continue;
+            };
+            let key = (stats_row.hydro_id.0, stats_row.stage_id);
+            let actual = ar_coeff_counts.get(&key).copied().unwrap_or(0);
+            if actual != expected {
+                let entity_str = format!("Hydro {}", stats_row.hydro_id.0);
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "scenarios/inflow_ar_coefficients.parquet",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str} stage {}: ar_order is {expected} but {actual} AR \
+                         coefficient row(s) found; ar_coefficients.len() must equal ar_order",
+                        stats_row.stage_id
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 14-16: Correlation matrix validation ────────────────────────────────
+
+/// Validates correlation matrix symmetry, diagonal, and off-diagonal range for
+/// all groups in all profiles of the correlation model.
+///
+/// Only runs when `data.correlation` is `Some`.
+fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
+    let Some(correlation) = &data.correlation else {
+        return;
+    };
+
+    for profile in correlation.profiles.values() {
+        for group in &profile.groups {
+            let n = group.entities.len();
+            let group_name = &group.name;
+
+            // Rules 14-16 require a square matrix; the matrix row count is guaranteed
+            // to match entity count by Layer 4 (dimensional check 4). Be defensive.
+            if group.matrix.len() != n {
+                continue;
+            }
+
+            for i in 0..n {
+                if group.matrix[i].len() != n {
+                    continue;
+                }
+                for j in 0..n {
+                    let val = group.matrix[i][j];
+
+                    // Rule 15: Diagonal entries must be 1.0 (±CORR_TOLERANCE).
+                    if i == j && (val - 1.0).abs() > CORR_TOLERANCE {
+                        ctx.add_error(
+                            ErrorKind::BusinessRuleViolation,
+                            "scenarios/correlation.json",
+                            Some(format!("CorrelationGroup {group_name}")),
+                            format!(
+                                "CorrelationGroup '{group_name}': diagonal entry matrix[{i}][{i}] \
+                                 is {val}, expected 1.0 (±{CORR_TOLERANCE}); \
+                                 correlation matrix diagonal must be 1.0"
+                            ),
+                        );
+                    }
+
+                    // Rule 16: Off-diagonal entries must be in [-1.0, 1.0].
+                    if i != j && !((-1.0_f64)..=1.0).contains(&val) {
+                        ctx.add_error(
+                            ErrorKind::BusinessRuleViolation,
+                            "scenarios/correlation.json",
+                            Some(format!("CorrelationGroup {group_name}")),
+                            format!(
+                                "CorrelationGroup '{group_name}': off-diagonal entry \
+                                 matrix[{i}][{j}] is {val}, outside valid range [-1.0, 1.0]; \
+                                 correlation coefficients must be in [-1.0, 1.0]"
+                            ),
+                        );
+                    }
+
+                    // Rule 14: Symmetry check (only check upper triangle to avoid duplicates).
+                    if i < j {
+                        let symmetric = group.matrix[j][i];
+                        if (val - symmetric).abs() > CORR_TOLERANCE {
+                            ctx.add_error(
+                                ErrorKind::BusinessRuleViolation,
+                                "scenarios/correlation.json",
+                                Some(format!("CorrelationGroup {group_name}")),
+                                format!(
+                                    "CorrelationGroup '{group_name}': correlation matrix is not \
+                                     symmetric at ({i},{j}): matrix[{i}][{j}]={val} but \
+                                     matrix[{j}][{i}]={symmetric}; tolerance is {CORR_TOLERANCE}"
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::too_many_lines,
+    clippy::doc_markdown
+)]
+mod tests {
+    use super::*;
+    use cobre_core::{
+        EntityId,
+        entities::{
+            Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
+        },
+        initial_conditions::InitialConditions,
+        penalty::GlobalPenaltyDefaults,
+        scenario::{SamplingScheme, ScenarioSource},
+        temporal::{
+            BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
+            StageRiskConfig, StageStateConfig,
+        },
+    };
+
+    use crate::{
+        config::Config,
+        extensions::{FphaHyperplaneRow, HydroGeometryRow},
+        stages::StagesData,
+        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+    };
+
+    // ── Test helpers ──────────────────────────────────────────────────────────
+
+    /// Build a minimal valid `HydroPenalties` with all fields set to `v`.
+    fn penalties_all(v: f64) -> HydroPenalties {
+        HydroPenalties {
+            spillage_cost: v,
+            diversion_cost: v,
+            fpha_turbined_cost: v,
+            storage_violation_below_cost: v,
+            filling_target_violation_cost: v,
+            turbined_violation_below_cost: v,
+            outflow_violation_below_cost: v,
+            outflow_violation_above_cost: v,
+            generation_violation_below_cost: v,
+            evaporation_violation_cost: v,
+            water_withdrawal_violation_cost: v,
+        }
+    }
+
+    /// Build a minimal valid `Hydro` using default sensible values.
+    fn make_hydro(id: i32, downstream_id: Option<i32>) -> Hydro {
+        Hydro {
+            id: EntityId::from(id),
+            name: format!("Hydro {id}"),
+            bus_id: EntityId::from(1),
+            downstream_id: downstream_id.map(EntityId::from),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 1000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 1000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 1000.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: penalties_all(1.0),
+        }
+    }
+
+    /// Build a minimal valid `Thermal`.
+    fn make_thermal(id: i32, min_mw: f64, max_mw: f64) -> Thermal {
+        Thermal {
+            id: EntityId::from(id),
+            name: format!("Thermal {id}"),
+            bus_id: EntityId::from(1),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: max_mw,
+                cost_per_mwh: 100.0,
+            }],
+            min_generation_mw: min_mw,
+            max_generation_mw: max_mw,
+            gnl_config: None,
+        }
+    }
+
+    /// Build one study stage with the given `id`.
+    fn make_stage(id: i32) -> Stage {
+        Stage {
+            id,
+            index: 0,
+            start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// Build a minimal valid `StagesData` with the given stage IDs.
+    fn make_stages(ids: Vec<i32>) -> StagesData {
+        StagesData {
+            stages: ids.into_iter().map(make_stage).collect(),
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: None,
+            },
+            scenario_source: ScenarioSource {
+                sampling_scheme: SamplingScheme::InSample,
+                seed: Some(42),
+                selection_mode: None,
+            },
+        }
+    }
+
+    /// Build a minimal `ParsedData` with the provided hydros, thermals, stages,
+    /// geometry, and FPHA rows.  All other fields are empty/minimal.
+    #[allow(clippy::too_many_arguments)]
+    fn make_data(
+        hydros: Vec<Hydro>,
+        thermals: Vec<Thermal>,
+        lines: Vec<Line>,
+        stages: StagesData,
+        hydro_geometry: Vec<HydroGeometryRow>,
+        fpha_hyperplanes: Vec<FphaHyperplaneRow>,
+    ) -> ParsedData {
+        ParsedData {
+            config: minimal_config(),
+            penalties: minimal_global_penalties(),
+            stages,
+            initial_conditions: InitialConditions {
+                storage: vec![],
+                filling_storage: vec![],
+            },
+            buses: vec![Bus {
+                id: EntityId::from(1),
+                name: "BUS_1".to_string(),
+                deficit_segments: vec![],
+                excess_cost: 100.0,
+            }],
+            thermals,
+            hydros,
+            lines,
+            non_controllable_sources: vec![],
+            pumping_stations: vec![],
+            energy_contracts: vec![],
+            hydro_geometry,
+            production_models: vec![],
+            fpha_hyperplanes,
+            inflow_history: vec![],
+            inflow_seasonal_stats: vec![],
+            inflow_ar_coefficients: vec![],
+            external_scenarios: vec![],
+            load_seasonal_stats: vec![],
+            load_factors: vec![],
+            correlation: None,
+            thermal_bounds: vec![],
+            hydro_bounds: vec![],
+            line_bounds: vec![],
+            pumping_bounds: vec![],
+            contract_bounds: vec![],
+            exchange_factors: vec![],
+            generic_constraints: vec![],
+            generic_constraint_bounds: vec![],
+            penalty_overrides_bus: vec![],
+            penalty_overrides_line: vec![],
+            penalty_overrides_hydro: vec![],
+            penalty_overrides_ncs: vec![],
+        }
+    }
+
+    /// Minimal `Config` required to fill `ParsedData`.
+    fn minimal_config() -> Config {
+        // Use the same JSON fragment that schema.rs tests use for config.json.
+        let json = r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 100 }
+                ]
+            }
+        }"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), json).unwrap();
+        crate::config::parse_config(tmp.path()).unwrap()
+    }
+
+    /// Minimal `GlobalPenaltyDefaults` required to fill `ParsedData`.
+    fn minimal_global_penalties() -> GlobalPenaltyDefaults {
+        use cobre_core::entities::DeficitSegment;
+        GlobalPenaltyDefaults {
+            bus_deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1.0,
+            }],
+            bus_excess_cost: 1.0,
+            line_exchange_cost: 1.0,
+            hydro: HydroPenalties {
+                spillage_cost: 1.0,
+                fpha_turbined_cost: 1.0,
+                diversion_cost: 1.0,
+                storage_violation_below_cost: 1.0,
+                filling_target_violation_cost: 1.0,
+                turbined_violation_below_cost: 1.0,
+                outflow_violation_below_cost: 1.0,
+                outflow_violation_above_cost: 1.0,
+                generation_violation_below_cost: 1.0,
+                evaporation_violation_cost: 1.0,
+                water_withdrawal_violation_cost: 1.0,
+            },
+            ncs_curtailment_cost: 1.0,
+        }
+    }
+
+    /// Build a minimal `FphaHyperplaneRow` with the given parameters.
+    fn make_fpha_row(hydro_id: i32, stage_id: Option<i32>, plane_id: i32) -> FphaHyperplaneRow {
+        FphaHyperplaneRow {
+            hydro_id: EntityId::from(hydro_id),
+            stage_id,
+            plane_id,
+            gamma_0: 100.0,
+            gamma_v: 0.5, // valid: > 0
+            gamma_q: 0.8,
+            gamma_s: -0.02, // valid: <= 0
+            kappa: 1.0,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        }
+    }
+
+    /// Build a minimal `HydroGeometryRow`.
+    fn make_geom_row(
+        hydro_id: i32,
+        volume_hm3: f64,
+        height_m: f64,
+        area_km2: f64,
+    ) -> HydroGeometryRow {
+        HydroGeometryRow {
+            hydro_id: EntityId::from(hydro_id),
+            volume_hm3,
+            height_m,
+            area_km2,
+        }
+    }
+
+    // ── Cascade acyclicity tests ───────────────────────────────────────────────
+
+    /// Given an acyclic cascade A -> B -> C (all have downstream_id pointing to next),
+    /// no errors are produced.
+    #[test]
+    fn test_cascade_acyclic_valid() {
+        let hydros = vec![
+            make_hydro(1, Some(2)), // 1 -> 2
+            make_hydro(2, Some(3)), // 2 -> 3
+            make_hydro(3, None),    // root (no downstream)
+        ];
+        let data = make_data(hydros, vec![], vec![], make_stages(vec![0]), vec![], vec![]);
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid acyclic cascade should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Given a cycle A -> B -> C -> A, exactly one CycleDetected error is produced.
+    #[test]
+    fn test_cascade_cycle_detected() {
+        let hydros = vec![
+            make_hydro(1, Some(2)), // 1 -> 2
+            make_hydro(2, Some(3)), // 2 -> 3
+            make_hydro(3, Some(1)), // 3 -> 1 (cycle!)
+        ];
+        let data = make_data(hydros, vec![], vec![], make_stages(vec![0]), vec![], vec![]);
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors(), "cycle should produce errors");
+        let cycle_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::CycleDetected)
+            .collect();
+        assert!(
+            !cycle_errors.is_empty(),
+            "should have at least one CycleDetected error"
+        );
+    }
+
+    /// Empty hydro list produces no cascade errors.
+    #[test]
+    fn test_cascade_empty_hydros() {
+        let data = make_data(vec![], vec![], vec![], make_stages(vec![0]), vec![], vec![]);
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    // ── Hydro storage bounds tests ────────────────────────────────────────────
+
+    /// min_storage > max_storage produces one InvalidValue error with "Hydro 5"
+    /// and "storage" in the message.
+    #[test]
+    fn test_hydro_storage_min_greater_than_max() {
+        let mut hydro = make_hydro(5, None);
+        hydro.min_storage_hm3 = 200.0;
+        hydro.max_storage_hm3 = 100.0;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(relevant.len(), 1, "exactly 1 InvalidValue error expected");
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("Hydro 5"),
+            "message should contain 'Hydro 5', got: {msg}"
+        );
+        assert!(
+            msg.contains("storage"),
+            "message should contain 'storage', got: {msg}"
+        );
+    }
+
+    /// min_storage == max_storage (run-of-river) produces no error.
+    #[test]
+    fn test_hydro_storage_equal_bounds_valid() {
+        let mut hydro = make_hydro(1, None);
+        hydro.min_storage_hm3 = 500.0;
+        hydro.max_storage_hm3 = 500.0;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "equal storage bounds should be valid, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    // ── Hydro turbine bounds tests ────────────────────────────────────────────
+
+    /// min_turbined > max_turbined produces one InvalidValue error.
+    #[test]
+    fn test_hydro_turbine_min_greater_than_max() {
+        let mut hydro = make_hydro(2, None);
+        hydro.min_turbined_m3s = 500.0;
+        hydro.max_turbined_m3s = 100.0;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let turbine_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(!turbine_errors.is_empty());
+    }
+
+    // ── Hydro outflow bounds tests ────────────────────────────────────────────
+
+    /// When max_outflow_m3s is None, no outflow bound error is produced even if
+    /// min_outflow_m3s has any value.
+    #[test]
+    fn test_hydro_outflow_no_max_no_error() {
+        let mut hydro = make_hydro(3, None);
+        hydro.min_outflow_m3s = 999.0;
+        hydro.max_outflow_m3s = None;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    /// When max_outflow_m3s is Some but min > max, one InvalidValue error is produced.
+    #[test]
+    fn test_hydro_outflow_min_greater_than_max() {
+        let mut hydro = make_hydro(4, None);
+        hydro.min_outflow_m3s = 500.0;
+        hydro.max_outflow_m3s = Some(300.0);
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+    }
+
+    // ── Lifecycle consistency tests ───────────────────────────────────────────
+
+    /// Hydro with entry >= exit produces one InvalidValue error.
+    #[test]
+    fn test_hydro_lifecycle_entry_gte_exit() {
+        let mut hydro = make_hydro(7, None);
+        hydro.entry_stage_id = Some(10);
+        hydro.exit_stage_id = Some(5);
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        assert!(
+            errors.iter().any(|e| e.kind == ErrorKind::InvalidValue),
+            "should have InvalidValue error for lifecycle"
+        );
+    }
+
+    /// Hydro with only entry_stage_id set (no exit) produces no lifecycle error.
+    #[test]
+    fn test_hydro_lifecycle_only_entry_no_error() {
+        let mut hydro = make_hydro(8, None);
+        hydro.entry_stage_id = Some(5);
+        hydro.exit_stage_id = None;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "only entry_stage_id set should produce no error, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Hydro with valid entry < exit produces no lifecycle error.
+    #[test]
+    fn test_hydro_lifecycle_valid() {
+        let mut hydro = make_hydro(9, None);
+        hydro.entry_stage_id = Some(0);
+        hydro.exit_stage_id = Some(10);
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    // ── Geometry monotonicity tests ───────────────────────────────────────────
+
+    /// Empty geometry slice produces no errors.
+    #[test]
+    fn test_geometry_empty_no_error() {
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    /// Strictly increasing volume, non-decreasing height and area produces no error.
+    #[test]
+    fn test_geometry_valid_monotonic() {
+        let geometry = vec![
+            make_geom_row(1, 10.0, 100.0, 1.0),
+            make_geom_row(1, 20.0, 110.0, 1.5),
+            make_geom_row(1, 30.0, 120.0, 2.0),
+        ];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            geometry,
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid monotonic geometry should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Non-monotonic volume produces BusinessRuleViolation with "Hydro 3" and "volume".
+    #[test]
+    fn test_geometry_non_monotonic_volume() {
+        // Volume sequence [10.0, 20.0, 15.0] has a decrease at index 2.
+        // Note: rows pre-sorted by (hydro_id, volume_hm3), but we construct
+        // the violation by using the same volume values — the parser would have
+        // sorted them, so [10, 15, 20] after sort. To test the actual validation,
+        // we craft a case where sorted order still violates (equal volumes).
+        // Use equal volumes to trigger the "not strictly increasing" check.
+        let geometry = vec![
+            make_geom_row(3, 10.0, 100.0, 1.0),
+            make_geom_row(3, 20.0, 110.0, 1.5),
+            make_geom_row(3, 20.0, 115.0, 1.6), // duplicate volume — not strictly increasing
+        ];
+        let data = make_data(
+            vec![make_hydro(3, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            geometry,
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(!relevant.is_empty(), "should have BusinessRuleViolation");
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("Hydro 3"),
+            "message should contain 'Hydro 3', got: {msg}"
+        );
+        assert!(
+            msg.contains("volume"),
+            "message should contain 'volume', got: {msg}"
+        );
+    }
+
+    /// Non-monotonic height produces BusinessRuleViolation with "height" in message.
+    #[test]
+    fn test_geometry_non_monotonic_height() {
+        let geometry = vec![
+            make_geom_row(2, 10.0, 100.0, 1.0),
+            make_geom_row(2, 20.0, 90.0, 1.5), // height decreased — violation
+            make_geom_row(2, 30.0, 110.0, 2.0),
+        ];
+        let data = make_data(
+            vec![make_hydro(2, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            geometry,
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(!relevant.is_empty());
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("height"),
+            "message should mention 'height', got: {msg}"
+        );
+    }
+
+    // ── FPHA minimum planes tests ─────────────────────────────────────────────
+
+    /// 2 planes for (hydro, stage) produces BusinessRuleViolation.
+    #[test]
+    fn test_fpha_too_few_planes() {
+        let rows = vec![
+            make_fpha_row(1, Some(0), 0),
+            make_fpha_row(1, Some(0), 1),
+            // Only 2 planes for (hydro=1, stage=0) — should require ≥ 3.
+        ];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
+            "should have BusinessRuleViolation for too few planes"
+        );
+    }
+
+    /// 3 planes for (hydro, stage) produces no minimum-count error.
+    #[test]
+    fn test_fpha_minimum_planes_valid() {
+        let rows = vec![
+            make_fpha_row(1, Some(0), 0),
+            make_fpha_row(1, Some(0), 1),
+            make_fpha_row(1, Some(0), 2),
+        ];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "3 planes should be valid, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    // ── FPHA gamma sign tests ─────────────────────────────────────────────────
+
+    /// Negative gamma_v produces BusinessRuleViolation.
+    #[test]
+    fn test_fpha_negative_gamma_v() {
+        let mut row = make_fpha_row(1, None, 0);
+        row.gamma_v = -0.5; // invalid: must be > 0
+        // Add two more valid planes so rule 11 (count) doesn't trigger.
+        let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
+            "negative gamma_v should produce BusinessRuleViolation"
+        );
+    }
+
+    /// Positive gamma_s produces BusinessRuleViolation.
+    #[test]
+    fn test_fpha_positive_gamma_s() {
+        let mut row = make_fpha_row(1, None, 0);
+        row.gamma_s = 0.1; // invalid: must be <= 0
+        let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
+            "positive gamma_s should produce BusinessRuleViolation"
+        );
+    }
+
+    /// gamma_s == 0.0 is valid (non-positive).
+    #[test]
+    fn test_fpha_gamma_s_zero_valid() {
+        let rows: Vec<FphaHyperplaneRow> = (0..3)
+            .map(|i| {
+                let mut r = make_fpha_row(1, None, i);
+                r.gamma_s = 0.0;
+                r
+            })
+            .collect();
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "gamma_s == 0 should be valid, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Empty FPHA slice produces no errors (rules 11-12 are skipped).
+    #[test]
+    fn test_fpha_empty_no_error() {
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    // ── Thermal generation bounds tests ───────────────────────────────────────
+
+    /// min_generation_mw > max_generation_mw produces InvalidValue with "Thermal <id>".
+    #[test]
+    fn test_thermal_generation_min_greater_than_max() {
+        let thermal = make_thermal(10, 500.0, 100.0); // min > max — violation
+        let data = make_data(
+            vec![],
+            vec![thermal],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(relevant.len(), 1, "exactly 1 InvalidValue error expected");
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("Thermal 10"),
+            "message should contain 'Thermal 10', got: {msg}"
+        );
+    }
+
+    /// min_generation_mw == max_generation_mw produces no error.
+    #[test]
+    fn test_thermal_generation_equal_bounds_valid() {
+        let thermal = make_thermal(11, 200.0, 200.0);
+        let data = make_data(
+            vec![],
+            vec![thermal],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+    }
+
+    // ── All-rules-checked test (no short-circuit) ─────────────────────────────
+
+    /// Given two hydros each with bound violations, both errors are collected
+    /// (all rules checked, no early exit).
+    #[test]
+    fn test_all_rules_checked_no_short_circuit() {
+        let mut h1 = make_hydro(1, None);
+        h1.min_storage_hm3 = 200.0;
+        h1.max_storage_hm3 = 100.0; // violation
+
+        let mut h2 = make_hydro(2, None);
+        h2.min_generation_mw = 500.0;
+        h2.max_generation_mw = 100.0; // violation
+
+        let data = make_data(
+            vec![h1, h2],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            ctx.errors().len() >= 2,
+            "both violations should be collected; got {} errors",
+            ctx.errors().len()
+        );
+    }
+
+    // ── Acceptance criteria tests ─────────────────────────────────────────────
+
+    /// AC 1: Valid data produces no errors.
+    #[test]
+    fn test_ac1_valid_data_no_errors() {
+        let geometry = vec![
+            make_geom_row(1, 10.0, 100.0, 1.0),
+            make_geom_row(1, 20.0, 110.0, 2.0),
+            make_geom_row(1, 30.0, 120.0, 3.0),
+        ];
+        let fpha: Vec<FphaHyperplaneRow> = (0..3).map(|i| make_fpha_row(1, Some(0), i)).collect();
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![make_thermal(1, 0.0, 500.0)],
+            vec![],
+            make_stages(vec![0]),
+            geometry,
+            fpha,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid data should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// AC 2: Hydro id=5 with inverted storage bounds produces exactly 1 InvalidValue
+    /// entry whose message contains "Hydro 5" and "storage".
+    #[test]
+    fn test_ac2_hydro_storage_bounds_error() {
+        let mut hydro = make_hydro(5, None);
+        hydro.min_storage_hm3 = 200.0;
+        hydro.max_storage_hm3 = 100.0;
+        let data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(relevant.len(), 1);
+        let msg = &relevant[0].message;
+        assert!(msg.contains("Hydro 5"), "message must contain 'Hydro 5'");
+        assert!(msg.contains("storage"), "message must contain 'storage'");
+    }
+
+    /// AC 3: Cycle A->B->C->A produces at least 1 CycleDetected error.
+    #[test]
+    fn test_ac3_cycle_detected() {
+        let hydros = vec![
+            make_hydro(1, Some(2)),
+            make_hydro(2, Some(3)),
+            make_hydro(3, Some(1)),
+        ];
+        let data = make_data(hydros, vec![], vec![], make_stages(vec![0]), vec![], vec![]);
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::CycleDetected),
+            "should have CycleDetected error"
+        );
+    }
+
+    /// AC 4: Non-monotonic volume for hydro id=3 produces BusinessRuleViolation
+    /// with "Hydro 3" and "volume" in the message.
+    #[test]
+    fn test_ac4_geometry_non_monotonic_volume_error() {
+        // Use equal volumes (10.0, 20.0, 20.0) to trigger the strict-increase check.
+        let geometry = vec![
+            make_geom_row(3, 10.0, 100.0, 1.0),
+            make_geom_row(3, 20.0, 110.0, 1.5),
+            make_geom_row(3, 20.0, 115.0, 1.6),
+        ];
+        let data = make_data(
+            vec![make_hydro(3, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            geometry,
+            vec![],
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(!relevant.is_empty(), "should have BusinessRuleViolation");
+        let msg = &relevant[0].message;
+        assert!(msg.contains("Hydro 3"), "must contain 'Hydro 3': {msg}");
+        assert!(msg.contains("volume"), "must contain 'volume': {msg}");
+    }
+
+    /// AC 5: Empty geometry and FPHA produce no errors from rules 8-12.
+    #[test]
+    fn test_ac5_empty_geometry_and_fpha_no_false_positives() {
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![], // empty geometry
+            vec![], // empty FPHA
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "empty geometry and FPHA should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    // ── Tests for validate_semantic_stages_penalties_scenarios ────────────────
+
+    use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
+    use cobre_core::{
+        entities::DeficitSegment,
+        scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+        temporal::{Block, Transition},
+    };
+    use std::collections::BTreeMap;
+
+    /// Build a minimal valid `ParsedData` for Layer 5b tests.
+    /// All hydro penalties satisfy the ordering hierarchy by default.
+    fn make_data_5b(
+        hydros: Vec<Hydro>,
+        stages: StagesData,
+        buses: Vec<Bus>,
+        inflow_stats: Vec<InflowSeasonalStatsRow>,
+        inflow_ar: Vec<InflowArCoefficientRow>,
+        correlation: Option<CorrelationModel>,
+    ) -> ParsedData {
+        ParsedData {
+            config: minimal_config(),
+            penalties: minimal_global_penalties(),
+            stages,
+            initial_conditions: InitialConditions {
+                storage: vec![],
+                filling_storage: vec![],
+            },
+            buses,
+            thermals: vec![],
+            hydros,
+            lines: vec![],
+            non_controllable_sources: vec![],
+            pumping_stations: vec![],
+            energy_contracts: vec![],
+            hydro_geometry: vec![],
+            production_models: vec![],
+            fpha_hyperplanes: vec![],
+            inflow_history: vec![],
+            inflow_seasonal_stats: inflow_stats,
+            inflow_ar_coefficients: inflow_ar,
+            external_scenarios: vec![],
+            load_seasonal_stats: vec![],
+            load_factors: vec![],
+            correlation,
+            thermal_bounds: vec![],
+            hydro_bounds: vec![],
+            line_bounds: vec![],
+            pumping_bounds: vec![],
+            contract_bounds: vec![],
+            exchange_factors: vec![],
+            generic_constraints: vec![],
+            generic_constraint_bounds: vec![],
+            penalty_overrides_bus: vec![],
+            penalty_overrides_line: vec![],
+            penalty_overrides_hydro: vec![],
+            penalty_overrides_ncs: vec![],
+        }
+    }
+
+    /// Build a hydro with penalties satisfying the ordering hierarchy.
+    /// filling (1000) > storage_viol (500) > constraint_viol (50) > resource (1)
+    fn make_hydro_ordered_penalties(id: i32) -> Hydro {
+        let mut h = make_hydro(id, None);
+        h.penalties = HydroPenalties {
+            filling_target_violation_cost: 1000.0,
+            storage_violation_below_cost: 500.0,
+            turbined_violation_below_cost: 50.0,
+            outflow_violation_below_cost: 50.0,
+            outflow_violation_above_cost: 50.0,
+            generation_violation_below_cost: 50.0,
+            evaporation_violation_cost: 50.0,
+            water_withdrawal_violation_cost: 50.0,
+            spillage_cost: 1.0,
+            diversion_cost: 1.0,
+            fpha_turbined_cost: 2.0,
+        };
+        h
+    }
+
+    /// Build a minimal valid `StagesData` with the given stage IDs and a
+    /// `FiniteHorizon` policy graph with valid transitions.
+    fn make_stages_5b(ids: Vec<i32>) -> StagesData {
+        StagesData {
+            stages: ids.into_iter().map(make_stage).collect(),
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: None,
+            },
+            scenario_source: ScenarioSource {
+                sampling_scheme: SamplingScheme::InSample,
+                seed: Some(42),
+                selection_mode: None,
+            },
+        }
+    }
+
+    /// Build a bus with a single deficit segment at the given cost.
+    fn make_bus_with_deficit(id: i32, cost_per_mwh: f64) -> Bus {
+        Bus {
+            id: EntityId::from(id),
+            name: format!("Bus {id}"),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh,
+            }],
+            excess_cost: 100.0,
+        }
+    }
+
+    /// Build a minimal `InflowSeasonalStatsRow`.
+    fn make_inflow_stats(hydro_id: i32, stage_id: i32, ar_order: i32) -> InflowSeasonalStatsRow {
+        InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(hydro_id),
+            stage_id,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+            ar_order,
+        }
+    }
+
+    /// Build a minimal `InflowArCoefficientRow`.
+    fn make_ar_row(hydro_id: i32, stage_id: i32, lag: i32) -> InflowArCoefficientRow {
+        InflowArCoefficientRow {
+            hydro_id: EntityId::from(hydro_id),
+            stage_id,
+            lag,
+            coefficient: 0.5,
+        }
+    }
+
+    /// Build a valid 2x2 symmetric correlation group.
+    fn make_corr_group(name: &str, matrix: Vec<Vec<f64>>) -> CorrelationGroup {
+        CorrelationGroup {
+            name: name.to_string(),
+            entities: vec![
+                CorrelationEntity {
+                    entity_type: "inflow".to_string(),
+                    id: EntityId::from(1),
+                },
+                CorrelationEntity {
+                    entity_type: "inflow".to_string(),
+                    id: EntityId::from(2),
+                },
+            ],
+            matrix,
+        }
+    }
+
+    /// Build a `CorrelationModel` with a single "default" profile containing the given group.
+    fn make_correlation(group: CorrelationGroup) -> CorrelationModel {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![group],
+            },
+        );
+        CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        }
+    }
+
+    // ── Valid case: no errors ─────────────────────────────────────────────────
+
+    /// Given valid stages, ordered penalties, and valid correlation, no errors
+    /// or warnings are produced.
+    #[test]
+    fn test_5b_all_valid_no_errors() {
+        let hydro = make_hydro_ordered_penalties(1);
+        // Penalty hierarchy: filling=1000 > storage_viol=500 > deficit=75 > constraint=50 > resource=1
+        // deficit=75 satisfies: storage_viol(500) > deficit(75) > constraint(50) > resource(1)
+        let bus = make_bus_with_deficit(1, 75.0);
+        let group = make_corr_group("All", vec![vec![1.0, 0.8], vec![0.8, 1.0]]);
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0, 1]),
+            vec![bus],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid data should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+        assert!(
+            ctx.warnings().is_empty(),
+            "valid data should produce no warnings, got: {:?}",
+            ctx.warnings()
+        );
+    }
+
+    // ── Rule 1: Transition stage validity ─────────────────────────────────────
+
+    /// Transition referencing a non-existent source_id produces InvalidValue error.
+    #[test]
+    fn test_5b_transition_invalid_source_id() {
+        let mut stages = make_stages_5b(vec![0, 1]);
+        stages.policy_graph.transitions = vec![Transition {
+            source_id: 99, // does not exist
+            target_id: 1,
+            probability: 1.0,
+            annual_discount_rate_override: None,
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        assert!(
+            errors.iter().any(|e| e.kind == ErrorKind::InvalidValue),
+            "should have InvalidValue for invalid source_id"
+        );
+    }
+
+    /// Transition referencing a non-existent target_id produces InvalidValue error.
+    #[test]
+    fn test_5b_transition_invalid_target_id() {
+        let mut stages = make_stages_5b(vec![0, 1]);
+        stages.policy_graph.transitions = vec![Transition {
+            source_id: 0,
+            target_id: 99, // does not exist
+            probability: 1.0,
+            annual_discount_rate_override: None,
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::InvalidValue),
+            "should have InvalidValue for invalid target_id"
+        );
+    }
+
+    // ── Rule 2: Transition probability sums ───────────────────────────────────
+
+    /// Transitions from stage 0 with probability sum 0.5 produce one InvalidValue
+    /// error with "probability" and "stage 0" in the message.
+    #[test]
+    fn test_5b_transition_probability_sum_wrong() {
+        let mut stages = make_stages_5b(vec![0, 1]);
+        stages.policy_graph.transitions = vec![Transition {
+            source_id: 0,
+            target_id: 1,
+            probability: 0.5, // should sum to 1.0
+            annual_discount_rate_override: None,
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(relevant.len(), 1, "exactly 1 InvalidValue error expected");
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("probability"),
+            "message should contain 'probability', got: {msg}"
+        );
+        assert!(
+            msg.contains("stage 0"),
+            "message should contain 'stage 0', got: {msg}"
+        );
+    }
+
+    /// Transitions from stage 0 summing exactly 1.0 produce no probability error.
+    #[test]
+    fn test_5b_transition_probability_sum_valid() {
+        let mut stages = make_stages_5b(vec![0, 1, 2]);
+        stages.policy_graph.transitions = vec![
+            Transition {
+                source_id: 0,
+                target_id: 1,
+                probability: 0.6,
+                annual_discount_rate_override: None,
+            },
+            Transition {
+                source_id: 0,
+                target_id: 2,
+                probability: 0.4,
+                annual_discount_rate_override: None,
+            },
+        ];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let prob_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            prob_errors.is_empty(),
+            "valid probability sum should produce no InvalidValue errors, got: {prob_errors:?}"
+        );
+    }
+
+    // ── Rule 3: Cyclic discount rate ──────────────────────────────────────────
+
+    /// Cyclic graph with annual_discount_rate = 0.0 produces InvalidValue error.
+    #[test]
+    fn test_5b_cyclic_zero_discount_rate() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.policy_graph.graph_type = PolicyGraphType::Cyclic;
+        stages.policy_graph.annual_discount_rate = 0.0;
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::InvalidValue),
+            "cyclic with 0 discount rate should produce InvalidValue"
+        );
+    }
+
+    /// Cyclic graph with annual_discount_rate > 0.0 produces no discount rate error.
+    #[test]
+    fn test_5b_cyclic_positive_discount_rate_valid() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.policy_graph.graph_type = PolicyGraphType::Cyclic;
+        stages.policy_graph.annual_discount_rate = 0.06;
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let discount_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            discount_errors.is_empty(),
+            "cyclic with positive discount rate should produce no error, got: {discount_errors:?}"
+        );
+    }
+
+    // ── Rule 4: Block duration positivity ─────────────────────────────────────
+
+    /// A block with duration_hours = 0.0 produces an InvalidValue error.
+    #[test]
+    fn test_5b_block_zero_duration() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].blocks = vec![Block {
+            index: 0,
+            name: "Peak".to_string(),
+            duration_hours: 0.0, // invalid
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::InvalidValue),
+            "zero duration block should produce InvalidValue"
+        );
+    }
+
+    /// A block with positive duration_hours produces no block duration error.
+    #[test]
+    fn test_5b_block_positive_duration_valid() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].blocks = vec![Block {
+            index: 0,
+            name: "Peak".to_string(),
+            duration_hours: 168.0,
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "positive block duration should produce no error, got: {errors:?}"
+        );
+    }
+
+    // ── Rule 5: CVaR parameter validity ───────────────────────────────────────
+
+    /// CVaR alpha = 0.0 (invalid, must be in (0, 1]) produces InvalidValue.
+    #[test]
+    fn test_5b_cvar_alpha_zero_invalid() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].risk_config = StageRiskConfig::CVaR {
+            alpha: 0.0, // invalid: must be in (0, 1]
+            lambda: 0.5,
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::InvalidValue),
+            "CVaR alpha=0.0 should produce InvalidValue"
+        );
+    }
+
+    /// CVaR lambda = -0.1 (invalid, must be in [0, 1]) produces InvalidValue.
+    #[test]
+    fn test_5b_cvar_lambda_out_of_range() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].risk_config = StageRiskConfig::CVaR {
+            alpha: 0.95,
+            lambda: -0.1, // invalid: must be in [0, 1]
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::InvalidValue),
+            "CVaR lambda=-0.1 should produce InvalidValue"
+        );
+    }
+
+    // ── Rule 6: Penalty ordering — filling > storage_viol ────────────────────
+
+    /// Hydro 7 with filling=100, storage_viol=200 (ordering violation) produces
+    /// a ModelQuality warning with "filling" and "storage" in the message.
+    #[test]
+    fn test_5b_penalty_ordering_filling_less_than_storage_violation() {
+        let mut hydro = make_hydro_ordered_penalties(7);
+        hydro.penalties.filling_target_violation_cost = 100.0;
+        hydro.penalties.storage_violation_below_cost = 200.0;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let warnings = ctx.warnings();
+        assert!(
+            !warnings.is_empty(),
+            "ordering violation should produce at least 1 warning"
+        );
+        let relevant: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality)
+            .collect();
+        assert!(
+            !relevant.is_empty(),
+            "should have ModelQuality warning for penalty ordering"
+        );
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("filling"),
+            "message should contain 'filling', got: {msg}"
+        );
+        assert!(
+            msg.contains("storage"),
+            "message should contain 'storage', got: {msg}"
+        );
+    }
+
+    // ── Rule 11: FPHA penalty rule ────────────────────────────────────────────
+
+    /// Hydro 3 with Fpha model, fpha_turbined_cost=0.01, spillage_cost=0.05
+    /// produces a BusinessRuleViolation error with "Hydro 3" and "fpha_turbined_cost".
+    #[test]
+    fn test_5b_fpha_penalty_violated() {
+        let mut hydro = make_hydro_ordered_penalties(3);
+        hydro.generation_model = HydroGenerationModel::Fpha;
+        hydro.penalties.fpha_turbined_cost = 0.01;
+        hydro.penalties.spillage_cost = 0.05;
+        // Adjust other penalties so check 10 doesn't trigger (min_resource must be > 0).
+        // Here min_resource = min(0.05, 1.0) = 0.05 > 0, so check 10 is fine.
+        // But we need check 9: min(constraint_viol) > max(resource). min_constraint=50,
+        // max_resource=max(0.05, 1.0)=1.0, so 50 > 1.0 is satisfied.
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert_eq!(
+            relevant.len(),
+            1,
+            "exactly 1 BusinessRuleViolation expected"
+        );
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("Hydro 3"),
+            "message should contain 'Hydro 3', got: {msg}"
+        );
+        assert!(
+            msg.contains("fpha_turbined_cost"),
+            "message should contain 'fpha_turbined_cost', got: {msg}"
+        );
+    }
+
+    /// FPHA hydro with fpha_turbined_cost > spillage_cost produces no error.
+    #[test]
+    fn test_5b_fpha_penalty_valid() {
+        let mut hydro = make_hydro_ordered_penalties(4);
+        hydro.generation_model = HydroGenerationModel::Fpha;
+        hydro.penalties.fpha_turbined_cost = 2.0;
+        hydro.penalties.spillage_cost = 1.0;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "valid FPHA penalty ordering should produce no BusinessRuleViolation, got: {errors:?}"
+        );
+    }
+
+    // ── Rule 12: Inflow std_m3s = 0.0 warning ────────────────────────────────
+
+    /// std_m3s = 0.0 produces a ModelQuality warning (deterministic inflow).
+    #[test]
+    fn test_5b_inflow_std_zero_warning() {
+        let stats = vec![InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 0.0, // triggers ModelQuality warning
+            ar_order: 0,
+        }];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            stats,
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "std_m3s=0.0 should produce warning, not error, got: {:?}",
+            ctx.errors()
+        );
+        let warnings = ctx.warnings();
+        assert!(
+            !warnings.is_empty(),
+            "std_m3s=0.0 should produce at least 1 ModelQuality warning"
+        );
+        assert!(
+            warnings.iter().any(|w| w.kind == ErrorKind::ModelQuality),
+            "should have ModelQuality warning"
+        );
+    }
+
+    // ── Rule 13: AR coefficient count mismatch ────────────────────────────────
+
+    /// InflowModel with ar_order=2 but 1 AR coefficient row produces InvalidValue.
+    #[test]
+    fn test_5b_ar_coefficient_count_mismatch() {
+        let stats = vec![make_inflow_stats(1, 0, 2)]; // ar_order=2
+        let ar_rows = vec![make_ar_row(1, 0, 1)]; // only 1 row (lag=1), need 2
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            stats,
+            ar_rows,
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            !relevant.is_empty(),
+            "AR count mismatch should produce InvalidValue"
+        );
+    }
+
+    /// InflowModel with ar_order=2 and 2 AR coefficient rows produces no error.
+    #[test]
+    fn test_5b_ar_coefficient_count_valid() {
+        let stats = vec![make_inflow_stats(1, 0, 2)]; // ar_order=2
+        let ar_rows = vec![make_ar_row(1, 0, 1), make_ar_row(1, 0, 2)]; // 2 rows
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            stats,
+            ar_rows,
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "matching AR count should produce no error, got: {errors:?}"
+        );
+    }
+
+    // ── Rule 14: Correlation matrix symmetry ──────────────────────────────────
+
+    /// Asymmetric correlation matrix (matrix[0][1]=0.8, matrix[1][0]=0.5) produces
+    /// a BusinessRuleViolation error with "symmetric" in the message.
+    #[test]
+    fn test_5b_correlation_asymmetric() {
+        let group = make_corr_group(
+            "Asymmetric",
+            vec![
+                vec![1.0, 0.8],
+                vec![0.5, 1.0], // asymmetric: should be 0.8
+            ],
+        );
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(
+            !relevant.is_empty(),
+            "asymmetric matrix should produce BusinessRuleViolation"
+        );
+        let msg = &relevant[0].message;
+        assert!(
+            msg.contains("symmetric"),
+            "message should contain 'symmetric', got: {msg}"
+        );
+    }
+
+    // ── Rule 15: Correlation matrix diagonal ──────────────────────────────────
+
+    /// Diagonal entry not equal to 1.0 produces a BusinessRuleViolation.
+    #[test]
+    fn test_5b_correlation_diagonal_not_one() {
+        let group = make_corr_group(
+            "BadDiag",
+            vec![
+                vec![0.9, 0.0], // diagonal entry 0.9 != 1.0
+                vec![0.0, 1.0],
+            ],
+        );
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
+            "diagonal != 1.0 should produce BusinessRuleViolation"
+        );
+    }
+
+    // ── Rule 16: Correlation coefficient range ────────────────────────────────
+
+    /// Off-diagonal entry > 1.0 produces a BusinessRuleViolation.
+    #[test]
+    fn test_5b_correlation_off_diagonal_out_of_range() {
+        let group = make_corr_group(
+            "BadRange",
+            vec![
+                vec![1.0, 1.5], // 1.5 > 1.0 — out of range
+                vec![1.5, 1.0],
+            ],
+        );
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        assert!(
+            ctx.errors()
+                .iter()
+                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
+            "off-diagonal > 1.0 should produce BusinessRuleViolation"
+        );
+    }
+
+    /// Valid symmetric correlation matrix produces no errors.
+    #[test]
+    fn test_5b_correlation_valid_symmetric() {
+        let group = make_corr_group("Valid", vec![vec![1.0, 0.6], vec![0.6, 1.0]]);
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid symmetric matrix should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    // ── Edge cases: empty correlation and inflow data ─────────────────────────
+
+    /// Empty correlation (None) and empty inflow data produce no false positives.
+    #[test]
+    fn test_5b_no_correlation_no_inflow_no_false_positives() {
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None, // no correlation
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "empty correlation and inflow should produce no errors, got: {:?}",
+            ctx.errors()
+        );
+    }
+}

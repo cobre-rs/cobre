@@ -2,8 +2,7 @@
 //!
 //! The `System` struct is the top-level in-memory representation of a fully loaded,
 //! validated, and resolved case. It is produced by `cobre-io::load_case()` and consumed
-//! by `cobre-sddp::train()`, `cobre-sddp::simulate()`, and `cobre-stochastic` scenario
-//! generation.
+//! by solvers and analysis tools (e.g., optimization, simulation, power flow).
 //!
 //! All entity collections in `System` are stored in canonical ID-sorted order to ensure
 //! declaration-order invariance: results are bit-for-bit identical regardless of input
@@ -12,15 +11,17 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Bus, CascadeTopology, EnergyContract, EntityId, Hydro, Line, NetworkTopology,
-    NonControllableSource, PumpingStation, Thermal, ValidationError,
+    Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
+    InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
+    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedPenalties, ScenarioSource, Stage, Thermal,
+    ValidationError,
 };
 
 /// Top-level system representation.
 ///
-/// Produced by `cobre-io` (Phase 2) or [`SystemBuilder`] (Phase 1 tests).
-/// Consumed by `cobre-sddp` and `cobre-stochastic` by shared reference.
-/// Immutable after construction. Shared read-only across threads.
+/// Produced by `cobre-io::load_case()` or [`SystemBuilder`] in tests.
+/// Consumed by solvers and analysis tools via shared reference.
+/// Immutable and thread-safe after construction.
 ///
 /// Entity collections are in canonical order (sorted by [`EntityId`]'s inner `i32`).
 /// Lookup indices provide O(1) access by [`EntityId`].
@@ -46,6 +47,7 @@ use crate::{
 /// assert!(system.bus(EntityId(1)).is_some());
 /// ```
 #[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct System {
     // Entity collections (canonical ordering by ID)
     buses: Vec<Bus>,
@@ -56,13 +58,22 @@ pub struct System {
     contracts: Vec<EnergyContract>,
     non_controllable_sources: Vec<NonControllableSource>,
 
-    // O(1) lookup indices (entity ID -> position in collection) -- private
+    // O(1) lookup indices (entity ID -> position in collection) -- private.
+    // Per spec SS6.2: HashMap lookup indices are NOT serialized. After deserialization
+    // the caller must invoke `rebuild_indices()` to restore O(1) lookup capability.
+    #[cfg_attr(feature = "serde", serde(skip))]
     bus_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     line_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     hydro_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     thermal_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     pumping_station_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     contract_index: HashMap<EntityId, usize>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     non_controllable_source_index: HashMap<EntityId, usize>,
 
     // Topology
@@ -70,6 +81,40 @@ pub struct System {
     cascade: CascadeTopology,
     /// Resolved transmission network topology.
     network: NetworkTopology,
+
+    // Temporal domain
+    /// Ordered list of stages (study + pre-study), sorted by `id` (canonical order).
+    stages: Vec<Stage>,
+    /// Policy graph defining stage transitions, horizon type, and discount rate.
+    policy_graph: PolicyGraph,
+
+    // Stage O(1) lookup index (stage ID -> position in stages vec).
+    // Stage IDs are `i32` (pre-study stages have negative IDs).
+    // Not serialized; rebuilt via `rebuild_indices()`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    stage_index: HashMap<i32, usize>,
+
+    // Resolved tables (populated by cobre-io after penalty/bound cascade)
+    /// Pre-resolved penalty values for all entities across all stages.
+    penalties: ResolvedPenalties,
+    /// Pre-resolved bound values for all entities across all stages.
+    bounds: ResolvedBounds,
+
+    // Scenario pipeline data (raw parameters loaded by cobre-io)
+    /// PAR(p) inflow model parameters, one entry per (hydro, stage) pair.
+    inflow_models: Vec<InflowModel>,
+    /// Seasonal load statistics, one entry per (bus, stage) pair.
+    load_models: Vec<LoadModel>,
+    /// Correlation model for stochastic inflow/load generation.
+    correlation: CorrelationModel,
+
+    // Study state
+    /// Initial reservoir storage levels at the start of the study.
+    initial_conditions: InitialConditions,
+    /// User-defined generic linear constraints, sorted by `id`.
+    generic_constraints: Vec<GenericConstraint>,
+    /// Top-level scenario source configuration (sampling scheme, seed).
+    scenario_source: ScenarioSource,
 }
 
 // Compile-time check that System is Send + Sync.
@@ -223,6 +268,124 @@ impl System {
     pub fn network(&self) -> &NetworkTopology {
         &self.network
     }
+
+    /// Returns all stages in canonical ID order (study and pre-study stages).
+    #[must_use]
+    pub fn stages(&self) -> &[Stage] {
+        &self.stages
+    }
+
+    /// Returns the number of stages (study and pre-study) in the system.
+    #[must_use]
+    pub fn n_stages(&self) -> usize {
+        self.stages.len()
+    }
+
+    /// Returns the stage with the given stage ID, or `None` if not found.
+    ///
+    /// Stage IDs are `i32`. Study stages have non-negative IDs; pre-study
+    /// stages (used only for PAR model lag initialization) have negative IDs.
+    #[must_use]
+    pub fn stage(&self, id: i32) -> Option<&Stage> {
+        self.stage_index.get(&id).map(|&i| &self.stages[i])
+    }
+
+    /// Returns a reference to the policy graph.
+    #[must_use]
+    pub fn policy_graph(&self) -> &PolicyGraph {
+        &self.policy_graph
+    }
+
+    /// Returns a reference to the pre-resolved penalty table.
+    #[must_use]
+    pub fn penalties(&self) -> &ResolvedPenalties {
+        &self.penalties
+    }
+
+    /// Returns a reference to the pre-resolved bounds table.
+    #[must_use]
+    pub fn bounds(&self) -> &ResolvedBounds {
+        &self.bounds
+    }
+
+    /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).
+    #[must_use]
+    pub fn inflow_models(&self) -> &[InflowModel] {
+        &self.inflow_models
+    }
+
+    /// Returns all load models in canonical order (by bus ID, then stage ID).
+    #[must_use]
+    pub fn load_models(&self) -> &[LoadModel] {
+        &self.load_models
+    }
+
+    /// Returns a reference to the correlation model.
+    #[must_use]
+    pub fn correlation(&self) -> &CorrelationModel {
+        &self.correlation
+    }
+
+    /// Returns a reference to the initial conditions.
+    #[must_use]
+    pub fn initial_conditions(&self) -> &InitialConditions {
+        &self.initial_conditions
+    }
+
+    /// Returns all generic constraints in canonical ID order.
+    #[must_use]
+    pub fn generic_constraints(&self) -> &[GenericConstraint] {
+        &self.generic_constraints
+    }
+
+    /// Returns a reference to the scenario source configuration.
+    #[must_use]
+    pub fn scenario_source(&self) -> &ScenarioSource {
+        &self.scenario_source
+    }
+
+    /// Rebuild all O(1) lookup indices from the entity collections.
+    ///
+    /// Required after deserialization: the `HashMap` lookup indices are not serialized
+    /// (per spec SS6.2 — they are derived from the entity collections). After
+    /// deserializing a `System` from JSON or any other format, call this method once
+    /// to restore O(1) access via [`bus`](Self::bus), [`hydro`](Self::hydro), etc.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "serde")]
+    /// # {
+    /// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+    ///
+    /// let system = SystemBuilder::new()
+    ///     .buses(vec![Bus {
+    ///         id: EntityId(1),
+    ///         name: "A".to_string(),
+    ///         deficit_segments: vec![],
+    ///         excess_cost: 0.0,
+    ///     }])
+    ///     .build()
+    ///     .expect("valid system");
+    ///
+    /// let json = serde_json::to_string(&system).unwrap();
+    /// let mut deserialized: cobre_core::System = serde_json::from_str(&json).unwrap();
+    /// deserialized.rebuild_indices();
+    ///
+    /// // O(1) lookup now works after index rebuild.
+    /// assert!(deserialized.bus(EntityId(1)).is_some());
+    /// # }
+    /// ```
+    pub fn rebuild_indices(&mut self) {
+        self.bus_index = build_index(&self.buses);
+        self.line_index = build_index(&self.lines);
+        self.hydro_index = build_index(&self.hydros);
+        self.thermal_index = build_index(&self.thermals);
+        self.pumping_station_index = build_index(&self.pumping_stations);
+        self.contract_index = build_index(&self.contracts);
+        self.non_controllable_source_index = build_index(&self.non_controllable_sources);
+        self.stage_index = build_stage_index(&self.stages);
+    }
 }
 
 /// Builder for constructing a validated, immutable [`System`].
@@ -256,6 +419,17 @@ pub struct SystemBuilder {
     pumping_stations: Vec<PumpingStation>,
     contracts: Vec<EnergyContract>,
     non_controllable_sources: Vec<NonControllableSource>,
+    // New fields from tickets 004-007
+    stages: Vec<Stage>,
+    policy_graph: PolicyGraph,
+    penalties: ResolvedPenalties,
+    bounds: ResolvedBounds,
+    inflow_models: Vec<InflowModel>,
+    load_models: Vec<LoadModel>,
+    correlation: CorrelationModel,
+    initial_conditions: InitialConditions,
+    generic_constraints: Vec<GenericConstraint>,
+    scenario_source: ScenarioSource,
 }
 
 impl Default for SystemBuilder {
@@ -266,6 +440,9 @@ impl Default for SystemBuilder {
 
 impl SystemBuilder {
     /// Create a new empty builder. All entity collections start empty.
+    ///
+    /// New fields introduced in Phase 2 default to empty/default values so that
+    /// all Phase 1 tests continue to work without modification.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -276,6 +453,16 @@ impl SystemBuilder {
             pumping_stations: Vec::new(),
             contracts: Vec::new(),
             non_controllable_sources: Vec::new(),
+            stages: Vec::new(),
+            policy_graph: PolicyGraph::default(),
+            penalties: ResolvedPenalties::empty(),
+            bounds: ResolvedBounds::empty(),
+            inflow_models: Vec::new(),
+            load_models: Vec::new(),
+            correlation: CorrelationModel::default(),
+            initial_conditions: InitialConditions::default(),
+            generic_constraints: Vec::new(),
+            scenario_source: ScenarioSource::default(),
         }
     }
 
@@ -328,6 +515,84 @@ impl SystemBuilder {
         self
     }
 
+    /// Set the stage collection (study and pre-study stages).
+    ///
+    /// Stages are sorted by `id` in [`build`](Self::build) to canonical order.
+    #[must_use]
+    pub fn stages(mut self, stages: Vec<Stage>) -> Self {
+        self.stages = stages;
+        self
+    }
+
+    /// Set the policy graph.
+    #[must_use]
+    pub fn policy_graph(mut self, policy_graph: PolicyGraph) -> Self {
+        self.policy_graph = policy_graph;
+        self
+    }
+
+    /// Set the pre-resolved penalty table.
+    ///
+    /// Populated by `cobre-io` after the three-tier penalty cascade is applied.
+    #[must_use]
+    pub fn penalties(mut self, penalties: ResolvedPenalties) -> Self {
+        self.penalties = penalties;
+        self
+    }
+
+    /// Set the pre-resolved bounds table.
+    ///
+    /// Populated by `cobre-io` after base bounds are overlaid with stage overrides.
+    #[must_use]
+    pub fn bounds(mut self, bounds: ResolvedBounds) -> Self {
+        self.bounds = bounds;
+        self
+    }
+
+    /// Set the PAR(p) inflow model collection.
+    #[must_use]
+    pub fn inflow_models(mut self, inflow_models: Vec<InflowModel>) -> Self {
+        self.inflow_models = inflow_models;
+        self
+    }
+
+    /// Set the load model collection.
+    #[must_use]
+    pub fn load_models(mut self, load_models: Vec<LoadModel>) -> Self {
+        self.load_models = load_models;
+        self
+    }
+
+    /// Set the correlation model.
+    #[must_use]
+    pub fn correlation(mut self, correlation: CorrelationModel) -> Self {
+        self.correlation = correlation;
+        self
+    }
+
+    /// Set the initial conditions.
+    #[must_use]
+    pub fn initial_conditions(mut self, initial_conditions: InitialConditions) -> Self {
+        self.initial_conditions = initial_conditions;
+        self
+    }
+
+    /// Set the generic constraint collection.
+    ///
+    /// Constraints are sorted by `id` in [`build`](Self::build) to canonical order.
+    #[must_use]
+    pub fn generic_constraints(mut self, generic_constraints: Vec<GenericConstraint>) -> Self {
+        self.generic_constraints = generic_constraints;
+        self
+    }
+
+    /// Set the scenario source configuration.
+    #[must_use]
+    pub fn scenario_source(mut self, scenario_source: ScenarioSource) -> Self {
+        self.scenario_source = scenario_source;
+        self
+    }
+
     /// Build the [`System`].
     ///
     /// Sorts all entity collections by [`EntityId`] (canonical ordering).
@@ -360,6 +625,8 @@ impl SystemBuilder {
         self.pumping_stations.sort_by_key(|e| e.id.0);
         self.contracts.sort_by_key(|e| e.id.0);
         self.non_controllable_sources.sort_by_key(|e| e.id.0);
+        self.stages.sort_by_key(|s| s.id);
+        self.generic_constraints.sort_by_key(|c| c.id.0);
 
         let mut errors: Vec<ValidationError> = Vec::new();
         check_duplicates(&self.buses, "Bus", &mut errors);
@@ -432,6 +699,8 @@ impl SystemBuilder {
             &self.pumping_stations,
         );
 
+        let stage_index = build_stage_index(&self.stages);
+
         Ok(System {
             buses: self.buses,
             lines: self.lines,
@@ -449,6 +718,17 @@ impl SystemBuilder {
             non_controllable_source_index,
             cascade,
             network,
+            stages: self.stages,
+            policy_graph: self.policy_graph,
+            stage_index,
+            penalties: self.penalties,
+            bounds: self.bounds,
+            inflow_models: self.inflow_models,
+            load_models: self.load_models,
+            correlation: self.correlation,
+            initial_conditions: self.initial_conditions,
+            generic_constraints: self.generic_constraints,
+            scenario_source: self.scenario_source,
         })
     }
 }
@@ -497,6 +777,17 @@ fn build_index<T: HasId>(entities: &[T]) -> HashMap<EntityId, usize> {
     let mut index = HashMap::with_capacity(entities.len());
     for (i, entity) in entities.iter().enumerate() {
         index.insert(entity.entity_id(), i);
+    }
+    index
+}
+
+/// Build a stage lookup index from the canonical-ordered stages vec.
+///
+/// Keys are `i32` stage IDs (which can be negative for pre-study stages).
+fn build_stage_index(stages: &[Stage]) -> HashMap<i32, usize> {
+    let mut index = HashMap::with_capacity(stages.len());
+    for (i, stage) in stages.iter().enumerate() {
+        index.insert(stage.id, i);
     }
     index
 }
@@ -1527,6 +1818,211 @@ mod tests {
         assert!(
             has_filling,
             "expected InvalidFillingConfig error, got: {errors:?}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_system_serde_roundtrip() {
+        // Build a system with a bus, a hydro, a line, and a thermal.
+        let bus_a = make_bus(1);
+        let bus_b = make_bus(2);
+        let hydro = make_hydro_on_bus(10, 1);
+        let thermal = make_thermal_on_bus(20, 2);
+        let line = make_line(1, 1, 2);
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus_a, bus_b])
+            .hydros(vec![hydro])
+            .thermals(vec![thermal])
+            .lines(vec![line])
+            .build()
+            .expect("valid system");
+
+        let json = serde_json::to_string(&system).unwrap();
+
+        // Deserialize and rebuild indices.
+        let mut deserialized: System = serde_json::from_str(&json).unwrap();
+        deserialized.rebuild_indices();
+
+        // Entity collections must match.
+        assert_eq!(system.buses(), deserialized.buses());
+        assert_eq!(system.hydros(), deserialized.hydros());
+        assert_eq!(system.thermals(), deserialized.thermals());
+        assert_eq!(system.lines(), deserialized.lines());
+
+        // O(1) lookup must work after index rebuild.
+        assert_eq!(
+            deserialized.bus(EntityId(1)).map(|b| b.id),
+            Some(EntityId(1))
+        );
+        assert_eq!(
+            deserialized.hydro(EntityId(10)).map(|h| h.id),
+            Some(EntityId(10))
+        );
+        assert_eq!(
+            deserialized.thermal(EntityId(20)).map(|t| t.id),
+            Some(EntityId(20))
+        );
+        assert_eq!(
+            deserialized.line(EntityId(1)).map(|l| l.id),
+            Some(EntityId(1))
+        );
+    }
+
+    // ---- Extended System tests (ticket-008) ------------------------------------
+
+    fn make_stage(id: i32) -> Stage {
+        use crate::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+        use chrono::NaiveDate;
+        Stage {
+            index: usize::try_from(id.max(0)).unwrap_or(0),
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 50,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// Verify that `SystemBuilder::new().build()` still works with all Phase 1
+    /// patterns unchanged. New fields must default to empty/default values.
+    #[test]
+    fn test_system_backward_compat() {
+        let system = SystemBuilder::new().build().expect("empty system is valid");
+        // Entity counts unchanged
+        assert_eq!(system.n_buses(), 0);
+        assert_eq!(system.n_hydros(), 0);
+        // New fields default to empty
+        assert_eq!(system.n_stages(), 0);
+        assert!(system.stages().is_empty());
+        assert!(system.initial_conditions().storage.is_empty());
+        assert!(system.generic_constraints().is_empty());
+        assert!(system.inflow_models().is_empty());
+        assert!(system.load_models().is_empty());
+        assert_eq!(system.penalties().n_stages(), 0);
+        assert_eq!(system.bounds().n_stages(), 0);
+    }
+
+    /// Build a System with 2 stages and verify `n_stages()` and `stage(id)` lookup.
+    #[test]
+    fn test_system_with_stages() {
+        let s0 = make_stage(0);
+        let s1 = make_stage(1);
+
+        let system = SystemBuilder::new()
+            .stages(vec![s1.clone(), s0.clone()]) // supply in reverse order
+            .build()
+            .expect("valid system");
+
+        // Canonical ordering: id=0 comes before id=1
+        assert_eq!(system.n_stages(), 2);
+        assert_eq!(system.stages()[0].id, 0);
+        assert_eq!(system.stages()[1].id, 1);
+
+        // O(1) lookup by stage id
+        let found = system.stage(0).expect("stage 0 must be found");
+        assert_eq!(found.id, s0.id);
+
+        let found1 = system.stage(1).expect("stage 1 must be found");
+        assert_eq!(found1.id, s1.id);
+
+        // Missing stage returns None
+        assert!(system.stage(99).is_none());
+    }
+
+    /// Build a System with 3 stages having IDs 0, 1, 2 and verify `stage()` lookups.
+    #[test]
+    fn test_system_stage_lookup_by_id() {
+        let stages: Vec<Stage> = [0i32, 1, 2].iter().map(|&id| make_stage(id)).collect();
+
+        let system = SystemBuilder::new()
+            .stages(stages)
+            .build()
+            .expect("valid system");
+
+        assert_eq!(system.stage(1).map(|s| s.id), Some(1));
+        assert!(system.stage(99).is_none());
+    }
+
+    /// Build a System with `InitialConditions` containing 1 storage entry and verify accessor.
+    #[test]
+    fn test_system_with_initial_conditions() {
+        let ic = InitialConditions {
+            storage: vec![crate::HydroStorage {
+                hydro_id: EntityId(0),
+                value_hm3: 15_000.0,
+            }],
+            filling_storage: vec![],
+        };
+
+        let system = SystemBuilder::new()
+            .initial_conditions(ic)
+            .build()
+            .expect("valid system");
+
+        assert_eq!(system.initial_conditions().storage.len(), 1);
+        assert_eq!(system.initial_conditions().storage[0].hydro_id, EntityId(0));
+        assert!((system.initial_conditions().storage[0].value_hm3 - 15_000.0).abs() < f64::EPSILON);
+    }
+
+    /// Verify serde round-trip of a System with stages and `policy_graph`,
+    /// including that `stage_index` is correctly rebuilt after deserialization.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_system_serde_roundtrip_with_stages() {
+        use crate::temporal::PolicyGraphType;
+
+        let stages = vec![make_stage(0), make_stage(1)];
+        let policy_graph = PolicyGraph {
+            graph_type: PolicyGraphType::FiniteHorizon,
+            annual_discount_rate: 0.0,
+            transitions: vec![],
+            season_map: None,
+        };
+
+        let system = SystemBuilder::new()
+            .stages(stages)
+            .policy_graph(policy_graph)
+            .build()
+            .expect("valid system");
+
+        let json = serde_json::to_string(&system).unwrap();
+        let mut deserialized: System = serde_json::from_str(&json).unwrap();
+
+        // stage_index is skipped during serde; rebuild before querying
+        deserialized.rebuild_indices();
+
+        // Collections must match after round-trip
+        assert_eq!(system.n_stages(), deserialized.n_stages());
+        assert_eq!(system.stages()[0].id, deserialized.stages()[0].id);
+        assert_eq!(system.stages()[1].id, deserialized.stages()[1].id);
+
+        // O(1) lookup must work after index rebuild
+        assert_eq!(deserialized.stage(0).map(|s| s.id), Some(0));
+        assert_eq!(deserialized.stage(1).map(|s| s.id), Some(1));
+        assert!(deserialized.stage(99).is_none());
+
+        // policy_graph fields must round-trip
+        assert_eq!(
+            deserialized.policy_graph().graph_type,
+            system.policy_graph().graph_type
         );
     }
 }

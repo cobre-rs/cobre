@@ -12,6 +12,7 @@ use crate::EntityId;
 /// the next segment's `depth_mw` MW costs that segment's `cost_per_mwh`, and so on.
 /// The final segment has `depth_mw` = None (extends to infinity).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeficitSegment {
     /// MW of deficit covered by this segment \[MW\]. None for the final unbounded segment.
     pub depth_mw: Option<f64>,
@@ -28,6 +29,7 @@ pub struct DeficitSegment {
 ///
 /// Source: system/buses.json. See Input System Entities SS1.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Bus {
     /// Unique bus identifier.
     pub id: EntityId,
@@ -106,5 +108,32 @@ mod tests {
         };
 
         assert_ne!(bus_a, bus_c);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_bus_serde_roundtrip() {
+        let bus = Bus {
+            id: EntityId::from(1),
+            name: "Main Bus".to_string(),
+            deficit_segments: vec![
+                DeficitSegment {
+                    depth_mw: Some(100.0),
+                    cost_per_mwh: 500.0,
+                },
+                DeficitSegment {
+                    depth_mw: Some(200.0),
+                    cost_per_mwh: 1000.0,
+                },
+                DeficitSegment {
+                    depth_mw: None,
+                    cost_per_mwh: 5000.0,
+                },
+            ],
+            excess_cost: 1.5,
+        };
+        let json = serde_json::to_string(&bus).unwrap();
+        let deserialized: Bus = serde_json::from_str(&json).unwrap();
+        assert_eq!(bus, deserialized);
     }
 }

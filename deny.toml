@@ -8,7 +8,12 @@ targets = []
 [advisories]
 # Deny crates with known security vulnerabilities.
 version = 2
-ignore = []
+ignore = [
+    # atomic-polyfill via postcard -> heapless; no upgrade available for postcard 1.x
+    "RUSTSEC-2023-0089",
+    # paste via parquet (dev-dep); transitive, no upgrade available
+    "RUSTSEC-2024-0436",
+]
 
 # ------------------------------------------------------------------ licenses
 [licenses]

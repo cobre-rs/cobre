@@ -24,14 +24,14 @@
 
 use serde::Serialize;
 
-use crate::validation::ValidationContext;
 use crate::LoadError;
+use crate::validation::ValidationContext;
 
 // ── ReportEntry ───────────────────────────────────────────────────────────────
 
 /// A single diagnostic entry in a [`ValidationReport`].
 ///
-/// The `kind` field holds the `Debug` representation of the [`ErrorKind`]
+/// The `kind` field holds the `Debug` representation of the `ErrorKind`
 /// variant (e.g., `"FileNotFound"`), making it suitable for programmatic
 /// inspection by the CLI, TUI, or MCP server.
 #[derive(Debug, Clone, Serialize)]

@@ -52,7 +52,7 @@ pub struct HydroStorage {
 ///
 /// A hydro must appear in exactly one of the two arrays, never both. Hydros
 /// with a `filling` configuration belong in [`filling_storage`]; all other
-/// hydros (including late-entry hydros) belong in [`storage`].
+/// hydros (including late-entry hydros) belong in [`storage`](InitialConditions::storage).
 ///
 /// [`filling_storage`]: InitialConditions::filling_storage
 #[derive(Debug, Clone, PartialEq)]

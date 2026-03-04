@@ -62,11 +62,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use cobre_core::EntityId;
 use cobre_core::scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
     CorrelationScheduleEntry,
 };
-use cobre_core::EntityId;
 use serde::Deserialize;
 
 use crate::LoadError;
@@ -161,7 +161,7 @@ struct RawScheduleEntry {
 /// | Matrix row count != entity count                         | [`LoadError::SchemaError`] |
 /// | Diagonal entry != 1.0                                    | [`LoadError::SchemaError`] |
 /// | Matrix element outside `[-1.0, 1.0]`                     | [`LoadError::SchemaError`] |
-/// | Matrix not symmetric (`|m[i][j] - m[j][i]| > 1e-10`)    | [`LoadError::SchemaError`] |
+/// | Matrix not symmetric (`|m\[i\]\[j\] - m\[j\]\[i\]| > 1e-10`) | [`LoadError::SchemaError`] |
 /// | Schedule `profile_name` not in `profiles`                | [`LoadError::SchemaError`] |
 ///
 /// # Examples

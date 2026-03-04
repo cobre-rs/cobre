@@ -3,7 +3,7 @@
 //!
 //! This module defines the clarity-first data containers for the raw scenario
 //! pipeline parameters loaded from input files. These are the data types stored
-//! in [`System`] and passed to downstream crates for processing.
+//! in [`System`](crate::System) and passed to downstream crates for processing.
 //!
 //! ## Dual-nature design
 //!
@@ -379,7 +379,7 @@ pub struct CorrelationScheduleEntry {
 /// schedule. When `schedule` is empty, the solver uses a single profile
 /// (typically named `"default"`) for all stages.
 ///
-/// `profiles` uses [`BTreeMap`] rather than [`HashMap`] to preserve
+/// `profiles` uses [`BTreeMap`] rather than [`HashMap`](std::collections::HashMap) to preserve
 /// deterministic iteration order, satisfying the declaration-order
 /// invariance requirement (design-principles.md §3).
 ///

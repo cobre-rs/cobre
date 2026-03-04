@@ -4,7 +4,7 @@
 //! ensured schema correctness, referential integrity, and dimensional
 //! consistency.
 //!
-//! ## Layer 5a rules (hydro and thermal domain) — [`validate_semantic_hydro_thermal`]
+//! ## Layer 5a rules (hydro and thermal domain) — `validate_semantic_hydro_thermal`
 //!
 //! | # | Rule                                              | Source file                           | `ErrorKind`            |
 //! |---|---------------------------------------------------|---------------------------------------|------------------------|
@@ -22,7 +22,7 @@
 //! |12 | FPHA: `gamma_v > 0`, `gamma_s <= 0`               | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
 //! |13 | `min_generation_mw <= max_generation_mw` (thermal)| `system/thermals.json`                | `InvalidValue`         |
 //!
-//! ## Layer 5b rules (stages, penalties, and scenario domain) — [`validate_semantic_stages_penalties_scenarios`]
+//! ## Layer 5b rules (stages, penalties, and scenario domain) — `validate_semantic_stages_penalties_scenarios`
 //!
 //! | #  | Rule                                                                    | Source file                                    | `ErrorKind`              |
 //! |----|-------------------------------------------------------------------------|------------------------------------------------|--------------------------|
@@ -45,7 +45,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 // ── validate_semantic_hydro_thermal ──────────────────────────────────────────
 
@@ -1051,6 +1051,7 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
+        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -1061,14 +1062,13 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{schema::ParsedData, ErrorKind, ValidationContext},
+        validation::{ErrorKind, ValidationContext, schema::ParsedData},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1737,7 +1737,7 @@ mod tests {
     fn test_fpha_negative_gamma_v() {
         let mut row = make_fpha_row(1, None, 0);
         row.gamma_v = -0.5; // invalid: must be > 0
-                            // Add two more valid planes so rule 11 (count) doesn't trigger.
+        // Add two more valid planes so rule 11 (count) doesn't trigger.
         let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
         let data = make_data(
             vec![make_hydro(1, None)],

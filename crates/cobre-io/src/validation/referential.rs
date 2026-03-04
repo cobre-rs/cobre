@@ -1,15 +1,15 @@
 //! Layer 3 — Referential integrity validation.
 //!
-//! Verifies that every cross-entity reference in [`ParsedData`] resolves to an
+//! Verifies that every cross-entity reference in `ParsedData` resolves to an
 //! existing entity in the corresponding registry.  All 30 rules are checked
 //! regardless of errors found in earlier rules — every dangling reference is
 //! collected before returning.
 //!
-//! The primary entry point is [`validate_referential_integrity`].
+//! The primary entry point is `validate_referential_integrity`.
 
 use std::collections::HashSet;
 
-use super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 // ── validate_referential_integrity ───────────────────────────────────────────
 
@@ -564,12 +564,12 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
 mod tests {
     use super::*;
     use cobre_core::{
+        EntityId,
         entities::{
             DiversionChannel, Hydro, HydroGenerationModel, HydroPenalties, Line,
             NonControllableSource, PumpingStation, Thermal, ThermalCostSegment,
         },
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
-        EntityId,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -583,7 +583,7 @@ mod tests {
         extensions::HydroGeometryRow,
         scenarios::{InflowSeasonalStatsRow, LoadSeasonalStatsRow},
         validation::{
-            schema::{validate_schema, ParsedData},
+            schema::{ParsedData, validate_schema},
             structural::validate_structure,
         },
     };

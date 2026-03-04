@@ -2,7 +2,7 @@
 //!
 //! [`resolve_bounds`] pre-computes per-(entity, stage) bound values by:
 //!
-//! 1. Deriving base [`*StageBounds`] values from each entity's fields (loaded from
+//! 1. Deriving base `*StageBounds` values from each entity's fields (loaded from
 //!    entity JSON files in epic-03).
 //! 2. Filling the [`ResolvedBounds`] table with these base values for all stages.
 //! 3. Applying sparse stage-varying overrides from the parsed Parquet rows
@@ -14,12 +14,12 @@
 use std::collections::HashMap;
 
 use cobre_core::{
+    EntityId,
     entities::{EnergyContract, Hydro, Line, PumpingStation, Thermal},
     resolved::{
         ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds, ResolvedBounds,
         ThermalStageBounds,
     },
-    EntityId,
 };
 
 use crate::constraints::{

@@ -120,7 +120,9 @@ use crate::constraints::{
 ///     water_withdrawal_violation_cost: None,
 /// };
 ///
-/// let result = resolve_penalties(&hydros, &[], &[], &[], 3, &[override_row], &[], &[], &[]);
+/// let stage_index: std::collections::HashMap<i32, usize> =
+///     [(0, 0), (1, 1), (2, 2)].into_iter().collect();
+/// let result = resolve_penalties(&hydros, &[], &[], &[], 3, &stage_index, &[override_row], &[], &[], &[]);
 ///
 /// // Stage 0: unchanged — entity-level value.
 /// assert!((result.hydro_penalties(0, 0).spillage_cost - 0.01).abs() < f64::EPSILON);
@@ -132,13 +134,18 @@ use crate::constraints::{
 /// assert!((result.hydro_penalties(1, 1).spillage_cost - 0.01).abs() < f64::EPSILON);
 /// ```
 #[must_use]
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::implicit_hasher
+)]
 pub fn resolve_penalties(
     hydros: &[Hydro],
     buses: &[Bus],
     lines: &[Line],
     ncs_sources: &[NonControllableSource],
     n_stages: usize,
+    stage_index: &HashMap<i32, usize>,
     hydro_overrides: &[HydroPenaltyOverrideRow],
     bus_overrides: &[BusPenaltyOverrideRow],
     line_overrides: &[LinePenaltyOverrideRow],
@@ -277,12 +284,9 @@ pub fn resolve_penalties(
         let Some(&entity_idx) = hydro_index.get(&row.hydro_id) else {
             continue; // Unknown entity ID — silently skip.
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
-            continue; // Negative stage_id — silently skip (out-of-range, Layer 3 concern).
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
+            continue; // Unknown or out-of-range stage_id — silently skip.
         };
-        if stage_idx >= n_stages {
-            continue; // Out-of-range stage — silently skip.
-        }
         let cell = table.hydro_penalties_mut(entity_idx, stage_idx);
         if let Some(v) = row.spillage_cost {
             cell.spillage_cost = v;
@@ -323,12 +327,9 @@ pub fn resolve_penalties(
         let Some(&entity_idx) = bus_index.get(&row.bus_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.bus_penalties_mut(entity_idx, stage_idx);
         if let Some(v) = row.excess_cost {
             cell.excess_cost = v;
@@ -339,12 +340,9 @@ pub fn resolve_penalties(
         let Some(&entity_idx) = line_index.get(&row.line_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.line_penalties_mut(entity_idx, stage_idx);
         if let Some(v) = row.exchange_cost {
             cell.exchange_cost = v;
@@ -355,12 +353,9 @@ pub fn resolve_penalties(
         let Some(&entity_idx) = ncs_index.get(&row.source_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.ncs_penalties_mut(entity_idx, stage_idx);
         if let Some(v) = row.curtailment_cost {
             cell.curtailment_cost = v;
@@ -405,6 +400,40 @@ mod tests {
     use cobre_core::entities::{
         Bus, DeficitSegment, HydroGenerationModel, HydroPenalties, Line, NonControllableSource,
     };
+
+    /// Build a 0-based consecutive stage_index map: {0→0, 1→1, …, (n-1)→(n-1)}.
+    fn si(n: usize) -> HashMap<i32, usize> {
+        (0..n).map(|i| (i32::try_from(i).unwrap(), i)).collect()
+    }
+
+    /// Test wrapper that passes a 0-based consecutive `stage_index` to
+    /// [`super::resolve_penalties`]. Shadows the import so existing test calls
+    /// work without modification.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_penalties(
+        hydros: &[Hydro],
+        buses: &[Bus],
+        lines: &[Line],
+        ncs_sources: &[NonControllableSource],
+        n_stages: usize,
+        hydro_overrides: &[HydroPenaltyOverrideRow],
+        bus_overrides: &[BusPenaltyOverrideRow],
+        line_overrides: &[LinePenaltyOverrideRow],
+        ncs_overrides: &[NcsPenaltyOverrideRow],
+    ) -> ResolvedPenalties {
+        super::resolve_penalties(
+            hydros,
+            buses,
+            lines,
+            ncs_sources,
+            n_stages,
+            &si(n_stages),
+            hydro_overrides,
+            bus_overrides,
+            line_overrides,
+            ncs_overrides,
+        )
+    }
 
     /// Build a `Hydro` with all 11 penalty fields set to the given value.
     fn make_hydro(id: i32, penalty_value: f64) -> Hydro {

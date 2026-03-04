@@ -43,6 +43,7 @@ use crate::constraints::{
 /// * `pumping_stations` — pumping stations sorted by ID
 /// * `contracts` — energy contracts sorted by ID
 /// * `n_stages` — total number of study stages
+/// * `stage_index` — mapping from domain-level `stage_id` to positional 0-based index
 /// * `hydro_overrides` — stage-varying overrides from `constraints/hydro_bounds.parquet`
 /// * `thermal_overrides` — stage-varying overrides from `constraints/thermal_bounds.parquet`
 /// * `line_overrides` — stage-varying overrides from `constraints/line_bounds.parquet`
@@ -115,8 +116,10 @@ use crate::constraints::{
 ///     water_withdrawal_m3s: None,
 /// };
 ///
+/// let stage_index: std::collections::HashMap<i32, usize> =
+///     [(0, 0), (1, 1), (2, 2)].into_iter().collect();
 /// let result = resolve_bounds(
-///     &[hydro], &[], &[], &[], &[], 3,
+///     &[hydro], &[], &[], &[], &[], 3, &stage_index,
 ///     &[override_row], &[], &[], &[], &[],
 /// );
 ///
@@ -132,7 +135,11 @@ use crate::constraints::{
 /// assert!((result.hydro_bounds(0, 2).max_storage_hm3 - 200.0).abs() < f64::EPSILON);
 /// ```
 #[must_use]
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::implicit_hasher
+)]
 pub fn resolve_bounds(
     hydros: &[Hydro],
     thermals: &[Thermal],
@@ -140,6 +147,7 @@ pub fn resolve_bounds(
     pumping_stations: &[PumpingStation],
     contracts: &[EnergyContract],
     n_stages: usize,
+    stage_index: &HashMap<i32, usize>,
     hydro_overrides: &[HydroBoundsRow],
     thermal_overrides: &[ThermalBoundsRow],
     line_overrides: &[LineBoundsRow],
@@ -310,12 +318,9 @@ pub fn resolve_bounds(
         let Some(&entity_idx) = hydro_index.get(&row.hydro_id) else {
             continue; // Unknown entity ID — silently skip.
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
-            continue; // Negative stage_id — silently skip.
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
+            continue; // Unknown or out-of-range stage_id — silently skip.
         };
-        if stage_idx >= n_stages {
-            continue; // Out-of-range stage — silently skip.
-        }
         let cell = table.hydro_bounds_mut(entity_idx, stage_idx);
         if let Some(v) = row.min_storage_hm3 {
             cell.min_storage_hm3 = v;
@@ -356,12 +361,9 @@ pub fn resolve_bounds(
         let Some(&entity_idx) = thermal_index.get(&row.thermal_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.thermal_bounds_mut(entity_idx, stage_idx);
         if let Some(v) = row.min_generation_mw {
             cell.min_generation_mw = v;
@@ -375,12 +377,9 @@ pub fn resolve_bounds(
         let Some(&entity_idx) = line_index.get(&row.line_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.line_bounds_mut(entity_idx, stage_idx);
         if let Some(v) = row.direct_mw {
             cell.direct_mw = v;
@@ -394,12 +393,9 @@ pub fn resolve_bounds(
         let Some(&entity_idx) = pumping_index.get(&row.station_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.pumping_bounds_mut(entity_idx, stage_idx);
         if let Some(v) = row.min_m3s {
             cell.min_flow_m3s = v;
@@ -413,12 +409,9 @@ pub fn resolve_bounds(
         let Some(&entity_idx) = contract_index.get(&row.contract_id) else {
             continue;
         };
-        let Ok(stage_idx) = usize::try_from(row.stage_id) else {
+        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {
             continue;
         };
-        if stage_idx >= n_stages {
-            continue;
-        }
         let cell = table.contract_bounds_mut(entity_idx, stage_idx);
         if let Some(v) = row.min_mw {
             cell.min_mw = v;
@@ -496,6 +489,44 @@ mod tests {
         ContractType, DiversionChannel, FillingConfig, HydroGenerationModel, HydroPenalties,
         ThermalCostSegment,
     };
+
+    /// Build a 0-based consecutive stage_index map: {0→0, 1→1, …, (n-1)→(n-1)}.
+    fn si(n: usize) -> HashMap<i32, usize> {
+        (0..n).map(|i| (i32::try_from(i).unwrap(), i)).collect()
+    }
+
+    /// Test wrapper that passes a 0-based consecutive `stage_index` to
+    /// [`super::resolve_bounds`]. Shadows the import so existing test calls
+    /// work without modification.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_bounds(
+        hydros: &[Hydro],
+        thermals: &[Thermal],
+        lines: &[Line],
+        pumping_stations: &[PumpingStation],
+        contracts: &[EnergyContract],
+        n_stages: usize,
+        hydro_overrides: &[HydroBoundsRow],
+        thermal_overrides: &[ThermalBoundsRow],
+        line_overrides: &[LineBoundsRow],
+        pumping_overrides: &[PumpingBoundsRow],
+        contract_overrides: &[ContractBoundsRow],
+    ) -> ResolvedBounds {
+        super::resolve_bounds(
+            hydros,
+            thermals,
+            lines,
+            pumping_stations,
+            contracts,
+            n_stages,
+            &si(n_stages),
+            hydro_overrides,
+            thermal_overrides,
+            line_overrides,
+            pumping_overrides,
+            contract_overrides,
+        )
+    }
 
     // ── Entity construction helpers ───────────────────────────────────────────
 

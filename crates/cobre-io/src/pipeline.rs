@@ -5,6 +5,8 @@
 //! that either returns a fully-validated [`cobre_core::System`] or a
 //! [`LoadError`] explaining what went wrong.
 
+use std::collections::HashMap;
+
 use cobre_core::{scenario::CorrelationModel, SystemBuilder};
 
 use crate::{
@@ -66,8 +68,15 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
 
     // ── Resolution step ───────────────────────────────────────────────────────
 
-    // Count study stages only (pre-study stages have negative IDs).
-    let n_stages = data.stages.stages.iter().filter(|s| s.id >= 0).count();
+    // Count study stages only (pre-study stages have negative IDs) and build
+    // a mapping from domain-level stage_id to positional 0-based index.
+    let study_stages: Vec<_> = data.stages.stages.iter().filter(|s| s.id >= 0).collect();
+    let n_stages = study_stages.len();
+    let stage_index: HashMap<i32, usize> = study_stages
+        .iter()
+        .enumerate()
+        .map(|(idx, s)| (s.id, idx))
+        .collect();
 
     let penalties = resolve_penalties(
         &data.hydros,
@@ -75,6 +84,7 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         &data.lines,
         &data.non_controllable_sources,
         n_stages,
+        &stage_index,
         &data.penalty_overrides_hydro,
         &data.penalty_overrides_bus,
         &data.penalty_overrides_line,
@@ -88,6 +98,7 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         &data.pumping_stations,
         &data.energy_contracts,
         n_stages,
+        &stage_index,
         &data.hydro_bounds,
         &data.thermal_bounds,
         &data.line_bounds,

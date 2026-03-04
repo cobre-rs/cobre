@@ -1982,7 +1982,7 @@ mod tests {
         assert!((system.initial_conditions().storage[0].value_hm3 - 15_000.0).abs() < f64::EPSILON);
     }
 
-    /// Verify serde round-trip of a System with stages and policy_graph,
+    /// Verify serde round-trip of a System with stages and `policy_graph`,
     /// including that `stage_index` is correctly rebuilt after deserialization.
     #[cfg(feature = "serde")]
     #[test]

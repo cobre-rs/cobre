@@ -42,10 +42,6 @@ pub struct Config {
     /// Config format version (e.g. `"2.0.0"`).
     pub version: Option<String>,
 
-    /// HPC / MPI configuration.
-    #[serde(default)]
-    pub mpi: MpiConfig,
-
     /// Modeling options (inflow non-negativity treatment).
     #[serde(default)]
     pub modeling: ModelingConfig,
@@ -68,94 +64,6 @@ pub struct Config {
     /// Export flags controlling which outputs are written to disk.
     #[serde(default)]
     pub exports: ExportsConfig,
-}
-
-// ── MPI Configuration ────────────────────────────────────────────────────────
-
-/// HPC / MPI configuration (`config.json → mpi`).
-///
-/// All fields have sensible defaults and the entire section can be omitted.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MpiConfig {
-    /// Communication patterns and collective settings.
-    #[serde(default)]
-    pub communication: MpiCommunicationConfig,
-
-    /// Memory management settings.
-    #[serde(default)]
-    pub memory: MpiMemoryConfig,
-
-    /// I/O strategy settings.
-    #[serde(default)]
-    pub io: MpiIoConfig,
-
-    /// Solver threading settings.
-    #[serde(default)]
-    pub solver: MpiSolverConfig,
-}
-
-/// MPI communication pattern settings.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MpiCommunicationConfig {
-    /// Cut aggregation strategy: `"hierarchical"` or `"flat"`.
-    #[serde(default)]
-    pub cut_aggregation: Option<String>,
-
-    /// Fan-out for hierarchical aggregation trees.
-    #[serde(default)]
-    pub aggregation_tree_fanout: Option<u32>,
-
-    /// Enable pipelined backward pass communication.
-    #[serde(default)]
-    pub backward_pipeline: Option<bool>,
-
-    /// Use MPI 4 persistent collectives for iterative operations.
-    #[serde(default)]
-    pub use_persistent_collectives: Option<bool>,
-
-    /// Use MPI shared-memory windows for intra-node communication.
-    #[serde(default)]
-    pub use_shared_memory_windows: Option<bool>,
-}
-
-/// MPI memory management settings.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MpiMemoryConfig {
-    /// FCF sharing strategy: `"intra_node_shared"` or `"replicated"`.
-    #[serde(default)]
-    pub fcf_sharing: Option<String>,
-
-    /// Enable NUMA-aware memory allocation.
-    #[serde(default)]
-    pub numa_aware_allocation: Option<bool>,
-
-    /// Enable first-touch initialization for NUMA locality.
-    #[serde(default)]
-    pub first_touch_init: Option<bool>,
-}
-
-/// MPI I/O strategy settings.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MpiIoConfig {
-    /// Enable parallel warm-start I/O across ranks.
-    #[serde(default)]
-    pub parallel_warm_start: Option<bool>,
-
-    /// Number of dedicated checkpoint writer ranks.
-    #[serde(default)]
-    pub checkpoint_writers: Option<u32>,
-
-    /// Checkpoint compression algorithm: `"zstd"`, `"lz4"`, or `"none"`.
-    #[serde(default)]
-    pub checkpoint_compression: Option<String>,
-}
-
-/// MPI solver threading settings.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MpiSolverConfig {
-    /// Number of threads used per LP solve call.
-    #[serde(default)]
-    pub threads_per_solve: Option<u32>,
 }
 
 // ── Modeling Configuration ───────────────────────────────────────────────────
@@ -860,28 +768,6 @@ mod tests {
         let json = r#"{
           "$schema": "https://cobre.dev/schemas/v2/config.schema.json",
           "version": "2.0.0",
-          "mpi": {
-            "communication": {
-              "cut_aggregation": "hierarchical",
-              "aggregation_tree_fanout": 8,
-              "backward_pipeline": true,
-              "use_persistent_collectives": true,
-              "use_shared_memory_windows": true
-            },
-            "memory": {
-              "fcf_sharing": "intra_node_shared",
-              "numa_aware_allocation": true,
-              "first_touch_init": true
-            },
-            "io": {
-              "parallel_warm_start": true,
-              "checkpoint_writers": 4,
-              "checkpoint_compression": "zstd"
-            },
-            "solver": {
-              "threads_per_solve": 1
-            }
-          },
           "modeling": {
             "inflow_non_negativity": {
               "method": "truncation",
@@ -943,21 +829,6 @@ mod tests {
 
         let f = write_config(json);
         let cfg = parse_config(f.path()).unwrap();
-
-        // MPI
-        assert_eq!(
-            cfg.mpi.communication.cut_aggregation.as_deref(),
-            Some("hierarchical")
-        );
-        assert_eq!(cfg.mpi.communication.aggregation_tree_fanout, Some(8));
-        assert_eq!(cfg.mpi.communication.backward_pipeline, Some(true));
-        assert_eq!(
-            cfg.mpi.memory.fcf_sharing.as_deref(),
-            Some("intra_node_shared")
-        );
-        assert_eq!(cfg.mpi.memory.numa_aware_allocation, Some(true));
-        assert_eq!(cfg.mpi.io.checkpoint_writers, Some(4));
-        assert_eq!(cfg.mpi.solver.threads_per_solve, Some(1));
 
         // Modeling
         assert_eq!(cfg.modeling.inflow_non_negativity.method, "truncation");

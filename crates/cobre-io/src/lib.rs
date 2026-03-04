@@ -34,25 +34,38 @@ pub mod config;
 pub mod error;
 pub mod extensions;
 pub mod initial_conditions;
+pub(crate) mod parquet_helpers;
 pub mod penalties;
+pub mod scenarios;
+pub mod stages;
 pub mod system;
 pub mod validation;
 
-pub use config::{Config, parse_config};
+pub use config::{parse_config, Config};
 pub use error::LoadError;
 pub use extensions::{
-    FittingWindow, FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
-    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_production_models,
-    parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
+    load_fpha_hyperplanes, load_production_models, parse_fpha_hyperplanes, parse_hydro_geometry,
+    parse_production_models, FittingWindow, FphaConfig, FphaHyperplaneRow, HydroGeometryRow,
+    ProductionModelConfig, SeasonConfig, SelectionMode, StageRange,
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use penalties::parse_penalties;
+pub use scenarios::{
+    assemble_inflow_models, assemble_load_models, load_correlation, load_external_scenarios,
+    load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
+    load_load_factors, load_load_seasonal_stats, load_scenarios, parse_correlation,
+    parse_external_scenarios, parse_inflow_ar_coefficients, parse_inflow_history,
+    parse_inflow_seasonal_stats, parse_load_factors, parse_load_seasonal_stats, BlockFactor,
+    ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow,
+    LoadFactorEntry, LoadSeasonalStatsRow, ScenarioData,
+};
+pub use stages::{parse_stages, StagesData};
 pub use system::{
     load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
     parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,
     parse_pumping_stations, parse_thermals,
 };
-pub use validation::structural::{FileManifest, validate_structure};
+pub use validation::structural::{validate_structure, FileManifest};
 pub use validation::{ErrorKind, Severity, ValidationContext, ValidationEntry};
 
 use cobre_core::System;

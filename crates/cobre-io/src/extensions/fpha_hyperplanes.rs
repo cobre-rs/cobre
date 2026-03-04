@@ -40,12 +40,16 @@
 //! - `gamma_v` positive, `gamma_s` non-positive semantic checks — Layer 5, Epic 06.
 //! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
 
-use arrow::array::{Array, Float64Array, Int32Array};
+use arrow::array::Array;
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::Path;
 
+use crate::parquet_helpers::{
+    extract_optional_float64, extract_optional_int32, extract_required_float64,
+    extract_required_int32,
+};
 use crate::LoadError;
 
 /// A single row from `system/fpha_hyperplanes.parquet`.
@@ -216,110 +220,6 @@ pub fn parse_fpha_hyperplanes(path: &Path) -> Result<Vec<FphaHyperplaneRow>, Loa
     });
 
     Ok(rows)
-}
-
-/// Extract a required column as [`Int32Array`] by name.
-///
-/// Returns `SchemaError` if the column is absent or has the wrong Arrow type.
-fn extract_required_int32<'a>(
-    batch: &'a arrow::record_batch::RecordBatch,
-    name: &str,
-    path: &Path,
-) -> Result<&'a Int32Array, LoadError> {
-    let col = batch
-        .column_by_name(name)
-        .ok_or_else(|| LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: name.to_string(),
-            message: format!("missing required column \"{name}\""),
-        })?;
-    col.as_any()
-        .downcast_ref::<Int32Array>()
-        .ok_or_else(|| LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: name.to_string(),
-            message: format!(
-                "column \"{name}\" has type {} but Int32 is required",
-                col.data_type()
-            ),
-        })
-}
-
-/// Extract a required column as [`Float64Array`] by name.
-///
-/// Returns `SchemaError` if the column is absent or has the wrong Arrow type.
-fn extract_required_float64<'a>(
-    batch: &'a arrow::record_batch::RecordBatch,
-    name: &str,
-    path: &Path,
-) -> Result<&'a Float64Array, LoadError> {
-    let col = batch
-        .column_by_name(name)
-        .ok_or_else(|| LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: name.to_string(),
-            message: format!("missing required column \"{name}\""),
-        })?;
-    col.as_any()
-        .downcast_ref::<Float64Array>()
-        .ok_or_else(|| LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: name.to_string(),
-            message: format!(
-                "column \"{name}\" has type {} but Float64 is required",
-                col.data_type()
-            ),
-        })
-}
-
-/// Extract an optional column as [`Int32Array`] by name, returning `None` if absent.
-///
-/// Returns `SchemaError` if the column exists but has the wrong Arrow type.
-fn extract_optional_int32<'a>(
-    batch: &'a arrow::record_batch::RecordBatch,
-    name: &str,
-    path: &Path,
-) -> Result<Option<&'a Int32Array>, LoadError> {
-    let Some(col) = batch.column_by_name(name) else {
-        return Ok(None);
-    };
-    let arr = col
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .ok_or_else(|| LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: name.to_string(),
-            message: format!(
-                "column \"{name}\" has type {} but Int32 is required",
-                col.data_type()
-            ),
-        })?;
-    Ok(Some(arr))
-}
-
-/// Extract an optional column as [`Float64Array`] by name, returning `None` if absent.
-///
-/// Returns `SchemaError` if the column exists but has the wrong Arrow type.
-fn extract_optional_float64<'a>(
-    batch: &'a arrow::record_batch::RecordBatch,
-    name: &str,
-    path: &Path,
-) -> Result<Option<&'a Float64Array>, LoadError> {
-    let Some(col) = batch.column_by_name(name) else {
-        return Ok(None);
-    };
-    let arr =
-        col.as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| LoadError::SchemaError {
-                path: path.to_path_buf(),
-                field: name.to_string(),
-                message: format!(
-                    "column \"{name}\" has type {} but Float64 is required",
-                    col.data_type()
-                ),
-            })?;
-    Ok(Some(arr))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

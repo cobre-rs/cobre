@@ -49,9 +49,12 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
     let data = validate_schema(path, &manifest, &mut ctx);
 
     let Some(data) = data else {
-        return ctx
-            .into_result()
-            .map(|()| unreachable!("validate_schema returned None but ctx has no errors"));
+        // validate_schema returns None when it collected parse/schema errors.
+        // into_result() should always return Err here, but if it doesn't we
+        // return a descriptive error rather than panicking.
+        return ctx.into_result().and(Err(LoadError::ConstraintError {
+            description: "schema validation failed but no errors were collected".to_string(),
+        }));
     };
 
     // Layers 3-5 — referential integrity, dimensional consistency, semantic rules.

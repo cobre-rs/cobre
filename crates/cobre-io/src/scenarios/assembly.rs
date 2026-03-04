@@ -143,17 +143,20 @@ pub fn assemble_inflow_models(
 
     // Any remaining keys in coeff_map are orphaned (no matching stats row).
     if consumed_keys < total_coeff_keys {
-        if let Some(orphan) = coeff_map.keys().next() {
-            return Err(LoadError::SchemaError {
-                path: Path::new("scenarios/inflow_ar_coefficients.parquet").to_path_buf(),
-                field: "inflow_ar_coefficients".to_string(),
-                message: format!(
-                    "orphaned AR coefficients for (hydro_id={}, stage_id={}) \
-                     have no matching inflow_seasonal_stats row",
-                    orphan.0 .0, orphan.1,
-                ),
-            });
-        }
+        let mut orphan_keys: Vec<_> = coeff_map.keys().collect();
+        orphan_keys.sort_by_key(|(id, stage)| (id.0, *stage));
+        let orphan_descriptions: Vec<String> = orphan_keys
+            .iter()
+            .map(|(id, stage)| format!("(hydro_id={}, stage_id={})", id.0, stage))
+            .collect();
+        return Err(LoadError::SchemaError {
+            path: Path::new("scenarios/inflow_ar_coefficients.parquet").to_path_buf(),
+            field: "inflow_ar_coefficients".to_string(),
+            message: format!(
+                "orphaned AR coefficients for {} have no matching inflow_seasonal_stats row",
+                orphan_descriptions.join(", "),
+            ),
+        });
     }
 
     Ok(models)

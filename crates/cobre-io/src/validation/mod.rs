@@ -203,7 +203,16 @@ impl ValidationContext {
         self.entries.iter().any(|e| e.severity == Severity::Error)
     }
 
-    /// Returns a slice of all error-severity [`ValidationEntry`] items.
+    /// Returns the number of error-severity diagnostics without allocating.
+    #[must_use]
+    pub fn error_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.severity == Severity::Error)
+            .count()
+    }
+
+    /// Returns all error-severity [`ValidationEntry`] items.
     #[must_use]
     pub fn errors(&self) -> Vec<&ValidationEntry> {
         self.entries

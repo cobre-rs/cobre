@@ -237,7 +237,7 @@ pub(crate) fn validate_schema(
     ctx: &mut ValidationContext,
 ) -> Option<ParsedData> {
     // Track whether any error is added during this call.
-    let error_count_before = ctx.errors().len();
+    let error_count_before = ctx.error_count();
 
     // ── Required root-level files ─────────────────────────────────────────────
 
@@ -558,7 +558,7 @@ pub(crate) fn validate_schema(
     // ── Assemble result ───────────────────────────────────────────────────────
 
     // Only return Some(ParsedData) when no new errors were added during this call.
-    if ctx.errors().len() > error_count_before {
+    if ctx.error_count() > error_count_before {
         return None;
     }
 

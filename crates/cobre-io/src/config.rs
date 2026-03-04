@@ -78,14 +78,13 @@ pub struct ModelingConfig {
 
 /// Inflow non-negativity treatment settings.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct InflowNonNegativityConfig {
     /// Method: `"none"`, `"penalty"`, `"truncation"`, or `"truncation_with_penalty"`.
-    #[serde(default = "InflowNonNegativityConfig::default_method")]
     pub method: String,
 
     /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"` or
     /// `"truncation_with_penalty"`.
-    #[serde(default = "InflowNonNegativityConfig::default_penalty_cost")]
     pub penalty_cost: f64,
 }
 
@@ -95,16 +94,6 @@ impl Default for InflowNonNegativityConfig {
             method: "penalty".to_string(),
             penalty_cost: 1000.0,
         }
-    }
-}
-
-impl InflowNonNegativityConfig {
-    fn default_method() -> String {
-        "penalty".to_string()
-    }
-
-    fn default_penalty_cost() -> f64 {
-        1000.0
     }
 }
 
@@ -202,13 +191,12 @@ pub struct CutSelectionConfig {
 
 /// LP solver retry settings (`config.json → training.solver`).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct TrainingSolverConfig {
     /// Maximum solver retry attempts before propagating a hard error.
-    #[serde(default = "TrainingSolverConfig::default_retry_max_attempts")]
     pub retry_max_attempts: u32,
 
     /// Total time budget in seconds across all retry attempts for one solve.
-    #[serde(default = "TrainingSolverConfig::default_retry_time_budget_seconds")]
     pub retry_time_budget_seconds: f64,
 }
 
@@ -218,16 +206,6 @@ impl Default for TrainingSolverConfig {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
         }
-    }
-}
-
-impl TrainingSolverConfig {
-    fn default_retry_max_attempts() -> u32 {
-        5
-    }
-
-    fn default_retry_time_budget_seconds() -> f64 {
-        30.0
     }
 }
 
@@ -328,21 +306,18 @@ pub struct LipschitzConfig {
 
 /// Policy directory settings (`config.json → policy`).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct PolicyConfig {
     /// Directory for policy data (cuts, states, vertices, basis).
-    #[serde(default = "PolicyConfig::default_path")]
     pub path: String,
 
     /// Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
-    #[serde(default = "PolicyConfig::default_mode")]
     pub mode: String,
 
     /// Verify state dimension and entity compatibility when loading.
-    #[serde(default = "PolicyConfig::default_validate_compatibility")]
     pub validate_compatibility: bool,
 
     /// Checkpoint settings.
-    #[serde(default)]
     pub checkpointing: CheckpointingConfig,
 }
 
@@ -354,20 +329,6 @@ impl Default for PolicyConfig {
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
         }
-    }
-}
-
-impl PolicyConfig {
-    fn default_path() -> String {
-        "./policy".to_string()
-    }
-
-    fn default_mode() -> String {
-        "fresh".to_string()
-    }
-
-    fn default_validate_compatibility() -> bool {
-        true
     }
 }
 
@@ -399,33 +360,27 @@ pub struct CheckpointingConfig {
 
 /// Post-training simulation settings (`config.json → simulation`).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct SimulationConfig {
     /// Enable post-training simulation.
-    #[serde(default = "SimulationConfig::default_enabled")]
     pub enabled: bool,
 
     /// Number of simulation scenarios.
-    #[serde(default = "SimulationConfig::default_num_scenarios")]
     pub num_scenarios: u32,
 
     /// Policy representation: `"outer"` (cuts) or `"inner"` (vertices).
-    #[serde(default = "SimulationConfig::default_policy_type")]
     pub policy_type: String,
 
     /// Directory for simulation output files.
-    #[serde(default)]
     pub output_path: Option<String>,
 
     /// Output mode: `"streaming"` or `"batched"`.
-    #[serde(default)]
     pub output_mode: Option<String>,
 
     /// Bounded channel capacity between simulation threads and the I/O writer thread.
-    #[serde(default = "SimulationConfig::default_io_channel_capacity")]
     pub io_channel_capacity: u32,
 
     /// Sampling scheme for simulation scenarios.
-    #[serde(default)]
     pub sampling_scheme: SimulationSamplingConfig,
 }
 
@@ -443,29 +398,12 @@ impl Default for SimulationConfig {
     }
 }
 
-impl SimulationConfig {
-    fn default_enabled() -> bool {
-        false
-    }
-
-    fn default_num_scenarios() -> u32 {
-        2000
-    }
-
-    fn default_policy_type() -> String {
-        "outer".to_string()
-    }
-
-    fn default_io_channel_capacity() -> u32 {
-        64
-    }
-}
-
 /// Sampling scheme for the post-training simulation.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct SimulationSamplingConfig {
     /// Scheme type: `"in_sample"`, `"out_of_sample"`, or `"external"`.
-    #[serde(rename = "type", default = "SimulationSamplingConfig::default_type")]
+    #[serde(rename = "type")]
     pub scheme_type: String,
 }
 
@@ -474,12 +412,6 @@ impl Default for SimulationSamplingConfig {
         Self {
             scheme_type: "in_sample".to_string(),
         }
-    }
-}
-
-impl SimulationSamplingConfig {
-    fn default_type() -> String {
-        "in_sample".to_string()
     }
 }
 
@@ -493,37 +425,30 @@ impl SimulationSamplingConfig {
 /// would not improve clarity for a flat set of independent output toggles.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct ExportsConfig {
     /// Export training summary metrics.
-    #[serde(default = "ExportsConfig::default_training")]
     pub training: bool,
 
     /// Export cut pool (outer approximation).
-    #[serde(default = "ExportsConfig::default_cuts")]
     pub cuts: bool,
 
     /// Export visited states.
-    #[serde(default = "ExportsConfig::default_states")]
     pub states: bool,
 
     /// Export inner approximation vertices.
-    #[serde(default = "ExportsConfig::default_vertices")]
     pub vertices: bool,
 
     /// Export simulation results.
-    #[serde(default = "ExportsConfig::default_simulation")]
     pub simulation: bool,
 
     /// Export per-scenario forward-pass detail.
-    #[serde(default)]
     pub forward_detail: bool,
 
     /// Export per-scenario backward-pass detail.
-    #[serde(default)]
     pub backward_detail: bool,
 
     /// Compression algorithm for output files: `"zstd"`, `"lz4"`, or `"none"`.
-    #[serde(default)]
     pub compression: Option<String>,
 }
 
@@ -539,28 +464,6 @@ impl Default for ExportsConfig {
             backward_detail: false,
             compression: None,
         }
-    }
-}
-
-impl ExportsConfig {
-    fn default_training() -> bool {
-        true
-    }
-
-    fn default_cuts() -> bool {
-        true
-    }
-
-    fn default_states() -> bool {
-        true
-    }
-
-    fn default_vertices() -> bool {
-        true
-    }
-
-    fn default_simulation() -> bool {
-        true
     }
 }
 

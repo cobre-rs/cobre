@@ -130,24 +130,24 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 <!-- UPDATE THIS TABLE as phases are completed -->
 
-| Phase | Status      | Notes                                                                       |
-| ----- | ----------- | --------------------------------------------------------------------------- |
-| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 108 tests |
-| 2     | not started | Ready to start (depends on Phase 1, complete)                               |
-| 3     | not started | Ready to start (depends on Phase 1, complete; parallel with 2, 5)           |
-| 4     | not started | Blocked by Phase 3                                                          |
-| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 2, 3)           |
-| 6     | not started | Blocked by Phases 1-5                                                       |
-| 7     | not started | Blocked by Phase 6                                                          |
-| 8     | not started | Blocked by Phase 7                                                          |
+| Phase | Status      | Notes                                                                                                           |
+| ----- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc) |
+| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests     |
+| 3     | not started | Ready to start (depends on Phase 1, complete; parallel with 5)                                                  |
+| 4     | not started | Blocked by Phase 3                                                                                              |
+| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                  |
+| 6     | not started | Blocked by Phases 1-5                                                                                           |
+| 7     | not started | Blocked by Phase 6                                                                                              |
+| 8     | not started | Blocked by Phase 7                                                                                              |
 
 ### Current phase
 
-**Phase 1: cobre-core -- Complete.** The foundation data model is implemented and all 108 tests pass. Next candidates are Phases 2 (`cobre-io`), 3 (`ferrompi` + `cobre-solver`), and 5 (`cobre-stochastic`), which can proceed in parallel.
+**Phase 2: cobre-io -- Complete.** The I/O layer is implemented: `load_case` pipeline, 5-layer validation (structural → schema → referential → dimensional → semantic), 33-file JSON/Parquet loading, penalty and bound resolution, postcard broadcast serialization, and validation report writer. All 622 tests pass (514 unit + 6 integration + 3 invariance + 99 doc-tests). Next candidates are Phases 3 (`ferrompi` + `cobre-solver`) and 5 (`cobre-stochastic`), which can proceed in parallel.
 
 ### Parallelizable phases
 
-Phases 3 and 5 can proceed in parallel with Phase 2 since they depend only on Phase 1.
+Phases 3 and 5 can now proceed in parallel since Phases 1 and 2 are both complete.
 The `ferrompi` crate has no in-workspace dependencies and can be developed at any time.
 
 ### Per-phase spec reading lists
@@ -155,7 +155,7 @@ The `ferrompi` crate has no in-workspace dependencies and can be developed at an
 For the complete spec reading list for each phase, see
 `~/git/cobre-docs/src/specs/overview/implementation-ordering.md` section 5.
 
-Quick reference for Phase 1 (current):
+Quick reference for Phase 1 (complete):
 
 - `src/specs/overview/notation-conventions.md`
 - `src/specs/overview/design-principles.md`

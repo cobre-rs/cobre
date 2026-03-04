@@ -10,7 +10,24 @@ by shared reference; no crate other than `cobre-io` constructs `System` values.
 
 The crate has no solver, optimizer, or I/O dependencies. It holds pure data
 structures, the `System` container that groups them, derived topology graphs,
-and penalty resolution utilities.
+penalty resolution utilities, temporal types, scenario pipeline types, initial
+conditions, generic constraints, and pre-resolved penalty/bound tables.
+
+## Module overview
+
+| Module               | Purpose                                                      |
+| -------------------- | ------------------------------------------------------------ |
+| `entities`           | Entity types: Bus, Line, Hydro, Thermal, and stub types      |
+| `entity_id`          | `EntityId` newtype wrapper                                   |
+| `error`              | `ValidationError` enum                                       |
+| `generic_constraint` | User-defined linear constraints over LP variables            |
+| `initial_conditions` | Reservoir storage levels at study start                      |
+| `penalty`            | Global defaults, entity overrides, and resolution functions  |
+| `resolved`           | Pre-resolved penalty/bound tables with O(1) lookup           |
+| `scenario`           | PAR model parameters, load statistics, and correlation model |
+| `system`             | `System` container and `SystemBuilder`                       |
+| `temporal`           | Stages, blocks, seasons, and the policy graph                |
+| `topology`           | `CascadeTopology` and `NetworkTopology` derived structures   |
 
 ## Design principles
 
@@ -440,6 +457,628 @@ let err = ValidationError::InvalidReference {
 // "Hydro with id 3 has invalid cross-reference in field 'bus_id': referenced Bus id 99 does not exist"
 println!("{err}");
 ```
+
+## Temporal model
+
+The `temporal` module defines the time structure of a multi-stage stochastic
+optimization problem. These types are loaded from `stages.json` by `cobre-io`
+and stored on `System`.
+
+There are 13 types in total: 5 enums and 8 structs.
+
+### Enums
+
+| Enum              | Variants                                           | Purpose                                                   |
+| ----------------- | -------------------------------------------------- | --------------------------------------------------------- |
+| `BlockMode`       | `Parallel`, `Chronological`                        | How blocks within a stage relate in the LP                |
+| `SeasonCycleType` | `Monthly`, `Weekly`, `Custom`                      | How season IDs map to calendar periods                    |
+| `NoiseMethod`     | `Saa`, `Lhs`, `QmcSobol`, `QmcHalton`, `Selective` | Opening tree noise generation algorithm                   |
+| `PolicyGraphType` | `FiniteHorizon`, `Cyclic`                          | Whether the study horizon is acyclic or infinite-periodic |
+| `StageRiskConfig` | `Expectation`, `CVaR { alpha, lambda }`            | Per-stage risk measure configuration                      |
+
+`BlockMode::Parallel` is the default: blocks are independent sub-periods solved
+simultaneously, with water balance aggregated across all blocks in the stage.
+`BlockMode::Chronological` enables intra-stage storage dynamics (daily cycling).
+
+`PolicyGraphType::FiniteHorizon` is the minimal viable solver choice: an acyclic
+stage chain with zero terminal value. `Cyclic` requires a positive
+`annual_discount_rate` for convergence.
+
+### Block
+
+A load block within a stage, representing a sub-period with uniform demand and
+generation characteristics.
+
+| Field            | Type     | Description                                            |
+| ---------------- | -------- | ------------------------------------------------------ |
+| `index`          | `usize`  | 0-based index within the parent stage (0, 1, ..., n-1) |
+| `name`           | `String` | Human-readable block label (e.g., "PEAK", "OFF-PEAK")  |
+| `duration_hours` | `f64`    | Duration of this block in hours; must be positive      |
+
+The block weight (fraction of stage duration) is derived on demand as
+`duration_hours / sum(all block hours in stage)` and is not stored.
+
+### StageStateConfig
+
+Flags controlling which variables carry state between stages.
+
+| Field         | Type   | Default | Description                                                    |
+| ------------- | ------ | ------- | -------------------------------------------------------------- |
+| `storage`     | `bool` | `true`  | Whether reservoir storage volumes are state variables          |
+| `inflow_lags` | `bool` | `false` | Whether past inflow realizations (AR lags) are state variables |
+
+`inflow_lags` must be `true` when the PAR model order `p > 0` and inflow lag
+cuts are enabled.
+
+### ScenarioSourceConfig
+
+Per-stage scenario generation configuration.
+
+| Field              | Type          | Description                                                |
+| ------------------ | ------------- | ---------------------------------------------------------- |
+| `branching_factor` | `usize`       | Number of noise realizations per stage; must be positive   |
+| `noise_method`     | `NoiseMethod` | Algorithm for generating noise vectors in the opening tree |
+
+`branching_factor` is the per-stage branching factor for both the opening tree
+and the forward pass. `noise_method` is orthogonal to `SamplingScheme` (which
+selects the forward-pass noise source); it governs how the backward-pass opening
+tree is produced.
+
+### Stage
+
+A single stage in the multi-stage stochastic problem, partitioning the study
+horizon into decision periods.
+
+| Field             | Type                   | Description                                                      |
+| ----------------- | ---------------------- | ---------------------------------------------------------------- |
+| `index`           | `usize`                | 0-based array position after canonical sort                      |
+| `id`              | `i32`                  | Domain-level identifier from `stages.json`; negative = pre-study |
+| `start_date`      | `NaiveDate`            | Stage start date (inclusive), ISO 8601                           |
+| `end_date`        | `NaiveDate`            | Stage end date (exclusive), ISO 8601                             |
+| `season_id`       | `Option<usize>`        | Index into `SeasonMap::seasons`; `None` = no seasonal structure  |
+| `blocks`          | `Vec<Block>`           | Ordered load blocks; sum of `duration_hours` = stage duration    |
+| `block_mode`      | `BlockMode`            | Parallel or chronological block formulation                      |
+| `state_config`    | `StageStateConfig`     | State variable flags                                             |
+| `risk_config`     | `StageRiskConfig`      | Risk measure for this stage                                      |
+| `scenario_config` | `ScenarioSourceConfig` | Branching factor and noise method                                |
+
+Pre-study stages (negative `id`) carry only `id`, `start_date`, `end_date`, and
+`season_id`. Their `blocks`, `risk_config`, and `scenario_config` fields are
+unused.
+
+```rust
+use chrono::NaiveDate;
+use cobre_core::temporal::{
+    Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage,
+    StageRiskConfig, StageStateConfig,
+};
+
+let stage = Stage {
+    index: 0,
+    id: 1,
+    start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+    end_date:   NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+    season_id:  Some(0),
+    blocks: vec![Block {
+        index: 0,
+        name: "SINGLE".to_string(),
+        duration_hours: 744.0,
+    }],
+    block_mode: BlockMode::Parallel,
+    state_config: StageStateConfig { storage: true, inflow_lags: false },
+    risk_config: StageRiskConfig::Expectation,
+    scenario_config: ScenarioSourceConfig {
+        branching_factor: 50,
+        noise_method: NoiseMethod::Saa,
+    },
+};
+```
+
+### SeasonDefinition and SeasonMap
+
+Season definitions map season IDs to calendar periods for PAR model coefficient
+lookup and inflow history aggregation.
+
+`SeasonDefinition` fields:
+
+| Field         | Type          | Description                                              |
+| ------------- | ------------- | -------------------------------------------------------- |
+| `id`          | `usize`       | 0-based season index (0-11 for monthly, 0-51 for weekly) |
+| `label`       | `String`      | Human-readable label (e.g., "January", "Wet Season")     |
+| `month_start` | `u32`         | Calendar month where the season starts (1-12)            |
+| `day_start`   | `Option<u32>` | Calendar day start; only used for `Custom` cycle type    |
+| `month_end`   | `Option<u32>` | Calendar month end; only used for `Custom` cycle type    |
+| `day_end`     | `Option<u32>` | Calendar day end; only used for `Custom` cycle type      |
+
+`SeasonMap` groups the definitions with a cycle type:
+
+| Field        | Type                    | Description                                                |
+| ------------ | ----------------------- | ---------------------------------------------------------- |
+| `cycle_type` | `SeasonCycleType`       | `Monthly` (12 seasons), `Weekly` (52 seasons), or `Custom` |
+| `seasons`    | `Vec<SeasonDefinition>` | Season entries sorted by `id`                              |
+
+### Transition and PolicyGraph
+
+`Transition` represents a directed edge in the policy graph:
+
+| Field                           | Type          | Description                                                    |
+| ------------------------------- | ------------- | -------------------------------------------------------------- |
+| `source_id`                     | `i32`         | Source stage ID                                                |
+| `target_id`                     | `i32`         | Target stage ID                                                |
+| `probability`                   | `f64`         | Transition probability; outgoing probabilities must sum to 1.0 |
+| `annual_discount_rate_override` | `Option<f64>` | Per-transition rate override; `None` = use global rate         |
+
+`PolicyGraph` is the top-level clarity-first representation of the stage graph
+loaded from `stages.json`:
+
+| Field                  | Type                | Description                                                     |
+| ---------------------- | ------------------- | --------------------------------------------------------------- |
+| `graph_type`           | `PolicyGraphType`   | `FiniteHorizon` (acyclic) or `Cyclic` (infinite periodic)       |
+| `annual_discount_rate` | `f64`               | Global discount rate; `0.0` = no discounting                    |
+| `transitions`          | `Vec<Transition>`   | Stage transitions forming a linear chain or DAG                 |
+| `season_map`           | `Option<SeasonMap>` | Season definitions; `None` when no seasonal structure is needed |
+
+For finite horizon, transitions form a linear chain. For cyclic horizon, at
+least one transition has `source_id >= target_id` (a back-edge) and the
+`annual_discount_rate` must be positive for convergence.
+
+```rust
+use cobre_core::temporal::{PolicyGraph, PolicyGraphType, Transition};
+
+let graph = PolicyGraph {
+    graph_type: PolicyGraphType::FiniteHorizon,
+    annual_discount_rate: 0.06,
+    transitions: vec![
+        Transition { source_id: 1, target_id: 2, probability: 1.0,
+                     annual_discount_rate_override: None },
+        Transition { source_id: 2, target_id: 3, probability: 1.0,
+                     annual_discount_rate_override: Some(0.08) },
+    ],
+    season_map: None,
+};
+assert_eq!(graph.graph_type, PolicyGraphType::FiniteHorizon);
+```
+
+The solver-level `HorizonMode` enum in `cobre-sddp` is built from a `PolicyGraph`
+at initialization time; it precomputes transition maps, cycle detection, and
+discount factors for efficient runtime dispatch. The `PolicyGraph` in `cobre-core`
+is the user-facing clarity-first representation.
+
+## Scenario pipeline types
+
+The `scenario` module holds clarity-first data containers for the raw scenario
+pipeline parameters loaded from input files. These are raw input-facing types;
+performance-adapted views (pre-computed LP arrays, Cholesky-decomposed matrices)
+belong in downstream crates (`cobre-stochastic`, `cobre-sddp`).
+
+### SamplingScheme and ScenarioSource
+
+`SamplingScheme` selects the forward-pass noise source:
+
+| Variant      | Description                                                          |
+| ------------ | -------------------------------------------------------------------- |
+| `InSample`   | Forward pass reuses the opening tree generated for the backward pass |
+| `External`   | Forward pass draws from an externally supplied scenario file         |
+| `Historical` | Forward pass replays historical inflow realizations                  |
+
+`InSample` is the default and the minimal viable solver choice.
+
+`ScenarioSource` is the top-level scenario configuration loaded from `stages.json`:
+
+| Field             | Type                            | Description                                                  |
+| ----------------- | ------------------------------- | ------------------------------------------------------------ |
+| `sampling_scheme` | `SamplingScheme`                | Noise source for the forward pass                            |
+| `seed`            | `Option<i64>`                   | Random seed for reproducible generation; `None` = OS entropy |
+| `selection_mode`  | `Option<ExternalSelectionMode>` | Only used when `sampling_scheme` is `External`               |
+
+`ExternalSelectionMode` has two variants: `Random` (draw uniformly at random)
+and `Sequential` (replay in file order, cycling when the end is reached).
+
+### InflowModel
+
+Raw PAR(p) model parameters for a single (hydro, stage) pair, loaded from
+`inflow_seasonal_stats.parquet` and `inflow_ar_coefficients.parquet`.
+
+| Field             | Type       | Description                                              |
+| ----------------- | ---------- | -------------------------------------------------------- |
+| `hydro_id`        | `EntityId` | Hydro plant this model belongs to                        |
+| `stage_id`        | `i32`      | Stage index this model applies to                        |
+| `mean_m3s`        | `f64`      | Seasonal mean inflow μ [m³/s]                            |
+| `std_m3s`         | `f64`      | Seasonal standard deviation σ [m³/s]                     |
+| `ar_order`        | `usize`    | AR model order p; zero means white-noise inflow          |
+| `ar_coefficients` | `Vec<f64>` | AR lag coefficients [ψ₁, ψ₂, …, ψₚ]; length = `ar_order` |
+
+```rust
+use cobre_core::{EntityId, scenario::InflowModel};
+
+let model = InflowModel {
+    hydro_id: EntityId(1),
+    stage_id: 3,
+    mean_m3s: 150.0,
+    std_m3s: 30.0,
+    ar_order: 2,
+    ar_coefficients: vec![0.45, 0.22],
+};
+assert_eq!(model.ar_order, 2);
+assert_eq!(model.ar_coefficients.len(), 2);
+```
+
+`System` holds a `Vec<InflowModel>` sorted by `(hydro_id, stage_id)` for
+declaration-order invariance.
+
+### LoadModel
+
+Raw load seasonal statistics for a single (bus, stage) pair, loaded from
+`load_seasonal_stats.parquet`.
+
+| Field      | Type       | Description                                     |
+| ---------- | ---------- | ----------------------------------------------- |
+| `bus_id`   | `EntityId` | Bus this load model belongs to                  |
+| `stage_id` | `i32`      | Stage index this model applies to               |
+| `mean_mw`  | `f64`      | Seasonal mean load demand [MW]                  |
+| `std_mw`   | `f64`      | Seasonal standard deviation of load demand [MW] |
+
+Load typically has no AR structure, so no lag coefficients are stored.
+`System` holds a `Vec<LoadModel>` sorted by `(bus_id, stage_id)`.
+
+### CorrelationModel
+
+`CorrelationModel` is the top-level correlation configuration loaded from
+`correlation.json`. It holds named profiles and an optional stage-to-profile
+schedule.
+
+The type hierarchy is:
+
+```
+CorrelationModel
+  └── profiles: BTreeMap<String, CorrelationProfile>
+        └── groups: Vec<CorrelationGroup>
+              ├── entities: Vec<CorrelationEntity>
+              └── matrix: Vec<Vec<f64>>   (symmetric, row-major)
+```
+
+`CorrelationEntity` carries `entity_type: String` (currently always `"inflow"`)
+and `id: EntityId`. Using `String` rather than an enum preserves forward
+compatibility when additional stochastic variable types are added.
+
+`profiles` uses `BTreeMap` rather than `HashMap` to preserve deterministic
+iteration order (declaration-order invariance). Cholesky decomposition of the
+correlation matrices is NOT performed here; that belongs to `cobre-stochastic`.
+
+```rust
+use std::collections::BTreeMap;
+use cobre_core::{EntityId, scenario::{
+    CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+}};
+
+let mut profiles = BTreeMap::new();
+profiles.insert("default".to_string(), CorrelationProfile {
+    groups: vec![CorrelationGroup {
+        name: "All".to_string(),
+        entities: vec![
+            CorrelationEntity { entity_type: "inflow".to_string(), id: EntityId(1) },
+            CorrelationEntity { entity_type: "inflow".to_string(), id: EntityId(2) },
+        ],
+        matrix: vec![vec![1.0, 0.8], vec![0.8, 1.0]],
+    }],
+});
+
+let model = CorrelationModel {
+    method: "cholesky".to_string(),
+    profiles,
+    schedule: vec![],
+};
+assert!(model.profiles.contains_key("default"));
+```
+
+When `schedule` is empty, a single profile (typically named `"default"`) applies
+to all stages. When `schedule` is non-empty, each entry maps a stage index to an
+active profile name.
+
+## Initial conditions and constraints
+
+### InitialConditions
+
+`InitialConditions` holds the reservoir storage levels at the start of the study.
+It is loaded from `initial_conditions.json` by `cobre-io` and stored on `System`.
+
+Two arrays are kept separate because filling hydros can have an initial volume
+below dead storage (`min_storage_hm3`), which is not a valid operating level
+for regular hydros:
+
+| Field             | Type                | Description                                                 |
+| ----------------- | ------------------- | ----------------------------------------------------------- |
+| `storage`         | `Vec<HydroStorage>` | Initial storage for operating hydros [hm³]                  |
+| `filling_storage` | `Vec<HydroStorage>` | Initial storage for filling hydros [hm³]; below dead volume |
+
+`HydroStorage` carries `hydro_id: EntityId` and `value_hm3: f64`. A hydro must
+appear in exactly one of the two arrays. Both arrays are sorted by `hydro_id`
+after loading for declaration-order invariance.
+
+```rust
+use cobre_core::{EntityId, InitialConditions, HydroStorage};
+
+let ic = InitialConditions {
+    storage: vec![
+        HydroStorage { hydro_id: EntityId(0), value_hm3: 15_000.0 },
+        HydroStorage { hydro_id: EntityId(1), value_hm3:  8_500.0 },
+    ],
+    filling_storage: vec![
+        HydroStorage { hydro_id: EntityId(10), value_hm3: 200.0 },
+    ],
+};
+
+assert_eq!(ic.storage.len(), 2);
+assert_eq!(ic.filling_storage.len(), 1);
+```
+
+### GenericConstraint
+
+`GenericConstraint` represents a user-defined linear constraint over LP
+variables, loaded from `generic_constraints.json` and stored in
+`System::generic_constraints`. The expression parser (string to
+`ConstraintExpression`) and referential validation live in `cobre-io`, not here.
+
+| Field         | Type                   | Description                                            |
+| ------------- | ---------------------- | ------------------------------------------------------ |
+| `id`          | `EntityId`             | Unique constraint identifier                           |
+| `name`        | `String`               | Short name used in reports and log output              |
+| `description` | `Option<String>`       | Optional human-readable description                    |
+| `expression`  | `ConstraintExpression` | Parsed left-hand-side linear expression                |
+| `sense`       | `ConstraintSense`      | Comparison sense: `GreaterEqual`, `LessEqual`, `Equal` |
+| `slack`       | `SlackConfig`          | Slack variable configuration                           |
+
+`ConstraintExpression` holds a `Vec<LinearTerm>`. Each `LinearTerm` has a
+`coefficient: f64` and a `variable: VariableRef`.
+
+### VariableRef
+
+`VariableRef` is an enum with 19 variants covering all LP variable types
+defined in the data model. Each variant names the variable type and carries the
+entity ID. For block-specific variables, `block_id` is `None` to sum over all
+blocks or `Some(i)` to reference block `i` specifically.
+
+| Category | Variants                                                                                                                                     |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hydro    | `HydroStorage`, `HydroTurbined`, `HydroSpillage`, `HydroDiversion`, `HydroOutflow`, `HydroGeneration`, `HydroEvaporation`, `HydroWithdrawal` |
+| Thermal  | `ThermalGeneration`                                                                                                                          |
+| Line     | `LineDirect`, `LineReverse`                                                                                                                  |
+| Bus      | `BusDeficit`, `BusExcess`                                                                                                                    |
+| Pumping  | `PumpingFlow`, `PumpingPower`                                                                                                                |
+| Contract | `ContractImport`, `ContractExport`                                                                                                           |
+| NCS      | `NonControllableGeneration`, `NonControllableCurtailment`                                                                                    |
+
+`HydroStorage`, `HydroEvaporation`, and `HydroWithdrawal` are stage-level
+variables (no `block_id`). All other hydro variables and all thermal, line, bus,
+pumping, contract, and NCS variables are block-specific (`block_id` field present).
+
+### SlackConfig
+
+Controls whether a soft constraint with a penalty cost is added to the LP:
+
+| Field     | Type          | Description                                                        |
+| --------- | ------------- | ------------------------------------------------------------------ |
+| `enabled` | `bool`        | If `true`, adds a slack variable allowing constraint violation     |
+| `penalty` | `Option<f64>` | Penalty per unit of violation; must be `Some(positive)` if enabled |
+
+```rust
+use cobre_core::{
+    EntityId, GenericConstraint, ConstraintExpression, ConstraintSense,
+    LinearTerm, SlackConfig, VariableRef,
+};
+
+let expr = ConstraintExpression {
+    terms: vec![
+        LinearTerm {
+            coefficient: 1.0,
+            variable: VariableRef::HydroGeneration {
+                hydro_id: EntityId(10),
+                block_id: None,   // sum over all blocks
+            },
+        },
+        LinearTerm {
+            coefficient: 1.0,
+            variable: VariableRef::HydroGeneration {
+                hydro_id: EntityId(11),
+                block_id: None,
+            },
+        },
+    ],
+};
+
+let gc = GenericConstraint {
+    id: EntityId(0),
+    name: "min_hydro_total".to_string(),
+    description: Some("Minimum total hydro generation".to_string()),
+    expression: expr,
+    sense: ConstraintSense::GreaterEqual,
+    slack: SlackConfig { enabled: true, penalty: Some(5_000.0) },
+};
+
+assert_eq!(gc.expression.terms.len(), 2);
+```
+
+## Resolved penalties and bounds
+
+The `resolved` module holds pre-resolved penalty and bound tables that provide
+O(1) lookup for LP builders and solvers.
+
+### Design: flat Vec with 2D indexing
+
+During input loading, the three-tier cascade (global defaults -> entity overrides
+-> stage overrides) is evaluated once by `cobre-io`. The results are stored in
+flat `Vec<T>` arrays with manual 2D indexing:
+
+```
+data[entity_idx * n_stages + stage_idx]
+```
+
+This layout gives cache-friendly sequential access when iterating over stages
+for a fixed entity (the common inner loop pattern in LP construction). No
+re-evaluation of the cascade is ever required at solve time; every penalty or
+bound lookup is a single array index operation.
+
+### ResolvedPenalties
+
+`ResolvedPenalties` holds per-(entity, stage) penalty values for all four
+entity types that carry stage-varying penalties: hydros, buses, lines, and
+non-controllable sources.
+
+Per-(entity, stage) penalty structs:
+
+| Struct                | Fields                  | Description                                              |
+| --------------------- | ----------------------- | -------------------------------------------------------- |
+| `HydroStagePenalties` | 11 `f64` fields         | All hydro penalty costs for one (hydro, stage) pair      |
+| `BusStagePenalties`   | `excess_cost: f64`      | Bus excess cost for one (bus, stage) pair                |
+| `LineStagePenalties`  | `exchange_cost: f64`    | Line flow regularization cost for one (line, stage) pair |
+| `NcsStagePenalties`   | `curtailment_cost: f64` | NCS curtailment cost for one (ncs, stage) pair           |
+
+Bus deficit segments are NOT stage-varying. The piecewise-linear deficit
+structure is fixed at the entity or global level, so `BusStagePenalties`
+contains only `excess_cost`.
+
+All four per-stage penalty structs implement `Copy`, so they can be passed by
+value on hot paths.
+
+```rust
+use cobre_core::resolved::{
+    BusStagePenalties, HydroStagePenalties, LineStagePenalties,
+    NcsStagePenalties, ResolvedPenalties,
+};
+
+// Allocate a 3-hydro, 2-bus, 1-line, 1-ncs table for 5 stages.
+let table = ResolvedPenalties::new(
+    3, 2, 1, 1, 5,
+    HydroStagePenalties { spillage_cost: 0.01, diversion_cost: 0.02,
+                          fpha_turbined_cost: 0.03,
+                          storage_violation_below_cost: 1000.0,
+                          filling_target_violation_cost: 5000.0,
+                          turbined_violation_below_cost: 500.0,
+                          outflow_violation_below_cost: 500.0,
+                          outflow_violation_above_cost: 500.0,
+                          generation_violation_below_cost: 500.0,
+                          evaporation_violation_cost: 500.0,
+                          water_withdrawal_violation_cost: 500.0 },
+    BusStagePenalties { excess_cost: 100.0 },
+    LineStagePenalties { exchange_cost: 5.0 },
+    NcsStagePenalties { curtailment_cost: 50.0 },
+);
+
+// O(1) lookup: hydro 1, stage 3
+let p = table.hydro_penalties(1, 3);
+assert!((p.spillage_cost - 0.01).abs() < f64::EPSILON);
+```
+
+### ResolvedBounds
+
+`ResolvedBounds` holds per-(entity, stage) bound values for five entity types:
+hydros, thermals, lines, pumping stations, and energy contracts.
+
+Per-(entity, stage) bound structs:
+
+| Struct                | Fields                                   | Description                                  |
+| --------------------- | ---------------------------------------- | -------------------------------------------- |
+| `HydroStageBounds`    | 11 fields (see table below)              | All hydro bounds for one (hydro, stage) pair |
+| `ThermalStageBounds`  | `min_generation_mw`, `max_generation_mw` | Thermal generation bounds [MW]               |
+| `LineStageBounds`     | `direct_mw`, `reverse_mw`                | Transmission capacity bounds [MW]            |
+| `PumpingStageBounds`  | `min_flow_m3s`, `max_flow_m3s`           | Pumping flow bounds [m³/s]                   |
+| `ContractStageBounds` | `min_mw`, `max_mw`, `price_per_mwh`      | Contract bounds [MW] and effective price     |
+
+`HydroStageBounds` has 11 fields:
+
+| Field                  | Unit | Description                                                          |
+| ---------------------- | ---- | -------------------------------------------------------------------- |
+| `min_storage_hm3`      | hm³  | Dead volume (soft lower bound)                                       |
+| `max_storage_hm3`      | hm³  | Physical reservoir capacity (hard upper bound)                       |
+| `min_turbined_m3s`     | m³/s | Minimum turbined flow (soft lower bound)                             |
+| `max_turbined_m3s`     | m³/s | Maximum turbined flow (hard upper bound)                             |
+| `min_outflow_m3s`      | m³/s | Environmental flow requirement (soft lower bound)                    |
+| `max_outflow_m3s`      | m³/s | Flood-control limit (soft upper bound); `None` = unbounded           |
+| `min_generation_mw`    | MW   | Minimum electrical generation (soft lower bound)                     |
+| `max_generation_mw`    | MW   | Maximum electrical generation (hard upper bound)                     |
+| `max_diversion_m3s`    | m³/s | Diversion channel capacity (hard upper bound); `None` = no diversion |
+| `filling_inflow_m3s`   | m³/s | Filling inflow retained during filling stages; default 0.0           |
+| `water_withdrawal_m3s` | m³/s | Water withdrawal per stage; positive = removed, negative = added     |
+
+```rust
+use cobre_core::resolved::{
+    ContractStageBounds, HydroStageBounds, LineStageBounds,
+    PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
+};
+
+// Allocate a table for 2 hydros, 1 thermal, 1 line, 0 pumping, 0 contracts, 3 stages.
+let table = ResolvedBounds::new(
+    2, 1, 1, 0, 0, 3,
+    HydroStageBounds { min_storage_hm3: 10.0, max_storage_hm3: 200.0,
+                       min_turbined_m3s: 0.0,  max_turbined_m3s: 500.0,
+                       min_outflow_m3s: 5.0,   max_outflow_m3s: None,
+                       min_generation_mw: 0.0, max_generation_mw: 100.0,
+                       max_diversion_m3s: None,
+                       filling_inflow_m3s: 0.0, water_withdrawal_m3s: 0.0 },
+    ThermalStageBounds { min_generation_mw: 50.0, max_generation_mw: 400.0 },
+    LineStageBounds { direct_mw: 1000.0, reverse_mw: 800.0 },
+    PumpingStageBounds { min_flow_m3s: 0.0, max_flow_m3s: 0.0 },
+    ContractStageBounds { min_mw: 0.0, max_mw: 0.0, price_per_mwh: 0.0 },
+);
+
+// O(1) lookup: hydro 0, stage 2
+let b = table.hydro_bounds(0, 2);
+assert!((b.max_storage_hm3 - 200.0).abs() < f64::EPSILON);
+assert!(b.max_outflow_m3s.is_none());
+```
+
+Both tables expose `_mut` accessor variants (e.g., `hydro_penalties_mut`,
+`hydro_bounds_mut`) that return `&mut T` for in-place updates during case
+loading. These are used exclusively by `cobre-io`; all other crates use the
+immutable read accessors.
+
+## Serde feature flag
+
+`cobre-core` ships with an optional `serde` feature that enables
+`serde::Serialize` and `serde::Deserialize` for all public types. The feature
+is disabled by default to keep the minimal build free of serialization
+dependencies.
+
+### When to enable
+
+| Use case                                          | Enable? |
+| ------------------------------------------------- | ------- |
+| Reading `cobre-core` as a pure data model library | No      |
+| Building `cobre-io` (JSON input loading)          | Yes     |
+| MPI broadcast via `postcard` in `cobre-comm`      | Yes     |
+| Checkpoint serialization in `cobre-sddp`          | Yes     |
+| Python bindings in `cobre-python`                 | Yes     |
+| Writing tests that inspect values as JSON         | Yes     |
+
+### Enabling the feature
+
+```toml
+# Cargo.toml
+[dependencies]
+cobre-core = { version = "0.x", features = ["serde"] }
+```
+
+Or from the command line:
+
+```
+cargo build --features cobre-core/serde
+```
+
+Enabling `serde` also activates `chrono/serde`, which is required because
+`Stage` carries `NaiveDate` fields that must be serializable for JSON input
+loading and MPI broadcast.
+
+### How it works
+
+Every public type in `cobre-core` carries a `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+attribute. When the feature is inactive, the derive is omitted entirely and the
+`serde` dependency is not compiled. There is no runtime cost and no API surface
+change when the feature is disabled.
+
+All downstream Cobre crates that perform serialization declare
+`cobre-core/serde` as a required dependency. The workspace ensures that only
+one copy of `cobre-core` is compiled, with the feature union of all crates that
+request it.
 
 ## Public API summary
 

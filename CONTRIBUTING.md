@@ -25,8 +25,8 @@ cd cobre
 # Build all crates
 cargo build --workspace
 
-# Run the full test suite
-cargo test --workspace
+# Run the full test suite (with all features enabled)
+cargo test --workspace --all-features
 
 # Run tests for a specific crate
 cargo test -p cobre-sddp
@@ -34,6 +34,38 @@ cargo test -p cobre-sddp
 # Build Rust API documentation
 cargo doc --workspace --no-deps --open
 ```
+
+### Testing cobre-core
+
+The `serde` feature enables JSON serialization for core types. Use `--features serde` (or
+`--all-features`) to include those tests:
+
+```bash
+# Run all cobre-core tests including serde round-trip tests
+cargo test -p cobre-core --all-features
+
+# Run only the serde-gated tests
+cargo test -p cobre-core --features serde
+```
+
+### Testing cobre-io
+
+cobre-io requires `--all-features` to run the full test suite, including integration tests
+that load case directories from `crates/cobre-io/tests/data/`:
+
+```bash
+# Run all cobre-io tests (unit, integration, invariance, doc-tests)
+cargo test -p cobre-io --all-features
+
+# Run only the integration tests
+cargo test -p cobre-io --all-features --test '*'
+```
+
+The `tests/data/` directory under `cobre-io` contains sample case directories used by
+integration tests. Each case directory follows the standard Cobre case layout: a
+`config.json` at the root and entity data files under subdirectories named after the
+entity type (e.g., `buses/`, `hydros/`, `thermals/`). When adding new parsers, add a
+corresponding sample input file to `tests/data/` and reference it from the integration test.
 
 ### Project Structure
 
@@ -88,8 +120,8 @@ For algorithmic enhancements, a reference to the relevant paper or implementatio
 1. **Fork** the repository
 2. **Create a branch** from `main`: `git checkout -b feat/my-feature`
 3. **Make your changes** — see coding guidelines below
-4. **Test**: `cargo test --workspace`
-5. **Lint**: `cargo clippy --workspace -- -D warnings`
+4. **Test**: `cargo test --workspace --all-features`
+5. **Lint**: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 6. **Format**: `cargo fmt --all`
 7. **Push** and open a pull request
 
@@ -138,8 +170,8 @@ Documentation improvements are always welcome. The Rust API docs live inline in 
 - **Run the full check before pushing:**
   ```bash
   cargo fmt --all
-  cargo clippy --workspace -- -D warnings
-  cargo test --workspace
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
+  cargo test --workspace --all-features
   ```
 - **No `unsafe` without justification.** If you need `unsafe`, add a `// SAFETY:` comment explaining the invariants.
 - **No `unwrap()` in library code.** Use `Result` or `Option` with proper error types. `unwrap()` is acceptable in tests and examples.
@@ -153,12 +185,14 @@ Documentation improvements are always welcome. The Rust API docs live inline in 
 - All public types must implement `Clone`, `Debug`. Implement `serde::Serialize`/`Deserialize` where appropriate.
 - Entity collections must be stored in ID-sorted (canonical) order. **Declaration-order invariance** is a hard requirement: results must be bit-for-bit identical regardless of input file ordering.
 - Validation logic lives here. A resolved system should be self-consistent — invalid states should be caught at load time, not at solve time.
+- The `serde` feature enables JSON serialization for core types. Enable it with `--features serde` or `--all-features` when running tests that cover serialization round-trips.
 
 #### cobre-io
 
 - Every parser must have round-trip tests: parse → serialize → parse should produce identical data.
 - Include sample input files in `tests/data/` for each supported format.
 - The 5-layer validation pipeline (structural → schema → referential → dimensional → semantic) must collect all errors before failing; never short-circuit on the first error.
+- Always run `cargo test -p cobre-io --all-features` to include the full test suite. Tests gated behind the `serde` feature (from `cobre-core`) are required for integration tests.
 
 #### cobre-sddp
 

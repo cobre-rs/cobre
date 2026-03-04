@@ -23,7 +23,14 @@
 //! assert!(ctx.into_result().is_err());
 //! ```
 
+pub mod dimensional;
+pub mod referential;
+pub mod schema;
+pub mod semantic;
 pub mod structural;
+
+#[allow(unused_imports)]
+pub(crate) use schema::{validate_schema, ParsedData};
 
 use std::path::PathBuf;
 
@@ -256,12 +263,11 @@ impl ValidationContext {
             .collect();
 
         if error_messages.is_empty() {
-            Ok(())
-        } else {
-            Err(LoadError::ConstraintError {
-                description: error_messages.join("\n"),
-            })
+            return Ok(());
         }
+        Err(LoadError::ConstraintError {
+            description: error_messages.join("\n"),
+        })
     }
 }
 

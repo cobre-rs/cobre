@@ -8,4 +8,4 @@ coverage:
         target: auto
     patch:
       default:
-        target: auto
+        target: 95%

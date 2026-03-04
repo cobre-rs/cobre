@@ -16,7 +16,7 @@
 //!   and correlation matrices
 //!
 //! Performance-adapted views (`PrecomputedParLp`, Cholesky-decomposed matrices)
-//! belong in downstream solver crates (`cobre-stochastic`, `cobre-sddp`).
+//! belong in downstream solver crates (`cobre-stochastic`).
 //!
 //! ## Declaration-order invariance
 //!
@@ -37,7 +37,7 @@ use crate::EntityId;
 // SamplingScheme (SS14 scenario source)
 // ---------------------------------------------------------------------------
 
-/// Forward-pass noise source for the SDDP training loop.
+/// Forward-pass noise source for multi-stage optimization solvers.
 ///
 /// Determines where the forward-pass scenario realisations come from.
 /// This is orthogonal to [`NoiseMethod`](crate::temporal::NoiseMethod),
@@ -142,7 +142,7 @@ pub struct ScenarioSource {
 /// `inflow_ar_coefficients.parquet`. These are the raw input-facing values.
 ///
 /// The performance-adapted view (`PrecomputedParLp`) is built from these
-/// parameters once at solver initialisation and belongs to `cobre-sddp`.
+/// parameters once at solver initialisation and belongs to downstream solver crates.
 ///
 /// ## Declaration-order invariance
 ///

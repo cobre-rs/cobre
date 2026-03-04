@@ -9,7 +9,7 @@
 //! These are clarity-first data types following the dual-nature design
 //! principle: they use `Vec<T>`, `String`, and `Option` for readability
 //! and correctness. LP-related fields (variable indices, constraint counts,
-//! coefficient arrays) belong to the performance layer in `cobre-sddp`.
+//! coefficient arrays) belong to the performance layer in downstream solver crates.
 //!
 //! Source: `stages.json`. See `internal-structures.md` SS12.
 
@@ -83,7 +83,7 @@ pub enum NoiseMethod {
 ///
 /// Determines whether the study horizon is finite (acyclic linear chain or DAG)
 /// or cyclic (infinite periodic horizon with at least one back-edge). The
-/// solver-level `HorizonMode` enum in `cobre-sddp` is built from a
+/// solver-level `HorizonMode` enum in downstream solver crates is built from a
 /// [`PolicyGraph`] that carries this tag — it precomputes transition maps,
 /// cycle detection, and discount factors for efficient runtime dispatch.
 ///
@@ -236,7 +236,7 @@ pub struct ScenarioSourceConfig {
 ///
 /// This struct does NOT contain LP-related fields (variable indices,
 /// constraint counts, coefficient arrays). Those belong to the
-/// `cobre-sddp` performance layer — see Solver Abstraction SS11.
+/// downstream solver crate performance layer — see Solver Abstraction SS11.
 ///
 /// Source: `stages.json` `stages[]` and `pre_study_stages[]`.
 /// See [Input Scenarios §1.4](input-scenarios.md).

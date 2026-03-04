@@ -76,7 +76,7 @@ This is a **progressive plan** with 10 epics. Epics 0-2, 8, and 9 have detailed 
 | ticket-042 | Populate cobre-io book page | epic-08 | completed | Detailed | 0.91 | 1.00 | EXCELLENT |
 | ticket-043 | Populate reference pages (case-format, error-codes) | epic-08 | completed | Detailed | 0.91 | 1.00 | EXCELLENT |
 | ticket-044 | Update project documentation | epic-08 | completed | Detailed | 0.92 | 1.00 | EXCELLENT |
-| ticket-045 | Audit and fix SDDP-specific language in cobre-core source | epic-09 | pending | Detailed | 0.95 | -- | -- |
-| ticket-046 | Audit and fix SDDP-specific language in cobre-io source | epic-09 | pending | Detailed | 0.94 | -- | -- |
-| ticket-047 | Audit and fix SDDP-specific language in documentation | epic-09 | pending | Detailed | 0.94 | -- | -- |
+| ticket-045 | Audit and fix SDDP-specific language in cobre-core source | epic-09 | completed | Detailed | 0.95 | 1.00 | EXCELLENT |
+| ticket-046 | Audit and fix SDDP-specific language in cobre-io source | epic-09 | completed | Detailed | 0.94 | 1.00 | EXCELLENT |
+| ticket-047 | Audit and fix SDDP-specific language in documentation | epic-09 | completed | Detailed | 0.94 | 1.00 | EXCELLENT |
 | ticket-048 | Remove MPI config section from Config struct (DEC-018) | emergency | completed | Detailed | 0.95 | 0.95 | EXCELLENT |

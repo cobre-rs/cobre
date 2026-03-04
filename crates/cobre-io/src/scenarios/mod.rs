@@ -1,6 +1,6 @@
 //! Parsers for scenario data files in the `scenarios/` subdirectory.
 //!
-//! Scenario files carry the stochastic inputs used by the SDDP training loop:
+//! Scenario files carry the stochastic inputs used by multi-stage optimization solvers:
 //! inflow statistics, AR coefficients, historical observations, load statistics,
 //! load scaling factors, spatial correlation profiles, and pre-computed external
 //! scenarios. All files are optional; when absent the loader returns an empty

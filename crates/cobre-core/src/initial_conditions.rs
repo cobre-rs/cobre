@@ -1,4 +1,4 @@
-//! Initial conditions for the SDDP study.
+//! Initial conditions for the optimization study.
 //!
 //! [`InitialConditions`] holds the reservoir storage levels at the start of
 //! the study. Two arrays are kept separate because filling hydros can have
@@ -44,7 +44,7 @@ pub struct HydroStorage {
     pub value_hm3: f64,
 }
 
-/// Initial system state at the start of the SDDP study.
+/// Initial system state at the start of the optimization study.
 ///
 /// Produced by parsing `initial_conditions.json` (in `cobre-io`) and stored
 /// inside [`crate::System`]. Both arrays are sorted by `hydro_id` after

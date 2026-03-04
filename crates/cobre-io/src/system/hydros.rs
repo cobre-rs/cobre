@@ -46,12 +46,12 @@
 //! is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    EntityId,
     entities::{
         DiversionChannel, EfficiencyModel, FillingConfig, HydraulicLossesModel, Hydro,
         HydroGenerationModel, TailraceModel, TailracePoint,
     },
-    penalty::{GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_hydro_penalties},
+    penalty::{resolve_hydro_penalties, GlobalPenaltyDefaults, HydroPenaltyOverrides},
+    EntityId,
 };
 use serde::Deserialize;
 use std::collections::HashSet;

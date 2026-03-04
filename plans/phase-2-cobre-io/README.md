@@ -23,10 +23,10 @@ This is a **progressive plan** with 10 epics. Epics 0-2, 8, and 9 have detailed 
 | 04 | Temporal and Scenario Loading | 5 | 12 | Refined |
 | 05 | Constraint Loading and Resolution | 5 | 13 | Refined |
 | 06 | Validation Pipeline | 5 | 14 | Refined |
-| 07 | Integration and Output | 5 | 11 | Outline |
+| 07 | Integration and Output | 5 | 9 | Refined |
 | 08 | Documentation Coherence | 6 | 13 | Detailed |
 | 09 | Solver-Neutral Language Review | 3 | 7 | Detailed |
-| **Total** | | **47** | **114** | |
+| **Total** | | **47** | **112** | |
 
 ## Progress Tracking
 
@@ -65,11 +65,11 @@ This is a **progressive plan** with 10 epics. Epics 0-2, 8, and 9 have detailed 
 | ticket-031 | Implement dimensional consistency validation (Layer 4) | epic-06 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
 | ticket-032 | Implement semantic validation hydro/thermal (Layer 5a) | epic-06 | completed | Refined | 1.00 | 0.95 | EXCELLENT |
 | ticket-033 | Implement semantic validation stages/penalties (Layer 5b) | epic-06 | completed | Refined | 1.00 | 0.88 | ACCEPTABLE |
-| ticket-034 | Implement load_case pipeline orchestrator | epic-07 | pending | Outline | -- | -- | -- |
-| ticket-035 | Implement postcard serialization helpers | epic-07 | pending | Outline | -- | -- | -- |
-| ticket-036 | Create integration test fixtures and E2E tests | epic-07 | pending | Outline | -- | -- | -- |
-| ticket-037 | Test declaration-order invariance | epic-07 | pending | Outline | -- | -- | -- |
-| ticket-038 | Outline validation report and output stubs | epic-07 | pending | Outline | -- | -- | -- |
+| ticket-034 | Implement load_case pipeline orchestrator | epic-07 | completed | Refined | 0.96 | 0.94 | EXCELLENT |
+| ticket-035 | Implement postcard serialization helpers | epic-07 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
+| ticket-036 | Create integration test fixtures and E2E tests | epic-07 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
+| ticket-037 | Test declaration-order invariance | epic-07 | completed | Refined | 1.00 | 0.93 | EXCELLENT |
+| ticket-038 | Implement validation report writer and output stubs | epic-07 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
 | ticket-039 | Review cobre-docs specs against implementation | epic-08 | pending | Detailed | 0.90 | -- | -- |
 | ticket-040 | Update cobre-docs cross-reference index | epic-08 | pending | Detailed | 0.90 | -- | -- |
 | ticket-041 | Populate cobre-core book page | epic-08 | pending | Detailed | 0.91 | -- | -- |

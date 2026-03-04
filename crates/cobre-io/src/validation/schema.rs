@@ -62,14 +62,18 @@ use crate::{
 ///
 /// This type is `pub(crate)` — it is only used within the validation pipeline
 /// and is never exposed to downstream crates.
-// Fields are populated by later validation layers (tickets 030-033); allow
-// dead_code until load_case wires up the full pipeline.
-#[allow(dead_code)]
 pub(crate) struct ParsedData {
     // ── Required root-level files ─────────────────────────────────────────────
     /// Parsed `config.json`.
+    ///
+    /// Populated for completeness and future use; not yet forwarded to `System`.
+    #[allow(dead_code)]
     pub(crate) config: Config,
     /// Parsed `penalties.json`.
+    ///
+    /// Global defaults are already embedded in entity structs by the parsers;
+    /// this field is retained for Layer 5 penalty-ordering checks.
+    #[allow(dead_code)]
     pub(crate) penalties: GlobalPenaltyDefaults,
     /// Parsed `stages.json`.
     pub(crate) stages: StagesData,
@@ -112,6 +116,9 @@ pub(crate) struct ParsedData {
     /// Parsed `scenarios/load_seasonal_stats.parquet`. Empty when absent.
     pub(crate) load_seasonal_stats: Vec<LoadSeasonalStatsRow>,
     /// Parsed `scenarios/load_factors.json`. Empty when absent.
+    ///
+    /// Parsed for schema validation; not yet forwarded to `System`.
+    #[allow(dead_code)]
     pub(crate) load_factors: Vec<LoadFactorEntry>,
     /// Parsed `scenarios/correlation.json`. `None` when absent.
     pub(crate) correlation: Option<CorrelationModel>,
@@ -128,6 +135,9 @@ pub(crate) struct ParsedData {
     /// Parsed `constraints/contract_bounds.parquet`. Empty when absent.
     pub(crate) contract_bounds: Vec<ContractBoundsRow>,
     /// Parsed `constraints/exchange_factors.json`. Empty when absent.
+    ///
+    /// Parsed for schema validation; not yet forwarded to `System`.
+    #[allow(dead_code)]
     pub(crate) exchange_factors: Vec<ExchangeFactorEntry>,
     /// Parsed `constraints/generic_constraints.json`. Empty when absent.
     pub(crate) generic_constraints: Vec<GenericConstraint>,
@@ -156,9 +166,6 @@ pub(crate) struct ParsedData {
 /// - [`LoadError::SchemaError`] maps to [`ErrorKind::SchemaViolation`].
 /// - All other variants map to [`ErrorKind::SchemaViolation`] as a safe
 ///   fallback (they should not occur in Layer 2).
-// Used by validate_schema and by tests; allow dead_code until load_case wires
-// up the full pipeline.
-#[allow(dead_code)]
 fn map_load_error(err: &LoadError, relative_path: &str, ctx: &mut ValidationContext) {
     match err {
         LoadError::IoError { .. } => {
@@ -222,9 +229,6 @@ fn map_load_error(err: &LoadError, relative_path: &str, ctx: &mut ValidationCont
 /// * `case_root` — path to the case directory root.
 /// * `manifest`  — output from [`crate::validation::structural::validate_structure`].
 /// * `ctx`        — mutable validation context that accumulates diagnostics.
-// Unused until load_case is implemented (ticket-036 integration). Allow
-// dead_code so the linter does not fail CI before the pipeline is wired up.
-#[allow(dead_code)]
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_schema(
@@ -624,7 +628,6 @@ pub(crate) fn validate_schema(
 
 /// Call a parser, map any error into `ctx`, and return `Some(value)` on success
 /// or `None` on failure.
-#[allow(dead_code)]
 fn parse_or_error<T>(
     result: Result<T, LoadError>,
     relative_path: &str,
@@ -641,7 +644,6 @@ fn parse_or_error<T>(
 
 /// Call a parser only when `present` is `true`, otherwise return the `default`
 /// value.  Maps any error into `ctx` and returns the default on failure.
-#[allow(dead_code)]
 fn optional_or_error<T, F, D>(
     present: bool,
     parse_fn: F,
@@ -672,7 +674,6 @@ where
 /// The sentinel allows penalty-dependent parsers (`parse_buses`, `parse_hydros`,
 /// `parse_lines`, `parse_non_controllable_sources`) to be attempted so that
 /// their own errors are collected in the same pass.
-#[allow(dead_code)]
 fn sentinel_penalties() -> GlobalPenaltyDefaults {
     use cobre_core::entities::{DeficitSegment, HydroPenalties};
     GlobalPenaltyDefaults {

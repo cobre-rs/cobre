@@ -42,9 +42,7 @@ use crate::extensions::{ProductionModelConfig, SelectionMode};
 ///
 /// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
 /// * `ctx`  — mutable validation context that accumulates diagnostics.
-// Unused until load_case wires up the full pipeline (ticket-036). Allow
-// dead_code so the linter does not fail CI before the pipeline is connected.
-#[allow(dead_code, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
     // ── Extract study stage IDs (non-negative IDs only) ───────────────────────
     //

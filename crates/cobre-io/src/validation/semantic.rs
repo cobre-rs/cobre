@@ -66,9 +66,7 @@ use super::{schema::ParsedData, ErrorKind, ValidationContext};
 ///
 /// Rules 8-12 are only checked when the corresponding data is non-empty.  An
 /// empty `hydro_geometry` or empty `fpha_hyperplanes` slice produces no errors.
-// Unused until load_case wires up the full pipeline (ticket-036). Allow
-// dead_code so the linter does not fail CI before the pipeline is connected.
-#[allow(dead_code, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
     check_hydro_bounds(data, ctx);
@@ -523,9 +521,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 ///
 /// Rules 12-13 are only checked when `data.inflow_seasonal_stats` is non-empty.
 /// Rules 14-16 are only checked when `data.correlation` is `Some`.
-// Unused until load_case wires up the full pipeline (ticket-036). Allow
-// dead_code so the linter does not fail CI before the pipeline is connected.
-#[allow(dead_code, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_stages_penalties_scenarios(
     data: &ParsedData,
     ctx: &mut ValidationContext,

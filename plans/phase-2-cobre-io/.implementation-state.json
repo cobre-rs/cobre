@@ -1,1059 +1,1159 @@
 {
-    "plan": "phase-2-cobre-io",
-    "last_updated": "2026-03-04T03:15:59Z",
-    "progressive": true,
-    "tickets": {
-        "ticket-001-generalize-cobre-core-doc-comments.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-00-phase1-generalization",
-            "scores": {
-                "quality": 0.96,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.96,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.93,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
+  "plan": "phase-2-cobre-io",
+  "last_updated": "2026-03-04T08:43:56Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-generalize-cobre-core-doc-comments.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-00-phase1-generalization",
+      "scores": {
+        "quality": 0.96,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
         },
-        "ticket-002-generalize-cobre-core-book-page.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-00-phase1-generalization",
-            "scores": {
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.9,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.75,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "open-source-documentation-writer"
-        },
-        "ticket-003-add-serde-feature-flag.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 0.75,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.96,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.6
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-004-define-temporal-types.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 0.5
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-005-define-scenario-pipeline-types.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-006-define-initial-conditions-and-generic-constraints.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 0.88,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-007-define-resolved-penalty-and-bound-types.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 0.5
-                },
-                "readiness": 0.96,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.88,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-008-extend-system-and-builder.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-01-core-extension",
-            "scores": {
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-009-define-load-error-and-crate-dependencies.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-02-io-foundation",
-            "scores": {
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 0.88,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-010-parse-config-json.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-02-io-foundation",
-            "scores": {
-                "readiness": 0.97,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.93,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 0.5
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-011-parse-penalties-json.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-02-io-foundation",
-            "scores": {
-                "readiness": 0.97,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.93,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-012-parse-initial-conditions-json.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-02-io-foundation",
-            "scores": {
-                "readiness": 0.97,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.93,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-013-implement-validation-context-and-structural-validation.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "epic-02-io-foundation",
-            "scores": {
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-014-parse-buses-and-thermals.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-03-entity-loading",
-            "scores": {
-                "readiness": 0.99,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.9
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-015-parse-hydros-json.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-03-entity-loading",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-016-parse-lines-and-optional-registries.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-03-entity-loading",
-            "scores": {
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-017-add-parquet-support-and-parse-hydro-geometry.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-03-entity-loading",
-            "scores": {
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 0.88,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-018-parse-production-models-and-fpha.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-03-entity-loading",
-            "scores": {
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-019-parse-stages-json.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-04-temporal-and-scenario-loading",
-            "scores": {
-                "quality": 0.875,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-020-parse-inflow-scenario-parquets.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-04-temporal-and-scenario-loading",
-            "scores": {
-                "quality": 0.975,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.96,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.6
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-021-parse-load-scenario-files.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-04-temporal-and-scenario-loading",
-            "scores": {
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-022-parse-correlation-and-external-scenarios.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-04-temporal-and-scenario-loading",
-            "scores": {
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 0.98,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-023-assemble-scenario-pipeline-data.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-04-temporal-and-scenario-loading",
-            "scores": {
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-024-parse-entity-bounds-parquets.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-05-constraint-loading-and-resolution",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-025-parse-penalty-override-parquets.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-05-constraint-loading-and-resolution",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-026-parse-generic-constraints-and-exchange-factors.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-05-constraint-loading-and-resolution",
-            "scores": {
-                "readiness": 0.96,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 0.9,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-027-implement-penalty-cascade-resolution.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-05-constraint-loading-and-resolution",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 0.875,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-028-implement-bound-resolution.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-05-constraint-loading-and-resolution",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-029-implement-schema-validation.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-06-validation-pipeline",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-030-implement-referential-integrity-validation.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-06-validation-pipeline",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 0.88,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-031-implement-dimensional-consistency-validation.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-06-validation-pipeline",
-            "scores": {
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                },
-                "quality": 1.0,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-032-implement-semantic-validation-hydro-thermal.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-06-validation-pipeline",
-            "scores": {
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-033-implement-semantic-validation-stages-penalties-scenarios.md": {
-            "status": "completed",
-            "detail_level": "refined",
-            "epic": "epic-06-validation-pipeline",
-            "scores": {
-                "quality": 0.88,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 0.5,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 1.0
-                },
-                "readiness": 1.0,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 1.0,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "workflow_step": null,
-            "agent": "hpc-rust-developer"
-        },
-        "ticket-034-implement-load-case-pipeline.md": {
-            "status": "pending",
-            "detail_level": "outline",
-            "epic": "epic-07-integration-and-output"
-        },
-        "ticket-035-implement-postcard-serialization.md": {
-            "status": "pending",
-            "detail_level": "outline",
-            "epic": "epic-07-integration-and-output"
-        },
-        "ticket-036-create-integration-test-fixtures.md": {
-            "status": "pending",
-            "detail_level": "outline",
-            "epic": "epic-07-integration-and-output"
-        },
-        "ticket-037-test-declaration-order-invariance.md": {
-            "status": "pending",
-            "detail_level": "outline",
-            "epic": "epic-07-integration-and-output"
-        },
-        "ticket-038-outline-validation-report-and-output-stubs.md": {
-            "status": "pending",
-            "detail_level": "outline",
-            "epic": "epic-07-integration-and-output"
-        },
-        "ticket-039-review-cobre-docs-specs.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.9,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.8,
-                    "boundary": 0.9,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            }
-        },
-        "ticket-040-update-cobre-docs-cross-reference-index.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.9,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.8,
-                    "boundary": 0.9,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.9
-                }
-            }
-        },
-        "ticket-041-populate-cobre-core-book-page.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.91,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.75,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            }
-        },
-        "ticket-042-populate-cobre-io-book-page.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.91,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.8,
-                    "boundary": 0.9,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            }
-        },
-        "ticket-043-populate-reference-pages.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.91,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.8,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.8
-                }
-            }
-        },
-        "ticket-044-update-project-documentation.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-08-documentation-coherence",
-            "scores": {
-                "readiness": 0.92,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.85,
-                    "boundary": 0.9,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.9
-                }
-            }
-        },
-        "ticket-045-audit-cobre-core-source.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-09-solver-neutral-review",
-            "scores": {
-                "readiness": 0.95,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.85,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.9
-                }
-            }
-        },
-        "ticket-046-audit-cobre-io-source.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-09-solver-neutral-review",
-            "scores": {
-                "readiness": 0.94,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.85,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.85
-                }
-            }
-        },
-        "ticket-047-audit-documentation.md": {
-            "status": "pending",
-            "detail_level": "detailed",
-            "epic": "epic-09-solver-neutral-review",
-            "scores": {
-                "readiness": 0.94,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.8,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 0.9
-                }
-            }
-        },
-        "ticket-048-remove-mpi-config-from-config-json.md": {
-            "status": "completed",
-            "detail_level": "detailed",
-            "epic": "emergency",
-            "workflow_step": null,
-            "scores": {
-                "quality": 0.95,
-                "quality_breakdown": {
-                    "conformance": 1.0,
-                    "scope_adherence": 1.0,
-                    "lint_cleanliness": 1.0,
-                    "type_safety": 1.0,
-                    "test_delta": 0.5
-                },
-                "readiness": 0.95,
-                "readiness_breakdown": {
-                    "structure": 1.0,
-                    "testability": 0.9,
-                    "boundary": 1.0,
-                    "dependency_clarity": 1.0,
-                    "atomicity": 1.0
-                }
-            },
-            "agent": "hpc-rust-developer"
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.93,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
         }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
     },
-    "epics": {
-        "epic-00-phase1-generalization": {
-            "phase": "completed",
-            "learning_extracted": false
+    "ticket-002-generalize-cobre-core-book-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-00-phase1-generalization",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
         },
-        "epic-01-core-extension": {
-            "phase": "completed",
-            "learning_extracted": false
-        },
-        "epic-02-io-foundation": {
-            "phase": "completed",
-            "learning_extracted": true
-        },
-        "epic-03-entity-loading": {
-            "phase": "completed",
-            "learning_extracted": true
-        },
-        "epic-04-temporal-and-scenario-loading": {
-            "phase": "completed",
-            "learning_extracted": true
-        },
-        "epic-05-constraint-loading-and-resolution": {
-            "phase": "completed",
-            "learning_extracted": true
-        },
-        "epic-06-validation-pipeline": {
-            "phase": "completed",
-            "learning_extracted": true
-        },
-        "epic-07-integration-and-output": {
-            "phase": "outline",
-            "learning_extracted": false
-        },
-        "epic-08-documentation-coherence": {
-            "phase": "executing",
-            "learning_extracted": false
-        },
-        "epic-09-solver-neutral-review": {
-            "phase": "executing",
-            "learning_extracted": false
+        "readiness": 0.9,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.75,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
         }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-003-add-serde-feature-flag.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-004-define-temporal-types.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-005-define-scenario-pipeline-types.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-006-define-initial-conditions-and-generic-constraints.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-007-define-resolved-penalty-and-bound-types.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.88,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-008-extend-system-and-builder.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-core-extension",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-009-define-load-error-and-crate-dependencies.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-io-foundation",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-010-parse-config-json.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-io-foundation",
+      "scores": {
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.93,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-011-parse-penalties-json.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-io-foundation",
+      "scores": {
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.93,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-012-parse-initial-conditions-json.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-io-foundation",
+      "scores": {
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.93,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-013-implement-validation-context-and-structural-validation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-io-foundation",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-014-parse-buses-and-thermals.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-entity-loading",
+      "scores": {
+        "readiness": 0.99,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-015-parse-hydros-json.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-entity-loading",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-016-parse-lines-and-optional-registries.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-entity-loading",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-017-add-parquet-support-and-parse-hydro-geometry.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-entity-loading",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-018-parse-production-models-and-fpha.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-entity-loading",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-019-parse-stages-json.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-temporal-and-scenario-loading",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-020-parse-inflow-scenario-parquets.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-temporal-and-scenario-loading",
+      "scores": {
+        "quality": 0.975,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-021-parse-load-scenario-files.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-temporal-and-scenario-loading",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-022-parse-correlation-and-external-scenarios.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-temporal-and-scenario-loading",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-023-assemble-scenario-pipeline-data.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-temporal-and-scenario-loading",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-024-parse-entity-bounds-parquets.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-05-constraint-loading-and-resolution",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-025-parse-penalty-override-parquets.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-05-constraint-loading-and-resolution",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-026-parse-generic-constraints-and-exchange-factors.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-05-constraint-loading-and-resolution",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-027-implement-penalty-cascade-resolution.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-05-constraint-loading-and-resolution",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-028-implement-bound-resolution.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-05-constraint-loading-and-resolution",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-029-implement-schema-validation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-06-validation-pipeline",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-030-implement-referential-integrity-validation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-06-validation-pipeline",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-031-implement-dimensional-consistency-validation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-06-validation-pipeline",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-032-implement-semantic-validation-hydro-thermal.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-06-validation-pipeline",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-033-implement-semantic-validation-stages-penalties-scenarios.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-06-validation-pipeline",
+      "scores": {
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-034-implement-load-case-pipeline.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-07-integration-and-output",
+      "scores": {
+        "quality": 0.9375,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.75,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-035-implement-postcard-serialization.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-07-integration-and-output",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-036-create-integration-test-fixtures.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-07-integration-and-output",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-037-test-declaration-order-invariance.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-07-integration-and-output",
+      "scores": {
+        "quality": 0.93,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-038-outline-validation-report-and-output-stubs.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-07-integration-and-output",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-039-review-cobre-docs-specs.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.9,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.8,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    },
+    "ticket-040-update-cobre-docs-cross-reference-index.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.9,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.8,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-041-populate-cobre-core-book-page.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.91,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.75,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      }
+    },
+    "ticket-042-populate-cobre-io-book-page.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.91,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.8,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      }
+    },
+    "ticket-043-populate-reference-pages.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.91,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.8,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    },
+    "ticket-044-update-project-documentation.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-08-documentation-coherence",
+      "scores": {
+        "readiness": 0.92,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.85,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-045-audit-cobre-core-source.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-09-solver-neutral-review",
+      "scores": {
+        "readiness": 0.95,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.85,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-046-audit-cobre-io-source.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-09-solver-neutral-review",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.85,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.85
+        }
+      }
+    },
+    "ticket-047-audit-documentation.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "epic": "epic-09-solver-neutral-review",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.8,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-048-remove-mpi-config-from-config-json.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "emergency",
+      "workflow_step": null,
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 0.95,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.9,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "agent": "hpc-rust-developer"
     }
+  },
+  "epics": {
+    "epic-00-phase1-generalization": {
+      "phase": "completed",
+      "learning_extracted": false
+    },
+    "epic-01-core-extension": {
+      "phase": "completed",
+      "learning_extracted": false
+    },
+    "epic-02-io-foundation": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-03-entity-loading": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-04-temporal-and-scenario-loading": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-05-constraint-loading-and-resolution": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-06-validation-pipeline": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-07-integration-and-output": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-08-documentation-coherence": {
+      "phase": "executing",
+      "learning_extracted": false
+    },
+    "epic-09-solver-neutral-review": {
+      "phase": "executing",
+      "learning_extracted": false
+    }
+  }
 }

@@ -29,9 +29,6 @@ pub mod schema;
 pub mod semantic;
 pub mod structural;
 
-#[allow(unused_imports)]
-pub(crate) use schema::{validate_schema, ParsedData};
-
 use std::path::PathBuf;
 
 use crate::LoadError;

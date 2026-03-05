@@ -2,7 +2,7 @@
 
 LP/MIP solver abstraction for the [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
 
-Provides a backend-agnostic solver interface with a default HiGHS backend, designed for the LP subproblems in SDDP and other power system optimization algorithms.
+Provides a backend-agnostic solver interface with a default HiGHS backend, designed for iterative LP solving in power system optimization algorithms.
 
 ## Status
 

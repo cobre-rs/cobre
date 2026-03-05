@@ -67,6 +67,24 @@ integration tests. Each case directory follows the standard Cobre case layout: a
 entity type (e.g., `buses/`, `hydros/`, `thermals/`). When adding new parsers, add a
 corresponding sample input file to `tests/data/` and reference it from the integration test.
 
+### Testing cobre-solver
+
+cobre-solver builds HiGHS from source using cmake. Before running the tests for the first
+time, initialize the HiGHS git submodule:
+
+```bash
+# Initialize the HiGHS vendored source (required once after cloning)
+git submodule update --init --recursive
+
+# Run all cobre-solver tests
+cargo test -p cobre-solver --all-features
+```
+
+The `highs` feature (enabled by default) triggers cmake-based compilation of HiGHS from
+source, which requires cmake >= 3.15 and a C/C++ compiler. The conformance test suite
+validates the `SolverInterface` contract against hand-computable LP fixtures, ensuring
+that every backend returns bit-for-bit consistent results for known inputs.
+
 ### Project Structure
 
 ```
@@ -202,8 +220,8 @@ Documentation improvements are always welcome. The Rust API docs live inline in 
 
 #### cobre-solver
 
-- The `Solver` trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag; CLP-specific code behind `clp`.
-- Benchmark any solver interface changes with `cargo bench`.
+- The `SolverInterface` trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag; CLP-specific code behind `clp`.
+- Criterion benchmarks for solver interface changes are planned but not yet configured; they will be added in a future phase.
 - Basis warm-starting is a correctness feature, not just a performance optimization — validate it in tests.
 
 #### cobre-comm

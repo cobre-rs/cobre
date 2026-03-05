@@ -49,3 +49,4 @@ What becomes easier or more difficult because of this change?
 | [003](003-compile-time-solver.md)        | Accepted | Compile-time solver selection via Cargo feature flags       |
 | [004](004-postcard-mpi-serialization.md) | Accepted | postcard for MPI broadcast serialization                    |
 | [005](005-flatbuffers-policy.md)         | Accepted | FlatBuffers for policy data persistence                     |
+| [006](006-soa-bound-patching.md)         | Accepted | SoA bound patching for solver hot path                      |

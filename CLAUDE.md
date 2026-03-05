@@ -130,24 +130,24 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 <!-- UPDATE THIS TABLE as phases are completed -->
 
-| Phase | Status      | Notes                                                                                                           |
-| ----- | ----------- | --------------------------------------------------------------------------------------------------------------- |
-| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc) |
-| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests     |
-| 3     | not started | Ready to start (depends on Phase 1, complete; parallel with 5)                                                  |
-| 4     | not started | Blocked by Phase 3                                                                                              |
-| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                  |
-| 6     | not started | Blocked by Phases 1-5                                                                                           |
-| 7     | not started | Blocked by Phase 6                                                                                              |
-| 8     | not started | Blocked by Phase 7                                                                                              |
+| Phase | Status      | Notes                                                                                                                     |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc)           |
+| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests               |
+| 3     | complete    | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc) |
+| 4     | not started | Ready to start (depends on Phase 3, complete)                                                                             |
+| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                            |
+| 6     | not started | Blocked by Phases 1-5                                                                                                     |
+| 7     | not started | Blocked by Phase 6                                                                                                        |
+| 8     | not started | Blocked by Phase 7                                                                                                        |
 
 ### Current phase
 
-**Phase 2: cobre-io -- Complete.** The I/O layer is implemented: `load_case` pipeline, 5-layer validation (structural → schema → referential → dimensional → semantic), 33-file JSON/Parquet loading, penalty and bound resolution, postcard broadcast serialization, and validation report writer. All 622 tests pass (514 unit + 6 integration + 3 invariance + 99 doc-tests). Next candidates are Phases 3 (`ferrompi` + `cobre-solver`) and 5 (`cobre-stochastic`), which can proceed in parallel.
+**Phase 3: ferrompi + cobre-solver -- Complete.** The LP solver abstraction is implemented: `SolverInterface` trait with compile-time monomorphization (DEC-002), `HighsSolver` backend with custom FFI bindings, 5-level retry escalation, dual normalization, warm-start basis management, and 30 conformance tests. ferrompi v0.2.0 audited for Phase 4 readiness (verdict: READY WITH ADAPTATIONS — `i32`↔`usize` conversions needed in `cobre-comm` wrapper). All 67 tests pass (35 unit + 30 integration + 2 doc). Next candidates are Phases 4 (`cobre-comm`) and 5 (`cobre-stochastic`), which can proceed in parallel.
 
 ### Parallelizable phases
 
-Phases 3 and 5 can now proceed in parallel since Phases 1 and 2 are both complete.
+Phases 4 and 5 can now proceed in parallel since Phases 1-3 are all complete.
 The `ferrompi` crate has no in-workspace dependencies and can be developed at any time.
 
 ### Per-phase spec reading lists
@@ -259,6 +259,29 @@ Results must be **bit-for-bit identical** regardless of input entity ordering. E
 collections are always stored in canonical ID-sorted order. Every function that
 processes entity collections must be tested with reordered input.
 
+### Infrastructure crate genericity (ENFORCED)
+
+The infrastructure crates (`cobre-core`, `cobre-io`, `cobre-solver`, `cobre-stochastic`,
+`cobre-comm`) are **deliberately generic** and must contain **zero algorithm-specific
+references** (no SDDP, no algorithm names in function/struct/type names, docs, or
+comments). This is a first-class requirement from the ecosystem design (see
+`cobre-docs/src/specs/overview/ecosystem-vision.md` §6).
+
+**Rules:**
+
+- No function, struct, enum, or type may include "sddp", "SDDP", or any other
+  algorithm name in infrastructure crates
+- Doc comments must use generic language ("the calling algorithm", "iterative LP
+  solving", "optimization algorithms") instead of algorithm-specific references
+- Test code may mention algorithms only in comments explaining the fixture's origin,
+  never in function or variable names
+- Application crates (`cobre-cli`, `cobre-mcp`, `cobre-tui`, `cobre-python`) and the
+  solver vertical (`cobre-sddp`) **may** reference SDDP freely
+
+**Quality gate:** At the end of each implementation phase, all modified infrastructure
+crate files must pass `grep -riE 'sddp' crates/<crate>/src/` with zero matches. This
+check is part of the plan completion protocol.
+
 ---
 
 ## Key Architectural Decisions
@@ -354,8 +377,9 @@ Target: crates/cobre-core/src/entities/hydro.rs (new file)
 - Use `unsafe` -- it is `forbid` at workspace level
 - Use `.unwrap()` in library code -- it is `deny` at workspace level
 - Use `bincode` -- use `postcard` for MPI, `FlatBuffers` for policy
-- Allocate on the hot path inside the SDDP training loop
+- Allocate on the hot path inside the training loop
 - Break declaration-order invariance (results must be identical regardless of input ordering)
+- Reference SDDP (or any algorithm name) in infrastructure crate code, types, or docs
 - Make architectural decisions not specified in the specs -- escalate gaps
 - Commit secrets, `.env` files, or credentials
 - Force-push to `main`

@@ -9,3 +9,9 @@ coverage:
     patch:
       default:
         target: 95%
+        paths:
+          - "!crates/cobre-solver/"
+      solver:
+        target: 90%
+        paths:
+          - "crates/cobre-solver/"

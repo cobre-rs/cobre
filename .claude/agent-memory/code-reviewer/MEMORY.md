@@ -54,6 +54,29 @@
   But in practice it CAN be reached if no new errors were added by validate_schema (pre-existing errors
   from Layer 1 caused validate_schema to return None). This is a logic flaw — see FINDING.
 
+### Phase 3 cobre-solver key facts
+
+- `unsafe_code = "allow"` is set at crate level in `Cargo.toml` (overriding workspace `forbid`)
+  because FFI to HiGHS requires unsafe blocks. All other workspace lints are manually replicated.
+- `HighsSolver` holds a raw `*mut c_void` handle; `Send` is manually impl'd (not `Sync`).
+- `ffi.rs` uses `#![allow(dead_code)]` intentionally — it's a sys-crate-style bindings file.
+- `self.reduced_costs` (Vec field in `HighsSolver`) is dead storage — it is resized in `load_model`
+  but never written or read. `col_dual` from HiGHS is used as reduced costs in `LpSolution`.
+- `as_ptr().cast_mut()` on `&self` methods (`extract_solution`, `get_basis`) creates mutable pointers
+  from shared references. Technically UB under stacked borrows; Miri would flag it.
+  The correct pattern is `&mut self` or taking `&mut self.field` explicitly.
+- Inner-block pointer extraction for `row_indices_ptr` in `load_model` is sound (no mutation between
+  extraction and FFI call) but fragile. Same pattern in `add_rows` with `col_indices_ptr`.
+- `cobre_highs_get_solution` return is silently discarded in `extract_solution` (not in
+  `try_extract_partial_solution` which uses `_status`). Called after OPTIMAL confirmed.
+- `restore_default_settings` is private and called unconditionally after retry loop.
+- The retry loop (5 levels: clear solver, enable presolve, primal simplex, relax tolerances, IPM)
+  only activates on `SOLVE_ERROR` or `UNKNOWN` model status. No test exercises it directly.
+- `test-support` feature re-exports raw FFI option-setters for integration tests that need
+  time/iteration limits (e.g., `test_solver_highs_solve_time_limit`).
+- SAFETY comment in `reset()` says "model is still loaded" (true for HiGHS) but code sets
+  `has_model = false`. This is correct behavior but the comment is misleading.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

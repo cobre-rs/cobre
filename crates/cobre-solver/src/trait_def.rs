@@ -30,7 +30,8 @@ use crate::types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, S
 ///
 /// - Mutating methods (`load_model`, `add_rows`, `set_row_bounds`,
 ///   `set_col_bounds`, `solve`, `solve_with_basis`, `reset`) take `&mut self`.
-/// - Read-only query methods (`get_basis`, `statistics`, `name`) take `&self`.
+/// - Methods that write to internal scratch buffers (`get_basis`) take `&mut self`.
+/// - Read-only query methods (`statistics`, `name`) take `&self`.
 ///
 /// # Error Recovery Contract
 ///
@@ -306,7 +307,7 @@ pub trait SolverInterface: Send {
     /// successful solve, the basis always exists and can be extracted.
     ///
     /// See [Solver Interface Trait SS2.7](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
-    fn get_basis(&self) -> Basis;
+    fn get_basis(&mut self) -> Basis;
 
     /// Returns accumulated solve metrics for this solver instance.
     ///
@@ -386,7 +387,7 @@ mod tests {
 
         fn reset(&mut self) {}
 
-        fn get_basis(&self) -> crate::types::Basis {
+        fn get_basis(&mut self) -> crate::types::Basis {
             crate::types::Basis {
                 col_status: vec![],
                 row_status: vec![],
@@ -435,7 +436,8 @@ mod tests {
 
     #[test]
     fn test_noop_solver_get_basis_empty() {
-        let basis = NoopSolver.get_basis();
+        let mut solver = NoopSolver;
+        let basis = solver.get_basis();
         assert!(basis.col_status.is_empty());
         assert!(basis.row_status.is_empty());
     }

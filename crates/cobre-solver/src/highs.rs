@@ -58,9 +58,6 @@ pub struct HighsSolver {
     /// Pre-allocated buffer for row dual multipliers (shadow prices).
     /// Resized in `load_model`.
     row_dual: Vec<f64>,
-    /// Pre-allocated buffer for reduced costs returned in `LpSolution`.
-    /// Resized in `load_model`.
-    reduced_costs: Vec<f64>,
     /// Scratch buffer for converting `usize` indices to `i32` for the `HiGHS` C API.
     /// Used by `add_rows`, `set_row_bounds`, and `set_col_bounds`.
     /// Never shrunk -- only grows -- to prevent reallocation churn on the hot path.
@@ -149,7 +146,6 @@ impl HighsSolver {
             col_dual: Vec::new(),
             row_value: Vec::new(),
             row_dual: Vec::new(),
-            reduced_costs: Vec::new(),
             scratch_i32: Vec::new(),
             basis_col_i32: Vec::new(),
             basis_row_i32: Vec::new(),
@@ -265,22 +261,27 @@ impl HighsSolver {
     ///
     /// Does not panic. The `iterations` cast from `i32` to `u64` is safe because
     /// `HiGHS` iteration counts are always non-negative.
-    fn extract_solution(&self, solve_time_seconds: f64) -> LpSolution {
+    fn extract_solution(&mut self, solve_time_seconds: f64) -> LpSolution {
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - All four mutable pointer arguments point into owned Vec buffers that were
         //   resized to at least `num_cols` / `num_rows` entries in `load_model` or
         //   `add_rows`. HiGHS writes exactly `num_cols` values into col_* buffers and
         //   `num_rows` values into row_* buffers, which is within bounds.
-        unsafe {
+        let status = unsafe {
             ffi::cobre_highs_get_solution(
                 self.handle,
-                self.col_value.as_ptr().cast_mut(),
-                self.col_dual.as_ptr().cast_mut(),
-                self.row_value.as_ptr().cast_mut(),
-                self.row_dual.as_ptr().cast_mut(),
-            );
-        }
+                self.col_value.as_mut_ptr(),
+                self.col_dual.as_mut_ptr(),
+                self.row_value.as_mut_ptr(),
+                self.row_dual.as_mut_ptr(),
+            )
+        };
+        assert_ne!(
+            status,
+            ffi::HIGHS_STATUS_ERROR,
+            "cobre_highs_get_solution failed after optimal solve"
+        );
 
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
         let objective = unsafe { ffi::cobre_highs_get_objective_value(self.handle) };
@@ -309,7 +310,7 @@ impl HighsSolver {
     /// Returns `None` if solution extraction is unavailable (e.g. after a
     /// `SOLVE_ERROR`). Returns `Some(solution)` when `HiGHS` has a best-effort
     /// primal/dual solution available (e.g. after `TIME_LIMIT` or `ITERATION_LIMIT`).
-    fn try_extract_partial_solution(&self, solve_time_seconds: f64) -> Option<LpSolution> {
+    fn try_extract_partial_solution(&mut self, solve_time_seconds: f64) -> Option<LpSolution> {
         // Attempt the extraction; if HiGHS has no solution available the buffers will
         // be filled with zeros or unchanged values. We consider the extraction valid
         // as long as HiGHS reports a finite objective value.
@@ -317,10 +318,10 @@ impl HighsSolver {
         let _status = unsafe {
             ffi::cobre_highs_get_solution(
                 self.handle,
-                self.col_value.as_ptr().cast_mut(),
-                self.col_dual.as_ptr().cast_mut(),
-                self.row_value.as_ptr().cast_mut(),
-                self.row_dual.as_ptr().cast_mut(),
+                self.col_value.as_mut_ptr(),
+                self.col_dual.as_mut_ptr(),
+                self.row_value.as_mut_ptr(),
+                self.row_dual.as_mut_ptr(),
             )
         };
 
@@ -454,7 +455,7 @@ impl HighsSolver {
     /// Returns `None` if the status is `SOLVE_ERROR` or `UNKNOWN` (retry should
     /// continue), or `Some(Err(...))` for all other terminal statuses.
     fn interpret_terminal_status(
-        &self,
+        &mut self,
         status: i32,
         solve_time_seconds: f64,
     ) -> Option<Result<LpSolution, SolverError>> {
@@ -714,7 +715,6 @@ impl SolverInterface for HighsSolver {
         // Zero-fill is fine; these are overwritten in full by `cobre_highs_get_solution`.
         self.col_value.resize(self.num_cols, 0.0);
         self.col_dual.resize(self.num_cols, 0.0);
-        self.reduced_costs.resize(self.num_cols, 0.0);
         self.row_value.resize(self.num_rows, 0.0);
         self.row_dual.resize(self.num_rows, 0.0);
 
@@ -1078,10 +1078,15 @@ impl SolverInterface for HighsSolver {
 
     fn reset(&mut self) {
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. `cobre_highs_clear_solver`
-        // discards the cached basis and factorization while preserving the model data.
-        // After this call the model is still loaded and `load_model` must be called
-        // again before the next `solve` -- enforced by zeroing `num_cols` and `num_rows`.
-        unsafe { ffi::cobre_highs_clear_solver(self.handle) };
+        // discards the cached basis and factorization. HiGHS preserves the model data
+        // internally, but Cobre's `reset` contract requires `load_model` before the
+        // next solve — enforced by setting `has_model = false`.
+        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
+        debug_assert_ne!(
+            status,
+            ffi::HIGHS_STATUS_ERROR,
+            "cobre_highs_clear_solver failed — HiGHS internal state may be inconsistent"
+        );
         // Force `load_model` to be called before the next solve.
         self.num_cols = 0;
         self.num_rows = 0;
@@ -1090,7 +1095,7 @@ impl SolverInterface for HighsSolver {
         // lifetime of the instance (per trait contract, SS4.3).
     }
 
-    fn get_basis(&self) -> Basis {
+    fn get_basis(&mut self) -> Basis {
         assert!(
             self.has_model,
             "get_basis called without a loaded model — call load_model first"
@@ -1102,14 +1107,11 @@ impl SolverInterface for HighsSolver {
         // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
         // - HiGHS writes exactly `num_cols` values to the col pointer and `num_rows`
         //   values to the row pointer, which is within the allocated lengths.
-        // We cast the shared references to mutable pointers because `cobre_highs_get_basis`
-        // takes `*mut i32` for output; Rust aliasing rules are satisfied because HiGHS does
-        // not retain the pointers after the call returns.
         let get_status = unsafe {
             ffi::cobre_highs_get_basis(
                 self.handle,
-                self.basis_col_i32.as_ptr().cast_mut(),
-                self.basis_row_i32.as_ptr().cast_mut(),
+                self.basis_col_i32.as_mut_ptr(),
+                self.basis_row_i32.as_mut_ptr(),
             )
         };
 
@@ -1259,11 +1261,6 @@ mod tests {
             solver.col_dual.len(),
             3,
             "col_dual buffer must be resized to num_cols"
-        );
-        assert_eq!(
-            solver.reduced_costs.len(),
-            3,
-            "reduced_costs buffer must be resized to num_cols"
         );
         assert_eq!(
             solver.row_value.len(),

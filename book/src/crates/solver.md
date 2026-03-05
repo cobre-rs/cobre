@@ -100,15 +100,17 @@ complete contracts.
 | `solve`            | `&mut self`           | `Result<LpSolution, SolverError>` | Solves the current LP; encapsulates internal retry logic                    |
 | `solve_with_basis` | `&mut self`           | `Result<LpSolution, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
 | `reset`            | `&mut self`           | `()`                              | Clears solver state for error recovery or model switch                      |
-| `get_basis`        | `&self`               | `Basis`                           | Extracts the current simplex basis after a successful solve                 |
+| `get_basis`        | `&mut self`           | `Basis`                           | Extracts the current simplex basis after a successful solve                 |
 | `statistics`       | `&self`               | `SolverStatistics`                | Returns accumulated monotonic solve counters                                |
 | `name`             | `&self`               | `&'static str`                    | Returns a static string identifying the backend                             |
 
 ### Mutability convention
 
 Methods that mutate solver state — loading a model, adding constraints, patching
-bounds, solving, and resetting — take `&mut self`. Methods that only read
-accumulated state (`get_basis`, `statistics`, `name`) take `&self`. This
+bounds, solving, resetting, and extracting a basis — take `&mut self`. `get_basis`
+requires `&mut self` because it writes to internal scratch buffers during
+extraction. Methods that only read accumulated state (`statistics`, `name`) take
+`&self`. This
 convention makes data-race hazards visible at the type level: the borrow checker
 prevents concurrent mutation without locks.
 

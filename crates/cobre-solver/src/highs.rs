@@ -19,6 +19,7 @@
 //! solves of small-to-medium LPs. Per-run parameters (time limit, iteration
 //! limit) are not set here -- those are applied by the caller before each solve.
 
+use std::ffi::CStr;
 use std::os::raw::c_void;
 use std::time::Instant;
 
@@ -26,6 +27,91 @@ use crate::{
     SolverInterface, ffi,
     types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate},
 };
+
+// ─── Default HiGHS configuration ─────────────────────────────────────────────
+//
+// The seven performance-tuned options applied at construction and restored after
+// each retry escalation. Keeping them in a single array eliminates per-option
+// error branches that are structurally impossible to trigger in tests (HiGHS
+// never rejects valid static option names).
+
+/// A typed `HiGHS` option value for the configuration table.
+enum OptionValue {
+    /// String option (`cobre_highs_set_string_option`).
+    Str(&'static CStr),
+    /// Integer option (`cobre_highs_set_int_option`).
+    Int(i32),
+    /// Boolean option (`cobre_highs_set_bool_option`).
+    Bool(i32),
+    /// Double option (`cobre_highs_set_double_option`).
+    Double(f64),
+}
+
+/// A named `HiGHS` option with its default value.
+struct DefaultOption {
+    name: &'static CStr,
+    value: OptionValue,
+}
+
+impl DefaultOption {
+    /// Applies this option to a `HiGHS` handle. Returns the `HiGHS` status code.
+    ///
+    /// # Safety
+    ///
+    /// `handle` must be a valid, non-null pointer from `cobre_highs_create()`.
+    unsafe fn apply(&self, handle: *mut c_void) -> i32 {
+        unsafe {
+            match &self.value {
+                OptionValue::Str(val) => {
+                    ffi::cobre_highs_set_string_option(handle, self.name.as_ptr(), val.as_ptr())
+                }
+                OptionValue::Int(val) => {
+                    ffi::cobre_highs_set_int_option(handle, self.name.as_ptr(), *val)
+                }
+                OptionValue::Bool(val) => {
+                    ffi::cobre_highs_set_bool_option(handle, self.name.as_ptr(), *val)
+                }
+                OptionValue::Double(val) => {
+                    ffi::cobre_highs_set_double_option(handle, self.name.as_ptr(), *val)
+                }
+            }
+        }
+    }
+}
+
+/// The seven performance-tuned default options (`HiGHS` Implementation SS4.1).
+fn default_options() -> [DefaultOption; 7] {
+    [
+        DefaultOption {
+            name: c"solver",
+            value: OptionValue::Str(c"simplex"),
+        },
+        DefaultOption {
+            name: c"simplex_strategy",
+            value: OptionValue::Int(4),
+        },
+        DefaultOption {
+            name: c"presolve",
+            value: OptionValue::Str(c"off"),
+        },
+        DefaultOption {
+            name: c"parallel",
+            value: OptionValue::Str(c"off"),
+        },
+        DefaultOption {
+            name: c"output_flag",
+            value: OptionValue::Bool(0),
+        },
+        DefaultOption {
+            name: c"primal_feasibility_tolerance",
+            value: OptionValue::Double(1e-7),
+        },
+        DefaultOption {
+            name: c"dual_feasibility_tolerance",
+            value: OptionValue::Double(1e-7),
+        },
+    ]
+}
 
 /// `HiGHS` LP solver instance implementing [`SolverInterface`].
 ///
@@ -162,89 +248,19 @@ impl HighsSolver {
     /// successfully, or `Err(SolverError::InternalError)` with the failing
     /// option name if any configuration call returns `HIGHS_STATUS_ERROR`.
     fn apply_default_config(handle: *mut c_void) -> Result<(), SolverError> {
-        // SAFETY: `handle` is a valid, non-null `HiGHS` pointer from `cobre_highs_create()`.
-        // All C string literals are null-terminated static data with 'static lifetime.
-        // Integers and doubles are plain values with no pointer requirements.
-
-        // solver = "simplex"
-        let status = unsafe {
-            ffi::cobre_highs_set_string_option(handle, c"solver".as_ptr(), c"simplex".as_ptr())
-        };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: solver".to_string(),
-                error_code: Some(status),
-            });
+        for opt in &default_options() {
+            // SAFETY: `handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
+            let status = unsafe { opt.apply(handle) };
+            if status == ffi::HIGHS_STATUS_ERROR {
+                return Err(SolverError::InternalError {
+                    message: format!(
+                        "HiGHS configuration failed: {}",
+                        opt.name.to_str().unwrap_or("?")
+                    ),
+                    error_code: Some(status),
+                });
+            }
         }
-
-        // simplex_strategy = 4 (dual simplex)
-        let status =
-            unsafe { ffi::cobre_highs_set_int_option(handle, c"simplex_strategy".as_ptr(), 4) };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: simplex_strategy".to_string(),
-                error_code: Some(status),
-            });
-        }
-
-        // presolve = "off"
-        let status = unsafe {
-            ffi::cobre_highs_set_string_option(handle, c"presolve".as_ptr(), c"off".as_ptr())
-        };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: presolve".to_string(),
-                error_code: Some(status),
-            });
-        }
-
-        // parallel = "off"
-        let status = unsafe {
-            ffi::cobre_highs_set_string_option(handle, c"parallel".as_ptr(), c"off".as_ptr())
-        };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: parallel".to_string(),
-                error_code: Some(status),
-            });
-        }
-
-        // output_flag = 0 (bool option -- suppresses console output)
-        let status =
-            unsafe { ffi::cobre_highs_set_bool_option(handle, c"output_flag".as_ptr(), 0) };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: output_flag".to_string(),
-                error_code: Some(status),
-            });
-        }
-
-        // primal_feasibility_tolerance = 1e-7
-        let status = unsafe {
-            ffi::cobre_highs_set_double_option(
-                handle,
-                c"primal_feasibility_tolerance".as_ptr(),
-                1e-7,
-            )
-        };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: primal_feasibility_tolerance".to_string(),
-                error_code: Some(status),
-            });
-        }
-
-        // dual_feasibility_tolerance = 1e-7
-        let status = unsafe {
-            ffi::cobre_highs_set_double_option(handle, c"dual_feasibility_tolerance".as_ptr(), 1e-7)
-        };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            return Err(SolverError::InternalError {
-                message: "HiGHS configuration failed: dual_feasibility_tolerance".to_string(),
-                error_code: Some(status),
-            });
-        }
-
         Ok(())
     }
 
@@ -354,31 +370,11 @@ impl HighsSolver {
     /// see the standard configuration regardless of which retry levels were
     /// reached (`HiGHS` Implementation SS3, restore-defaults requirement).
     fn restore_default_settings(&mut self) {
-        // SAFETY for all option calls below:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - All C string literals are null-terminated static data with 'static lifetime.
         // Errors from restore calls are silently ignored -- we are already in the
         // error recovery path and cannot do anything useful if option reset fails.
-        unsafe {
-            ffi::cobre_highs_set_string_option(
-                self.handle,
-                c"solver".as_ptr(),
-                c"simplex".as_ptr(),
-            );
-            ffi::cobre_highs_set_int_option(self.handle, c"simplex_strategy".as_ptr(), 4);
-            ffi::cobre_highs_set_string_option(self.handle, c"presolve".as_ptr(), c"off".as_ptr());
-            ffi::cobre_highs_set_double_option(
-                self.handle,
-                c"primal_feasibility_tolerance".as_ptr(),
-                1e-7,
-            );
-            ffi::cobre_highs_set_double_option(
-                self.handle,
-                c"dual_feasibility_tolerance".as_ptr(),
-                1e-7,
-            );
-            ffi::cobre_highs_set_string_option(self.handle, c"parallel".as_ptr(), c"off".as_ptr());
-            ffi::cobre_highs_set_bool_option(self.handle, c"output_flag".as_ptr(), 0);
+        for opt in &default_options() {
+            // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+            unsafe { opt.apply(self.handle) };
         }
     }
 
@@ -1821,7 +1817,9 @@ mod research_tests_ticket_023 {
         assert!(!highs.is_null());
         unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
         unsafe { research_load_ss11_lp(highs) };
-        let _ = unsafe { ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0) };
+        let _ = unsafe {
+            ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0)
+        };
         let run_status = unsafe { ffi::cobre_highs_run(highs) };
         let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
         let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
@@ -2005,9 +2003,13 @@ mod research_tests_ticket_023 {
             let highs = unsafe { ffi::cobre_highs_create() };
             assert!(!highs.is_null());
             unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
-            unsafe { ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr()) };
+            unsafe {
+                ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr())
+            };
             unsafe { research_load_larger_lp(highs) };
-            unsafe { ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0) };
+            unsafe {
+                ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0)
+            };
             unsafe { ffi::cobre_highs_run(highs) };
 
             let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };

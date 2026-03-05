@@ -1221,7 +1221,11 @@ fn test_solver_highs_solve_time_limit() {
     solver.load_model(&make_larger_lp_template());
 
     unsafe {
-        test_support::cobre_highs_set_double_option(solver.raw_handle(), c"time_limit".as_ptr(), 0.0);
+        test_support::cobre_highs_set_double_option(
+            solver.raw_handle(),
+            c"time_limit".as_ptr(),
+            0.0,
+        );
     }
 
     let result = solver.solve();
@@ -1233,7 +1237,10 @@ fn test_solver_highs_solve_time_limit() {
     }) = result
     {
         assert!(elapsed_seconds >= 0.0);
-        assert!(partial_solution.is_some(), "crash point should provide partial solution");
+        assert!(
+            partial_solution.is_some(),
+            "crash point should provide partial solution"
+        );
     }
 
     let stats = solver.statistics();
@@ -1274,7 +1281,10 @@ fn test_solver_highs_solve_iteration_limit() {
     }) = result
     {
         assert_eq!(iterations, 0, "no pivots before iteration_limit=0");
-        assert!(partial_solution.is_some(), "crash point should provide partial solution");
+        assert!(
+            partial_solution.is_some(),
+            "crash point should provide partial solution"
+        );
     }
 
     let stats = solver.statistics();
@@ -1301,7 +1311,10 @@ fn test_solver_highs_restore_defaults_after_limit() {
             0,
         );
     }
-    assert!(matches!(solver.solve(), Err(SolverError::IterationLimit { .. })));
+    assert!(matches!(
+        solver.solve(),
+        Err(SolverError::IterationLimit { .. })
+    ));
 
     // Reset and restore simplex_iteration_limit (not in restore_default_settings).
     solver.reset();
@@ -1383,3 +1396,240 @@ fn test_solver_highs_partial_solution_on_limit() {
 // controllable error injection mechanism.
 //
 // Reference: research-edge-case-lps.md §3.3 "Retry Escalation" and §8 item 3.
+
+// ─── Infeasible / unbounded ray extraction ───────────────────────────────────
+//
+// The existing infeasible and unbounded tests use trivial 0-row LPs where HiGHS
+// detects the status through bound-checking alone (no simplex). For those LPs,
+// HiGHS does not compute dual/primal rays. These tests use multi-row LPs that
+// force simplex to discover infeasibility/unboundedness, producing rays.
+
+/// SS3.3: infeasible LP with constraints — exercises `make_infeasible_error` ray path.
+///
+/// A 2-variable LP with row constraints that cannot be simultaneously satisfied:
+///   x0 + x1 >= 10   (row 0)
+///   x0 + x1 <= 5    (row 1)
+///   x0, x1 >= 0
+///
+/// `HiGHS` simplex discovers infeasibility. Whether a dual ray is available
+/// depends on the solver path taken (with presolve off, dual simplex may not
+/// compute the infeasibility certificate). This test verifies the
+/// `make_infeasible_error()` function is called and exercises both branches
+/// of the ray extraction (Some or None).
+#[test]
+fn test_solver_highs_infeasible_with_rows() {
+    // CSC: 2 cols, 2 rows, 4 non-zeros
+    // col 0: rows [0, 1] -> a_start = [0, 2, 4]
+    // col 1: rows [0, 1]
+    let infeasible_with_rows = StageTemplate {
+        num_cols: 2,
+        num_rows: 2,
+        num_nz: 4,
+        col_starts: vec![0, 2, 4],
+        row_indices: vec![0, 1, 0, 1],
+        values: vec![1.0, 1.0, 1.0, 1.0],
+        col_lower: vec![0.0, 0.0],
+        col_upper: vec![f64::INFINITY, f64::INFINITY],
+        objective: vec![1.0, 1.0],
+        row_lower: vec![10.0, f64::NEG_INFINITY],
+        row_upper: vec![f64::INFINITY, 5.0],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 2,
+        n_hydro: 0,
+        max_par_order: 0,
+    };
+
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&infeasible_with_rows);
+    let result = solver.solve();
+
+    match result {
+        Err(SolverError::Infeasible { ray }) => {
+            // If a dual ray is present, verify it is well-formed.
+            if let Some(ref ray_vals) = ray {
+                assert_eq!(ray_vals.len(), 2, "dual ray should have one entry per row");
+            }
+            // Both Some and None are valid — HiGHS may or may not provide the ray.
+        }
+        other => panic!(
+            "expected Err(SolverError::Infeasible {{ .. }}), got {:?}",
+            other.map(|s| s.objective)
+        ),
+    }
+}
+
+/// SS3.3b: infeasible LP with presolve — exercises dual ray extraction with presolve on.
+///
+/// Some `HiGHS` solver paths only provide dual rays when presolve is enabled.
+/// This test re-runs the infeasible LP with presolve=on to maximise the
+/// chance of exercising the `Some(ray_buf)` branch.
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_infeasible_with_presolve() {
+    let infeasible_with_rows = StageTemplate {
+        num_cols: 2,
+        num_rows: 2,
+        num_nz: 4,
+        col_starts: vec![0, 2, 4],
+        row_indices: vec![0, 1, 0, 1],
+        values: vec![1.0, 1.0, 1.0, 1.0],
+        col_lower: vec![0.0, 0.0],
+        col_upper: vec![f64::INFINITY, f64::INFINITY],
+        objective: vec![1.0, 1.0],
+        row_lower: vec![10.0, f64::NEG_INFINITY],
+        row_upper: vec![f64::INFINITY, 5.0],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 2,
+        n_hydro: 0,
+        max_par_order: 0,
+    };
+
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+
+    // Enable presolve — may help HiGHS compute infeasibility certificates.
+    unsafe {
+        test_support::cobre_highs_set_string_option(
+            solver.raw_handle(),
+            c"presolve".as_ptr(),
+            c"on".as_ptr(),
+        );
+    }
+
+    solver.load_model(&infeasible_with_rows);
+    let result = solver.solve();
+
+    // Accept Infeasible with or without ray.
+    assert!(
+        matches!(result, Err(SolverError::Infeasible { .. })),
+        "expected Err(SolverError::Infeasible {{ .. }}), got {:?}",
+        result.map(|s| s.objective)
+    );
+}
+
+/// SS3.4: unbounded LP with primal ray — free variable driving objective to -∞.
+///
+/// A 2-variable LP where x1 is unconstrained and drives the objective:
+///   min -x1
+///   s.t. x0 <= 10    (row 0, only constrains x0)
+///   x0 >= 0, x1 free
+///
+/// `HiGHS` simplex discovers unboundedness and provides a primal ray (direction
+/// of unbounded improvement). The `make_unbounded_error()` path extracts it.
+#[test]
+fn test_solver_highs_unbounded_with_primal_ray() {
+    // CSC: 2 cols, 1 row, 1 non-zero
+    // col 0: row [0] -> a_start = [0, 1, 1]
+    // col 1: (empty)
+    let unbounded_with_rows = StageTemplate {
+        num_cols: 2,
+        num_rows: 1,
+        num_nz: 1,
+        col_starts: vec![0, 1, 1],
+        row_indices: vec![0],
+        values: vec![1.0],
+        col_lower: vec![0.0, f64::NEG_INFINITY],
+        col_upper: vec![f64::INFINITY, f64::INFINITY],
+        objective: vec![0.0, -1.0],
+        row_lower: vec![f64::NEG_INFINITY],
+        row_upper: vec![10.0],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 1,
+        n_hydro: 0,
+        max_par_order: 0,
+    };
+
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&unbounded_with_rows);
+    let result = solver.solve();
+
+    match result {
+        Err(SolverError::Unbounded { direction }) => {
+            // HiGHS should provide a primal ray for this LP.
+            assert!(
+                direction.is_some(),
+                "expected primal ray for unbounded LP with rows"
+            );
+            let dir = direction.unwrap();
+            assert_eq!(dir.len(), 2, "primal ray should have one entry per column");
+            // The ray must be non-trivial.
+            assert!(
+                dir.iter().any(|&v| v.abs() > 1e-12),
+                "primal ray should be non-trivial"
+            );
+        }
+        other => panic!(
+            "expected Err(SolverError::Unbounded {{ direction: Some(..) }}), got {:?}",
+            other.map(|s| s.objective)
+        ),
+    }
+}
+
+/// SS3.5: unbounded-or-infeasible LP — presolve detects ambiguous status.
+///
+/// A 2-variable LP with contradictory constraints AND an unbounded free variable:
+///   min -x1
+///   s.t. x0 >= 10     (row 0)
+///        x0 <= 5      (row 1, contradicts row 0)
+///   x0 >= 0, x1 free (unbounded)
+///
+/// With presolve ON, `HiGHS` detects the contradiction during preprocessing and
+/// may report model status 9 (`UNBOUNDED_OR_INFEASIBLE`) because the presence
+/// of the free variable x1 makes the dual also infeasible. The
+/// `interpret_terminal_status()` path for status 9 attempts ray extraction.
+///
+/// If `HiGHS` reports status 8 (INFEASIBLE) instead, the test still succeeds —
+/// the ray extraction code for INFEASIBLE is exercised by the previous test.
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_unbounded_or_infeasible() {
+    // CSC: 2 cols, 2 rows, 2 non-zeros
+    // col 0: rows [0, 1] -> a_start = [0, 2, 2]
+    // col 1: (empty — free variable not in constraints)
+    let ambiguous_template = StageTemplate {
+        num_cols: 2,
+        num_rows: 2,
+        num_nz: 2,
+        col_starts: vec![0, 2, 2],
+        row_indices: vec![0, 1],
+        values: vec![1.0, 1.0],
+        col_lower: vec![0.0, f64::NEG_INFINITY],
+        col_upper: vec![f64::INFINITY, f64::INFINITY],
+        objective: vec![0.0, -1.0],
+        row_lower: vec![10.0, f64::NEG_INFINITY],
+        row_upper: vec![f64::INFINITY, 5.0],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 2,
+        n_hydro: 0,
+        max_par_order: 0,
+    };
+
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+
+    // Enable presolve to trigger UNBOUNDED_OR_INFEASIBLE detection.
+    unsafe {
+        test_support::cobre_highs_set_string_option(
+            solver.raw_handle(),
+            c"presolve".as_ptr(),
+            c"on".as_ptr(),
+        );
+    }
+
+    solver.load_model(&ambiguous_template);
+    let result = solver.solve();
+
+    // Accept either UNBOUNDED_OR_INFEASIBLE or INFEASIBLE — both are valid
+    // responses for this LP depending on the HiGHS solver path taken.
+    match &result {
+        Err(SolverError::Infeasible { .. } | SolverError::Unbounded { .. }) => {
+            // Both are acceptable outcomes.
+        }
+        other => panic!(
+            "expected Infeasible or Unbounded error, got {:?}",
+            other.as_ref().map(|s| s.objective)
+        ),
+    }
+}

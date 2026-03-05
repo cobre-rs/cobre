@@ -77,6 +77,9 @@ pub struct HighsSolver {
     num_cols: usize,
     /// Current number of LP rows (constraints), updated by `load_model` and `add_rows`.
     num_rows: usize,
+    /// Whether a model is currently loaded. Set to `true` in `load_model`,
+    /// `false` in `reset` and `new`. Guards `solve`/`get_basis` contract.
+    has_model: bool,
     /// Accumulated solver statistics. Counters grow monotonically from zero;
     /// not reset by `reset()`.
     stats: SolverStatistics,
@@ -152,6 +155,7 @@ impl HighsSolver {
             basis_row_i32: Vec::new(),
             num_cols: 0,
             num_rows: 0,
+            has_model: false,
             stats: SolverStatistics::default(),
         })
     }
@@ -372,6 +376,12 @@ impl HighsSolver {
                 c"dual_feasibility_tolerance".as_ptr(),
                 1e-7,
             );
+            ffi::cobre_highs_set_string_option(
+                self.handle,
+                c"parallel".as_ptr(),
+                c"off".as_ptr(),
+            );
+            ffi::cobre_highs_set_bool_option(self.handle, c"output_flag".as_ptr(), 0);
         }
     }
 
@@ -703,6 +713,7 @@ impl SolverInterface for HighsSolver {
 
         self.num_cols = template.num_cols;
         self.num_rows = template.num_rows;
+        self.has_model = true;
 
         // Resize solution extraction buffers to match the new LP dimensions.
         // Zero-fill is fine; these are overwritten in full by `cobre_highs_get_solution`.
@@ -806,6 +817,11 @@ impl SolverInterface for HighsSolver {
             return;
         }
 
+        assert!(
+            i32::try_from(indices.len()).is_ok(),
+            "set_row_bounds: indices.len() {} overflows i32",
+            indices.len()
+        );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = indices.len() as i32;
 
@@ -844,6 +860,11 @@ impl SolverInterface for HighsSolver {
             return;
         }
 
+        assert!(
+            i32::try_from(indices.len()).is_ok(),
+            "set_col_bounds: indices.len() {} overflows i32",
+            indices.len()
+        );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = indices.len() as i32;
 
@@ -871,6 +892,7 @@ impl SolverInterface for HighsSolver {
 
     #[allow(clippy::too_many_lines)]
     fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        assert!(self.has_model, "solve called without a loaded model — call load_model first");
         let t0 = Instant::now();
         let model_status = self.run_once();
         let solve_time = t0.elapsed().as_secs_f64();
@@ -1061,11 +1083,13 @@ impl SolverInterface for HighsSolver {
         // Force `load_model` to be called before the next solve.
         self.num_cols = 0;
         self.num_rows = 0;
+        self.has_model = false;
         // Intentionally do NOT zero `self.stats` -- statistics accumulate for the
         // lifetime of the instance (per trait contract, SS4.3).
     }
 
     fn get_basis(&self) -> Basis {
+        assert!(self.has_model, "get_basis called without a loaded model — call load_model first");
         // Reuse the pre-allocated i32 buffers as output targets.
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.

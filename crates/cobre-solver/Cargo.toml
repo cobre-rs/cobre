@@ -15,6 +15,9 @@ categories = ["science", "mathematics"]
 [features]
 default = ["highs"]
 highs = []
+# Exposes FFI option-setting helpers for integration tests.
+# Must NOT be enabled in production builds.
+test-support = ["highs"]
 
 # Override unsafe_code to "allow" for this crate because FFI bindings to HiGHS
 # require unsafe blocks. All other workspace lints are manually replicated here

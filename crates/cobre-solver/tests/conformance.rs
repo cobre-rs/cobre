@@ -6,10 +6,19 @@
 //! tests cannot access `#[cfg(test)]` module internals.
 #![cfg_attr(
     test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::float_cmp,
+        clippy::too_many_lines,
+        clippy::panic
+    )
 )]
 
-use cobre_solver::{HighsSolver, RowBatch, SolverInterface, StageTemplate};
+use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate};
+
+#[cfg(feature = "test-support")]
+use cobre_solver::test_support;
 
 // ─── SS1.1 Shared LP fixture ─────────────────────────────────────────────────
 //
@@ -1140,3 +1149,237 @@ fn test_solver_highs_solve_unbounded() {
         stats.success_count
     );
 }
+
+// ─── Edge case: time and iteration limits ─────────────────────────────────────
+//
+// These tests exercise the time-limit and iteration-limit branches in `highs.rs`
+// lines 504-521 and the `try_extract_partial_solution` function (lines 312-348),
+// which are never reached by tests that only use perfectly solvable LPs.
+//
+// The SS1.1 fixture (3 vars, 2 constraints) is too small to trigger these limits:
+// HiGHS's crash heuristic produces an optimal starting point without entering the
+// simplex loop, so per-iteration and per-second checks never fire. A larger LP
+// is required (see research doc: plans/phase-3-solver/epic-08-coverage/research-edge-case-lps.md).
+//
+// ─── Larger LP fixture (5 vars, 4 constraints) ───────────────────────────────
+//
+//   Minimize:   x0 + x1 + x2 + x3 + x4
+//   Subject to:
+//     x0 + x1           >= 10  (row 0)
+//          x1 + x2      >= 8   (row 1)
+//               x2 + x3 >= 6   (row 2)
+//                    x3 + x4 >= 4  (row 3)
+//   0 <= xi <= 100, i = 0..4
+//
+// This LP cannot be solved at the crash point (all xi=0); it requires at least
+// 4 simplex pivots. The chained structure means presolve cannot reduce it to
+// a trivially optimal form in a single pass. This makes it reliable for
+// triggering both TIME_LIMIT (time_limit=0.0) and ITERATION_LIMIT
+// (presolve="off", simplex_iteration_limit=0).
+//
+// CSC format (column-wise sparse):
+//   col_starts  = [0, 1, 3, 5, 7, 8]       len = num_cols + 1 = 6
+//   row_indices = [0, 0, 1, 1, 2, 2, 3, 3] len = num_nz = 8
+//   values      = [1.0; 8]                 len = num_nz = 8
+//
+// StageTemplate fields n_state, n_transfer, n_dual_relevant, n_hydro, max_par_order
+// are set to 0/1 as needed to satisfy the struct; they do not affect LP solving.
+
+/// Constructs the "larger LP" fixture used for time/iteration limit tests.
+///
+/// 5 variables, 4 chained >= constraints, all coefficients 1.0.
+/// Cannot be solved at the crash point; requires >= 4 simplex pivots.
+fn make_larger_lp_template() -> StageTemplate {
+    StageTemplate {
+        num_cols: 5,
+        num_rows: 4,
+        num_nz: 8,
+        col_starts: vec![0, 1, 3, 5, 7, 8],
+        row_indices: vec![0, 0, 1, 1, 2, 2, 3, 3],
+        values: vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        col_lower: vec![0.0, 0.0, 0.0, 0.0, 0.0],
+        col_upper: vec![100.0, 100.0, 100.0, 100.0, 100.0],
+        objective: vec![1.0, 1.0, 1.0, 1.0, 1.0],
+        row_lower: vec![10.0, 8.0, 6.0, 4.0],
+        row_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::INFINITY],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 1,
+        n_hydro: 0,
+        max_par_order: 0,
+    }
+}
+
+/// SS limit row 1: `time_limit=0.0` triggers `TimeLimitExceeded` with partial solution.
+///
+/// Crash heuristic completes before the time check fires, populating solution buffers
+/// with the crash-point values (all xi=0, objective=0.0).
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_solve_time_limit() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&make_larger_lp_template());
+
+    unsafe {
+        test_support::cobre_highs_set_double_option(solver.raw_handle(), c"time_limit".as_ptr(), 0.0);
+    }
+
+    let result = solver.solve();
+    assert!(matches!(result, Err(SolverError::TimeLimitExceeded { .. })));
+
+    if let Err(SolverError::TimeLimitExceeded {
+        elapsed_seconds,
+        partial_solution,
+    }) = result
+    {
+        assert!(elapsed_seconds >= 0.0);
+        assert!(partial_solution.is_some(), "crash point should provide partial solution");
+    }
+
+    let stats = solver.statistics();
+    assert_eq!(stats.solve_count, 1);
+    assert_eq!(stats.failure_count, 1);
+    assert_eq!(stats.success_count, 0);
+}
+
+/// SS limit row 2: `simplex_iteration_limit=0` triggers `IterationLimit` with presolve="off".
+///
+/// Crash heuristic completes before iteration check, providing crash-point solution.
+/// Presolve disabled to prevent trivial pre-simplex solution.
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_solve_iteration_limit() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&make_larger_lp_template());
+
+    unsafe {
+        test_support::cobre_highs_set_string_option(
+            solver.raw_handle(),
+            c"presolve".as_ptr(),
+            c"off".as_ptr(),
+        );
+        test_support::cobre_highs_set_int_option(
+            solver.raw_handle(),
+            c"simplex_iteration_limit".as_ptr(),
+            0,
+        );
+    }
+
+    let result = solver.solve();
+    assert!(matches!(result, Err(SolverError::IterationLimit { .. })));
+
+    if let Err(SolverError::IterationLimit {
+        iterations,
+        partial_solution,
+    }) = result
+    {
+        assert_eq!(iterations, 0, "no pivots before iteration_limit=0");
+        assert!(partial_solution.is_some(), "crash point should provide partial solution");
+    }
+
+    let stats = solver.statistics();
+    assert_eq!(stats.solve_count, 1);
+    assert_eq!(stats.failure_count, 1);
+    assert_eq!(stats.success_count, 0);
+}
+
+/// SS limit row 3: after limit error, reset and restore options allow clean solve.
+///
+/// Verifies that `restore_default_settings` (called inside retry loop) and manual
+/// cleanup of non-default options (e.g., `simplex_iteration_limit`) allow recovery.
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_restore_defaults_after_limit() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+
+    // Trigger ITERATION_LIMIT on the larger LP.
+    solver.load_model(&make_larger_lp_template());
+    unsafe {
+        test_support::cobre_highs_set_int_option(
+            solver.raw_handle(),
+            c"simplex_iteration_limit".as_ptr(),
+            0,
+        );
+    }
+    assert!(matches!(solver.solve(), Err(SolverError::IterationLimit { .. })));
+
+    // Reset and restore simplex_iteration_limit (not in restore_default_settings).
+    solver.reset();
+    unsafe {
+        test_support::cobre_highs_set_int_option(
+            solver.raw_handle(),
+            c"simplex_iteration_limit".as_ptr(),
+            i32::MAX,
+        );
+    }
+
+    // Reload SS1.1 and solve cleanly.
+    solver.load_model(&make_fixture_stage_template());
+    let solution = solver.solve().expect("solve() must succeed after restore");
+    assert!((solution.objective - 100.0).abs() < 1e-8);
+
+    let stats = solver.statistics();
+    assert!(stats.solve_count >= 2);
+    assert!(stats.failure_count >= 1);
+    assert!(stats.success_count >= 1);
+}
+
+/// SS limit row 4: partial solution extraction after iteration limit.
+///
+/// Verifies that `try_extract_partial_solution` returns a finite objective and
+/// properly-sized primal/dual vectors (reflecting the crash-point solution).
+#[cfg(feature = "test-support")]
+#[test]
+fn test_solver_highs_partial_solution_on_limit() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&make_larger_lp_template());
+
+    unsafe {
+        test_support::cobre_highs_set_int_option(
+            solver.raw_handle(),
+            c"simplex_iteration_limit".as_ptr(),
+            0,
+        );
+    }
+
+    let partial = match solver.solve() {
+        Err(SolverError::IterationLimit {
+            partial_solution, ..
+        }) => partial_solution,
+        other => panic!("expected IterationLimit, got {other:?}"),
+    };
+
+    let sol = partial.expect("partial_solution should be Some after ITERATION_LIMIT");
+    assert!(sol.objective.is_finite());
+    assert_eq!(sol.primal.len(), 5);
+    assert_eq!(sol.dual.len(), 4);
+}
+
+// ─── Retry escalation note ────────────────────────────────────────────────────
+//
+// The 5-level retry escalation loop in `highs.rs` lines 920-1006 is entered
+// only when `run_once()` returns `HIGHS_MODEL_STATUS_SOLVE_ERROR` (4) or
+// `HIGHS_MODEL_STATUS_UNKNOWN` (15). These statuses are NOT triggered by any
+// pure LP formulation reliably across platforms:
+//
+// - SOLVE_ERROR requires `cobre_highs_run` to return `HIGHS_STATUS_ERROR` (-1),
+//   which only happens for semi-continuous/semi-integer variables (not supported
+//   by cobre-solver's LP-only interface) or LPs with HiGHS-internal-infinity
+//   cost coefficients (not representable as IEEE 754 doubles).
+// - UNKNOWN requires IPM crossover failure on a degenerate LP, which is
+//   platform- and version-dependent.
+//
+// A mock-based test would require either:
+//   a) Making `run_once` replaceable (trait object or function pointer), which
+//      changes the production code structure; or
+//   b) Injecting invalid model data through `unsafe` code, which violates the
+//      workspace `unsafe_code = "forbid"` lint.
+//
+// Neither approach is acceptable without explicit user approval. The retry loop
+// and `restore_default_settings` are therefore covered indirectly:
+// `restore_default_settings` is exercised by `test_solver_highs_restore_defaults_after_limit`
+// (which verifies that cleanup after a limit error allows a subsequent optimal solve),
+// and the retry loop's coverage is deferred to a future ticket that adds a
+// controllable error injection mechanism.
+//
+// Reference: research-edge-case-lps.md §3.3 "Retry Escalation" and §8 item 3.

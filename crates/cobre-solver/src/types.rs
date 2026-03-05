@@ -648,6 +648,189 @@ mod tests {
     }
 
     #[test]
+    fn test_solver_error_display_all_branches() {
+        let partial = LpSolution {
+            objective: 42.0,
+            primal: vec![1.0],
+            dual: vec![2.0],
+            reduced_costs: vec![3.0],
+            iterations: 5,
+            solve_time_seconds: 0.1,
+        };
+
+        let cases = vec![
+            (
+                "Infeasible/None",
+                SolverError::Infeasible { ray: None },
+                "infeasible",
+                false,
+            ),
+            (
+                "Infeasible/Some",
+                SolverError::Infeasible {
+                    ray: Some(vec![1.0, 0.0]),
+                },
+                "infeasibility ray available",
+                true,
+            ),
+            (
+                "Unbounded/None",
+                SolverError::Unbounded { direction: None },
+                "unbounded",
+                false,
+            ),
+            (
+                "Unbounded/Some",
+                SolverError::Unbounded {
+                    direction: Some(vec![0.0, 1.0]),
+                },
+                "unbounded direction available",
+                true,
+            ),
+            (
+                "NumericalDifficulty/None",
+                SolverError::NumericalDifficulty {
+                    partial_solution: None,
+                    message: "singular matrix".to_string(),
+                },
+                "no partial solution",
+                true,
+            ),
+            (
+                "NumericalDifficulty/Some",
+                SolverError::NumericalDifficulty {
+                    partial_solution: Some(partial.clone()),
+                    message: "factorization failed".to_string(),
+                },
+                "partial solution available",
+                true,
+            ),
+            (
+                "TimeLimitExceeded/None",
+                SolverError::TimeLimitExceeded {
+                    partial_solution: None,
+                    elapsed_seconds: 60.0,
+                },
+                "no partial solution",
+                true,
+            ),
+            (
+                "TimeLimitExceeded/Some",
+                SolverError::TimeLimitExceeded {
+                    partial_solution: Some(partial.clone()),
+                    elapsed_seconds: 120.0,
+                },
+                "partial solution available",
+                true,
+            ),
+            (
+                "IterationLimit/None",
+                SolverError::IterationLimit {
+                    partial_solution: None,
+                    iterations: 10_000,
+                },
+                "no partial solution",
+                true,
+            ),
+            (
+                "IterationLimit/Some",
+                SolverError::IterationLimit {
+                    partial_solution: Some(partial.clone()),
+                    iterations: 50_000,
+                },
+                "partial solution available",
+                true,
+            ),
+            (
+                "InternalError/None",
+                SolverError::InternalError {
+                    message: "unknown failure".to_string(),
+                    error_code: None,
+                },
+                "unknown failure",
+                false,
+            ),
+            (
+                "InternalError/Some",
+                SolverError::InternalError {
+                    message: "segfault in HiGHS".to_string(),
+                    error_code: Some(-1),
+                },
+                "code -1",
+                true,
+            ),
+        ];
+
+        for (name, err, expected_text, _) in cases {
+            let msg = format!("{err}");
+            assert!(!msg.is_empty(), "{name} must be non-empty: {msg}");
+            assert!(
+                msg.contains(expected_text),
+                "{name} must contain '{expected_text}': {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_solver_error_is_std_error_all_variants() {
+        let partial = LpSolution {
+            objective: 0.0,
+            primal: vec![],
+            dual: vec![],
+            reduced_costs: vec![],
+            iterations: 0,
+            solve_time_seconds: 0.0,
+        };
+
+        let errors: Vec<SolverError> = vec![
+            SolverError::Infeasible { ray: None },
+            SolverError::Infeasible {
+                ray: Some(vec![1.0]),
+            },
+            SolverError::Unbounded { direction: None },
+            SolverError::Unbounded {
+                direction: Some(vec![1.0]),
+            },
+            SolverError::NumericalDifficulty {
+                partial_solution: None,
+                message: "test".to_string(),
+            },
+            SolverError::NumericalDifficulty {
+                partial_solution: Some(partial.clone()),
+                message: "test".to_string(),
+            },
+            SolverError::TimeLimitExceeded {
+                partial_solution: None,
+                elapsed_seconds: 1.0,
+            },
+            SolverError::TimeLimitExceeded {
+                partial_solution: Some(partial.clone()),
+                elapsed_seconds: 1.0,
+            },
+            SolverError::IterationLimit {
+                partial_solution: None,
+                iterations: 1,
+            },
+            SolverError::IterationLimit {
+                partial_solution: Some(partial),
+                iterations: 1,
+            },
+            SolverError::InternalError {
+                message: "test".to_string(),
+                error_code: None,
+            },
+            SolverError::InternalError {
+                message: "test".to_string(),
+                error_code: Some(-1),
+            },
+        ];
+
+        for err in &errors {
+            let _: &dyn std::error::Error = err;
+        }
+    }
+
+    #[test]
     fn test_row_batch_construction() {
         // Benders cut fixture from Solver Interface Testing SS1.2:
         // Cut 1: -5*x0 + x1 >= 20  (col_indices [0,1], values [-5, 1])

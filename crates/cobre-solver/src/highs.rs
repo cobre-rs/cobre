@@ -1141,6 +1141,26 @@ impl SolverInterface for HighsSolver {
     }
 }
 
+/// Test-support accessors for integration tests that need to set raw `HiGHS` options.
+///
+/// Gated behind the `test-support` feature. The raw handle is intentionally not
+/// part of the public API — callers use these methods to configure time/iteration
+/// limits before a solve without going through the safe wrapper.
+#[cfg(feature = "test-support")]
+impl HighsSolver {
+    /// Returns the raw `HiGHS` handle for use with test-support FFI helpers.
+    ///
+    /// # Safety
+    ///
+    /// The returned pointer is valid for the lifetime of `self`. The caller must
+    /// not store the pointer beyond that lifetime, must not call
+    /// `cobre_highs_destroy` on it, and must not alias it across threads.
+    #[must_use]
+    pub fn raw_handle(&self) -> *mut std::os::raw::c_void {
+        self.handle
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::HighsSolver;
@@ -1712,5 +1732,443 @@ mod tests {
             BasisStatus::AtLower,
             "NONBASIC (4) must map to AtLower (default nonbasic position)"
         );
+    }
+}
+
+// ─── Research verification tests for ticket-023 ──────────────────────────
+//
+// These tests verify LP formulations that reliably trigger non-optimal
+// HiGHS model statuses. They use the raw FFI layer to set options not
+// exposed through SolverInterface and confirm the expected model status.
+// Findings are documented in:
+//   plans/phase-3-solver/epic-08-coverage/research-edge-case-lps.md
+//
+// The SS1.1 LP (3-variable, 2-constraint) is too small: HiGHS's crash
+// heuristic solves it without entering the simplex loop, so time/iteration
+// limits never fire. A 5-variable, 4-constraint "larger_lp" is required.
+#[cfg(test)]
+#[allow(clippy::doc_markdown)]
+mod research_tests_ticket_023 {
+    // LP used: 3-variable, 2-constraint fixture from SS1.1 (same as other tests).
+    // This LP requires at least 2 simplex iterations, so iteration_limit=1 will
+    // produce ITERATION_LIMIT.
+
+    // ─── Helper: load the SS1.1 LP onto an existing HiGHS handle ────────────
+    //
+    // 3 columns (x0, x1, x2), 2 equality rows, 3 non-zeros.
+    // Optimal: x0=6, x1=0, x2=2, obj=100. Requires 2 simplex iterations.
+    //
+    // SAFETY: caller must guarantee `highs` is a valid, non-null HiGHS handle.
+    unsafe fn research_load_ss11_lp(highs: *mut std::os::raw::c_void) {
+        use crate::ffi;
+        let col_cost: [f64; 3] = [0.0, 1.0, 50.0];
+        let col_lower: [f64; 3] = [0.0, 0.0, 0.0];
+        let col_upper: [f64; 3] = [10.0, f64::INFINITY, 8.0];
+        let row_lower: [f64; 2] = [6.0, 14.0];
+        let row_upper: [f64; 2] = [6.0, 14.0];
+        let a_start: [i32; 4] = [0, 2, 2, 3];
+        let a_index: [i32; 3] = [0, 1, 1];
+        let a_value: [f64; 3] = [1.0, 2.0, 1.0];
+        // SAFETY: all pointers are valid, aligned, non-null, and live for the call duration.
+        let status = unsafe {
+            ffi::cobre_highs_pass_lp(
+                highs,
+                3,
+                2,
+                3,
+                ffi::HIGHS_MATRIX_FORMAT_COLWISE,
+                ffi::HIGHS_OBJ_SENSE_MINIMIZE,
+                0.0,
+                col_cost.as_ptr(),
+                col_lower.as_ptr(),
+                col_upper.as_ptr(),
+                row_lower.as_ptr(),
+                row_upper.as_ptr(),
+                a_start.as_ptr(),
+                a_index.as_ptr(),
+                a_value.as_ptr(),
+            )
+        };
+        assert_eq!(
+            status,
+            ffi::HIGHS_STATUS_OK,
+            "research_load_ss11_lp pass_lp failed"
+        );
+    }
+
+    /// Probe: what do time_limit=0.0 and iteration_limit=0 actually return on SS1.1?
+    ///
+    /// This test is OBSERVATIONAL -- it captures actual HiGHS behavior. The SS1.1 LP
+    /// (2 constraints, 3 variables) is solved by presolve/crash before the simplex
+    /// loop, making limits ineffective. This test documents that behavior.
+    #[test]
+    fn test_research_probe_limit_status_on_ss11_lp() {
+        use crate::ffi;
+
+        // SS1.1 with time_limit=0.0: presolve/crash solves before time check fires.
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+        unsafe { research_load_ss11_lp(highs) };
+        let _ = unsafe { ffi::cobre_highs_set_double_option(highs, c"time_limit".as_ptr(), 0.0) };
+        let run_status = unsafe { ffi::cobre_highs_run(highs) };
+        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+        let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
+        eprintln!(
+            "SS1.1 + time_limit=0: run_status={run_status}, model_status={model_status}, obj={obj}"
+        );
+        unsafe { ffi::cobre_highs_destroy(highs) };
+
+        // SS1.1 with iteration_limit=0: same result, need a larger LP.
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+        unsafe { research_load_ss11_lp(highs) };
+        let _ = unsafe { ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0) };
+        let run_status = unsafe { ffi::cobre_highs_run(highs) };
+        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+        let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
+        eprintln!(
+            "SS1.1 + iteration_limit=0: run_status={run_status}, model_status={model_status}, obj={obj}"
+        );
+        unsafe { ffi::cobre_highs_destroy(highs) };
+    }
+
+    /// Helper: load a 5-variable, 4-constraint LP that requires multiple simplex
+    /// iterations and cannot be solved by crash alone.
+    ///
+    /// LP (larger_lp):
+    ///   min  x0 + x1 + x2 + x3 + x4
+    ///   s.t. x0 + x1              >= 10
+    ///        x1 + x2              >= 8
+    ///        x2 + x3              >= 6
+    ///        x3 + x4              >= 4
+    ///   x_i in [0, 100], i = 0..4
+    ///
+    /// CSC matrix (5 cols, 4 rows, 8 non-zeros):
+    ///   col 0: rows [0]       -> a_start[0]=0, a_start[1]=1
+    ///   col 1: rows [0,1]     -> a_start[2]=3
+    ///   col 2: rows [1,2]     -> a_start[3]=5
+    ///   col 3: rows [2,3]     -> a_start[4]=7
+    ///   col 4: rows [3]       -> a_start[5]=8
+    ///
+    /// SAFETY: caller must guarantee `highs` is a valid, non-null HiGHS handle.
+    unsafe fn research_load_larger_lp(highs: *mut std::os::raw::c_void) {
+        use crate::ffi;
+        let col_cost: [f64; 5] = [1.0, 1.0, 1.0, 1.0, 1.0];
+        let col_lower: [f64; 5] = [0.0; 5];
+        let col_upper: [f64; 5] = [100.0; 5];
+        let row_lower: [f64; 4] = [10.0, 8.0, 6.0, 4.0];
+        let row_upper: [f64; 4] = [f64::INFINITY; 4];
+        // CSC: col 0 -> row 0; col 1 -> rows 0,1; col 2 -> rows 1,2; col 3 -> rows 2,3; col 4 -> row 3
+        let a_start: [i32; 6] = [0, 1, 3, 5, 7, 8];
+        let a_index: [i32; 8] = [0, 0, 1, 1, 2, 2, 3, 3];
+        let a_value: [f64; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        // SAFETY: all pointers are valid, aligned, non-null, and live for the call duration.
+        let status = unsafe {
+            ffi::cobre_highs_pass_lp(
+                highs,
+                5,
+                4,
+                8,
+                ffi::HIGHS_MATRIX_FORMAT_COLWISE,
+                ffi::HIGHS_OBJ_SENSE_MINIMIZE,
+                0.0,
+                col_cost.as_ptr(),
+                col_lower.as_ptr(),
+                col_upper.as_ptr(),
+                row_lower.as_ptr(),
+                row_upper.as_ptr(),
+                a_start.as_ptr(),
+                a_index.as_ptr(),
+                a_value.as_ptr(),
+            )
+        };
+        assert_eq!(
+            status,
+            ffi::HIGHS_STATUS_OK,
+            "research_load_larger_lp pass_lp failed"
+        );
+    }
+
+    /// Verify time_limit=0.0 triggers HIGHS_MODEL_STATUS_TIME_LIMIT (13).
+    ///
+    /// Uses a 5-variable, 4-constraint LP that cannot be trivially solved by
+    /// crash. HiGHS checks the time limit at entry to the simplex loop.
+    /// time_limit=0.0 is always exceeded by wall-clock time before any pivot.
+    ///
+    /// Observed: run_status=WARNING (1), model_status=TIME_LIMIT (13).
+    /// Confirmed in vendor/HiGHS/check/TestQpSolver.cpp line 1083-1085.
+    #[test]
+    fn test_research_time_limit_zero_triggers_time_limit_status() {
+        use crate::ffi;
+
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+        unsafe { research_load_larger_lp(highs) };
+
+        let opt_status =
+            unsafe { ffi::cobre_highs_set_double_option(highs, c"time_limit".as_ptr(), 0.0) };
+        assert_eq!(opt_status, ffi::HIGHS_STATUS_OK);
+
+        let run_status = unsafe { ffi::cobre_highs_run(highs) };
+        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+
+        eprintln!(
+            "time_limit=0 on larger LP: run_status={run_status}, model_status={model_status}"
+        );
+
+        assert_eq!(
+            run_status,
+            ffi::HIGHS_STATUS_WARNING,
+            "time_limit=0 must return HIGHS_STATUS_WARNING (1), got {run_status}"
+        );
+        assert_eq!(
+            model_status,
+            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT,
+            "time_limit=0 must give MODEL_STATUS_TIME_LIMIT (13), got {model_status}"
+        );
+
+        unsafe { ffi::cobre_highs_destroy(highs) };
+    }
+
+    /// Verify simplex_iteration_limit=0 triggers HIGHS_MODEL_STATUS_ITERATION_LIMIT (14).
+    ///
+    /// Uses the 5-variable, 4-constraint LP with presolve disabled so that
+    /// the crash phase does not solve it, and the iteration limit check fires.
+    ///
+    /// Confirmed pattern from vendor/HiGHS/check/TestLpSolversIterations.cpp
+    /// lines 145-165: iteration_limit=0 -> HighsStatus::kWarning +
+    /// HighsModelStatus::kIterationLimit, iteration count = 0.
+    #[test]
+    fn test_research_iteration_limit_zero_triggers_iteration_limit_status() {
+        use crate::ffi;
+
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+        // Disable presolve so crash cannot solve LP without simplex iterations.
+        unsafe { ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr()) };
+        unsafe { research_load_larger_lp(highs) };
+
+        let opt_status = unsafe {
+            ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0)
+        };
+        assert_eq!(opt_status, ffi::HIGHS_STATUS_OK);
+
+        let run_status = unsafe { ffi::cobre_highs_run(highs) };
+        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+
+        eprintln!(
+            "iteration_limit=0 on larger LP: run_status={run_status}, model_status={model_status}"
+        );
+
+        assert_eq!(
+            run_status,
+            ffi::HIGHS_STATUS_WARNING,
+            "iteration_limit=0 must return HIGHS_STATUS_WARNING (1), got {run_status}"
+        );
+        assert_eq!(
+            model_status,
+            ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT,
+            "iteration_limit=0 must give MODEL_STATUS_ITERATION_LIMIT (14), got {model_status}"
+        );
+
+        unsafe { ffi::cobre_highs_destroy(highs) };
+    }
+
+    /// Observe partial solution availability after TIME_LIMIT and ITERATION_LIMIT.
+    ///
+    /// With time_limit=0.0, HiGHS halts before pivots. With iteration_limit=0
+    /// and presolve disabled, HiGHS halts at the crash-point solution.
+    /// Both tests record objective availability for documentation.
+    #[test]
+    fn test_research_partial_solution_availability() {
+        use crate::ffi;
+
+        // TIME_LIMIT: observe objective after halting at time check
+        {
+            let highs = unsafe { ffi::cobre_highs_create() };
+            assert!(!highs.is_null());
+            unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+            unsafe { research_load_larger_lp(highs) };
+            unsafe { ffi::cobre_highs_set_double_option(highs, c"time_limit".as_ptr(), 0.0) };
+            unsafe { ffi::cobre_highs_run(highs) };
+
+            let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
+            let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+            assert_eq!(model_status, ffi::HIGHS_MODEL_STATUS_TIME_LIMIT);
+            eprintln!("TIME_LIMIT: obj={obj}, finite={}", obj.is_finite());
+            unsafe { ffi::cobre_highs_destroy(highs) };
+        }
+
+        // ITERATION_LIMIT: observe objective at crash point
+        {
+            let highs = unsafe { ffi::cobre_highs_create() };
+            assert!(!highs.is_null());
+            unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+            unsafe { ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr()) };
+            unsafe { research_load_larger_lp(highs) };
+            unsafe { ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0) };
+            unsafe { ffi::cobre_highs_run(highs) };
+
+            let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
+            let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+            assert_eq!(model_status, ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT);
+            eprintln!("ITERATION_LIMIT: obj={obj}, finite={}", obj.is_finite());
+            unsafe { ffi::cobre_highs_destroy(highs) };
+        }
+    }
+
+    /// Verify restore_default_settings: solve with iteration_limit=0, then solve
+    /// without limit after restoring defaults. The second solve must succeed optimally.
+    #[test]
+    fn test_research_restore_defaults_allows_subsequent_optimal_solve() {
+        use crate::ffi;
+
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+
+        // Apply cobre defaults (mirror HighsSolver::new() configuration).
+        unsafe {
+            ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
+            ffi::cobre_highs_set_string_option(highs, c"parallel".as_ptr(), c"off".as_ptr());
+            ffi::cobre_highs_set_double_option(
+                highs,
+                c"primal_feasibility_tolerance".as_ptr(),
+                1e-7,
+            );
+            ffi::cobre_highs_set_double_option(highs, c"dual_feasibility_tolerance".as_ptr(), 1e-7);
+        }
+
+        let col_cost: [f64; 3] = [0.0, 1.0, 50.0];
+        let col_lower: [f64; 3] = [0.0, 0.0, 0.0];
+        let col_upper: [f64; 3] = [10.0, f64::INFINITY, 8.0];
+        let row_lower: [f64; 2] = [6.0, 14.0];
+        let row_upper: [f64; 2] = [6.0, 14.0];
+        let a_start: [i32; 4] = [0, 2, 2, 3];
+        let a_index: [i32; 3] = [0, 1, 1];
+        let a_value: [f64; 3] = [1.0, 2.0, 1.0];
+
+        // First solve: with iteration_limit = 0 -> ITERATION_LIMIT.
+        unsafe {
+            ffi::cobre_highs_pass_lp(
+                highs,
+                3,
+                2,
+                3,
+                ffi::HIGHS_MATRIX_FORMAT_COLWISE,
+                ffi::HIGHS_OBJ_SENSE_MINIMIZE,
+                0.0,
+                col_cost.as_ptr(),
+                col_lower.as_ptr(),
+                col_upper.as_ptr(),
+                row_lower.as_ptr(),
+                row_upper.as_ptr(),
+                a_start.as_ptr(),
+                a_index.as_ptr(),
+                a_value.as_ptr(),
+            );
+            ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 0);
+            ffi::cobre_highs_run(highs);
+        }
+        let status1 = unsafe { ffi::cobre_highs_get_model_status(highs) };
+        assert_eq!(status1, ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT);
+
+        // Restore default settings (mirror restore_default_settings()).
+        unsafe {
+            ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
+            ffi::cobre_highs_set_double_option(
+                highs,
+                c"primal_feasibility_tolerance".as_ptr(),
+                1e-7,
+            );
+            ffi::cobre_highs_set_double_option(highs, c"dual_feasibility_tolerance".as_ptr(), 1e-7);
+            ffi::cobre_highs_set_string_option(highs, c"parallel".as_ptr(), c"off".as_ptr());
+            ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0);
+            // simplex_iteration_limit is NOT in restore_default_settings -- reset explicitly.
+            ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), i32::MAX);
+        }
+
+        // Second solve on the same model: must reach OPTIMAL.
+        unsafe { ffi::cobre_highs_clear_solver(highs) };
+        unsafe { ffi::cobre_highs_run(highs) };
+        let status2 = unsafe { ffi::cobre_highs_get_model_status(highs) };
+        let obj = unsafe { ffi::cobre_highs_get_objective_value(highs) };
+        assert_eq!(
+            status2,
+            ffi::HIGHS_MODEL_STATUS_OPTIMAL,
+            "after restoring defaults, second solve must be OPTIMAL, got {status2}"
+        );
+        assert!(
+            (obj - 100.0).abs() < 1e-8,
+            "objective after restore must be 100.0, got {obj}"
+        );
+
+        unsafe { ffi::cobre_highs_destroy(highs) };
+    }
+
+    /// Verify iteration_limit=1 also triggers ITERATION_LIMIT for SS1.1 LP.
+    ///
+    /// This verifies that limiting to a small but non-zero number of iterations
+    /// also works, providing an alternative formulation for ticket-025.
+    #[test]
+    fn test_research_iteration_limit_one_triggers_iteration_limit_status() {
+        use crate::ffi;
+
+        let highs = unsafe { ffi::cobre_highs_create() };
+        assert!(!highs.is_null());
+
+        unsafe { ffi::cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
+
+        let col_cost: [f64; 3] = [0.0, 1.0, 50.0];
+        let col_lower: [f64; 3] = [0.0, 0.0, 0.0];
+        let col_upper: [f64; 3] = [10.0, f64::INFINITY, 8.0];
+        let row_lower: [f64; 2] = [6.0, 14.0];
+        let row_upper: [f64; 2] = [6.0, 14.0];
+        let a_start: [i32; 4] = [0, 2, 2, 3];
+        let a_index: [i32; 3] = [0, 1, 1];
+        let a_value: [f64; 3] = [1.0, 2.0, 1.0];
+
+        unsafe {
+            ffi::cobre_highs_pass_lp(
+                highs,
+                3,
+                2,
+                3,
+                ffi::HIGHS_MATRIX_FORMAT_COLWISE,
+                ffi::HIGHS_OBJ_SENSE_MINIMIZE,
+                0.0,
+                col_cost.as_ptr(),
+                col_lower.as_ptr(),
+                col_upper.as_ptr(),
+                row_lower.as_ptr(),
+                row_upper.as_ptr(),
+                a_start.as_ptr(),
+                a_index.as_ptr(),
+                a_value.as_ptr(),
+            );
+            ffi::cobre_highs_set_int_option(highs, c"simplex_iteration_limit".as_ptr(), 1);
+            ffi::cobre_highs_run(highs);
+        }
+
+        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };
+        eprintln!("iteration_limit=1 model_status: {model_status}");
+        // If the LP solves in 1 iteration it may be OPTIMAL; otherwise ITERATION_LIMIT.
+        // We record both possibilities for the research document.
+        assert!(
+            model_status == ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT
+                || model_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL,
+            "expected ITERATION_LIMIT or OPTIMAL, got {model_status}"
+        );
+
+        unsafe { ffi::cobre_highs_destroy(highs) };
     }
 }

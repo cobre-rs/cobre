@@ -439,4 +439,60 @@ mod tests {
         assert!(basis.col_status.is_empty());
         assert!(basis.row_status.is_empty());
     }
+
+    #[test]
+    fn test_noop_solver_all_methods() {
+        use crate::types::{Basis, RowBatch, SolverError, StageTemplate};
+
+        let template = StageTemplate {
+            num_cols: 1,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![0, 0],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![0.0],
+            col_upper: vec![1.0],
+            objective: vec![1.0],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+        };
+
+        let batch = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+
+        let basis = Basis {
+            col_status: vec![],
+            row_status: vec![],
+        };
+
+        let mut solver = NoopSolver;
+        solver.load_model(&template);
+        solver.add_rows(&batch);
+        solver.set_row_bounds(&[], &[], &[]);
+        solver.set_col_bounds(&[], &[], &[]);
+
+        // Both solve and solve_with_basis return InternalError for NoopSolver.
+        assert!(matches!(
+            solver.solve(),
+            Err(SolverError::InternalError { .. })
+        ));
+        assert!(matches!(
+            solver.solve_with_basis(&basis),
+            Err(SolverError::InternalError { .. })
+        ));
+
+        solver.reset();
+    }
 }

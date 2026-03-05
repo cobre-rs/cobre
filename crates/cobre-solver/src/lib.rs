@@ -49,3 +49,15 @@ pub use types::{
 pub mod highs;
 #[cfg(feature = "highs")]
 pub use highs::HighsSolver;
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    //! Test-only utilities for configuring solver options from integration tests.
+    //!
+    //! Do **not** enable this feature in production builds. The re-exported functions
+    //! call into the `HiGHS` C API directly and bypass all safe-wrapper validation.
+
+    pub use crate::ffi::{
+        cobre_highs_set_double_option, cobre_highs_set_int_option, cobre_highs_set_string_option,
+    };
+}

@@ -34,7 +34,11 @@ fn main() {
 
     eprintln!("cobre-solver: building HiGHS from {}", highs_src.display());
 
+    // Always build HiGHS in Release mode regardless of the Rust profile.
+    // HiGHS is a solver library — an unoptimized build is ~10x slower and
+    // would produce misleading results even during development.
     let highs_dst = cmake::Config::new(&highs_src)
+        .define("CMAKE_BUILD_TYPE", "Release")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("HIGHS_NO_DEFAULT_THREADS", "ON")
         .define("BUILD_TESTING", "OFF")
@@ -83,5 +87,8 @@ fn main() {
         .include(&highs_include_highs)
         .warnings(true)
         .extra_warnings(true)
+        // Suppress warning from HiGHS header: `Highs_compilationDate` is
+        // declared static in highs_c_api.h but defined only in the .cpp file.
+        .flag("-Wno-unused-function")
         .compile("highs_wrapper");
 }

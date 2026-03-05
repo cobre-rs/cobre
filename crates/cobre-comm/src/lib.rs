@@ -40,9 +40,13 @@ mod types;
 #[cfg(feature = "mpi")]
 mod ferrompi;
 
+pub use factory::{BackendKind, available_backends, create_communicator};
 pub use local::{HeapRegion, LocalBackend};
 pub use traits::{CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion};
 pub use types::{BackendError, CommError, ReduceOp};
 
 #[cfg(feature = "mpi")]
 pub use ferrompi::FerrompiBackend;
+
+#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+pub use factory::CommBackend;

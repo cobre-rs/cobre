@@ -1008,6 +1008,7 @@ impl SolverInterface for HighsSolver {
     }
 
     fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
+        assert!(self.has_model, "solve_with_basis called without a loaded model — call load_model first");
         // Column count must match exactly -- columns never change between stages
         // for the same template (Solver Abstraction SS2.3).
         assert!(

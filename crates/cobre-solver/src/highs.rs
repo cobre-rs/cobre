@@ -1,7 +1,7 @@
 //! `HiGHS` LP solver backend implementing [`SolverInterface`].
 //!
 //! This module provides [`HighsSolver`], which wraps the `HiGHS` C API through
-//! the FFI layer in [`crate::ffi`] and implements the full [`SolverInterface`]
+//! the FFI layer in `ffi` and implements the full [`SolverInterface`]
 //! contract for iterative LP solving in power system optimization.
 //!
 //! # Thread Safety

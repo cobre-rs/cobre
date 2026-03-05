@@ -31,6 +31,9 @@ unwrap_used = "deny"
 expect_used = "warn"
 panic = "warn"
 
+[dependencies]
+log = "0.4"
+
 [build-dependencies]
 cmake = "0.1"
 cc = "1.2"

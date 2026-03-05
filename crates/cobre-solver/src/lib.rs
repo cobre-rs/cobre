@@ -40,4 +40,9 @@ pub mod trait_def;
 pub use trait_def::SolverInterface;
 
 pub mod types;
-pub use types::{Basis, BasisStatus, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate};
+pub use types::{
+    Basis, BasisStatus, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate,
+};
+
+pub mod highs;
+pub use highs::HighsSolver;

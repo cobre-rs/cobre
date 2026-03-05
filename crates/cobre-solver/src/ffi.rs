@@ -285,9 +285,7 @@ mod tests {
         assert!(!highs.is_null(), "cobre_highs_create() returned null");
 
         // output_flag is bool-typed; use bool setter, not int setter.
-        let status = unsafe {
-            cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0)
-        };
+        let status = unsafe { cobre_highs_set_bool_option(highs, c"output_flag".as_ptr(), 0) };
         assert_eq!(
             status, HIGHS_STATUS_OK,
             "cobre_highs_set_bool_option(output_flag) returned status {status}"
@@ -302,20 +300,20 @@ mod tests {
         let status = unsafe {
             cobre_highs_pass_lp(
                 highs,
-                1,                          // num_col
-                0,                          // num_row
-                0,                          // num_nz
+                1, // num_col
+                0, // num_row
+                0, // num_nz
                 HIGHS_MATRIX_FORMAT_COLWISE,
                 HIGHS_OBJ_SENSE_MINIMIZE,
-                0.0,                        // offset
+                0.0, // offset
                 col_cost.as_ptr(),
                 col_lower.as_ptr(),
                 col_upper.as_ptr(),
-                std::ptr::null(),           // row_lower (empty)
-                std::ptr::null(),           // row_upper (empty)
+                std::ptr::null(), // row_lower (empty)
+                std::ptr::null(), // row_upper (empty)
                 a_start.as_ptr(),
-                std::ptr::null(),           // a_index (empty)
-                std::ptr::null(),           // a_value (empty)
+                std::ptr::null(), // a_index (empty)
+                std::ptr::null(), // a_value (empty)
             )
         };
         assert_eq!(

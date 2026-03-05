@@ -12,5 +12,25 @@ readme = "README.md"
 keywords = ["linear-programming", "optimization", "solver", "highs", "lp"]
 categories = ["science", "mathematics"]
 
-[lints]
-workspace = true
+[features]
+default = ["highs"]
+highs = []
+
+# Override unsafe_code to "allow" for this crate because FFI bindings to HiGHS
+# require unsafe blocks. All other workspace lints are manually replicated here
+# since Cargo does not permit combining `lints.workspace = true` with per-lint
+# overrides in the same crate manifest.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
+
+[build-dependencies]
+cmake = "0.1"
+cc = "1.2"

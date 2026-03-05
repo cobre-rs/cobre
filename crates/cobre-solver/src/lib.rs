@@ -20,3 +20,18 @@
 //! This crate is in early development. The API **will** change.
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+
+// Relax strict production lints for test builds. These lints (unwrap_used,
+// expect_used, etc.) guard library code but are normal in tests.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::float_cmp,
+        clippy::panic,
+        clippy::too_many_lines
+    )
+)]
+
+mod ffi;

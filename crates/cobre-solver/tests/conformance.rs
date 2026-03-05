@@ -245,7 +245,7 @@ fn test_solver_highs_set_row_bounds_state_change() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
     // Patch Row 0 (state-fixing equality) from 6.0 to 4.0
-    solver.set_row_bounds(&[(0, 4.0, 4.0)]);
+    solver.set_row_bounds(&[0], &[4.0], &[4.0]);
     let solution = solver
         .solve()
         .expect("solve() must succeed after patching row bounds");
@@ -286,7 +286,7 @@ fn test_solver_highs_set_col_bounds_basic() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
     // Tighten col 2 upper bound from 8.0 to 3.0 (x2=2 still feasible)
-    solver.set_col_bounds(&[(2, 0.0, 3.0)]);
+    solver.set_col_bounds(&[2], &[0.0], &[3.0]);
     let solution = solver
         .solve()
         .expect("solve() must succeed after tightening col 2 bounds");
@@ -306,7 +306,7 @@ fn test_solver_highs_set_col_bounds_tightens() {
 
     solver.load_model(&template);
     // Force x1 >= 10.0
-    solver.set_col_bounds(&[(1, 10.0, f64::INFINITY)]);
+    solver.set_col_bounds(&[1], &[10.0], &[f64::INFINITY]);
     let solution = solver
         .solve()
         .expect("solve() must succeed after patching col 1 lower bound");
@@ -343,7 +343,7 @@ fn test_solver_highs_set_col_bounds_repatch() {
     );
 
     // Cycle 2: patch col 1 lower bound to 10.0
-    solver.set_col_bounds(&[(1, 10.0, f64::INFINITY)]);
+    solver.set_col_bounds(&[1], &[10.0], &[f64::INFINITY]);
     let solution2 = solver
         .solve()
         .expect("second solve() must succeed after tightening col 1");
@@ -354,7 +354,7 @@ fn test_solver_highs_set_col_bounds_repatch() {
     );
 
     // Cycle 3: re-patch col 1 back to original [0, inf]
-    solver.set_col_bounds(&[(1, 0.0, f64::INFINITY)]);
+    solver.set_col_bounds(&[1], &[0.0], &[f64::INFINITY]);
     let solution3 = solver
         .solve()
         .expect("third solve() must succeed after restoring col 1 bounds");
@@ -508,7 +508,7 @@ fn test_solver_highs_dual_normalization_sensitivity_check() {
     );
 
     // Patch Row 0 RHS to 6.01 (perturb state-fixing constraint by +0.01)
-    solver.set_row_bounds(&[(0, 6.01, 6.01)]);
+    solver.set_row_bounds(&[0], &[6.01], &[6.01]);
     let solution_perturbed = solver
         .solve()
         .expect("second solve() must succeed after patching Row 0 RHS");
@@ -914,7 +914,7 @@ fn test_solver_highs_lifecycle_full_cycle() {
     );
 
     // Step 7: patch Row 0 state-fixing equality to 4.0
-    solver.set_row_bounds(&[(0, 4.0, 4.0)]);
+    solver.set_row_bounds(&[0], &[4.0], &[4.0]);
 
     // Step 8: warm-start with basis → 368.0
     let sol8 = solver
@@ -998,7 +998,7 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
     );
 
     // Step 3: patch Row 0 to 4.0, solve → 368.0
-    solver.set_row_bounds(&[(0, 4.0, 4.0)]);
+    solver.set_row_bounds(&[0], &[4.0], &[4.0]);
     let sol2 = solver
         .solve()
         .expect("step 3 solve() must succeed with x0=4.0");
@@ -1009,7 +1009,7 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
     );
 
     // Step 4: patch Row 0 to 8.0 — this makes x2 = 14 - 16 = -2 < 0, infeasible
-    solver.set_row_bounds(&[(0, 8.0, 8.0)]);
+    solver.set_row_bounds(&[0], &[8.0], &[8.0]);
     let result = solver.solve();
     assert!(
         matches!(result, Err(cobre_solver::SolverError::Infeasible { .. })),

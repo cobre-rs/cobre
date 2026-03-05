@@ -109,19 +109,22 @@ pub trait SolverInterface: Send {
 
     /// Updates row bounds (constraint RHS values) without structural LP changes.
     ///
-    /// Each entry in `patches` is a `(row_index, new_lower, new_upper)` triple.
-    /// This is step 3 of the LP rebuild sequence and the primary modification
-    /// between successive solves at the same stage. For equality constraints
-    /// (water balance, lag fixing, noise fixing), set `new_lower = new_upper`.
+    /// `indices` contains the row indices to update. `lower` and `upper` contain
+    /// the new lower and upper bounds for each index, respectively. All three
+    /// slices must have the same length. This is step 3 of the LP rebuild
+    /// sequence and the primary modification between successive solves at the
+    /// same stage. For equality constraints (water balance, lag fixing, noise
+    /// fixing), set the corresponding entries in `lower` and `upper` equal.
     ///
     /// **Preconditions:**
     /// - [`load_model`](Self::load_model) has been called.
-    /// - All row indices in `patches` reference valid rows in the loaded model.
+    /// - All row indices in `indices` reference valid rows in the loaded model.
     /// - All bound values are finite (no NaN or infinity).
-    /// - `new_lower <= new_upper` for each patch.
+    /// - `lower[i] <= upper[i]` for each entry.
+    /// - `indices`, `lower`, and `upper` have equal length.
     ///
     /// **Postconditions:**
-    /// - Row lower and upper bounds at each patched index are updated; the LP
+    /// - Row lower and upper bounds at each index are updated; the LP
     ///   reflects the current scenario realization.
     /// - Non-patched rows are unchanged.
     /// - Column bounds are unchanged.
@@ -132,23 +135,30 @@ pub trait SolverInterface: Send {
     /// are computed from the LP layout convention; out-of-bounds indices are a
     /// programming error (panic on violation).
     ///
+    /// # Panics
+    ///
+    /// Panics if `indices`, `lower`, and `upper` do not have equal length.
+    ///
     /// See [Solver Interface Trait SS2.3](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
-    fn set_row_bounds(&mut self, patches: &[(usize, f64, f64)]);
+    fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]);
 
     /// Updates column bounds (variable lower/upper bounds) without structural LP changes.
     ///
-    /// Each entry in `patches` is a `(col_index, new_lower, new_upper)` triple.
-    /// Useful for per-scenario variable bound updates such as thermal unit
-    /// commitment bounds or battery state-of-charge limits.
+    /// `indices` contains the column indices to update. `lower` and `upper`
+    /// contain the new lower and upper bounds for each index, respectively. All
+    /// three slices must have the same length. Useful for per-scenario variable
+    /// bound updates such as thermal unit commitment bounds or battery
+    /// state-of-charge limits.
     ///
     /// **Preconditions:**
     /// - [`load_model`](Self::load_model) has been called.
-    /// - All column indices in `patches` reference valid columns in the loaded model.
+    /// - All column indices in `indices` reference valid columns in the loaded model.
     /// - All bound values are finite (no NaN or infinity).
-    /// - `new_lower <= new_upper` for each patch.
+    /// - `lower[i] <= upper[i]` for each entry.
+    /// - `indices`, `lower`, and `upper` have equal length.
     ///
     /// **Postconditions:**
-    /// - Column lower and upper bounds at each patched index are updated.
+    /// - Column lower and upper bounds at each index are updated.
     /// - Non-patched columns are unchanged.
     /// - Row bounds are unchanged.
     /// - The solver basis is preserved; patching does not invalidate a
@@ -158,8 +168,12 @@ pub trait SolverInterface: Send {
     /// are computed from the LP layout convention; out-of-bounds indices are a
     /// programming error (panic on violation).
     ///
+    /// # Panics
+    ///
+    /// Panics if `indices`, `lower`, and `upper` do not have equal length.
+    ///
     /// See [Solver Interface Trait SS2.3a](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
-    fn set_col_bounds(&mut self, patches: &[(usize, f64, f64)]);
+    fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]);
 
     /// Invokes the LP solver and returns either a valid solution or a terminal error.
     ///
@@ -349,9 +363,9 @@ mod tests {
 
         fn add_rows(&mut self, _cuts: &crate::types::RowBatch) {}
 
-        fn set_row_bounds(&mut self, _patches: &[(usize, f64, f64)]) {}
+        fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn set_col_bounds(&mut self, _patches: &[(usize, f64, f64)]) {}
+        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
         fn solve(&mut self) -> Result<crate::types::LpSolution, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {

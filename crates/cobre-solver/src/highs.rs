@@ -65,6 +65,15 @@ pub struct HighsSolver {
     /// Used by `load_model`, `add_rows`, `set_row_bounds`, and `set_col_bounds`.
     /// Never shrunk -- only grows -- to prevent reallocation churn on the hot path.
     scratch_i32: Vec<i32>,
+    /// Scratch buffer for `col_starts` i32 conversion in `load_model`.
+    /// Avoids per-call allocation on the hot path. Never shrunk.
+    scratch_col_starts_i32: Vec<i32>,
+    /// Scratch buffer for lower bounds in `set_row_bounds` / `set_col_bounds`.
+    /// Avoids per-call allocation on the hot path. Never shrunk.
+    scratch_lower: Vec<f64>,
+    /// Scratch buffer for upper bounds in `set_row_bounds` / `set_col_bounds`.
+    /// Avoids per-call allocation on the hot path. Never shrunk.
+    scratch_upper: Vec<f64>,
     /// Pre-allocated i32 buffer for column basis status codes.
     /// Reused across `solve_with_basis` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_cols`; never shrunk.
@@ -148,6 +157,9 @@ impl HighsSolver {
             row_dual: Vec::new(),
             reduced_costs: Vec::new(),
             scratch_i32: Vec::new(),
+            scratch_col_starts_i32: Vec::new(),
+            scratch_lower: Vec::new(),
+            scratch_upper: Vec::new(),
             basis_col_i32: Vec::new(),
             basis_row_i32: Vec::new(),
             num_cols: 0,
@@ -382,7 +394,10 @@ impl HighsSolver {
     fn run_once(&mut self) -> i32 {
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. `cobre_highs_run`
         // drives the HiGHS solver on the currently loaded model.
-        unsafe { ffi::cobre_highs_run(self.handle) };
+        let run_status = unsafe { ffi::cobre_highs_run(self.handle) };
+        if run_status == ffi::HIGHS_STATUS_ERROR {
+            return ffi::HIGHS_MODEL_STATUS_SOLVE_ERROR;
+        }
         // SAFETY: same.
         unsafe { ffi::cobre_highs_get_model_status(self.handle) }
     }
@@ -596,6 +611,31 @@ impl HighsSolver {
         }
         &self.scratch_i32[..source.len()]
     }
+
+    /// Fills `scratch_i32`, `scratch_lower`, and `scratch_upper` from a bound
+    /// patch slice. Used by `set_row_bounds` and `set_col_bounds` to avoid
+    /// per-call heap allocation on the hot path.
+    fn fill_bound_scratch(&mut self, patches: &[(usize, f64, f64)]) {
+        let n = patches.len();
+
+        self.scratch_i32.clear();
+        self.scratch_i32.reserve(n);
+        self.scratch_lower.clear();
+        self.scratch_lower.reserve(n);
+        self.scratch_upper.clear();
+        self.scratch_upper.reserve(n);
+
+        for &(idx, lo, hi) in patches {
+            debug_assert!(
+                i32::try_from(idx).is_ok(),
+                "patch index {idx} overflows i32::MAX"
+            );
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            self.scratch_i32.push(idx as i32);
+            self.scratch_lower.push(lo);
+            self.scratch_upper.push(hi);
+        }
+    }
 }
 
 impl Drop for HighsSolver {
@@ -615,25 +655,18 @@ impl SolverInterface for HighsSolver {
     }
 
     fn load_model(&mut self, template: &StageTemplate) {
-        // Convert col_starts directly; use scratch for larger row_indices
-        // to avoid holding two simultaneous references from convert_to_i32_scratch.
-        let col_starts_i32: Vec<i32> = template
-            .col_starts
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                debug_assert!(
-                    i32::try_from(v).is_ok(),
-                    "col_starts[{i}] = {v} overflows i32::MAX"
-                );
-                // SAFETY: debug_assert above verifies v fits in i32. LP column
-                // start offsets never approach i32::MAX in practice.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                {
-                    v as i32
-                }
-            })
-            .collect();
+        // Convert col_starts into the scratch buffer; use scratch_i32 for row_indices
+        // separately to avoid holding two simultaneous mutable references.
+        self.scratch_col_starts_i32.clear();
+        self.scratch_col_starts_i32.reserve(template.col_starts.len());
+        for (i, &v) in template.col_starts.iter().enumerate() {
+            debug_assert!(
+                i32::try_from(v).is_ok(),
+                "col_starts[{i}] = {v} overflows i32::MAX"
+            );
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            self.scratch_col_starts_i32.push(v as i32);
+        }
 
         let row_indices_ptr = {
             let row_indices_i32 = self.convert_to_i32_scratch(&template.row_indices);
@@ -644,7 +677,7 @@ impl SolverInterface for HighsSolver {
         // - `self.handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
         // - All pointer arguments point into owned `Vec` data that remains alive for the
         //   duration of this call.
-        // - `col_starts_i32` is a local Vec alive until the end of this scope.
+        // - `scratch_col_starts_i32` is alive for `'self`.
         // - `row_indices_ptr` points into `self.scratch_i32`, which is alive for `'self`.
         // - All slice lengths match the HiGHS API contract:
         //   `num_col + 1` for a_start, `num_nz` for a_index and a_value,
@@ -685,7 +718,7 @@ impl SolverInterface for HighsSolver {
                 template.col_upper.as_ptr(),
                 template.row_lower.as_ptr(),
                 template.row_upper.as_ptr(),
-                col_starts_i32.as_ptr(),
+                self.scratch_col_starts_i32.as_ptr(),
                 row_indices_ptr,
                 template.values.as_ptr(),
             )
@@ -795,35 +828,29 @@ impl SolverInterface for HighsSolver {
             return;
         }
 
-        let lower: Vec<f64> = patches.iter().map(|&(_, lo, _)| lo).collect();
-        let upper: Vec<f64> = patches.iter().map(|&(_, _, hi)| hi).collect();
-        let indices: Vec<usize> = patches.iter().map(|&(idx, _, _)| idx).collect();
-        let set_ptr = {
-            let set_i32 = self.convert_to_i32_scratch(&indices);
-            set_i32.as_ptr()
-        };
+        self.fill_bound_scratch(patches);
+        let set_ptr = self.scratch_i32.as_ptr();
 
         assert!(
             i32::try_from(patches.len()).is_ok(),
             "patches.len() {} overflows i32: patch set exceeds HiGHS API limit",
             patches.len()
         );
-        // SAFETY: patches.len() has been asserted to fit in i32 above.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = patches.len() as i32;
 
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - `set_ptr` points into `self.scratch_i32`, alive for `'self`.
-        // - `lower` and `upper` are local Vecs alive until the end of this scope.
-        // - `num_set_entries` equals the lengths of all three arrays.
+        // - `scratch_lower` / `scratch_upper` alive for `'self`.
+        // - `num_entries` equals the lengths of all three arrays.
         let status = unsafe {
             ffi::cobre_highs_change_rows_bounds_by_set(
                 self.handle,
                 num_entries,
                 set_ptr,
-                lower.as_ptr(),
-                upper.as_ptr(),
+                self.scratch_lower.as_ptr(),
+                self.scratch_upper.as_ptr(),
             )
         };
 
@@ -839,35 +866,29 @@ impl SolverInterface for HighsSolver {
             return;
         }
 
-        let lower: Vec<f64> = patches.iter().map(|&(_, lo, _)| lo).collect();
-        let upper: Vec<f64> = patches.iter().map(|&(_, _, hi)| hi).collect();
-        let indices: Vec<usize> = patches.iter().map(|&(idx, _, _)| idx).collect();
-        let set_ptr = {
-            let set_i32 = self.convert_to_i32_scratch(&indices);
-            set_i32.as_ptr()
-        };
+        self.fill_bound_scratch(patches);
+        let set_ptr = self.scratch_i32.as_ptr();
 
         assert!(
             i32::try_from(patches.len()).is_ok(),
             "patches.len() {} overflows i32: patch set exceeds HiGHS API limit",
             patches.len()
         );
-        // SAFETY: patches.len() has been asserted to fit in i32 above.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = patches.len() as i32;
 
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - `set_ptr` points into `self.scratch_i32`, alive for `'self`.
-        // - `lower` and `upper` are local Vecs alive until the end of this scope.
-        // - `num_set_entries` equals the lengths of all three arrays.
+        // - `scratch_lower` / `scratch_upper` alive for `'self`.
+        // - `num_entries` equals the lengths of all three arrays.
         let status = unsafe {
             ffi::cobre_highs_change_cols_bounds_by_set(
                 self.handle,
                 num_entries,
                 set_ptr,
-                lower.as_ptr(),
-                upper.as_ptr(),
+                self.scratch_lower.as_ptr(),
+                self.scratch_upper.as_ptr(),
             )
         };
 

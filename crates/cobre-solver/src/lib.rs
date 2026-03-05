@@ -34,6 +34,7 @@
     )
 )]
 
+#[cfg(feature = "highs")]
 mod ffi;
 
 pub mod trait_def;
@@ -44,5 +45,7 @@ pub use types::{
     Basis, BasisStatus, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate,
 };
 
+#[cfg(feature = "highs")]
 pub mod highs;
+#[cfg(feature = "highs")]
 pub use highs::HighsSolver;

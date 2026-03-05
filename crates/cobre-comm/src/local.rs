@@ -185,6 +185,19 @@ pub struct HeapRegion<T: CommData> {
     data: Vec<T>,
 }
 
+impl<T: CommData> HeapRegion<T> {
+    /// Construct a `HeapRegion` with `count` zero-initialized elements.
+    ///
+    /// Used by backends other than `LocalBackend` (e.g., `FerrompiBackend`)
+    /// that reuse `HeapRegion` as their `Region<T>` type but cannot access the
+    /// private `data` field directly.
+    pub(crate) fn new(count: usize) -> Self {
+        Self {
+            data: vec![T::default(); count],
+        }
+    }
+}
+
 impl<T: CommData> SharedRegion<T> for HeapRegion<T> {
     fn as_slice(&self) -> &[T] {
         &self.data
@@ -545,6 +558,13 @@ mod tests {
     fn test_heap_region_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<HeapRegion<f64>>();
+    }
+
+    #[test]
+    fn test_heap_region_new_crate_visible() {
+        let region = HeapRegion::<f64>::new(5);
+        assert_eq!(region.as_slice().len(), 5);
+        assert!(region.as_slice().iter().all(|&x| x == 0.0));
     }
 
     #[test]

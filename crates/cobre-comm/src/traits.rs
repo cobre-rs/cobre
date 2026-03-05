@@ -26,6 +26,25 @@
 /// to produce zero-filled regions without unsafe code), and `'static`
 /// (no borrowed data).
 ///
+/// When the `mpi` feature is enabled, `CommData` additionally requires
+/// [`ferrompi::MpiDatatype`], which is the FFI marker trait sealing the seven
+/// primitive types that MPI can transmit directly (`f32`, `f64`, `i32`, `i64`,
+/// `u8`, `u32`, `u64`). This narrows the set of valid `CommData` types to those
+/// that ferrompi can pass to the MPI C library without a custom datatype commit.
+/// The narrowing is intentional: Cobre's SDDP data plane only ever transmits
+/// these primitive types, so the restriction has no practical effect on callers.
+///
+/// # Future extensions: non-MpiDatatype payloads
+///
+/// If a future feature requires communicating types that are not
+/// `MpiDatatype` (e.g., `bool`, tuples, or fixed-size arrays), those
+/// types cannot be transmitted directly through MPI. The caller must
+/// serialize them into an MPI-compatible representation first — for
+/// example, mapping `bool` slices to `u8` bitmaps or packing struct
+/// fields into `f64` / `i32` arrays. This is a deliberate constraint:
+/// MPI collective operations are typed at the C level, and ferrompi's
+/// sealed `MpiDatatype` trait reflects that.
+///
 /// # Blanket implementation
 ///
 /// All types that satisfy the bounds are automatically `CommData` without
@@ -35,19 +54,35 @@
 /// # use cobre_comm::CommData;
 /// fn requires_comm_data<T: CommData>() {}
 ///
-/// requires_comm_data::<f64>();         // f64 is CommData
-/// requires_comm_data::<u8>();          // u8 is CommData
-/// requires_comm_data::<i32>();         // i32 is CommData
-/// requires_comm_data::<u64>();         // u64 is CommData
-/// requires_comm_data::<bool>();        // bool is CommData
-/// requires_comm_data::<(f64, f64)>();  // tuples of Copy+Send+Sync+Default+'static are CommData
+/// requires_comm_data::<f64>();  // f64 is CommData
+/// requires_comm_data::<u8>();   // u8 is CommData
+/// requires_comm_data::<i32>();  // i32 is CommData
+/// requires_comm_data::<u64>();  // u64 is CommData
 /// ```
+// When the `mpi` feature is active, CommData also requires MpiDatatype so that
+// the FerrompiBackend Communicator impl can delegate directly to ferrompi's
+// generic FFI methods without an extra bound on each method signature.
+// The intersection of CommData types (7 primitives that are MpiDatatype) is
+// exactly the set of types the SDDP data plane ever transmits.
+#[cfg(feature = "mpi")]
+pub trait CommData: Send + Sync + Copy + Default + 'static + ferrompi::MpiDatatype {}
+
+/// Blanket implementation (mpi): any type satisfying the bounds is `CommData`.
+#[cfg(feature = "mpi")]
+impl<T: Send + Sync + Copy + Default + 'static + ferrompi::MpiDatatype> CommData for T {}
+
+/// Marker trait for types that can be transmitted through collective operations.
+///
+/// Without the `mpi` feature, `CommData` accepts all `Copy + Send + Sync +
+/// Default + 'static` types, including `bool` and tuple types used in tests.
+#[cfg(not(feature = "mpi"))]
 pub trait CommData: Send + Sync + Copy + Default + 'static {}
 
-/// Blanket implementation: any type satisfying the bounds is `CommData`.
+/// Blanket implementation (no mpi): any type satisfying the bounds is `CommData`.
 ///
 /// This covers all payload types used in SDDP communication (f64 arrays for
 /// cuts and trial points, scalar statistics) without requiring explicit impls.
+#[cfg(not(feature = "mpi"))]
 impl<T: Send + Sync + Copy + Default + 'static> CommData for T {}
 
 /// Backend abstraction for SDDP collective communication operations.
@@ -676,11 +711,17 @@ mod tests {
 
     #[test]
     fn test_commdata_blanket_impl() {
+        // f64, u8, i32, u64 implement MpiDatatype and are CommData under both
+        // feature configurations.
         assert_comm_data::<f64>();
         assert_comm_data::<u8>();
         assert_comm_data::<i32>();
         assert_comm_data::<u64>();
+        // bool and (f64, f64) do not implement MpiDatatype, so they are only
+        // CommData when the `mpi` feature is NOT enabled.
+        #[cfg(not(feature = "mpi"))]
         assert_comm_data::<bool>();
+        #[cfg(not(feature = "mpi"))]
         assert_comm_data::<(f64, f64)>();
     }
 

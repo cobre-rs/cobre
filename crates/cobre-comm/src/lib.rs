@@ -43,3 +43,6 @@ mod ferrompi;
 pub use local::{HeapRegion, LocalBackend};
 pub use traits::{CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion};
 pub use types::{BackendError, CommError, ReduceOp};
+
+#[cfg(feature = "mpi")]
+pub use ferrompi::FerrompiBackend;

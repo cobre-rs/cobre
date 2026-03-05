@@ -13,9 +13,11 @@ keywords = ["mpi", "distributed", "communication", "hpc", "parallelism"]
 categories = ["science", "network-programming"]
 
 [dependencies]
+thiserror = "2"
+ferrompi = { version = "0.2", optional = true }
 
 [features]
-mpi = []
+mpi = ["dep:ferrompi"]
 tcp = []
 shm = []
 

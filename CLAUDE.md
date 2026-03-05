@@ -130,24 +130,24 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 <!-- UPDATE THIS TABLE as phases are completed -->
 
-| Phase | Status      | Notes                                                                                                           |
-| ----- | ----------- | --------------------------------------------------------------------------------------------------------------- |
-| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc) |
-| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests     |
-| 3     | not started | Ready to start (depends on Phase 1, complete; parallel with 5)                                                  |
-| 4     | not started | Blocked by Phase 3                                                                                              |
-| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                  |
-| 6     | not started | Blocked by Phases 1-5                                                                                           |
-| 7     | not started | Blocked by Phase 6                                                                                              |
-| 8     | not started | Blocked by Phase 7                                                                                              |
+| Phase | Status      | Notes                                                                                                                     |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc)           |
+| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests               |
+| 3     | complete    | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc) |
+| 4     | not started | Ready to start (depends on Phase 3, complete)                                                                             |
+| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                            |
+| 6     | not started | Blocked by Phases 1-5                                                                                                     |
+| 7     | not started | Blocked by Phase 6                                                                                                        |
+| 8     | not started | Blocked by Phase 7                                                                                                        |
 
 ### Current phase
 
-**Phase 2: cobre-io -- Complete.** The I/O layer is implemented: `load_case` pipeline, 5-layer validation (structural → schema → referential → dimensional → semantic), 33-file JSON/Parquet loading, penalty and bound resolution, postcard broadcast serialization, and validation report writer. All 622 tests pass (514 unit + 6 integration + 3 invariance + 99 doc-tests). Next candidates are Phases 3 (`ferrompi` + `cobre-solver`) and 5 (`cobre-stochastic`), which can proceed in parallel.
+**Phase 3: ferrompi + cobre-solver -- Complete.** The LP solver abstraction is implemented: `SolverInterface` trait with compile-time monomorphization (DEC-002), `HighsSolver` backend with custom FFI bindings, 5-level retry escalation, dual normalization, warm-start basis management, and 30 conformance tests. ferrompi v0.2.0 audited for Phase 4 readiness (verdict: READY WITH ADAPTATIONS — `i32`↔`usize` conversions needed in `cobre-comm` wrapper). All 67 tests pass (35 unit + 30 integration + 2 doc). Next candidates are Phases 4 (`cobre-comm`) and 5 (`cobre-stochastic`), which can proceed in parallel.
 
 ### Parallelizable phases
 
-Phases 3 and 5 can now proceed in parallel since Phases 1 and 2 are both complete.
+Phases 4 and 5 can now proceed in parallel since Phases 1-3 are all complete.
 The `ferrompi` crate has no in-workspace dependencies and can be developed at any time.
 
 ### Per-phase spec reading lists

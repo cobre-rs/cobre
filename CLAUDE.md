@@ -259,6 +259,29 @@ Results must be **bit-for-bit identical** regardless of input entity ordering. E
 collections are always stored in canonical ID-sorted order. Every function that
 processes entity collections must be tested with reordered input.
 
+### Infrastructure crate genericity (ENFORCED)
+
+The infrastructure crates (`cobre-core`, `cobre-io`, `cobre-solver`, `cobre-stochastic`,
+`cobre-comm`) are **deliberately generic** and must contain **zero algorithm-specific
+references** (no SDDP, no algorithm names in function/struct/type names, docs, or
+comments). This is a first-class requirement from the ecosystem design (see
+`cobre-docs/src/specs/overview/ecosystem-vision.md` §6).
+
+**Rules:**
+
+- No function, struct, enum, or type may include "sddp", "SDDP", or any other
+  algorithm name in infrastructure crates
+- Doc comments must use generic language ("the calling algorithm", "iterative LP
+  solving", "optimization algorithms") instead of algorithm-specific references
+- Test code may mention algorithms only in comments explaining the fixture's origin,
+  never in function or variable names
+- Application crates (`cobre-cli`, `cobre-mcp`, `cobre-tui`, `cobre-python`) and the
+  solver vertical (`cobre-sddp`) **may** reference SDDP freely
+
+**Quality gate:** At the end of each implementation phase, all modified infrastructure
+crate files must pass `grep -riE 'sddp' crates/<crate>/src/` with zero matches. This
+check is part of the plan completion protocol.
+
 ---
 
 ## Key Architectural Decisions
@@ -354,8 +377,9 @@ Target: crates/cobre-core/src/entities/hydro.rs (new file)
 - Use `unsafe` -- it is `forbid` at workspace level
 - Use `.unwrap()` in library code -- it is `deny` at workspace level
 - Use `bincode` -- use `postcard` for MPI, `FlatBuffers` for policy
-- Allocate on the hot path inside the SDDP training loop
+- Allocate on the hot path inside the training loop
 - Break declaration-order invariance (results must be identical regardless of input ordering)
+- Reference SDDP (or any algorithm name) in infrastructure crate code, types, or docs
 - Make architectural decisions not specified in the specs -- escalate gaps
 - Commit secrets, `.env` files, or credentials
 - Force-push to `main`

@@ -5,7 +5,7 @@
 
 use crate::types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate};
 
-/// Backend-agnostic interface for LP solver instances used in SDDP.
+/// Backend-agnostic interface for LP solver instances.
 ///
 /// # Design
 ///
@@ -82,8 +82,8 @@ pub trait SolverInterface: Send {
 
     /// Appends constraint rows to the dynamic constraint region in a single batch call.
     ///
-    /// In SDDP, this is used to add Benders cuts assembled from the cut pool's
-    /// activity bitmap. This is step 2 of the LP rebuild sequence.
+    /// Used to add dynamically generated constraint rows (e.g., Benders cuts)
+    /// assembled from a cut pool. This is step 2 of the LP rebuild sequence.
     ///
     /// **Preconditions:**
     /// - [`load_model`](Self::load_model) has been called; a structural LP must
@@ -138,9 +138,8 @@ pub trait SolverInterface: Send {
     /// Updates column bounds (variable lower/upper bounds) without structural LP changes.
     ///
     /// Each entry in `patches` is a `(col_index, new_lower, new_upper)` triple.
-    /// Not used in minimal viable SDDP but included for completeness; future
-    /// extensions (thermal unit commitment bounds, battery state-of-charge
-    /// limits) may require per-scenario column bound updates.
+    /// Useful for per-scenario variable bound updates such as thermal unit
+    /// commitment bounds or battery state-of-charge limits.
     ///
     /// **Preconditions:**
     /// - [`load_model`](Self::load_model) has been called.
@@ -338,19 +337,11 @@ pub trait SolverInterface: Send {
 mod tests {
     use super::SolverInterface;
 
-    // Verify the trait is usable as a generic bound. This compile-time test
-    // ensures `SolverInterface` can constrain generic parameters correctly.
-    //
-    // Note: the trait IS object-safe in Rust terms (no generic methods, no
-    // `Self` in return position). The design decision is to use compile-time
-    // monomorphization (DEC-002), not `dyn SolverInterface`, because the hot
-    // path calls FFI on millions of LP solves and virtual dispatch adds
-    // measurable overhead. The trait's object-safety is incidental -- it is
-    // not the mechanism we rely on.
+    // Verify trait is usable as a generic bound (compile-time monomorphization
+    // per DEC-002, not dyn dispatch).
     fn accepts_solver<S: SolverInterface>(_: &S) {}
 
-    // A zero-sized test double that implements SolverInterface for
-    // compile-time verification only.
+    // Test double implementing SolverInterface for compile-time verification.
     struct NoopSolver;
 
     impl SolverInterface for NoopSolver {
@@ -397,7 +388,7 @@ mod tests {
         }
     }
 
-    // Verify NoopSolver satisfies the Send bound.
+    // Verify Send bound is satisfied.
     fn assert_send<T: Send>() {}
 
     #[test]

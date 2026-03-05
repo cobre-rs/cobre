@@ -2,7 +2,7 @@
 //!
 //! This module provides [`HighsSolver`], which wraps the `HiGHS` C API through
 //! the FFI layer in [`crate::ffi`] and implements the full [`SolverInterface`]
-//! contract for use in SDDP training and simulation.
+//! contract for iterative LP solving in power system optimization.
 //!
 //! # Thread Safety
 //!
@@ -13,10 +13,11 @@
 //!
 //! # Configuration
 //!
-//! The constructor applies SDDP-tuned defaults (`HiGHS` Implementation SS4.1):
-//! dual simplex, no presolve, no parallelism, suppressed output, and tight
-//! feasibility tolerances. Per-run parameters (time limit, iteration limit)
-//! are not set here -- those are applied by the caller before each solve.
+//! The constructor applies performance-tuned defaults (`HiGHS` Implementation
+//! SS4.1): dual simplex, no presolve, no parallelism, suppressed output, and
+//! tight feasibility tolerances. These defaults are optimised for repeated
+//! solves of small-to-medium LPs. Per-run parameters (time limit, iteration
+//! limit) are not set here -- those are applied by the caller before each solve.
 
 use std::os::raw::c_void;
 use std::time::Instant;
@@ -91,10 +92,10 @@ pub struct HighsSolver {
 unsafe impl Send for HighsSolver {}
 
 impl HighsSolver {
-    /// Creates a new `HiGHS` solver instance with SDDP-tuned configuration.
+    /// Creates a new `HiGHS` solver instance with performance-tuned defaults.
     ///
     /// Calls `cobre_highs_create()` to allocate the `HiGHS` handle, then applies
-    /// the seven SDDP default options defined in `HiGHS` Implementation SS4.1:
+    /// the seven default options defined in `HiGHS` Implementation SS4.1:
     ///
     /// | Option                         | Value       | Type   |
     /// |--------------------------------|-------------|--------|
@@ -128,9 +129,9 @@ impl HighsSolver {
             });
         }
 
-        // Apply SDDP-tuned configuration. On any failure, destroy the handle
-        // before returning to prevent a resource leak.
-        if let Err(e) = Self::apply_sddp_config(handle) {
+        // Apply performance-tuned configuration. On any failure, destroy the
+        // handle before returning to prevent a resource leak.
+        if let Err(e) = Self::apply_default_config(handle) {
             // SAFETY: `handle` is a valid, non-null pointer obtained from
             // `cobre_highs_create()` in this same function. It has not been
             // passed to `cobre_highs_destroy()` yet. After this call, `handle`
@@ -155,12 +156,12 @@ impl HighsSolver {
         })
     }
 
-    /// Applies the seven SDDP-tuned `HiGHS` configuration options.
+    /// Applies the seven performance-tuned `HiGHS` configuration options.
     ///
     /// Called once during construction. Returns `Ok(())` if all options are set
     /// successfully, or `Err(SolverError::InternalError)` with the failing
     /// option name if any configuration call returns `HIGHS_STATUS_ERROR`.
-    fn apply_sddp_config(handle: *mut c_void) -> Result<(), SolverError> {
+    fn apply_default_config(handle: *mut c_void) -> Result<(), SolverError> {
         // SAFETY: `handle` is a valid, non-null `HiGHS` pointer from `cobre_highs_create()`.
         // All C string literals are null-terminated static data with 'static lifetime.
         // Integers and doubles are plain values with no pointer requirements.
@@ -342,10 +343,10 @@ impl HighsSolver {
         })
     }
 
-    /// Restores the seven SDDP-tuned default options after a retry escalation.
+    /// Restores the seven performance-tuned default options after a retry escalation.
     ///
     /// Called unconditionally after the retry loop to ensure subsequent solves
-    /// see the standard SDDP configuration regardless of which retry levels were
+    /// see the standard configuration regardless of which retry levels were
     /// reached (`HiGHS` Implementation SS3, restore-defaults requirement).
     fn restore_default_settings(&mut self) {
         // SAFETY for all option calls below:
@@ -899,29 +900,20 @@ impl SolverInterface for HighsSolver {
             return terminal;
         }
 
-        // 5-level retry escalation (HiGHS Implementation SS3).
-        // model_status is SOLVE_ERROR or UNKNOWN -- begin retry sequence.
+        // 5-level retry escalation (HiGHS Implementation SS3). Apply progressively
+        // more permissive strategies on SOLVE_ERROR/UNKNOWN; break on OPTIMAL or
+        // definitive terminal status.
         let mut retry_attempts: u64 = 0;
         let mut final_result: Option<Result<LpSolution, SolverError>> = None;
 
-        // Each level applies a progressively more permissive strategy and
-        // re-runs the solver. On OPTIMAL we break immediately. On a definitive
-        // terminal status we return that error. On SOLVE_ERROR/UNKNOWN we
-        // continue to the next level.
         for level in 0..5_u32 {
-            // Apply escalation strategy for this level.
-            // SAFETY for all configuration calls below:
-            // - `self.handle` is a valid, non-null HiGHS pointer.
-            // - All C string literals are null-terminated static data.
+            // SAFETY: handle is valid non-null HiGHS pointer; option names/values
+            // are static C strings; no retained pointers after call.
             match level {
                 0 => {
-                    // Level 1: clear cached basis / factorization.
-                    // SAFETY: handle is valid non-null pointer.
                     unsafe { ffi::cobre_highs_clear_solver(self.handle) };
                 }
                 1 => {
-                    // Level 2: enable presolve.
-                    // SAFETY: handle is valid; option name and value are static C strings.
                     unsafe {
                         ffi::cobre_highs_set_string_option(
                             self.handle,
@@ -931,8 +923,6 @@ impl SolverInterface for HighsSolver {
                     }
                 }
                 2 => {
-                    // Level 3: switch to primal simplex (strategy 1).
-                    // SAFETY: handle is valid; option name is a static C string.
                     unsafe {
                         ffi::cobre_highs_set_int_option(
                             self.handle,
@@ -942,8 +932,6 @@ impl SolverInterface for HighsSolver {
                     }
                 }
                 3 => {
-                    // Level 4: relax feasibility tolerances to 1e-6.
-                    // SAFETY: handle is valid; option names are static C strings.
                     unsafe {
                         ffi::cobre_highs_set_double_option(
                             self.handle,
@@ -958,8 +946,6 @@ impl SolverInterface for HighsSolver {
                     }
                 }
                 4 => {
-                    // Level 5: switch to interior-point method.
-                    // SAFETY: handle is valid; option name and value are static C strings.
                     unsafe {
                         ffi::cobre_highs_set_string_option(
                             self.handle,
@@ -968,7 +954,7 @@ impl SolverInterface for HighsSolver {
                         );
                     }
                 }
-                _ => unreachable!("retry loop bounded to 5 levels"),
+                _ => unreachable!(),
             }
 
             retry_attempts += 1;
@@ -1075,15 +1061,15 @@ impl SolverInterface for HighsSolver {
             )
         };
 
+        // Basis rejection tracking: singular factorization is the only realistic
+        // failure (dimensions and status codes are prevented by assertions above).
+        // Fall back to cold-start and track for performance diagnostics.
         if set_status == ffi::HIGHS_STATUS_ERROR {
-            // Basis rejection is a valid recovery path -- fall back to cold-start solve.
-            log::debug!(
-                "cobre_highs_set_basis returned HIGHS_STATUS_ERROR; falling back to cold-start solve"
-            );
+            self.stats.basis_rejections += 1;
+            debug_assert!(false, "basis rejected; falling back to cold-start");
         }
 
-        // Delegate to the full retry-escalation solve regardless of set_basis outcome.
-        // Statistics are updated by `solve()` -- no double-counting here.
+        // Delegate to solve() which handles retry escalation and statistics updates.
         self.solve()
     }
 
@@ -1599,7 +1585,7 @@ mod tests {
         let cold_iterations = cold_solution.iterations;
         let basis = solver.get_basis();
 
-        // Reload the same model (simulates the SDDP loop reusing the same template).
+        // Reload the same model (simulates an iterative algorithm reusing the same template).
         solver.load_model(&template);
         let warm_solution = solver
             .solve_with_basis(&basis)

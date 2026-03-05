@@ -144,6 +144,15 @@ pub struct SolverStatistics {
     /// Excludes retry overhead between attempts; includes time for all
     /// individual solve invocations.
     pub total_solve_time_seconds: f64,
+
+    /// Number of times `solve_with_basis` fell back to cold-start because the
+    /// solver rejected the supplied basis.
+    ///
+    /// A non-zero value indicates that warm-starting failed for some solves,
+    /// which has a direct performance impact. Investigate if this counter
+    /// grows — common causes are singular basis matrices or factorization
+    /// failures after LP structure changes.
+    pub basis_rejections: u64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -154,7 +163,7 @@ pub struct SolverStatistics {
 ///
 /// Column and row ordering follows the LP layout convention defined in
 /// [Solver Abstraction SS2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-/// The `cobre-sddp` crate owns construction of this type; `cobre-solver`
+/// The calling algorithm crate owns construction of this type; `cobre-solver`
 /// treats it as an opaque data holder and does not interpret the LP structure.
 ///
 /// See [Solver Interface Trait SS4.4](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md)
@@ -254,7 +263,7 @@ pub struct StageTemplate {
 
 /// Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
 ///
-/// In SDDP, assembled from the cut pool activity bitmap before each LP rebuild
+/// Assembled from the cut pool activity bitmap before each LP rebuild
 /// and passed to [`crate::SolverInterface::add_rows`] for a single batch call.
 /// Cuts are appended at the bottom of the constraint matrix in the dynamic
 /// constraint region per
@@ -301,7 +310,7 @@ pub struct RowBatch {
 
 /// Terminal LP solve error returned after all retry attempts are exhausted.
 ///
-/// The SDDP algorithm uses the variant to determine its response:
+/// The calling algorithm uses the variant to determine its response:
 /// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or proceed with
 /// degraded quality (`NumericalDifficulty`, `TimeLimitExceeded`,
 /// `IterationLimit`) when a partial solution is available.
@@ -314,7 +323,7 @@ pub enum SolverError {
     /// The LP has no feasible solution.
     ///
     /// Indicates a data error (inconsistent bounds or constraints) or a
-    /// modeling error. The SDDP algorithm performs a hard stop.
+    /// modeling error. The calling algorithm should perform a hard stop.
     Infeasible {
         /// Infeasibility ray (proof of infeasibility), if available from the
         /// solver. Not all solver backends provide this.
@@ -324,7 +333,7 @@ pub enum SolverError {
     /// The LP objective is unbounded below.
     ///
     /// Indicates a modeling error (missing bounds, incorrect objective sign).
-    /// The SDDP algorithm performs a hard stop.
+    /// The calling algorithm should perform a hard stop.
     Unbounded {
         /// Unbounded direction certificate, if available from the solver.
         /// Not all solver backends provide this.
@@ -334,8 +343,8 @@ pub enum SolverError {
     /// Solver encountered numerical difficulties that persisted through all
     /// retry attempts.
     ///
-    /// May have a partial (non-optimal) solution. The SDDP algorithm logs a
-    /// warning and may proceed if the partial solution is usable.
+    /// May have a partial (non-optimal) solution. The calling algorithm may
+    /// log a warning and proceed if the partial solution is usable.
     NumericalDifficulty {
         /// Best solution found before the numerical difficulty, if any.
         partial_solution: Option<LpSolution>,
@@ -368,7 +377,7 @@ pub enum SolverError {
     ///
     /// Covers FFI panics, memory allocation failures within the solver,
     /// corrupted internal state, or any error not classifiable into the above
-    /// categories. The SDDP algorithm logs the error and performs a hard stop.
+    /// categories. The calling algorithm should log the error and perform a hard stop.
     InternalError {
         /// Human-readable error description.
         message: String,
@@ -462,15 +471,12 @@ mod tests {
     #[test]
     fn test_basis_status_clone_copy() {
         let original = BasisStatus::AtLower;
-        // Copy: assign to new binding without moving
         let copied = original;
-        // Clone: use a Vec to exercise Clone without triggering clone_on_copy lint
         let vec_of_status = vec![original, BasisStatus::Basic];
         let cloned_vec = vec_of_status.clone();
         assert_eq!(original, copied);
         assert_eq!(vec_of_status, cloned_vec);
-
-        // Verify all variants can be compared
+        // Verify variants are comparable
         assert_ne!(BasisStatus::AtLower, BasisStatus::Basic);
         assert_ne!(BasisStatus::AtUpper, BasisStatus::Free);
         assert_ne!(BasisStatus::Fixed, BasisStatus::Basic);

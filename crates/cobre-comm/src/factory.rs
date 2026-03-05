@@ -418,9 +418,14 @@ fn auto_detect() -> Result<CommBackend, crate::BackendError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::BackendKind;
 
     use super::{available_backends, mpi_launch_detected};
+
+    /// Serialises tests that mutate `COBRE_COMM_BACKEND`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// `available_backends()` always contains `"local"` regardless of features.
     #[test]
@@ -477,10 +482,8 @@ mod tests {
     /// `unsafe` block is required by the compiler and documents this invariant.
     #[test]
     fn test_mpi_launch_detected_pmi_rank() {
-        // SAFETY: `PMI_RANK` is only written by this test. No other test in
-        // this module reads or writes `PMI_RANK`. The Rust test harness runs
-        // tests on multiple threads, but this specific variable is not
-        // accessed concurrently by any other test.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialised by ENV_LOCK; no concurrent env var access.
         unsafe { std::env::set_var("PMI_RANK", "0") };
         let result = mpi_launch_detected();
         // SAFETY: symmetric with set_var above.
@@ -494,7 +497,8 @@ mod tests {
     /// `mpi_launch_detected()` returns `true` when `OMPI_COMM_WORLD_RANK` is set.
     #[test]
     fn test_mpi_launch_detected_ompi() {
-        // SAFETY: `OMPI_COMM_WORLD_RANK` is only written by this test.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialised by ENV_LOCK.
         unsafe { std::env::set_var("OMPI_COMM_WORLD_RANK", "0") };
         let result = mpi_launch_detected();
         // SAFETY: symmetric with set_var above.
@@ -512,7 +516,7 @@ mod tests {
     fn test_create_communicator_no_feature_auto() {
         use crate::Communicator;
 
-        // SAFETY: `COBRE_COMM_BACKEND` is only written/removed by factory tests.
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
         let backend = super::create_communicator().expect("LocalBackend construction must succeed");
         assert_eq!(backend.rank(), 0);
@@ -523,7 +527,7 @@ mod tests {
     #[test]
     #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
     fn test_create_communicator_no_feature_invalid() {
-        // SAFETY: `COBRE_COMM_BACKEND` is only written by factory tests.
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("COBRE_COMM_BACKEND", "foobar") };
         let err = super::create_communicator().expect_err("unknown backend must return Err");
         // SAFETY: symmetric with set_var above.
@@ -543,7 +547,7 @@ mod tests {
     #[test]
     #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
     fn test_create_communicator_no_feature_unavailable() {
-        // SAFETY: `COBRE_COMM_BACKEND` is only written by factory tests.
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("COBRE_COMM_BACKEND", "mpi") };
         let err = super::create_communicator().expect_err("unavailable backend must return Err");
         // SAFETY: symmetric with set_var above.

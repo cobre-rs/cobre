@@ -376,11 +376,7 @@ impl HighsSolver {
                 c"dual_feasibility_tolerance".as_ptr(),
                 1e-7,
             );
-            ffi::cobre_highs_set_string_option(
-                self.handle,
-                c"parallel".as_ptr(),
-                c"off".as_ptr(),
-            );
+            ffi::cobre_highs_set_string_option(self.handle, c"parallel".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_bool_option(self.handle, c"output_flag".as_ptr(), 0);
         }
     }
@@ -609,7 +605,6 @@ impl HighsSolver {
         }
         &self.scratch_i32[..source.len()]
     }
-
 }
 
 impl Drop for HighsSolver {
@@ -892,7 +887,10 @@ impl SolverInterface for HighsSolver {
 
     #[allow(clippy::too_many_lines)]
     fn solve(&mut self) -> Result<LpSolution, SolverError> {
-        assert!(self.has_model, "solve called without a loaded model — call load_model first");
+        assert!(
+            self.has_model,
+            "solve called without a loaded model — call load_model first"
+        );
         let t0 = Instant::now();
         let model_status = self.run_once();
         let solve_time = t0.elapsed().as_secs_f64();
@@ -1008,7 +1006,10 @@ impl SolverInterface for HighsSolver {
     }
 
     fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
-        assert!(self.has_model, "solve_with_basis called without a loaded model — call load_model first");
+        assert!(
+            self.has_model,
+            "solve_with_basis called without a loaded model — call load_model first"
+        );
         // Column count must match exactly -- columns never change between stages
         // for the same template (Solver Abstraction SS2.3).
         assert!(
@@ -1090,7 +1091,10 @@ impl SolverInterface for HighsSolver {
     }
 
     fn get_basis(&self) -> Basis {
-        assert!(self.has_model, "get_basis called without a loaded model — call load_model first");
+        assert!(
+            self.has_model,
+            "get_basis called without a loaded model — call load_model first"
+        );
         // Reuse the pre-allocated i32 buffers as output targets.
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.

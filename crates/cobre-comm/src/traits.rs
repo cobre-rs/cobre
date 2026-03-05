@@ -21,7 +21,9 @@
 /// Marker trait for types that can be transmitted through collective operations.
 ///
 /// Requires `Send + Sync` (safe to share across threads and processes),
-/// `Copy` (bitwise copyable — no heap indirection), and `'static`
+/// `Copy` (bitwise copyable — no heap indirection), `Default`
+/// (zero-initializable — required by `SharedMemoryProvider::create_shared_region`
+/// to produce zero-filled regions without unsafe code), and `'static`
 /// (no borrowed data).
 ///
 /// # Blanket implementation
@@ -38,15 +40,15 @@
 /// requires_comm_data::<i32>();         // i32 is CommData
 /// requires_comm_data::<u64>();         // u64 is CommData
 /// requires_comm_data::<bool>();        // bool is CommData
-/// requires_comm_data::<(f64, f64)>();  // tuples of Copy+Send+Sync+'static are CommData
+/// requires_comm_data::<(f64, f64)>();  // tuples of Copy+Send+Sync+Default+'static are CommData
 /// ```
-pub trait CommData: Send + Sync + Copy + 'static {}
+pub trait CommData: Send + Sync + Copy + Default + 'static {}
 
 /// Blanket implementation: any type satisfying the bounds is `CommData`.
 ///
 /// This covers all payload types used in SDDP communication (f64 arrays for
 /// cuts and trial points, scalar statistics) without requiring explicit impls.
-impl<T: Send + Sync + Copy + 'static> CommData for T {}
+impl<T: Send + Sync + Copy + Default + 'static> CommData for T {}
 
 /// Backend abstraction for SDDP collective communication operations.
 ///

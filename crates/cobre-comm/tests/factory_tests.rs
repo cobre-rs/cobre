@@ -3,7 +3,7 @@
 //! Tests env var handling, backend availability, and trait bounds across
 //! different feature compilation scenarios.
 // Allow expect/unwrap in test code — these guard test setup paths that must not fail.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Mutex;
 

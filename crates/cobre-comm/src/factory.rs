@@ -329,7 +329,7 @@ pub fn create_communicator() -> Result<crate::LocalBackend, crate::BackendError>
 /// compiled in, this function returns a [`CommBackend`] selected according to
 /// the `COBRE_COMM_BACKEND` environment variable:
 ///
-/// - Unset or `"auto"` → [`auto_detect`] priority chain
+/// - Unset or `"auto"` → auto-detect priority chain
 /// - `"mpi"` (feature compiled) → `CommBackend::Mpi(FerrompiBackend::new()?)`
 /// - `"mpi"` (feature absent), `"tcp"`, or `"shm"` →
 ///   `Err(BackendError::BackendNotAvailable)` (no concrete implementation in

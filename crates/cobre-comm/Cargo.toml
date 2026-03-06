@@ -1,6 +1,6 @@
 [package]
 name = "cobre-comm"
-description = "Pluggable communication backend abstraction for distributed SDDP execution (MPI, TCP, shared-memory, local)"
+description = "Pluggable communication backend abstraction for the Cobre ecosystem (MPI, TCP, shared-memory, local)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,11 +13,27 @@ keywords = ["mpi", "distributed", "communication", "hpc", "parallelism"]
 categories = ["science", "network-programming"]
 
 [dependencies]
+thiserror = "2"
+ferrompi = { version = "0.2", optional = true }
 
 [features]
-mpi = []
+mpi = ["dep:ferrompi"]
 tcp = []
 shm = []
 
-[lints]
-workspace = true
+# Override unsafe_code to "allow" for this crate because FerrompiBackend requires
+# `unsafe impl Send` and `unsafe impl Sync` to satisfy the Communicator trait bounds.
+# ferrompi::Mpi is !Send + !Sync (PhantomData<*const ()>), but the RAII pattern
+# guarantees construction and finalization happen on the same thread, making the
+# unsafe impl sound. All other workspace lints are manually replicated here since
+# Cargo does not permit combining `lints.workspace = true` with per-lint overrides.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

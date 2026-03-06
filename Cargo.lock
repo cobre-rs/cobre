@@ -312,6 +312,10 @@ version = "0.0.1"
 [[package]]
 name = "cobre-comm"
 version = "0.0.1"
+dependencies = [
+ "ferrompi",
+ "thiserror",
+]
 
 [[package]]
 name = "cobre-core"
@@ -455,6 +459,17 @@ name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+
+[[package]]
+name = "ferrompi"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45e5f0b625d08261175ba486cb47cd1a0a586cc1c05c582e752a45bbcb21cc5e"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "thiserror",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -857,6 +872,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "postcard"

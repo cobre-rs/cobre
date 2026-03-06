@@ -251,9 +251,9 @@ pub fn build_stochastic_context(
     let dim = hydro_ids.len();
 
     let par_lp = PrecomputedParLp::build(system.inflow_models(), &study_stages, &hydro_ids)?;
-    let correlation = DecomposedCorrelation::build(system.correlation())?;
+    let mut correlation = DecomposedCorrelation::build(system.correlation())?;
     let opening_tree =
-        generate_opening_tree(base_seed, &study_stages, dim, &correlation, &hydro_ids);
+        generate_opening_tree(base_seed, &study_stages, dim, &mut correlation, &hydro_ids);
 
     Ok(StochasticContext {
         par_lp,

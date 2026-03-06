@@ -1,0 +1,334 @@
+{
+  "plan": "phase-5-cobre-stochastic",
+  "last_updated": "2026-03-06T21:25:32Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-scaffold-crate-structure.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-crate-scaffold-and-par-types",
+      "scores": {
+        "readiness": 0.93,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.85,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        },
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-002-implement-precomputed-par-lp.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-crate-scaffold-and-par-types",
+      "scores": {
+        "readiness": 0.91,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.9,
+          "boundary": 0.7,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-003-implement-par-validation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-01-crate-scaffold-and-par-types",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.7,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.98,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-004-implement-siphash-seed-derivation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-noise-generation-and-opening-tree",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-005-implement-cholesky-and-correlation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-noise-generation-and-opening-tree",
+      "scores": {
+        "readiness": 0.92,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.9,
+          "boundary": 0.85,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 0.90,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-006-implement-opening-tree-types.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-noise-generation-and-opening-tree",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-007-implement-opening-tree-generation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "epic": "epic-02-noise-generation-and-opening-tree",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-008-implement-insample-forward-sampling.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-insample-sampling-and-integration",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-009-implement-stochastic-context.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-insample-sampling-and-integration",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-010-organize-public-api.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-03-insample-sampling-and-integration",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-011-implement-pipeline-conformance-tests.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-conformance-tests",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-012-implement-reproducibility-invariance-tests.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "epic": "epic-04-conformance-tests",
+      "scores": {
+        "quality": 0.96,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-013-write-documentation-and-close-phase.md": {
+      "status": "pending",
+      "detail_level": "outline",
+      "epic": "epic-05-documentation-and-phase-close"
+    }
+  },
+  "epics": {
+    "epic-01-crate-scaffold-and-par-types": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-02-noise-generation-and-opening-tree": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-03-insample-sampling-and-integration": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-04-conformance-tests": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-05-documentation-and-phase-close": {
+      "phase": "outline",
+      "learning_extracted": false
+    }
+  }
+}

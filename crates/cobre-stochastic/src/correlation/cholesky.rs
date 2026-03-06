@@ -177,14 +177,16 @@ impl CholeskyFactor {
         );
 
         // eta[i] = sum_{j=0}^{i} L[i][j] * z[j]
-        // Indices i and j are required to call self.get(i, j) and index independent[j].
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..self.dim {
+        // Row base is tracked incrementally to avoid recomputing i*(i+1)/2 per row.
+        let mut row_base = 0usize;
+        for (i, out) in correlated.iter_mut().enumerate().take(self.dim) {
+            let row = &self.data[row_base..=row_base + i];
             let mut acc = 0.0_f64;
-            for j in 0..=i {
-                acc += self.get(i, j) * independent[j];
+            for (l_ij, &z_j) in row.iter().zip(&independent[..=i]) {
+                acc += l_ij * z_j;
             }
-            correlated[i] = acc;
+            *out = acc;
+            row_base += i + 1;
         }
     }
 

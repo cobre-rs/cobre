@@ -94,10 +94,10 @@ use crate::{
 /// let model = CorrelationModel {
 ///     method: "cholesky".to_string(), profiles, schedule: vec![],
 /// };
-/// let correlation = DecomposedCorrelation::build(&model).unwrap();
+/// let mut correlation = DecomposedCorrelation::build(&model).unwrap();
 /// let entity_order = vec![EntityId(1), EntityId(2)];
 ///
-/// let tree = generate_opening_tree(42, &stages, 2, &correlation, &entity_order);
+/// let tree = generate_opening_tree(42, &stages, 2, &mut correlation, &entity_order);
 /// assert_eq!(tree.n_stages(), 2);
 /// assert_eq!(tree.n_openings(0), 3);
 /// ```
@@ -106,10 +106,14 @@ pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
     dim: usize,
-    correlation: &DecomposedCorrelation,
+    correlation: &mut DecomposedCorrelation,
     entity_order: &[EntityId],
 ) -> OpeningTree {
     let n_stages = stages.len();
+
+    // Pre-compute entity position indices once, eliminating per-call O(n)
+    // linear scans and Vec allocations inside apply_correlation.
+    correlation.resolve_positions(entity_order);
 
     // Extract per-stage branching factors.
     let openings_per_stage: Vec<usize> = stages
@@ -273,11 +277,12 @@ mod tests {
     #[test]
     fn determinism_same_inputs_produce_identical_trees() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
-        let corr = identity_correlation(&[1, 2]);
+        let mut corr = identity_correlation(&[1, 2]);
+        let mut corr2 = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree1 = generate_opening_tree(42, &stages, 2, &corr, &entity_order);
-        let tree2 = generate_opening_tree(42, &stages, 2, &corr, &entity_order);
+        let tree1 = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+        let tree2 = generate_opening_tree(42, &stages, 2, &mut corr2, &entity_order);
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -295,10 +300,10 @@ mod tests {
     #[test]
     fn opening_0_0_has_correct_length_and_finite_values() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
-        let corr = identity_correlation(&[1, 2]);
+        let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order);
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -312,11 +317,11 @@ mod tests {
     #[test]
     fn seed_sensitivity_different_seeds_produce_different_trees() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
-        let corr = identity_correlation(&[1, 2]);
+        let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree_a = generate_opening_tree(42, &stages, 2, &corr, &entity_order);
-        let tree_b = generate_opening_tree(99, &stages, 2, &corr, &entity_order);
+        let tree_a = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+        let tree_b = generate_opening_tree(99, &stages, 2, &mut corr, &entity_order);
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -335,10 +340,10 @@ mod tests {
             make_stage(1, 1, 3),
             make_stage(2, 2, 1),
         ];
-        let corr = identity_correlation(&[1, 2]);
+        let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order);
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -358,10 +363,10 @@ mod tests {
             make_stage(1, 1, 5),
             make_stage(2, 2, 5),
         ];
-        let corr = identity_correlation(&[1, 2, 3]);
+        let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
 
-        let tree = generate_opening_tree(7, &stages, 3, &corr, &entity_order);
+        let tree = generate_opening_tree(7, &stages, 3, &mut corr, &entity_order);
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -375,10 +380,10 @@ mod tests {
     fn identity_correlation_noise_has_normal_statistics() {
         let n_openings = 500;
         let stages = vec![make_stage(0, 0, n_openings)];
-        let corr = identity_correlation(&[1]);
+        let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
 
-        let tree = generate_opening_tree(12345, &stages, 1, &corr, &entity_order);
+        let tree = generate_opening_tree(12345, &stages, 1, &mut corr, &entity_order);
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -408,10 +413,10 @@ mod tests {
             make_stage(1, 1, 8),
             make_stage(2, 2, 12),
         ];
-        let corr = identity_correlation(&[1, 2, 3, 4]);
+        let mut corr = identity_correlation(&[1, 2, 3, 4]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
-        let tree = generate_opening_tree(99, &stages, 4, &corr, &entity_order);
+        let tree = generate_opening_tree(99, &stages, 4, &mut corr, &entity_order);
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -431,10 +436,10 @@ mod tests {
     fn correlated_noise_matches_target_correlation() {
         let n_openings = 2000;
         let stages = vec![make_stage(0, 0, n_openings)];
-        let corr = correlated_correlation(&[1, 2], 0.8);
+        let mut corr = correlated_correlation(&[1, 2], 0.8);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order);
+        let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order);
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -472,10 +477,10 @@ mod tests {
     #[allow(clippy::float_cmp)]
     fn different_openings_and_stages_produce_different_noise() {
         let stages = vec![make_stage(0, 0, 4), make_stage(1, 1, 4)];
-        let corr = identity_correlation(&[1]);
+        let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
 
-        let tree = generate_opening_tree(0, &stages, 1, &corr, &entity_order);
+        let tree = generate_opening_tree(0, &stages, 1, &mut corr, &entity_order);
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];

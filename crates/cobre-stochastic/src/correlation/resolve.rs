@@ -15,6 +15,10 @@ use cobre_core::{CorrelationModel, EntityId};
 
 use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
 
+/// Maximum group dimension for stack-allocated buffers in `apply_correlation`.
+/// Groups with more entities than this threshold use heap-allocated buffers.
+const MAX_STACK_DIM: usize = 64;
+
 /// A single correlation group's Cholesky factor with entity ID mapping.
 #[derive(Debug)]
 pub struct GroupFactor {
@@ -22,6 +26,10 @@ pub struct GroupFactor {
     pub factor: CholeskyFactor,
     /// Entity IDs in this group, in the order matching the factor rows/columns.
     pub entity_ids: Vec<EntityId>,
+    /// Pre-computed positions of this group's entities within the canonical
+    /// entity order. Filled by [`DecomposedCorrelation::resolve_positions`].
+    /// When `Some`, `apply_correlation` skips the per-call linear scan.
+    positions: Option<Box<[usize]>>,
 }
 
 /// Pre-decomposed correlation data for all profiles, with stage-to-profile mapping.
@@ -132,7 +140,11 @@ impl DecomposedCorrelation {
 
                 let entity_ids: Vec<EntityId> = group.entities.iter().map(|e| e.id).collect();
 
-                group_factors.push(GroupFactor { factor, entity_ids });
+                group_factors.push(GroupFactor {
+                    factor,
+                    entity_ids,
+                    positions: None,
+                });
             }
             factors.insert(profile_name.clone(), group_factors);
         }
@@ -160,6 +172,35 @@ impl DecomposedCorrelation {
             .map_or(self.default_profile.as_str(), String::as_str)
     }
 
+    /// Pre-computes entity position indices for all correlation groups.
+    ///
+    /// Call this once after building the correlation data, before entering
+    /// the hot loop that calls [`apply_correlation`]. This eliminates the
+    /// per-call O(n) linear scan over `entity_order`.
+    ///
+    /// Each `GroupFactor` stores the positions of its entity IDs within the
+    /// canonical `entity_order` slice. Groups whose entities do not appear
+    /// in `entity_order` get an empty position array and are skipped during
+    /// correlation application.
+    pub fn resolve_positions(&mut self, entity_order: &[EntityId]) {
+        let id_to_pos: HashMap<EntityId, usize> = entity_order
+            .iter()
+            .enumerate()
+            .map(|(i, &eid)| (eid, i))
+            .collect();
+
+        for group_factors in self.factors.values_mut() {
+            for gf in group_factors.iter_mut() {
+                let positions: Vec<usize> = gf
+                    .entity_ids
+                    .iter()
+                    .filter_map(|eid| id_to_pos.get(eid).copied())
+                    .collect();
+                gf.positions = Some(positions.into_boxed_slice());
+            }
+        }
+    }
+
     /// Applies spatial correlation to `independent_noise` for the given stage.
     ///
     /// Looks up the active correlation profile for `stage_id`, then for each
@@ -173,9 +214,11 @@ impl DecomposedCorrelation {
     /// Entities that do not appear in any correlation group retain their
     /// independent noise values unchanged.
     ///
-    /// The temporary gather buffer is stack-allocated for groups up to 64
-    /// entities; larger groups use a heap buffer. No allocation occurs for
-    /// groups of 64 entities or fewer.
+    /// For best performance, call [`resolve_positions`] once before entering
+    /// the hot loop. When positions are pre-computed, this method performs
+    /// zero heap allocations for groups of up to 64 entities.
+    ///
+    /// [`resolve_positions`]: Self::resolve_positions
     pub fn apply_correlation(
         &self,
         stage_id: i32,
@@ -189,32 +232,64 @@ impl DecomposedCorrelation {
         };
 
         for gf in group_factors {
-            let positions: Vec<usize> = gf
-                .entity_ids
-                .iter()
-                .filter_map(|eid| entity_order.iter().position(|e| e == eid))
-                .collect();
-
-            let n = positions.len();
-            if n == 0 {
-                continue;
+            // Use pre-computed positions if available; fall back to linear scan.
+            if let Some(ref precomputed) = gf.positions {
+                Self::apply_group_precomputed(&gf.factor, precomputed, independent_noise);
+            } else {
+                Self::apply_group_scan(&gf.factor, &gf.entity_ids, independent_noise, entity_order);
             }
+        }
+    }
 
-            let gathered: Vec<f64> = positions
-                .iter()
-                .map(|&pos| independent_noise[pos])
-                .collect();
+    /// Fast path: positions are pre-computed. Uses stack buffers for groups ≤ 64.
+    fn apply_group_precomputed(factor: &CholeskyFactor, positions: &[usize], noise: &mut [f64]) {
+        let n = positions.len();
+        if n == 0 || n != factor.dim() {
+            return;
+        }
 
-            let mut correlated: Vec<f64> = vec![0.0; n];
-
-            // Only transform if group size matches factor dimension.
-            // Unmatched entities retain independent noise.
-            if n == gf.factor.dim() {
-                gf.factor.transform(&gathered, &mut correlated);
-                for (i, &pos) in positions.iter().enumerate() {
-                    independent_noise[pos] = correlated[i];
-                }
+        if n <= MAX_STACK_DIM {
+            let mut gathered = [0.0_f64; MAX_STACK_DIM];
+            let mut correlated = [0.0_f64; MAX_STACK_DIM];
+            for (i, &pos) in positions.iter().enumerate() {
+                gathered[i] = noise[pos];
             }
+            factor.transform(&gathered[..n], &mut correlated[..n]);
+            for (i, &pos) in positions.iter().enumerate() {
+                noise[pos] = correlated[i];
+            }
+        } else {
+            let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();
+            let mut correlated = vec![0.0_f64; n];
+            factor.transform(&gathered, &mut correlated);
+            for (i, &pos) in positions.iter().enumerate() {
+                noise[pos] = correlated[i];
+            }
+        }
+    }
+
+    /// Slow path: linear scan for positions (backward compatibility without `resolve_positions`).
+    fn apply_group_scan(
+        factor: &CholeskyFactor,
+        entity_ids: &[EntityId],
+        noise: &mut [f64],
+        entity_order: &[EntityId],
+    ) {
+        let positions: Vec<usize> = entity_ids
+            .iter()
+            .filter_map(|eid| entity_order.iter().position(|e| e == eid))
+            .collect();
+
+        let n = positions.len();
+        if n == 0 || n != factor.dim() {
+            return;
+        }
+
+        let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();
+        let mut correlated = vec![0.0_f64; n];
+        factor.transform(&gathered, &mut correlated);
+        for (i, &pos) in positions.iter().enumerate() {
+            noise[pos] = correlated[i];
         }
     }
 }

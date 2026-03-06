@@ -1189,6 +1189,7 @@ fn test_solver_highs_solve_unbounded() {
 ///
 /// 5 variables, 4 chained >= constraints, all coefficients 1.0.
 /// Cannot be solved at the crash point; requires >= 4 simplex pivots.
+#[allow(dead_code)]
 fn make_larger_lp_template() -> StageTemplate {
     StageTemplate {
         num_cols: 5,

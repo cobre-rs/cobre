@@ -1,10 +1,10 @@
 //! # cobre-comm
 //!
 //! Pluggable communication backend abstraction for the [Cobre](https://github.com/cobre-rs/cobre)
-//! distributed SDDP solver.
+//! ecosystem.
 //!
 //! This crate defines the `Communicator` and `SharedMemoryProvider` traits
-//! that decouple the SDDP training loop from specific communication technologies.
+//! that decouple distributed computations from specific communication technologies.
 //! Backend implementations are feature-gated:
 //!
 //! - `local` — single-process no-op (always available, zero overhead)
@@ -20,7 +20,7 @@
 //! - **Zero-cost static dispatch**: generics over `Communicator` eliminate
 //!   dynamic dispatch overhead on the hot path.
 //! - **Additive features**: multiple backends can coexist in one binary.
-//! - **Orthogonal to SDDP**: `cobre-sddp` depends on this crate for
+//! - **Orthogonal to the solver**: `cobre-sddp` depends on this crate for
 //!   communication; it does not depend back.
 //!
 //! ## Status

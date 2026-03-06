@@ -85,6 +85,35 @@ source, which requires cmake >= 3.15 and a C/C++ compiler. The conformance test 
 validates the `SolverInterface` contract against hand-computable LP fixtures, ensuring
 that every backend returns bit-for-bit consistent results for known inputs.
 
+### Testing cobre-comm
+
+cobre-comm has two test configurations depending on whether MPI support is compiled in.
+
+**Without MPI** (default, no external dependencies required):
+
+```bash
+# Run all cobre-comm tests (unit, integration, doc-tests) without MPI
+cargo test -p cobre-comm
+```
+
+**With MPI** (requires an MPI runtime):
+
+```bash
+# Run all cobre-comm tests including the MPI backend
+cargo test -p cobre-comm --features mpi
+```
+
+The `mpi` feature requires an MPI runtime to be installed:
+
+- Debian/Ubuntu: `sudo apt install libmpich-dev`
+- Fedora: `sudo dnf install mpich-devel`
+- macOS Homebrew: `brew install mpich`
+
+CI runs tests without the `mpi` feature by default. The `mpi` feature tests
+require a manual setup with an MPI installation. The conformance suite in
+`tests/conformance.rs` validates the `Communicator` contract against
+`LocalBackend` and is always run as part of `cargo test -p cobre-comm`.
+
 ### Project Structure
 
 ```

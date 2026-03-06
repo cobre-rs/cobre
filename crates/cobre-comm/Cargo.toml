@@ -1,6 +1,6 @@
 [package]
 name = "cobre-comm"
-description = "Pluggable communication backend abstraction for distributed SDDP execution (MPI, TCP, shared-memory, local)"
+description = "Pluggable communication backend abstraction for the Cobre ecosystem (MPI, TCP, shared-memory, local)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

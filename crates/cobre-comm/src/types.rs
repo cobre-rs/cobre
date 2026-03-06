@@ -10,11 +10,11 @@
 
 /// Element-wise reduction operations for `allreduce`.
 ///
-/// These map directly to MPI reduction operations used during SDDP training.
+/// These map directly to MPI reduction operations used during distributed execution.
 /// The `Sum` and `Min` variants are the two operations required by the backward
 /// pass: `MPI_SUM` for upper bound statistics and `MPI_MIN` for the lower bound.
 /// Because MPI may not support mixed reduction operations in a single `allreduce`
-/// call, the SDDP training loop issues two separate calls — one with [`ReduceOp::Min`]
+/// call, the training loop issues two separate calls — one with [`ReduceOp::Min`]
 /// for the lower bound scalar and one with [`ReduceOp::Sum`] for the remaining
 /// statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

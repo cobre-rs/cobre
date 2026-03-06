@@ -8,7 +8,7 @@
 //!
 //! - Wraps `ferrompi::Communicator` for rank/size queries and collective operations.
 //! - Supports persistent collectives (MPI 4.x) for iterative algorithms such as
-//!   the SDDP forward/backward pass, reducing per-call setup overhead by 10–30 %.
+//!   the forward/backward pass, reducing per-call setup overhead by 10–30 %.
 //! - Nonblocking collectives allow overlap of communication with local LP solves.
 //!
 //! # Feature gate
@@ -58,7 +58,7 @@ pub struct FerrompiBackend {
     /// The `MPI_COMM_WORLD` communicator handle.
     ///
     /// Used for all inter-node collective operations (allreduce, allgatherv,
-    /// broadcast, barrier) during the SDDP training loop.
+    /// broadcast, barrier) during distributed execution.
     world: ferrompi::Communicator,
 
     /// Optional intra-node communicator obtained from `MPI_Comm_split_type`.
@@ -71,8 +71,8 @@ pub struct FerrompiBackend {
 
     /// Cached world rank (0-based).
     ///
-    /// Cached at construction to avoid repeated FFI calls on the hot path during
-    /// the SDDP training loop (rank is invariant for the lifetime of the backend).
+    /// Cached at construction to avoid repeated FFI calls on the hot path.
+    /// Rank is invariant for the lifetime of the backend.
     rank: usize,
 
     /// Cached world size (total number of MPI ranks).

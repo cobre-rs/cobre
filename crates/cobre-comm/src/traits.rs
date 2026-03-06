@@ -1,11 +1,11 @@
 //! Trait definitions for the cobre-comm abstraction layer.
 //!
-//! This module defines the core traits that decouple the SDDP training loop from
+//! This module defines the core traits that decouple distributed computations from
 //! specific communication technologies:
 //!
 //! - [`CommData`] — marker trait for types that can be transmitted through a
 //!   `Communicator`.
-//! - [`Communicator`] — backend abstraction for SDDP collective communication
+//! - [`Communicator`] — backend abstraction for collective communication
 //!   operations (`allgatherv`, `allreduce`, `broadcast`, `barrier`, `rank`, `size`).
 //! - [`LocalCommunicator`] — object-safe sub-trait exposing only the non-generic
 //!   methods of `Communicator` (`rank`, `size`, `barrier`). Used as the return type
@@ -31,8 +31,8 @@
 /// primitive types that MPI can transmit directly (`f32`, `f64`, `i32`, `i64`,
 /// `u8`, `u32`, `u64`). This narrows the set of valid `CommData` types to those
 /// that ferrompi can pass to the MPI C library without a custom datatype commit.
-/// The narrowing is intentional: Cobre's SDDP data plane only ever transmits
-/// these primitive types, so the restriction has no practical effect on callers.
+/// This restriction has no practical effect: the data plane only transmits
+/// these seven primitive types in practice.
 ///
 /// # Future extensions: non-MpiDatatype payloads
 ///
@@ -63,7 +63,7 @@
 // the FerrompiBackend Communicator impl can delegate directly to ferrompi's
 // generic FFI methods without an extra bound on each method signature.
 // The intersection of CommData types (7 primitives that are MpiDatatype) is
-// exactly the set of types the SDDP data plane ever transmits.
+// exactly the set of types the communication data plane ever transmits.
 #[cfg(feature = "mpi")]
 pub trait CommData: Send + Sync + Copy + Default + 'static + ferrompi::MpiDatatype {}
 
@@ -80,14 +80,14 @@ pub trait CommData: Send + Sync + Copy + Default + 'static {}
 
 /// Blanket implementation (no mpi): any type satisfying the bounds is `CommData`.
 ///
-/// This covers all payload types used in SDDP communication (f64 arrays for
+/// This covers all payload types used in distributed computation (f64 arrays for
 /// cuts and trial points, scalar statistics) without requiring explicit impls.
 #[cfg(not(feature = "mpi"))]
 impl<T: Send + Sync + Copy + Default + 'static> CommData for T {}
 
-/// Backend abstraction for SDDP collective communication operations.
+/// Backend abstraction for collective communication operations.
 ///
-/// The trait provides the six operations used during SDDP training:
+/// The trait provides the six operations used during distributed execution:
 /// four collective operations (`allgatherv`, `allreduce`, `broadcast`, `barrier`)
 /// and two infallible accessors (`rank`, `size`).
 ///
@@ -111,7 +111,7 @@ impl<T: Send + Sync + Copy + Default + 'static> CommData for T {}
 /// The trait requires `Send + Sync` to support hybrid MPI+OpenMP execution where
 /// the communicator handle is shared across threads within a rank. All collective
 /// operations take `&self` (shared reference). Callers are responsible for
-/// serializing concurrent calls — the training loop serializes collective
+/// serializing concurrent calls — the calling algorithm serializes collective
 /// operations so that multiple threads never invoke the same collective
 /// simultaneously on the same communicator instance.
 ///
@@ -133,7 +133,7 @@ pub trait Communicator: Send + Sync {
     /// occupies `recv[displs[1]..displs[1]+counts[1]]`, and so on.
     ///
     /// This is the most performance-critical method in the trait. It is called
-    /// twice per SDDP iteration: once after the forward pass to distribute trial
+    /// twice per iteration: once after the forward pass to distribute trial
     /// points (~206 MB at production scale) and once per backward stage to
     /// synchronize new cuts (~3.2 MB per stage, ~381 MB across 119 stages).
     ///
@@ -164,7 +164,7 @@ pub trait Communicator: Send + Sync {
     /// # Thread safety
     ///
     /// Takes `&self`. Collective operations must not be called concurrently on
-    /// the same communicator from multiple threads; the training loop serializes
+    /// the same communicator from multiple threads; the calling algorithm serializes
     /// all collective calls.
     fn allgatherv<T: CommData>(
         &self,
@@ -465,7 +465,7 @@ pub trait LocalCommunicator: Send + Sync {
 /// ## Phase 3: Read-only access
 ///
 /// After the fence, all ranks read via [`as_slice`](SharedRegion::as_slice).
-/// No further writes occur during the SDDP training loop.
+/// No further writes occur during the training loop.
 ///
 /// ## Deallocation (RAII)
 ///
@@ -560,7 +560,7 @@ pub trait SharedRegion<T: CommData>: Send + Sync {
 ///
 /// `SharedMemoryProvider` is a **companion to [`Communicator`]**, not a
 /// supertrait of it. A backend type may implement both traits independently.
-/// The SDDP training loop uses combined bounds:
+/// When both traits are needed, use combined bounds:
 ///
 /// ```rust
 /// # use cobre_comm::{Communicator, SharedMemoryProvider};
@@ -611,7 +611,7 @@ pub trait SharedMemoryProvider: Send + Sync {
     /// Create a shared memory region capable of holding `count` elements of type `T`.
     ///
     /// Lifecycle phase: **allocation** — must be called during solver startup,
-    /// never during the SDDP training hot path.
+    /// never during the training hot path.
     ///
     /// On a backend with true shared memory, the leader rank allocates the full
     /// backing region (`count` elements) and follower ranks allocate size 0,

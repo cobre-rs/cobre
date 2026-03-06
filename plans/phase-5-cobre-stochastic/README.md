@@ -15,8 +15,8 @@ Phase 5 implements the `cobre-stochastic` crate, the scenario generation layer o
 | 01 | Crate Scaffold and PAR Types | 3 (detailed) | completed | completed |
 | 02 | Noise Generation and Opening Tree | 4 (detailed) | completed | completed |
 | 03 | InSample Sampling and Integration | 3 (refined) | completed | completed |
-| 04 | Conformance Tests | 2 (refined) | pending | executing |
-| 05 | Documentation and Phase-Close | 1 (outline) | pending | outline |
+| 04 | Conformance Tests | 2 (refined) | completed | completed |
+| 05 | Documentation and Phase-Close | 1 (refined) | completed | completed |
 
 ## Dependency Graph
 
@@ -61,7 +61,7 @@ ticket-001 (scaffold)
 | ticket-010 | Organize public API and re-exports | epic-03 | completed | Refined | 1.00 | 0.95 | EXCELLENT |
 | ticket-011 | Implement pipeline conformance tests | epic-04 | completed | Refined | 1.00 | 0.75 | ACCEPTABLE |
 | ticket-012 | Implement reproducibility/invariance tests | epic-04 | completed | Refined | 1.00 | 0.96 | EXCELLENT |
-| ticket-013 | Write documentation and close phase | epic-05 | pending | Outline | -- | -- | -- |
+| ticket-013 | Write documentation and close phase | epic-05 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
 
 ## Resolved Decisions
 

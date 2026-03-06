@@ -114,6 +114,25 @@ require a manual setup with an MPI installation. The conformance suite in
 `tests/conformance.rs` validates the `Communicator` contract against
 `LocalBackend` and is always run as part of `cargo test -p cobre-comm`.
 
+### Testing cobre-stochastic
+
+cobre-stochastic has no external system dependencies and no feature flags. All
+dependencies (siphasher, rand, rand_pcg, rand_distr, thiserror) are Cargo-managed.
+
+```bash
+# Run all cobre-stochastic tests (unit, integration, doc-tests)
+cargo test -p cobre-stochastic
+```
+
+The `--all-features` flag is not needed. The integration tests live in
+`tests/conformance.rs` and `tests/reproducibility.rs`:
+
+- `tests/conformance.rs` — verifies PAR(p) coefficient preprocessing against
+  hand-computed AR(0) and AR(1) fixtures with tolerance 1e-10.
+- `tests/reproducibility.rs` — verifies seed determinism, opening tree seed
+  sensitivity, declaration-order invariance, and the infrastructure genericity
+  gate (`grep -riE 'sddp' crates/cobre-stochastic/src/` must return no matches).
+
 ### Project Structure
 
 ```

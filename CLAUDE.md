@@ -130,24 +130,24 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 <!-- UPDATE THIS TABLE as phases are completed -->
 
-| Phase | Status      | Notes                                                                                                                        |
-| ----- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc)              |
-| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests                  |
-| 3     | complete    | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc)    |
-| 4     | complete    | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc) |
-| 5     | not started | Ready to start (depends on Phase 1, complete; parallel with 3)                                                               |
-| 6     | not started | Blocked by Phases 1-5                                                                                                        |
-| 7     | not started | Blocked by Phase 6                                                                                                           |
-| 8     | not started | Blocked by Phase 7                                                                                                           |
+| Phase | Status      | Notes                                                                                                                                                                     |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | complete    | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc)                                                           |
+| 2     | complete    | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests                                                               |
+| 3     | complete    | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc)                                                 |
+| 4     | complete    | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc)                                              |
+| 5     | complete    | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling -- 125 tests (105 unit + 5 conformance + 4 reproducibility + 11 doc) |
+| 6     | not started | Blocked by Phases 1-5                                                                                                                                                     |
+| 7     | not started | Blocked by Phase 6                                                                                                                                                        |
+| 8     | not started | Blocked by Phase 7                                                                                                                                                        |
 
 ### Current phase
 
-**Phase 4: cobre-comm -- Complete.** The communication abstraction layer is implemented: `Communicator`, `SharedMemoryProvider`, `SharedRegion`, and `LocalCommunicator` traits; `LocalBackend` with heap-fallback shared memory; `FerrompiBackend` wrapping ferrompi v0.2.0 with MPI 4.x collective operations; `BackendKind` enum and `create_communicator` factory with `COBRE_COMM_BACKEND` environment override; and a local conformance test suite. Neutral language enforced throughout — zero SDDP references in source. All 90 tests pass (54 unit + 28 integration + 8 doc). Next candidate is Phase 5 (`cobre-stochastic`).
+**Phase 5: cobre-stochastic -- Complete.** The stochastic process model layer is implemented: PAR(p) coefficient preprocessing with original-unit conversion and stage-major flat array layout; deterministic noise generation via SipHash-1-3 seed derivation (DEC-017) and Pcg64 RNG; hand-rolled Cholesky decomposition with packed lower-triangular storage and pre-computed entity positions; opening scenario tree with sentinel offset arrays; InSample scenario selection via `sample_forward`; and `StochasticContext` as the single integration entry point. Neutral language enforced throughout -- zero SDDP references in source. All 125 tests pass (105 unit + 5 conformance + 4 reproducibility + 11 doc). Next candidate is Phase 6 (`cobre-sddp`).
 
 ### Parallelizable phases
 
-Phase 5 (`cobre-stochastic`) is the next candidate. Phases 1–4 are all complete.
+Phase 6 (`cobre-sddp`) is the next candidate. Phases 1–5 are all complete.
 
 ### Per-phase spec reading lists
 

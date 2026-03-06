@@ -13,7 +13,7 @@ keywords = ["stochastic", "time-series", "autoregressive", "scenarios", "samplin
 categories = ["science", "simulation", "mathematics"]
 
 [dependencies]
-cobre-core = { path = "../cobre-core" }
+cobre-core = { version = "0.0.1", path = "../cobre-core" }
 siphasher = "1"
 rand = "0.10"
 rand_distr = "0.6"

@@ -12,3 +12,6 @@
 
 pub mod cholesky;
 pub mod resolve;
+
+pub use cholesky::CholeskyFactor;
+pub use resolve::{DecomposedCorrelation, GroupFactor};

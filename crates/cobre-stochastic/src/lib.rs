@@ -35,8 +35,10 @@ pub mod par;
 pub mod sampling;
 pub mod tree;
 
+pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
-pub use par::{validate_par_parameters, ParValidationReport, ParWarning, PrecomputedParLp};
+pub use par::{ParValidationReport, ParWarning, PrecomputedParLp, validate_par_parameters};
+pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 
 #[cfg(test)]
 #[allow(unused_imports)]

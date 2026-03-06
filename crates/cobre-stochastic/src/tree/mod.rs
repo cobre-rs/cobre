@@ -13,3 +13,6 @@
 
 pub mod generate;
 pub mod opening_tree;
+
+pub use generate::generate_opening_tree;
+pub use opening_tree::{OpeningTree, OpeningTreeView};

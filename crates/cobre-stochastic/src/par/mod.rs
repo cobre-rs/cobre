@@ -16,4 +16,4 @@ pub mod precompute;
 pub mod validation;
 
 pub use precompute::PrecomputedParLp;
-pub use validation::{validate_par_parameters, ParValidationReport, ParWarning};
+pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

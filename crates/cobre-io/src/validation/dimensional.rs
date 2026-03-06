@@ -12,19 +12,18 @@
 //! | # | Rule | Source File |
 //! |---|------|-------------|
 //! | 1 | Every active hydro must have an `InflowModel` for every study stage. | `scenarios/inflow_seasonal_stats.parquet` |
-//! | 2 | Every `InflowModel` with `ar_order > 0` must have matching AR coefficient rows. | `scenarios/inflow_ar_coefficients.parquet` |
-//! | 3 | Every bus must have a `LoadModel` for every study stage. | `scenarios/load_seasonal_stats.parquet` |
-//! | 4 | For each `CorrelationGroup`, `matrix.len() == entities.len()`. | `scenarios/correlation.json` |
-//! | 5 | For each `CorrelationGroup`, every row `matrix[i].len() == entities.len()`. | `scenarios/correlation.json` |
-//! | 6 | Every `profile_name` in the correlation schedule exists in `profiles`. | `scenarios/correlation.json` |
-//! | 7 | Every FPHA-configured hydro must have at least 1 row in `fpha_hyperplanes`. | `system/fpha_hyperplanes.parquet` |
-//! | 8 | Every FPHA- or `LinearizedHead`-configured hydro must have ≥ 2 rows in `hydro_geometry`. | `system/hydro_geometry.parquet` |
+//! | 2 | Every bus must have a `LoadModel` for every study stage. | `scenarios/load_seasonal_stats.parquet` |
+//! | 3 | For each `CorrelationGroup`, `matrix.len() == entities.len()`. | `scenarios/correlation.json` |
+//! | 4 | For each `CorrelationGroup`, every row `matrix[i].len() == entities.len()`. | `scenarios/correlation.json` |
+//! | 5 | Every `profile_name` in the correlation schedule exists in `profiles`. | `scenarios/correlation.json` |
+//! | 6 | Every FPHA-configured hydro must have at least 1 row in `fpha_hyperplanes`. | `system/fpha_hyperplanes.parquet` |
+//! | 7 | Every FPHA- or `LinearizedHead`-configured hydro must have ≥ 2 rows in `hydro_geometry`. | `system/hydro_geometry.parquet` |
 
 use std::collections::{HashMap, HashSet};
 
 use cobre_core::entities::HydroGenerationModel;
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 use crate::extensions::{ProductionModelConfig, SelectionMode};
 
 // ── validate_dimensional_consistency ─────────────────────────────────────────
@@ -44,10 +43,6 @@ use crate::extensions::{ProductionModelConfig, SelectionMode};
 /// * `ctx`  — mutable validation context that accumulates diagnostics.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
-    // ── Extract study stage IDs (non-negative IDs only) ───────────────────────
-    //
-    // Pre-study stages have negative IDs and do not require scenario data.
-
     let study_stage_ids: Vec<i32> = data
         .stages
         .stages
@@ -55,11 +50,6 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         .filter(|s| s.id >= 0)
         .map(|s| s.id)
         .collect();
-
-    // ── Rule 1: Inflow model coverage ─────────────────────────────────────────
-    //
-    // Every hydro active during a study stage must have an InflowModel entry
-    // for that stage. Only checked when inflow_seasonal_stats is non-empty.
 
     if !data.inflow_seasonal_stats.is_empty() {
         let inflow_pairs: HashSet<(i32, i32)> = data
@@ -70,8 +60,6 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
 
         for hydro in &data.hydros {
             for &stage_id in &study_stage_ids {
-                // Check lifecycle bounds: a hydro only needs coverage for
-                // stages within [entry_stage_id, exit_stage_id).
                 if let Some(entry) = hydro.entry_stage_id {
                     if stage_id < entry {
                         continue;
@@ -98,54 +86,6 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         }
     }
 
-    // ── Rule 2: Inflow AR coefficient consistency ─────────────────────────────
-    //
-    // For every InflowModel with ar_order > 0, there must be a matching entry
-    // in inflow_ar_coefficients for the same (hydro_id, stage_id) with
-    // ar_coefficients.len() == ar_order. Only checked when
-    // inflow_ar_coefficients is non-empty.
-
-    if !data.inflow_ar_coefficients.is_empty() {
-        // Group AR coefficient rows by (hydro_id, stage_id), counting entries.
-        let mut ar_coeff_counts: HashMap<(i32, i32), usize> = HashMap::new();
-        for row in &data.inflow_ar_coefficients {
-            *ar_coeff_counts
-                .entry((row.hydro_id.0, row.stage_id))
-                .or_insert(0) += 1;
-        }
-
-        for stats_row in &data.inflow_seasonal_stats {
-            if stats_row.ar_order <= 0 {
-                continue;
-            }
-
-            let key = (stats_row.hydro_id.0, stats_row.stage_id);
-            let actual_count = ar_coeff_counts.get(&key).copied().unwrap_or(0);
-            // ar_order > 0 is guaranteed by the guard above; conversion is infallible for
-            // positive i32 values. Use try_from with a fallback that can never trigger.
-            let Ok(expected) = usize::try_from(stats_row.ar_order) else {
-                continue;
-            };
-
-            if actual_count != expected {
-                ctx.add_error(
-                    ErrorKind::DimensionMismatch,
-                    "scenarios/inflow_ar_coefficients.parquet",
-                    Some(format!("Hydro {}", stats_row.hydro_id.0)),
-                    format!(
-                        "Hydro {} stage {} has ar_order={} but {} AR coefficient row(s) found",
-                        stats_row.hydro_id.0, stats_row.stage_id, expected, actual_count
-                    ),
-                );
-            }
-        }
-    }
-
-    // ── Rule 3: Load stats coverage ───────────────────────────────────────────
-    //
-    // Every bus must have a LoadModel entry for every study stage.
-    // Only checked when load_seasonal_stats is non-empty.
-
     if !data.load_seasonal_stats.is_empty() {
         let load_pairs: HashSet<(i32, i32)> = data
             .load_seasonal_stats
@@ -170,15 +110,6 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         }
     }
 
-    // ── Rules 4 & 5: Correlation matrix dimensions ────────────────────────────
-    //
-    // For each CorrelationGroup:
-    //   Rule 4: matrix.len() == entities.len()  (row count matches entity count)
-    //   Rule 5: every row matrix[i].len() == entities.len()  (square matrix)
-    //
-    // Note: the correlation parser (Layer 2) already enforces square + diagonal
-    // = 1.0 + symmetry. Layer 4 re-checks the dimension rules here as specified.
-
     if let Some(correlation) = &data.correlation {
         for (profile_name, profile) in &correlation.profiles {
             for group in &profile.groups {
@@ -196,12 +127,9 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
                             group.name, profile_name, n_rows, n_entities
                         ),
                     );
-                    // Skip column check when row count is wrong — the row
-                    // access would be indexing into a differently-sized matrix.
                     continue;
                 }
 
-                // Rule 5: every row must have exactly n_entities columns.
                 for (i, row) in group.matrix.iter().enumerate() {
                     if row.len() != n_entities {
                         ctx.add_error(
@@ -219,12 +147,6 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         }
     }
 
-    // ── Rule 6: Correlation schedule coverage ─────────────────────────────────
-    //
-    // Every profile_name in CorrelationModel.schedule must refer to an existing
-    // profile key in CorrelationModel.profiles. Only checked when correlation
-    // is Some.
-
     if let Some(correlation) = &data.correlation {
         for entry in &correlation.schedule {
             if !correlation.profiles.contains_key(&entry.profile_name) {
@@ -241,24 +163,13 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         }
     }
 
-    // ── Rule 7: FPHA hyperplane coverage ──────────────────────────────────────
-    //
-    // Every hydro configured with HydroGenerationModel::Fpha (or whose
-    // ProductionModelConfig references FPHA for any stage range) must have at
-    // least 1 row in fpha_hyperplanes. Only checked when fpha_hyperplanes is
-    // non-empty.
-
     if !data.fpha_hyperplanes.is_empty() {
-        // Build set of hydro IDs that have at least one hyperplane row.
         let hydros_with_hyperplanes: HashSet<i32> = data
             .fpha_hyperplanes
             .iter()
             .map(|row| row.hydro_id.0)
             .collect();
 
-        // Build set of hydro IDs that require FPHA hyperplanes.
-        // Source 1: hydro.generation_model == Fpha
-        // Source 2: any ProductionModelConfig for that hydro references "fpha"
         let fpha_hydro_ids = collect_fpha_hydro_ids(&data.hydros, &data.production_models);
 
         for &hydro_id in &fpha_hydro_ids {
@@ -275,23 +186,12 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         }
     }
 
-    // ── Rule 8: Hydro geometry coverage ──────────────────────────────────────
-    //
-    // Every hydro configured with HydroGenerationModel::Fpha or
-    // HydroGenerationModel::LinearizedHead must have at least 2 rows in
-    // hydro_geometry (minimum VHA curve points). Only checked when
-    // hydro_geometry is non-empty.
-
     if !data.hydro_geometry.is_empty() {
-        // Count geometry rows per hydro ID.
         let mut geometry_row_counts: HashMap<i32, usize> = HashMap::new();
         for row in &data.hydro_geometry {
             *geometry_row_counts.entry(row.hydro_id.0).or_insert(0) += 1;
         }
 
-        // Build set of hydro IDs that require geometry data.
-        // Source 1: hydro.generation_model == Fpha or LinearizedHead
-        // Source 2: any ProductionModelConfig references "fpha" or "linearized_head"
         let head_hydro_ids =
             collect_head_dependent_hydro_ids(&data.hydros, &data.production_models);
 
@@ -313,26 +213,18 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Collects the set of hydro IDs that are configured to use the FPHA model.
-///
-/// A hydro is considered FPHA-configured if:
-/// - Its `generation_model` field is [`HydroGenerationModel::Fpha`], OR
-/// - Any of its [`ProductionModelConfig`] entries reference the `"fpha"` model
-///   in any stage range or season entry.
 fn collect_fpha_hydro_ids(
     hydros: &[cobre_core::entities::Hydro],
     production_models: &[ProductionModelConfig],
 ) -> HashSet<i32> {
     let mut ids = HashSet::new();
 
-    // Source 1: entity-level generation model.
     for hydro in hydros {
         if matches!(hydro.generation_model, HydroGenerationModel::Fpha) {
             ids.insert(hydro.id.0);
         }
     }
 
-    // Source 2: production model config references.
     for config in production_models {
         if production_model_uses_fpha(config) {
             ids.insert(config.hydro_id.0);
@@ -342,21 +234,12 @@ fn collect_fpha_hydro_ids(
     ids
 }
 
-/// Collects the set of hydro IDs that are configured to use a head-dependent
-/// model (FPHA or `LinearizedHead`).
-///
-/// A hydro is considered head-dependent if:
-/// - Its `generation_model` field is [`HydroGenerationModel::Fpha`] or
-///   [`HydroGenerationModel::LinearizedHead`], OR
-/// - Any of its [`ProductionModelConfig`] entries reference `"fpha"` or
-///   `"linearized_head"` in any stage range or season entry.
 fn collect_head_dependent_hydro_ids(
     hydros: &[cobre_core::entities::Hydro],
     production_models: &[ProductionModelConfig],
 ) -> HashSet<i32> {
     let mut ids = HashSet::new();
 
-    // Source 1: entity-level generation model.
     for hydro in hydros {
         if matches!(
             hydro.generation_model,
@@ -366,7 +249,6 @@ fn collect_head_dependent_hydro_ids(
         }
     }
 
-    // Source 2: production model config references.
     for config in production_models {
         if production_model_uses_head_dependent(config) {
             ids.insert(config.hydro_id.0);
@@ -376,7 +258,6 @@ fn collect_head_dependent_hydro_ids(
     ids
 }
 
-/// Returns `true` if any stage range or season in `config` uses the `"fpha"` model.
 fn production_model_uses_fpha(config: &ProductionModelConfig) -> bool {
     match &config.selection_mode {
         SelectionMode::StageRanges { ranges } => ranges.iter().any(|r| r.model == "fpha"),
@@ -387,8 +268,6 @@ fn production_model_uses_fpha(config: &ProductionModelConfig) -> bool {
     }
 }
 
-/// Returns `true` if any stage range or season in `config` uses a
-/// head-dependent model (`"fpha"` or `"linearized_head"`).
 fn production_model_uses_head_dependent(config: &ProductionModelConfig) -> bool {
     match &config.selection_mode {
         SelectionMode::StageRanges { ranges } => ranges
@@ -407,8 +286,6 @@ fn production_model_uses_head_dependent(config: &ProductionModelConfig) -> bool 
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -422,7 +299,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
-        EntityId,
         entities::{Bus, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
@@ -432,17 +308,16 @@ mod tests {
             Block, BlockMode, NoiseMethod, PolicyGraph, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
-        scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow},
+        scenarios::{InflowSeasonalStatsRow, LoadSeasonalStatsRow},
         validation::{ErrorKind, ValidationContext},
     };
 
     use super::*;
-
-    // ── Builder helpers ───────────────────────────────────────────────────────
 
     fn make_hydro(
         id: i32,
@@ -548,13 +423,12 @@ mod tests {
         }
     }
 
-    fn inflow_stats_row(hydro_id: i32, stage_id: i32, ar_order: i32) -> InflowSeasonalStatsRow {
+    fn inflow_stats_row(hydro_id: i32, stage_id: i32) -> InflowSeasonalStatsRow {
         InflowSeasonalStatsRow {
             hydro_id: EntityId(hydro_id),
             stage_id,
             mean_m3s: 100.0,
             std_m3s: 10.0,
-            ar_order,
         }
     }
 
@@ -564,15 +438,6 @@ mod tests {
             stage_id,
             mean_mw: 500.0,
             std_mw: 50.0,
-        }
-    }
-
-    fn ar_coeff_row(hydro_id: i32, stage_id: i32, lag: i32) -> InflowArCoefficientRow {
-        InflowArCoefficientRow {
-            hydro_id: EntityId(hydro_id),
-            stage_id,
-            lag,
-            coefficient: 0.5,
         }
     }
 
@@ -744,10 +609,10 @@ mod tests {
             ),
         ];
         data.inflow_seasonal_stats = vec![
-            inflow_stats_row(1, 0, 0),
-            inflow_stats_row(1, 1, 0),
-            inflow_stats_row(2, 0, 0),
-            inflow_stats_row(2, 1, 0),
+            inflow_stats_row(1, 0),
+            inflow_stats_row(1, 1),
+            inflow_stats_row(2, 0),
+            inflow_stats_row(2, 1),
         ];
 
         let mut ctx = ValidationContext::new();
@@ -798,11 +663,11 @@ mod tests {
 
         // Hydro 2 is missing stage 1.
         data.inflow_seasonal_stats = vec![
-            inflow_stats_row(1, 0, 0),
-            inflow_stats_row(1, 1, 0),
-            inflow_stats_row(2, 0, 0), // stage 1 missing for hydro 2
-            inflow_stats_row(3, 0, 0),
-            inflow_stats_row(3, 1, 0),
+            inflow_stats_row(1, 0),
+            inflow_stats_row(1, 1),
+            inflow_stats_row(2, 0), // stage 1 missing for hydro 2
+            inflow_stats_row(3, 0),
+            inflow_stats_row(3, 1),
         ];
 
         let mut ctx = ValidationContext::new();
@@ -1020,7 +885,7 @@ mod tests {
         )];
 
         // Only provide inflow stats for stage 1.
-        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 1, 0)];
+        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 1)];
 
         let mut ctx = ValidationContext::new();
         validate_dimensional_consistency(&data, &mut ctx);
@@ -1051,7 +916,7 @@ mod tests {
         )];
 
         // Only provide inflow stats for stage 0.
-        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0, 0)];
+        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0)];
 
         let mut ctx = ValidationContext::new();
         validate_dimensional_consistency(&data, &mut ctx);
@@ -1089,7 +954,7 @@ mod tests {
         )];
 
         // Provide inflow stats for study stages 0 and 1 only — not pre-study.
-        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0, 0), inflow_stats_row(1, 1, 0)];
+        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0), inflow_stats_row(1, 1)];
 
         let mut ctx = ValidationContext::new();
         validate_dimensional_consistency(&data, &mut ctx);
@@ -1140,42 +1005,7 @@ mod tests {
         );
     }
 
-    // ── AC 11: AR coefficient count mismatch ─────────────────────────────────
-
-    /// Given an InflowModel with ar_order=2 but only 1 AR coefficient row,
-    /// one DimensionMismatch error is produced.
-    #[test]
-    fn test_ar_coefficient_count_mismatch() {
-        let mut data = base_parsed_data();
-        data.hydros = vec![make_hydro(
-            1,
-            HydroGenerationModel::ConstantProductivity {
-                productivity_mw_per_m3s: 0.9,
-            },
-            None,
-            None,
-        )];
-
-        // ar_order=2 but only 1 coefficient row provided.
-        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0, 2), inflow_stats_row(1, 1, 0)];
-        data.inflow_ar_coefficients = vec![
-            ar_coeff_row(1, 0, 1), // only lag 1, missing lag 2
-        ];
-
-        let mut ctx = ValidationContext::new();
-        validate_dimensional_consistency(&data, &mut ctx);
-
-        let errors = ctx.errors();
-        assert_eq!(
-            errors.len(),
-            1,
-            "expected exactly 1 error for AR coefficient mismatch, got: {:?}",
-            errors
-        );
-        assert_eq!(errors[0].kind, ErrorKind::DimensionMismatch);
-    }
-
-    // ── AC 12: Correlation schedule references non-existent profile ───────────
+    // ── AC 11 (renumbered 12): Correlation schedule references non-existent profile ───────────
 
     /// A schedule entry referencing a profile name that does not exist in
     /// `profiles` produces one DimensionMismatch error.
@@ -1256,7 +1086,7 @@ mod tests {
             None,
             None,
         )];
-        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0, 0)]; // missing stage 1
+        data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0)]; // missing stage 1
 
         // Trigger rule 3 violation: bus 1 missing stage 1.
         data.buses = vec![make_bus(1)];

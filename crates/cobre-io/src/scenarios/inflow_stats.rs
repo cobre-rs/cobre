@@ -1,5 +1,5 @@
 //! Parsing for `scenarios/inflow_seasonal_stats.parquet` — PAR(p) seasonal
-//! mean, standard deviation, and AR order per (hydro, stage).
+//! mean and standard deviation per (hydro, stage).
 //!
 //! [`parse_inflow_seasonal_stats`] reads `scenarios/inflow_seasonal_stats.parquet`
 //! and returns a sorted `Vec<InflowSeasonalStatsRow>`.
@@ -12,7 +12,6 @@
 //! | `stage_id` | INT32  | Yes      | Stage ID                             |
 //! | `mean_m3s` | DOUBLE | Yes      | Seasonal mean inflow (m³/s)          |
 //! | `std_m3s`  | DOUBLE | Yes      | Seasonal standard deviation (m³/s)   |
-//! | `ar_order` | INT32  | Yes      | AR model order for this (hydro, stage) |
 //!
 //! ## Output ordering
 //!
@@ -22,31 +21,30 @@
 //!
 //! Per-row constraints enforced by this parser:
 //!
-//! - All five columns must be present with the correct types.
+//! - All four columns must be present with the correct types.
 //! - `mean_m3s` must be finite (NaN and ±inf are rejected).
 //! - `std_m3s` must be non-negative and finite.
-//! - `ar_order` must be ≥ 0.
 //!
 //! Deferred validations (not performed here):
 //!
 //! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
 //! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
-//! - AR coefficient count matching `ar_order` — Layer 3/5, Epic 06.
+//! - AR coefficient count consistency — Layer 3/5, Epic 06.
 
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::Path;
 
-use crate::LoadError;
 use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
+use crate::LoadError;
 
 /// A single row from `scenarios/inflow_seasonal_stats.parquet`.
 ///
 /// Carries the PAR(p) seasonal statistics for a (hydro, stage) pair loaded
 /// from the `inflow_seasonal_stats.parquet` file. These rows are later joined
 /// with [`InflowArCoefficientRow`](super::InflowArCoefficientRow) by
-/// ticket-023 to produce [`cobre_core::scenario::InflowModel`] entries.
+/// [`super::assemble_inflow_models`] to produce [`cobre_core::scenario::InflowModel`] entries.
 ///
 /// # Examples
 ///
@@ -59,10 +57,9 @@ use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 ///     stage_id: 3,
 ///     mean_m3s: 150.0,
 ///     std_m3s: 30.0,
-///     ar_order: 2,
 /// };
 /// assert_eq!(row.hydro_id, EntityId::from(1));
-/// assert_eq!(row.ar_order, 2);
+/// assert_eq!(row.stage_id, 3);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct InflowSeasonalStatsRow {
@@ -74,8 +71,6 @@ pub struct InflowSeasonalStatsRow {
     pub mean_m3s: f64,
     /// Seasonal standard deviation σ in m³/s. Must be non-negative and finite.
     pub std_m3s: f64,
-    /// AR model order p (number of lags). Zero means white-noise inflow. Must be ≥ 0.
-    pub ar_order: i32,
 }
 
 /// Parse `scenarios/inflow_seasonal_stats.parquet` and return a sorted row table.
@@ -92,7 +87,6 @@ pub struct InflowSeasonalStatsRow {
 /// | Required column missing or wrong type         | [`LoadError::SchemaError`] |
 /// | `mean_m3s` is NaN or infinite                 | [`LoadError::SchemaError`] |
 /// | `std_m3s` is negative or not finite           | [`LoadError::SchemaError`] |
-/// | `ar_order` is negative                        | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -119,14 +113,11 @@ pub fn parse_inflow_seasonal_stats(path: &Path) -> Result<Vec<InflowSeasonalStat
     for batch_result in reader {
         let batch = batch_result.map_err(|e| LoadError::parse(path, e.to_string()))?;
 
-        // ── Required columns ──────────────────────────────────────────────────
         let hydro_id_col = extract_required_int32(&batch, "hydro_id", path)?;
         let stage_id_col = extract_required_int32(&batch, "stage_id", path)?;
         let mean_m3s_col = extract_required_float64(&batch, "mean_m3s", path)?;
         let std_m3s_col = extract_required_float64(&batch, "std_m3s", path)?;
-        let ar_order_col = extract_required_int32(&batch, "ar_order", path)?;
 
-        // ── Build rows with per-row validation ────────────────────────────────
         let n = batch.num_rows();
         let base_idx = rows.len();
         rows.reserve(n);
@@ -138,7 +129,6 @@ pub fn parse_inflow_seasonal_stats(path: &Path) -> Result<Vec<InflowSeasonalStat
             let stage_id = stage_id_col.value(i);
             let mean_m3s = mean_m3s_col.value(i);
             let std_m3s = std_m3s_col.value(i);
-            let ar_order = ar_order_col.value(i);
 
             // Validate mean_m3s: must be finite (NaN and ±inf rejected).
             if !mean_m3s.is_finite() {
@@ -158,26 +148,15 @@ pub fn parse_inflow_seasonal_stats(path: &Path) -> Result<Vec<InflowSeasonalStat
                 });
             }
 
-            // Validate ar_order: must be >= 0.
-            if ar_order < 0 {
-                return Err(LoadError::SchemaError {
-                    path: path.to_path_buf(),
-                    field: format!("inflow_seasonal_stats[{row_idx}].ar_order"),
-                    message: format!("value must be >= 0, got {ar_order}"),
-                });
-            }
-
             rows.push(InflowSeasonalStatsRow {
                 hydro_id,
                 stage_id,
                 mean_m3s,
                 std_m3s,
-                ar_order,
             });
         }
     }
 
-    // ── Sort by (hydro_id, stage_id) ascending ────────────────────────────────
     rows.sort_by(|a, b| {
         a.hydro_id
             .0
@@ -187,8 +166,6 @@ pub fn parse_inflow_seasonal_stats(path: &Path) -> Result<Vec<InflowSeasonalStat
 
     Ok(rows)
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 #[allow(
@@ -207,15 +184,12 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new("hydro_id", DataType::Int32, false),
             Field::new("stage_id", DataType::Int32, false),
             Field::new("mean_m3s", DataType::Float64, false),
             Field::new("std_m3s", DataType::Float64, false),
-            Field::new("ar_order", DataType::Int32, false),
         ]))
     }
 
@@ -233,7 +207,6 @@ mod tests {
         stage_ids: &[i32],
         means: &[f64],
         stds: &[f64],
-        ar_orders: &[i32],
     ) -> RecordBatch {
         RecordBatch::try_new(
             schema(),
@@ -242,25 +215,18 @@ mod tests {
                 Arc::new(Int32Array::from(stage_ids.to_vec())),
                 Arc::new(Float64Array::from(means.to_vec())),
                 Arc::new(Float64Array::from(stds.to_vec())),
-                Arc::new(Int32Array::from(ar_orders.to_vec())),
             ],
         )
         .expect("valid batch")
     }
 
-    // ── AC: valid file with 4 rows, verify sort order and field values ─────────
-
-    /// Valid 4-row file (2 hydros x 2 stages) in scrambled order.
-    /// Result: sorted by (hydro_id, stage_id); first row hydro_id = 1, stage_id = 0.
     #[test]
     fn test_valid_4_rows_sorted_by_hydro_stage() {
-        // Input order: (3,1), (1,0), (3,0), (1,1) — out of sort order.
         let batch = make_batch(
             &[3, 1, 3, 1],
             &[1, 0, 0, 1],
             &[200.0, 150.0, 180.0, 160.0],
             &[40.0, 30.0, 35.0, 32.0],
-            &[2, 1, 2, 1],
         );
         let tmp = write_parquet(&batch);
         let rows = parse_inflow_seasonal_stats(tmp.path()).unwrap();
@@ -270,7 +236,6 @@ mod tests {
         assert_eq!(rows[0].stage_id, 0);
         assert!((rows[0].mean_m3s - 150.0).abs() < 1e-10);
         assert!((rows[0].std_m3s - 30.0).abs() < 1e-10);
-        assert_eq!(rows[0].ar_order, 1);
         assert_eq!(rows[1].hydro_id, EntityId::from(1));
         assert_eq!(rows[1].stage_id, 1);
         assert_eq!(rows[2].hydro_id, EntityId::from(3));
@@ -279,16 +244,12 @@ mod tests {
         assert_eq!(rows[3].stage_id, 1);
     }
 
-    // ── AC: missing required column -> SchemaError ────────────────────────────
-
-    /// File missing `mean_m3s` column -> SchemaError with field "mean_m3s".
     #[test]
     fn test_missing_mean_m3s_column() {
         let schema_no_mean = Arc::new(Schema::new(vec![
             Field::new("hydro_id", DataType::Int32, false),
             Field::new("stage_id", DataType::Int32, false),
             Field::new("std_m3s", DataType::Float64, false),
-            Field::new("ar_order", DataType::Int32, false),
         ]));
         let batch = RecordBatch::try_new(
             schema_no_mean,
@@ -296,7 +257,6 @@ mod tests {
                 Arc::new(Int32Array::from(vec![1_i32])),
                 Arc::new(Int32Array::from(vec![0_i32])),
                 Arc::new(Float64Array::from(vec![30.0])),
-                Arc::new(Int32Array::from(vec![2_i32])),
             ],
         )
         .unwrap();
@@ -318,12 +278,9 @@ mod tests {
         }
     }
 
-    // ── AC: std_m3s negative -> SchemaError ───────────────────────────────────
-
-    /// `std_m3s = -1.0` -> SchemaError with field path containing "std_m3s".
     #[test]
     fn test_negative_std_m3s() {
-        let batch = make_batch(&[1], &[0], &[150.0], &[-1.0], &[2]);
+        let batch = make_batch(&[1], &[0], &[150.0], &[-1.0]);
         let tmp = write_parquet(&batch);
         let err = parse_inflow_seasonal_stats(tmp.path()).unwrap_err();
 
@@ -338,32 +295,9 @@ mod tests {
         }
     }
 
-    // ── AC: ar_order negative -> SchemaError ──────────────────────────────────
-
-    /// `ar_order = -1` -> SchemaError.
-    #[test]
-    fn test_negative_ar_order() {
-        let batch = make_batch(&[1], &[0], &[150.0], &[30.0], &[-1]);
-        let tmp = write_parquet(&batch);
-        let err = parse_inflow_seasonal_stats(tmp.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, .. } => {
-                assert!(
-                    field.contains("ar_order"),
-                    "field should contain 'ar_order', got: {field}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    // ── AC: mean_m3s NaN -> SchemaError ───────────────────────────────────────
-
-    /// `mean_m3s = NaN` -> SchemaError with field path containing "mean_m3s".
     #[test]
     fn test_nan_mean_m3s() {
-        let batch = make_batch(&[1], &[0], &[f64::NAN], &[30.0], &[2]);
+        let batch = make_batch(&[1], &[0], &[f64::NAN], &[30.0]);
         let tmp = write_parquet(&batch);
         let err = parse_inflow_seasonal_stats(tmp.path()).unwrap_err();
 
@@ -378,20 +312,14 @@ mod tests {
         }
     }
 
-    // ── AC: empty file -> Ok(vec![]) ──────────────────────────────────────────
-
-    /// Empty Parquet (0 rows) -> Ok(Vec::new()).
     #[test]
     fn test_empty_parquet_returns_empty_vec() {
-        let batch = make_batch(&[], &[], &[], &[], &[]);
+        let batch = make_batch(&[], &[], &[], &[]);
         let tmp = write_parquet(&batch);
         let rows = parse_inflow_seasonal_stats(tmp.path()).unwrap();
         assert!(rows.is_empty());
     }
 
-    // ── AC: declaration-order invariance ─────────────────────────────────────
-
-    /// Reordering the Parquet rows does not change the output ordering.
     #[test]
     fn test_declaration_order_invariance() {
         let batch_asc = make_batch(
@@ -399,14 +327,12 @@ mod tests {
             &[0, 1, 0, 1],
             &[100.0, 110.0, 200.0, 210.0],
             &[10.0, 11.0, 20.0, 21.0],
-            &[1, 1, 2, 2],
         );
         let batch_desc = make_batch(
             &[5, 5, 1, 1],
             &[1, 0, 1, 0],
             &[210.0, 200.0, 110.0, 100.0],
             &[21.0, 20.0, 11.0, 10.0],
-            &[2, 2, 1, 1],
         );
         let tmp_asc = write_parquet(&batch_asc);
         let tmp_desc = write_parquet(&batch_desc);

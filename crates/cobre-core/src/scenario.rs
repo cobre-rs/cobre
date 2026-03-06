@@ -10,7 +10,11 @@
 //! Following the dual-nature design principle (internal-structures.md §1.1),
 //! this module holds only the **raw input-facing types**:
 //!
-//! - [`InflowModel`] — PAR(p) parameters per (hydro, stage)
+//! - [`InflowModel`] — PAR(p) parameters per (hydro, stage). AR coefficients
+//!   are stored **standardized by seasonal std** (dimensionless ψ\*), and
+//!   `residual_std_ratio` (`σ_m` / `s_m`) captures the remaining variance not
+//!   explained by the AR model. Downstream crates recover the runtime residual
+//!   std as `std_m3s * residual_std_ratio`.
 //! - [`LoadModel`] — seasonal load statistics per (bus, stage)
 //! - [`CorrelationModel`] — named correlation profiles with entity groups
 //!   and correlation matrices
@@ -137,9 +141,14 @@ pub struct ScenarioSource {
 
 /// Raw PAR(p) model parameters for a single (hydro, stage) pair.
 ///
-/// Stores the seasonal mean, standard deviation, AR order, and lag
+/// Stores the seasonal mean, standard deviation, and standardized AR lag
 /// coefficients loaded from `inflow_seasonal_stats.parquet` and
 /// `inflow_ar_coefficients.parquet`. These are the raw input-facing values.
+///
+/// AR coefficients are stored **standardized by seasonal std** (dimensionless ψ\*,
+/// direct Yule-Walker output). The `residual_std_ratio` field carries the ratio
+/// `σ_m` / `s_m` so that downstream crates can recover the runtime residual std as
+/// `std_m3s * residual_std_ratio` without re-deriving it from the coefficients.
 ///
 /// The performance-adapted view (`PrecomputedParLp`) is built from these
 /// parameters once at solver initialisation and belongs to downstream solver crates.
@@ -162,11 +171,12 @@ pub struct ScenarioSource {
 ///     stage_id: 3,
 ///     mean_m3s: 150.0,
 ///     std_m3s: 30.0,
-///     ar_order: 2,
 ///     ar_coefficients: vec![0.45, 0.22],
+///     residual_std_ratio: 0.85,
 /// };
-/// assert_eq!(model.ar_order, 2);
+/// assert_eq!(model.ar_order(), 2);
 /// assert_eq!(model.ar_coefficients.len(), 2);
+/// assert!((model.residual_std_ratio - 0.85).abs() < f64::EPSILON);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -180,15 +190,27 @@ pub struct InflowModel {
     /// Seasonal mean inflow μ in m³/s.
     pub mean_m3s: f64,
 
-    /// Seasonal standard deviation σ in m³/s.
+    /// Seasonal standard deviation `s_m` in m³/s (seasonal sample std).
     pub std_m3s: f64,
 
-    /// AR model order p (number of lags). Zero means white-noise inflow.
-    pub ar_order: usize,
-
-    /// AR lag coefficients [ψ₁, ψ₂, …, ψₚ] in original units (m³/s).
-    /// Length equals `ar_order`. Empty when `ar_order == 0`.
+    /// AR lag coefficients [ψ\*₁, ψ\*₂, …, ψ\*ₚ] standardized by seasonal std
+    /// (dimensionless). These are the direct Yule-Walker output. Length is the
+    /// AR order p. Empty when p == 0 (white noise).
     pub ar_coefficients: Vec<f64>,
+
+    /// Ratio of residual standard deviation to seasonal standard deviation
+    /// (`σ_m` / `s_m`). Dimensionless, in (0, 1]. The runtime residual std is
+    /// `std_m3s * residual_std_ratio`. When `ar_coefficients` is empty
+    /// (white noise), this is 1.0 (the AR model explains nothing).
+    pub residual_std_ratio: f64,
+}
+
+impl InflowModel {
+    /// AR model order p (number of lags). Zero means white-noise inflow.
+    #[must_use]
+    pub fn ar_order(&self) -> usize {
+        self.ar_coefficients.len()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +456,6 @@ pub struct CorrelationModel {
 }
 
 impl Default for ScenarioSource {
-    /// Returns an `InSample`, non-deterministic `ScenarioSource` with no seed.
-    ///
-    /// This is the minimal-viable-solver default: the forward pass reuses
-    /// the opening tree generated during the backward pass.
     fn default() -> Self {
         Self {
             sampling_scheme: SamplingScheme::InSample,
@@ -448,10 +466,6 @@ impl Default for ScenarioSource {
 }
 
 impl Default for CorrelationModel {
-    /// Returns an empty `CorrelationModel` with no profiles and no schedule.
-    ///
-    /// The method is set to `"cholesky"` for forward compatibility. An empty
-    /// profile map means no inter-entity correlation is applied.
     fn default() -> Self {
         Self {
             method: "cholesky".to_string(),
@@ -484,17 +498,43 @@ mod tests {
             stage_id: 11,
             mean_m3s: 250.0,
             std_m3s: 55.0,
-            ar_order: 3,
             ar_coefficients: vec![0.5, 0.2, 0.1],
+            residual_std_ratio: 0.85,
         };
 
         assert_eq!(model.hydro_id, EntityId(7));
         assert_eq!(model.stage_id, 11);
         assert_eq!(model.mean_m3s, 250.0);
         assert_eq!(model.std_m3s, 55.0);
-        assert_eq!(model.ar_order, 3);
+        assert_eq!(model.ar_order(), 3);
         assert_eq!(model.ar_coefficients, vec![0.5, 0.2, 0.1]);
-        assert_eq!(model.ar_coefficients.len(), model.ar_order);
+        assert_eq!(model.ar_coefficients.len(), model.ar_order());
+        assert!((model.residual_std_ratio - 0.85).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_inflow_model_ar_order_method() {
+        // Empty coefficients: ar_order() == 0 (white noise)
+        let white_noise = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        assert_eq!(white_noise.ar_order(), 0);
+
+        // Two coefficients: ar_order() == 2
+        let par2 = InflowModel {
+            hydro_id: EntityId(2),
+            stage_id: 1,
+            mean_m3s: 200.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![0.45, 0.22],
+            residual_std_ratio: 0.85,
+        };
+        assert_eq!(par2.ar_order(), 2);
     }
 
     #[test]
@@ -621,12 +661,13 @@ mod tests {
             stage_id: 0,
             mean_m3s: 150.0,
             std_m3s: 30.0,
-            ar_order: 2,
             ar_coefficients: vec![0.45, 0.22],
+            residual_std_ratio: 0.85,
         };
         let json = serde_json::to_string(&model).unwrap();
         let deserialized: InflowModel = serde_json::from_str(&json).unwrap();
         assert_eq!(model, deserialized);
+        assert!((deserialized.residual_std_ratio - 0.85).abs() < f64::EPSILON);
     }
 
     #[test]

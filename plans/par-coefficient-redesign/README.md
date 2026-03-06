@@ -28,9 +28,9 @@ Emergency implementation plan to redesign PAR coefficient storage across the Cob
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ticket-001 | Update PAR Inflow Model and Input Scenarios Specs | epic-01 | completed | Detailed | 0.95 | 0.96 | EXCELLENT |
 | ticket-002 | Add DEC-020 and Update Spec Gap Inventory | epic-01 | completed | Detailed | 0.93 | 0.75 | ACCEPTABLE |
-| ticket-003 | Add residual_std_ratio to InflowModel in cobre-core | epic-02 | pending | Detailed | 0.96 | -- | -- |
-| ticket-004 | Add residual_std_ratio to InflowArCoefficientRow Parser | epic-02 | pending | Detailed | 0.96 | -- | -- |
-| ticket-005 | Update Assembly Logic for residual_std_ratio | epic-02 | pending | Detailed | 0.96 | -- | -- |
+| ticket-003 | Add residual_std_ratio to InflowModel in cobre-core | epic-02 | completed | Detailed | 0.96 | 0.95 | EXCELLENT |
+| ticket-004 | Add residual_std_ratio to InflowArCoefficientRow Parser | epic-02 | completed | Detailed | 0.96 | 0.88 | ACCEPTABLE |
+| ticket-005 | Update Assembly Logic for residual_std_ratio | epic-02 | completed | Detailed | 0.96 | 0.90 | EXCELLENT |
 | ticket-006 | Update Validation Layers for residual_std_ratio | epic-03 | pending | Detailed | 0.94 | -- | -- |
 | ticket-007 | Update Phase 5 Plan Tickets to Remove ASSUMPTION Flags | epic-03 | pending | Detailed | 0.94 | -- | -- |
 

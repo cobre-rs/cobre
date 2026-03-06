@@ -1,6 +1,6 @@
 {
   "plan": "par-coefficient-redesign",
-  "last_updated": "2026-03-06T13:38:38Z",
+  "last_updated": "2026-03-06T14:03:02Z",
   "progressive": false,
   "tickets": {
     "ticket-001-update-par-and-scenarios-specs.md": {
@@ -52,9 +52,17 @@
       "agent": "open-source-documentation-writer"
     },
     "ticket-003-add-residual-std-ratio-to-inflow-model.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
         "readiness": 0.96,
         "readiness_breakdown": {
           "structure": 1.0,
@@ -63,12 +71,22 @@
           "dependency_clarity": 1.0,
           "atomicity": 0.9
         }
-      }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
     },
     "ticket-004-add-residual-std-ratio-to-ar-parser.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
         "readiness": 0.96,
         "readiness_breakdown": {
           "structure": 1.0,
@@ -77,12 +95,22 @@
           "dependency_clarity": 1.0,
           "atomicity": 0.8
         }
-      }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
     },
     "ticket-005-update-assembly-for-residual-std-ratio.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
+        "quality": 0.90,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
         "readiness": 0.96,
         "readiness_breakdown": {
           "structure": 1.0,
@@ -91,7 +119,9 @@
           "dependency_clarity": 1.0,
           "atomicity": 0.9
         }
-      }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
     },
     "ticket-006-update-validation-layers.md": {
       "status": "pending",

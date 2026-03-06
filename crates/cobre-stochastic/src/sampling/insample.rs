@@ -52,8 +52,7 @@ pub fn sample_forward<'a>(
     let seed = derive_forward_seed(base_seed, iteration, scenario, stage);
     let mut rng = rng_from_seed(seed);
     let n = tree.n_openings(stage_idx);
-    #[allow(clippy::cast_possible_truncation)]
-    let j = (rng.random::<u64>() % n as u64) as usize;
+    let j = rng.random_range(0..n);
     (j, tree.opening(stage_idx, j))
 }
 

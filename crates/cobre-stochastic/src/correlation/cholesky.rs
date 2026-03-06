@@ -19,7 +19,7 @@ const SYMMETRY_TOL: f64 = 1e-10;
 ///
 /// Stores L such that Sigma = L * L^T. The factor is stored as a flat
 /// array in row-major order, including only the lower triangle
-/// (L[i][j] for j <= i).
+/// (L\[i\]\[j\] for j <= i).
 ///
 /// Used to transform independent standard normal samples into
 /// spatially correlated samples: eta = L * z where z ~ N(0, I).

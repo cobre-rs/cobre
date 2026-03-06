@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{CorrelationModel, EntityId};
 
-use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
+use crate::{correlation::cholesky::CholeskyFactor, StochasticError};
 
 /// Maximum group dimension for stack-allocated buffers in `apply_correlation`.
 /// Groups with more entities than this threshold use heap-allocated buffers.
@@ -175,7 +175,7 @@ impl DecomposedCorrelation {
     /// Pre-computes entity position indices for all correlation groups.
     ///
     /// Call this once after building the correlation data, before entering
-    /// the hot loop that calls [`apply_correlation`]. This eliminates the
+    /// the hot loop that calls [`Self::apply_correlation`]. This eliminates the
     /// per-call O(n) linear scan over `entity_order`.
     ///
     /// Each `GroupFactor` stores the positions of its entity IDs within the
@@ -299,11 +299,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
-        EntityId,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             CorrelationScheduleEntry,
         },
+        EntityId,
     };
 
     use super::*;

@@ -305,7 +305,7 @@ pub struct ScenarioData {
 /// |--------------------------------------------------------|----------------------------|
 /// | Any file read or parse failure                         | Propagated from parser     |
 /// | AR coefficient rows without matching stats row         | [`LoadError::SchemaError`] |
-/// | AR coefficient count does not match `ar_order`         | [`LoadError::SchemaError`] |
+/// | AR coefficient rows exist for unknown (hydro, stage)   | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///

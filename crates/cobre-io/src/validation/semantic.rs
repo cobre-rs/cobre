@@ -38,7 +38,7 @@
 //! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
 //! |11  | FPHA hydros: `fpha_turbined_cost > spillage_cost`                       | `penalties.json`                               | `BusinessRuleViolation`  |
 //! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow)            | `scenarios/inflow_seasonal_stats.parquet`      | `ModelQuality` (warning) |
-//! |13  | AR coefficient count equals `ar_order`                                  | `scenarios/inflow_ar_coefficients.parquet`     | `InvalidValue`           |
+//! |13  | `residual_std_ratio` consistent across all lag rows of same group       | `scenarios/inflow_ar_coefficients.parquet`     | `InvalidValue`           |
 //! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
@@ -47,25 +47,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
-// ── validate_semantic_hydro_thermal ──────────────────────────────────────────
-
-/// Performs Layer 5a semantic validation: all hydro and thermal domain rules.
-///
-/// All 13 rules are checked regardless of failures in earlier rules — every
-/// violation is collected before returning.  This function is infallible; it
-/// never returns a `Result`.  All violations are pushed to `ctx` as
-/// [`ErrorKind::CycleDetected`], [`ErrorKind::InvalidValue`], or
-/// [`ErrorKind::BusinessRuleViolation`] entries.
-///
-/// # Arguments
-///
-/// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
-/// * `ctx`  — mutable validation context that accumulates diagnostics.
-///
-/// # Geometry and FPHA rules
-///
-/// Rules 8-12 are only checked when the corresponding data is non-empty.  An
-/// empty `hydro_geometry` or empty `fpha_hyperplanes` slice produces no errors.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
@@ -77,41 +58,26 @@ pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut Valid
     check_thermal_generation_bounds(data, ctx);
 }
 
-// ── Rule 1: Cascade acyclicity ────────────────────────────────────────────────
-
-/// Checks that the hydro cascade graph is acyclic using Kahn's algorithm.
-///
-/// Builds a downstream adjacency map from `hydro.downstream_id` and runs
-/// topological sort.  If any node is unvisited after the sort, a cycle exists.
-/// Reports all cycle-participant hydro IDs in one error entry.
 fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
     if data.hydros.is_empty() {
         return;
     }
 
-    // Collect all hydro IDs.
     let all_ids: Vec<i32> = data.hydros.iter().map(|h| h.id.0).collect();
-
-    // Build adjacency map: upstream_id -> list of downstream_ids (within the
-    // hydro set only -- Layer 3 has already validated that downstream_id
-    // references exist, but be defensive).
     let downstream_set: HashSet<i32> = all_ids.iter().copied().collect();
 
-    // adjacency[u] = Vec of v such that u -> v (u is upstream, v is downstream)
     let mut adjacency: HashMap<i32, Vec<i32>> = HashMap::new();
     for id in &all_ids {
         adjacency.insert(*id, Vec::new());
     }
     for hydro in &data.hydros {
         if let Some(ds) = hydro.downstream_id {
-            // Only add edges within the hydro registry.
             if downstream_set.contains(&ds.0) {
                 adjacency.entry(hydro.id.0).or_default().push(ds.0);
             }
         }
     }
 
-    // Compute in-degrees: in_degree[v] = number of upstream nodes pointing to v.
     let mut in_degree: HashMap<i32, usize> = HashMap::new();
     for id in &all_ids {
         in_degree.insert(*id, 0);
@@ -124,7 +90,6 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // Kahn's algorithm: start with all zero-in-degree nodes.
     let mut queue: std::collections::VecDeque<i32> = in_degree
         .iter()
         .filter(|&(_, deg)| *deg == 0)
@@ -148,9 +113,7 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // If visited_count < total, a cycle exists.
     if visited_count < all_ids.len() {
-        // Collect all nodes still in the cycle (in_degree > 0 after Kahn's).
         let mut cycle_participants: Vec<i32> = in_degree
             .iter()
             .filter(|&(_, deg)| *deg > 0)
@@ -174,14 +137,10 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rules 2-5: Hydro bound consistency ───────────────────────────────────────
-
-/// Checks storage, turbine, outflow, and generation bound consistency for every hydro.
 fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
     for hydro in &data.hydros {
         let entity_str = format!("Hydro {}", hydro.id.0);
 
-        // Rule 2: min_storage_hm3 <= max_storage_hm3
         if hydro.min_storage_hm3 > hydro.max_storage_hm3 {
             ctx.add_error(
                 ErrorKind::InvalidValue,
@@ -194,7 +153,6 @@ fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
             );
         }
 
-        // Rule 3: min_turbined_m3s <= max_turbined_m3s
         if hydro.min_turbined_m3s > hydro.max_turbined_m3s {
             ctx.add_error(
                 ErrorKind::InvalidValue,
@@ -207,7 +165,6 @@ fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
             );
         }
 
-        // Rule 4: min_outflow_m3s <= max_outflow_m3s (when Some)
         if let Some(max_outflow) = hydro.max_outflow_m3s {
             if hydro.min_outflow_m3s > max_outflow {
                 ctx.add_error(
@@ -222,7 +179,6 @@ fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
             }
         }
 
-        // Rule 5: min_generation_mw <= max_generation_mw
         if hydro.min_generation_mw > hydro.max_generation_mw {
             ctx.add_error(
                 ErrorKind::InvalidValue,
@@ -237,11 +193,7 @@ fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rule 6: Entity lifecycle consistency ──────────────────────────────────────
-
-/// Checks that `entry_stage_id < exit_stage_id` for all entities with both fields set.
 fn check_lifecycle_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
-    // Hydros
     for hydro in &data.hydros {
         if let (Some(entry), Some(exit)) = (hydro.entry_stage_id, hydro.exit_stage_id) {
             if entry >= exit {
@@ -258,7 +210,6 @@ fn check_lifecycle_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // Lines
     for line in &data.lines {
         if let (Some(entry), Some(exit)) = (line.entry_stage_id, line.exit_stage_id) {
             if entry >= exit {
@@ -275,7 +226,6 @@ fn check_lifecycle_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // Thermals
     for thermal in &data.thermals {
         if let (Some(entry), Some(exit)) = (thermal.entry_stage_id, thermal.exit_stage_id) {
             if entry >= exit {
@@ -293,12 +243,7 @@ fn check_lifecycle_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rule 7: Filling configuration validity ────────────────────────────────────
-
-/// Checks that every hydro's `filling.start_stage_id` is a valid study stage ID.
 fn check_filling_config(data: &ParsedData, ctx: &mut ValidationContext) {
-    // Build the set of study stage IDs (non-negative IDs only — pre-study stages
-    // have negative IDs and are not valid targets for filling operations).
     let study_stage_ids: HashSet<i32> = data
         .stages
         .stages
@@ -325,13 +270,6 @@ fn check_filling_config(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rules 8-10: Geometry monotonicity ────────────────────────────────────────
-
-/// Checks monotonicity of VHA curves for all hydros with geometry data.
-///
-/// Rows are pre-sorted by `(hydro_id, volume_hm3)` ascending, so groups are
-/// contiguous.  Iterates with a `current_key` variable rather than collecting
-/// into a map — O(n) with no extra allocation.
 fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
     if data.hydro_geometry.is_empty() {
         return;
@@ -350,15 +288,11 @@ fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
         }
         let group = &rows[group_start..i];
 
-        // Check consecutive pairs within the group.
         for pair in group.windows(2) {
             let prev = &pair[0];
             let curr = &pair[1];
             let entity_str = format!("Hydro {current_hydro_id}");
 
-            // Rule 8: volume_hm3 must be strictly increasing.
-            // (rows are pre-sorted by volume_hm3, so consecutive values should never
-            // be equal either)
             if curr.volume_hm3 <= prev.volume_hm3 {
                 ctx.add_error(
                     ErrorKind::BusinessRuleViolation,
@@ -371,7 +305,6 @@ fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
                 );
             }
 
-            // Rule 9: height_m must be non-decreasing.
             if curr.height_m < prev.height_m {
                 ctx.add_error(
                     ErrorKind::BusinessRuleViolation,
@@ -384,7 +317,6 @@ fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
                 );
             }
 
-            // Rule 10: area_km2 must be non-decreasing.
             if curr.area_km2 < prev.area_km2 {
                 ctx.add_error(
                     ErrorKind::BusinessRuleViolation,
@@ -400,19 +332,11 @@ fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rules 11-12: FPHA hyperplane constraints ──────────────────────────────────
-
-/// Checks FPHA hyperplane minimum plane count and gamma sign constraints.
-///
-/// Rows are pre-sorted by `(hydro_id, stage_id, plane_id)` ascending (null
-/// `stage_id` sorts first).  Groups are contiguous.  Uses a `current_key`
-/// variable for O(n) grouping without extra allocation.
 fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
     if data.fpha_hyperplanes.is_empty() {
         return;
     }
 
-    // Rule 12: Check gamma_v > 0 and gamma_s <= 0 for every row.
     for row in &data.fpha_hyperplanes {
         let entity_str = format!("Hydro {}", row.hydro_id.0);
 
@@ -445,18 +369,14 @@ fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // Rule 11: Each (hydro_id, stage_id) group must have at least 3 planes.
-    // Rows are sorted by (hydro_id, stage_id, plane_id).
     let rows = &data.fpha_hyperplanes;
     let mut i = 0;
 
     while i < rows.len() {
         let current_hydro_id = rows[i].hydro_id.0;
         let current_stage_id = rows[i].stage_id;
-
         let group_start = i;
 
-        // Find end of this (hydro_id, stage_id) group.
         while i < rows.len()
             && rows[i].hydro_id.0 == current_hydro_id
             && rows[i].stage_id == current_stage_id
@@ -481,9 +401,6 @@ fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
-// ── Rule 13: Thermal generation bound consistency ─────────────────────────────
-
-/// Checks that `min_generation_mw <= max_generation_mw` for every thermal.
 fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContext) {
     for thermal in &data.thermals {
         if thermal.min_generation_mw > thermal.max_generation_mw {
@@ -901,10 +818,6 @@ fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationContext) {
 
 /// Validates inflow model standard deviation and AR coefficient count consistency.
 fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
-    if data.inflow_seasonal_stats.is_empty() {
-        return;
-    }
-
     // Rule 12: std_m3s >= 0.0; warn when == 0.0 (deterministic inflow).
     // Note: std_m3s < 0 is already caught by the schema parser. However, the
     // schema parser only produces a SchemaError; here we emit a ModelQuality
@@ -924,37 +837,36 @@ fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    // Rule 13: AR coefficient count must equal ar_order.
-    // Group inflow_ar_coefficients rows by (hydro_id, stage_id), counting entries.
-    if !data.inflow_ar_coefficients.is_empty() {
-        let mut ar_coeff_counts: HashMap<(i32, i32), usize> = HashMap::new();
+    // Rule 13: residual_std_ratio consistency across lag rows (V-AR-4).
+    // For each (hydro_id, stage_id) group, all lag rows must share the same
+    // residual_std_ratio value. Range validation is already done by the parser
+    // (ticket-004); this rule only checks cross-row consistency within a group.
+    {
+        let mut ratio_by_group: HashMap<(i32, i32), f64> = HashMap::new();
         for row in &data.inflow_ar_coefficients {
-            *ar_coeff_counts
-                .entry((row.hydro_id.0, row.stage_id))
-                .or_insert(0) += 1;
-        }
-
-        for stats_row in &data.inflow_seasonal_stats {
-            if stats_row.ar_order <= 0 {
-                continue;
-            }
-            let Ok(expected) = usize::try_from(stats_row.ar_order) else {
-                continue;
-            };
-            let key = (stats_row.hydro_id.0, stats_row.stage_id);
-            let actual = ar_coeff_counts.get(&key).copied().unwrap_or(0);
-            if actual != expected {
-                let entity_str = format!("Hydro {}", stats_row.hydro_id.0);
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
-                    "scenarios/inflow_ar_coefficients.parquet",
-                    Some(&entity_str),
-                    format!(
-                        "{entity_str} stage {}: ar_order is {expected} but {actual} AR \
-                         coefficient row(s) found; ar_coefficients.len() must equal ar_order",
-                        stats_row.stage_id
-                    ),
-                );
+            let key = (row.hydro_id.0, row.stage_id);
+            match ratio_by_group.entry(key) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(row.residual_std_ratio);
+                }
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    if (*e.get() - row.residual_std_ratio).abs() > f64::EPSILON {
+                        ctx.add_error(
+                            ErrorKind::InvalidValue,
+                            "scenarios/inflow_ar_coefficients.parquet",
+                            Some(format!("Hydro {}", row.hydro_id.0)),
+                            format!(
+                                "Hydro {} stage {}: inconsistent residual_std_ratio across \
+                                 lag rows (first={}, current={}); all lags must share the \
+                                 same ratio",
+                                row.hydro_id.0,
+                                row.stage_id,
+                                e.get(),
+                                row.residual_std_ratio,
+                            ),
+                        );
+                    }
+                }
             }
         }
     }
@@ -2146,27 +2058,6 @@ mod tests {
         }
     }
 
-    /// Build a minimal `InflowSeasonalStatsRow`.
-    fn make_inflow_stats(hydro_id: i32, stage_id: i32, ar_order: i32) -> InflowSeasonalStatsRow {
-        InflowSeasonalStatsRow {
-            hydro_id: EntityId::from(hydro_id),
-            stage_id,
-            mean_m3s: 100.0,
-            std_m3s: 10.0,
-            ar_order,
-        }
-    }
-
-    /// Build a minimal `InflowArCoefficientRow`.
-    fn make_ar_row(hydro_id: i32, stage_id: i32, lag: i32) -> InflowArCoefficientRow {
-        InflowArCoefficientRow {
-            hydro_id: EntityId::from(hydro_id),
-            stage_id,
-            lag,
-            coefficient: 0.5,
-        }
-    }
-
     /// Build a valid 2x2 symmetric correlation group.
     fn make_corr_group(name: &str, matrix: Vec<Vec<f64>>) -> CorrelationGroup {
         CorrelationGroup {
@@ -2671,7 +2562,6 @@ mod tests {
             stage_id: 0,
             mean_m3s: 100.0,
             std_m3s: 0.0, // triggers ModelQuality warning
-            ar_order: 0,
         }];
         let data = make_data_5b(
             vec![make_hydro_ordered_penalties(1)],
@@ -2699,58 +2589,99 @@ mod tests {
         );
     }
 
-    // ── Rule 13: AR coefficient count mismatch ────────────────────────────────
+    // ── Rule 13: residual_std_ratio consistency ───────────────────────────────
 
-    /// InflowModel with ar_order=2 but 1 AR coefficient row produces InvalidValue.
+    /// Two AR coefficient rows for the same (hydro, stage) with identical
+    /// `residual_std_ratio` values produce no `InvalidValue` error.
     #[test]
-    fn test_5b_ar_coefficient_count_mismatch() {
-        let stats = vec![make_inflow_stats(1, 0, 2)]; // ar_order=2
-        let ar_rows = vec![make_ar_row(1, 0, 1)]; // only 1 row (lag=1), need 2
+    fn test_5b_residual_std_ratio_consistent_no_error() {
+        let ar_rows = vec![
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.5,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.3,
+                residual_std_ratio: 0.85, // same ratio as lag 1
+            },
+        ];
         let data = make_data_5b(
             vec![make_hydro_ordered_penalties(1)],
             make_stages_5b(vec![0]),
             vec![make_bus_with_deficit(1, 10.0)],
-            stats,
+            vec![],
             ar_rows,
             None,
         );
         let mut ctx = ValidationContext::new();
         validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-        assert!(ctx.has_errors());
         let errors = ctx.errors();
-        let relevant: Vec<_> = errors
+        let invalid_value_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue && e.message.contains("residual_std_ratio")
+            })
+            .collect();
+        assert!(
+            invalid_value_errors.is_empty(),
+            "consistent residual_std_ratio should produce no InvalidValue errors, got: \
+             {invalid_value_errors:?}"
+        );
+    }
+
+    /// Two AR coefficient rows for the same (hydro, stage) with different
+    /// `residual_std_ratio` values produce an `InvalidValue` error whose message
+    /// contains "residual_std_ratio" and "inconsistent".
+    #[test]
+    fn test_5b_residual_std_ratio_inconsistent_error() {
+        let ar_rows = vec![
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.5,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.3,
+                residual_std_ratio: 0.90, // different ratio — triggers V-AR-4
+            },
+        ];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            ar_rows,
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors = ctx.errors();
+        let invalid_value_errors: Vec<_> = errors
             .iter()
             .filter(|e| e.kind == ErrorKind::InvalidValue)
             .collect();
         assert!(
-            !relevant.is_empty(),
-            "AR count mismatch should produce InvalidValue"
+            !invalid_value_errors.is_empty(),
+            "inconsistent residual_std_ratio should produce at least one InvalidValue error"
         );
-    }
-
-    /// InflowModel with ar_order=2 and 2 AR coefficient rows produces no error.
-    #[test]
-    fn test_5b_ar_coefficient_count_valid() {
-        let stats = vec![make_inflow_stats(1, 0, 2)]; // ar_order=2
-        let ar_rows = vec![make_ar_row(1, 0, 1), make_ar_row(1, 0, 2)]; // 2 rows
-        let data = make_data_5b(
-            vec![make_hydro_ordered_penalties(1)],
-            make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 10.0)],
-            stats,
-            ar_rows,
-            None,
-        );
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-        let errors: Vec<_> = ctx
-            .errors()
-            .into_iter()
-            .filter(|e| e.kind == ErrorKind::InvalidValue)
-            .collect();
+        let ratio_error = invalid_value_errors.iter().find(|e| {
+            e.message.contains("residual_std_ratio") && e.message.contains("inconsistent")
+        });
         assert!(
-            errors.is_empty(),
-            "matching AR count should produce no error, got: {errors:?}"
+            ratio_error.is_some(),
+            "InvalidValue error message should contain 'residual_std_ratio' and 'inconsistent', \
+             got: {invalid_value_errors:?}"
         );
     }
 

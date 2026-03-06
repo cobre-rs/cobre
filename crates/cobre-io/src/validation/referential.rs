@@ -1102,7 +1102,6 @@ mod tests {
             stage_id: 0,
             mean_m3s: 100.0,
             std_m3s: 10.0,
-            ar_order: 1,
         }];
         let mut ctx = ValidationContext::new();
         validate_referential_integrity(&data, &mut ctx);

@@ -23,8 +23,6 @@ use cobre_core::{
 use crate::LoadError;
 use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 
-// ── assemble_inflow_models ────────────────────────────────────────────────────
-
 /// Assemble `Vec<InflowModel>` by joining seasonal stats with AR coefficients.
 ///
 /// Both inputs must be pre-sorted by their respective parsers:
@@ -33,16 +31,18 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 ///
 /// For each [`InflowSeasonalStatsRow`], all [`InflowArCoefficientRow`] entries
 /// with a matching `(hydro_id, stage_id)` are collected into `ar_coefficients`,
-/// preserving lag order. The coefficient count must equal `ar_order`.
+/// preserving lag order. The coefficient count determines the AR order; there is
+/// no cross-check against a separate `ar_order` field.
 ///
-/// An empty `ar_coefficients` vec is produced when `ar_order == 0`.
+/// When no coefficient rows exist for a (hydro, stage) pair, the resulting
+/// [`InflowModel`] has an empty `ar_coefficients` vec and `residual_std_ratio = 1.0`
+/// (white-noise identity).
 ///
 /// # Errors
 ///
 /// | Condition                                              | Error variant              |
 /// |--------------------------------------------------------|----------------------------|
 /// | Coefficient rows exist for a pair not in `stats`      | [`LoadError::SchemaError`] |
-/// | Coefficient count does not match `ar_order`            | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -52,17 +52,19 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 /// use cobre_io::scenarios::assembly::assemble_inflow_models;
 ///
 /// let stats = vec![
-///     InflowSeasonalStatsRow { hydro_id: EntityId(1), stage_id: 0, mean_m3s: 100.0, std_m3s: 10.0, ar_order: 2 },
-///     InflowSeasonalStatsRow { hydro_id: EntityId(1), stage_id: 1, mean_m3s: 80.0, std_m3s: 8.0, ar_order: 0 },
+///     InflowSeasonalStatsRow { hydro_id: EntityId(1), stage_id: 0, mean_m3s: 100.0, std_m3s: 10.0 },
+///     InflowSeasonalStatsRow { hydro_id: EntityId(1), stage_id: 1, mean_m3s: 80.0, std_m3s: 8.0 },
 /// ];
 /// let coefficients = vec![
-///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 1, coefficient: 0.5 },
-///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 2, coefficient: 0.2 },
+///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 1, coefficient: 0.5, residual_std_ratio: 0.85 },
+///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 2, coefficient: 0.2, residual_std_ratio: 0.85 },
 /// ];
 /// let models = assemble_inflow_models(stats, coefficients).expect("valid join");
 /// assert_eq!(models.len(), 2);
-/// assert_eq!(models[0].ar_coefficients.len(), 2);
+/// assert_eq!(models[0].ar_order(), 2);
+/// assert!((models[0].residual_std_ratio - 0.85).abs() < f64::EPSILON);
 /// assert!(models[1].ar_coefficients.is_empty());
+/// assert!((models[1].residual_std_ratio - 1.0).abs() < f64::EPSILON);
 /// ```
 pub fn assemble_inflow_models(
     stats: Vec<InflowSeasonalStatsRow>,
@@ -74,13 +76,15 @@ pub fn assemble_inflow_models(
     }
 
     // Group coefficients by (hydro_id, stage_id) preserving lag order (pre-sorted by parser).
-    let mut coeff_map: HashMap<(EntityId, i32), Vec<f64>> =
+    // The tuple carries (coefficient_vec, residual_std_ratio) where the ratio is taken
+    // from the first row in the group (consistency across lags is validated in Layer 5).
+    let mut coeff_map: HashMap<(EntityId, i32), (Vec<f64>, f64)> =
         HashMap::with_capacity(coefficients.len());
     for row in coefficients {
-        coeff_map
+        let entry = coeff_map
             .entry((row.hydro_id, row.stage_id))
-            .or_default()
-            .push(row.coefficient);
+            .or_insert_with(|| (Vec::new(), row.residual_std_ratio));
+        entry.0.push(row.coefficient);
     }
 
     let total_coeff_keys = coeff_map.len();
@@ -90,54 +94,23 @@ pub fn assemble_inflow_models(
 
     for row in stats {
         let key = (row.hydro_id, row.stage_id);
-        // Parser validates ar_order >= 0; usize::try_from avoids sign-loss cast.
-        let ar_order = usize::try_from(row.ar_order).map_err(|_| LoadError::SchemaError {
-            path: Path::new("scenarios/inflow_seasonal_stats.parquet").to_path_buf(),
-            field: "ar_order".to_string(),
-            message: format!(
-                "ar_order is negative ({}) for (hydro_id={}, stage_id={})",
-                row.ar_order, row.hydro_id.0, row.stage_id,
-            ),
-        })?;
 
-        let ar_coefficients = if let Some(coeffs) = coeff_map.remove(&key) {
-            if coeffs.len() != ar_order {
-                return Err(LoadError::SchemaError {
-                    path: Path::new("scenarios/inflow_ar_coefficients.parquet").to_path_buf(),
-                    field: "inflow_ar_coefficients".to_string(),
-                    message: format!(
-                        "ar_order mismatch for (hydro_id={}, stage_id={}): \
-                         expected {} coefficients, found {}",
-                        row.hydro_id.0,
-                        row.stage_id,
-                        ar_order,
-                        coeffs.len(),
-                    ),
-                });
-            }
-            consumed_keys += 1;
-            coeffs
-        } else if ar_order > 0 {
-            return Err(LoadError::SchemaError {
-                path: Path::new("scenarios/inflow_ar_coefficients.parquet").to_path_buf(),
-                field: "inflow_ar_coefficients".to_string(),
-                message: format!(
-                    "ar_order mismatch for (hydro_id={}, stage_id={}): \
-                     expected {} coefficients, found 0",
-                    row.hydro_id.0, row.stage_id, ar_order,
-                ),
-            });
-        } else {
-            Vec::new()
-        };
+        let (ar_coefficients, residual_std_ratio) =
+            if let Some((coeffs, ratio)) = coeff_map.remove(&key) {
+                consumed_keys += 1;
+                (coeffs, ratio)
+            } else {
+                // No coefficients for this (hydro, stage): white-noise model.
+                (Vec::new(), 1.0_f64)
+            };
 
         models.push(InflowModel {
             hydro_id: row.hydro_id,
             stage_id: row.stage_id,
             mean_m3s: row.mean_m3s,
             std_m3s: row.std_m3s,
-            ar_order,
             ar_coefficients,
+            residual_std_ratio,
         });
     }
 
@@ -161,8 +134,6 @@ pub fn assemble_inflow_models(
 
     Ok(models)
 }
-
-// ── assemble_load_models ──────────────────────────────────────────────────────
 
 /// Assemble `Vec<LoadModel>` by mapping [`LoadSeasonalStatsRow`] 1:1 to [`LoadModel`].
 ///
@@ -200,8 +171,6 @@ pub fn assemble_load_models(stats: Vec<LoadSeasonalStatsRow>) -> Vec<LoadModel> 
         .collect()
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -213,36 +182,26 @@ mod tests {
     use super::*;
     use cobre_core::EntityId;
 
-    // ── assemble_inflow_models ────────────────────────────────────────────────
-
-    /// Given matching stats and coefficients, the resulting models have correct
-    /// `ar_coefficients` contents and lengths.
     #[test]
     fn test_assemble_inflow_models_matching_join() {
-        // Spec acceptance criterion: hydro 1 stage 0 ar_order 2, hydro 1 stage 1
-        // ar_order 0, hydro 2 stage 0 ar_order 1 — 3 coefficient rows (hydro 1
-        // stage 0 lags 1,2 and hydro 2 stage 0 lag 1).
         let stats = vec![
             InflowSeasonalStatsRow {
                 hydro_id: EntityId(1),
                 stage_id: 0,
                 mean_m3s: 100.0,
                 std_m3s: 10.0,
-                ar_order: 2,
             },
             InflowSeasonalStatsRow {
                 hydro_id: EntityId(1),
                 stage_id: 1,
                 mean_m3s: 80.0,
                 std_m3s: 8.0,
-                ar_order: 0,
             },
             InflowSeasonalStatsRow {
                 hydro_id: EntityId(2),
                 stage_id: 0,
                 mean_m3s: 200.0,
                 std_m3s: 20.0,
-                ar_order: 1,
             },
         ];
         let coefficients = vec![
@@ -251,67 +210,67 @@ mod tests {
                 stage_id: 0,
                 lag: 1,
                 coefficient: 0.45,
+                residual_std_ratio: 0.85,
             },
             InflowArCoefficientRow {
                 hydro_id: EntityId(1),
                 stage_id: 0,
                 lag: 2,
                 coefficient: 0.22,
+                residual_std_ratio: 0.85,
             },
             InflowArCoefficientRow {
                 hydro_id: EntityId(2),
                 stage_id: 0,
                 lag: 1,
                 coefficient: 0.60,
+                residual_std_ratio: 0.72,
             },
         ];
 
         let models = assemble_inflow_models(stats, coefficients).unwrap();
         assert_eq!(models.len(), 3);
 
-        // hydro 1 stage 0: ar_order 2 → 2 coefficients
         let m0 = &models[0];
         assert_eq!(m0.hydro_id, EntityId(1));
         assert_eq!(m0.stage_id, 0);
-        assert_eq!(m0.ar_order, 2);
+        assert_eq!(m0.ar_order(), 2);
         assert_eq!(m0.ar_coefficients.len(), 2);
         assert!((m0.ar_coefficients[0] - 0.45).abs() < f64::EPSILON);
         assert!((m0.ar_coefficients[1] - 0.22).abs() < f64::EPSILON);
+        assert!((m0.residual_std_ratio - 0.85).abs() < f64::EPSILON);
 
-        // hydro 1 stage 1: ar_order 0 → empty coefficients
         let m1 = &models[1];
         assert_eq!(m1.hydro_id, EntityId(1));
         assert_eq!(m1.stage_id, 1);
-        assert_eq!(m1.ar_order, 0);
+        assert_eq!(m1.ar_order(), 0);
         assert!(m1.ar_coefficients.is_empty());
+        assert!((m1.residual_std_ratio - 1.0).abs() < f64::EPSILON);
 
-        // hydro 2 stage 0: ar_order 1 → 1 coefficient
         let m2 = &models[2];
         assert_eq!(m2.hydro_id, EntityId(2));
         assert_eq!(m2.stage_id, 0);
-        assert_eq!(m2.ar_order, 1);
+        assert_eq!(m2.ar_order(), 1);
         assert_eq!(m2.ar_coefficients.len(), 1);
         assert!((m2.ar_coefficients[0] - 0.60).abs() < f64::EPSILON);
+        assert!((m2.residual_std_ratio - 0.72).abs() < f64::EPSILON);
     }
 
-    /// AR order zero with no coefficient rows produces an empty `ar_coefficients` vec.
     #[test]
-    fn test_assemble_inflow_models_ar_order_zero() {
+    fn test_assemble_inflow_models_no_coefficients() {
         let stats = vec![InflowSeasonalStatsRow {
             hydro_id: EntityId(3),
             stage_id: 5,
             mean_m3s: 50.0,
             std_m3s: 5.0,
-            ar_order: 0,
         }];
         let models = assemble_inflow_models(stats, vec![]).unwrap();
         assert_eq!(models.len(), 1);
         assert!(models[0].ar_coefficients.is_empty());
-        assert_eq!(models[0].ar_order, 0);
+        assert_eq!(models[0].ar_order(), 0);
+        assert!((models[0].residual_std_ratio - 1.0).abs() < f64::EPSILON);
     }
 
-    /// Orphaned coefficient rows (no matching stats row) produce a `SchemaError`
-    /// with `message` containing `"orphaned"`.
     #[test]
     fn test_assemble_inflow_models_orphaned_coefficients() {
         let stats = vec![InflowSeasonalStatsRow {
@@ -319,7 +278,6 @@ mod tests {
             stage_id: 0,
             mean_m3s: 100.0,
             std_m3s: 10.0,
-            ar_order: 0,
         }];
         // Coefficients for hydro 5 stage 0 — no matching stats row.
         let coefficients = vec![InflowArCoefficientRow {
@@ -327,6 +285,7 @@ mod tests {
             stage_id: 0,
             lag: 1,
             coefficient: 0.3,
+            residual_std_ratio: 0.85,
         }];
 
         let err = assemble_inflow_models(stats, coefficients).unwrap_err();
@@ -345,99 +304,12 @@ mod tests {
         }
     }
 
-    /// Coefficient count mismatch (ar_order = 2 but only 1 coefficient row)
-    /// produces a `SchemaError` with `message` containing `"mismatch"`.
-    #[test]
-    fn test_assemble_inflow_models_count_mismatch() {
-        let stats = vec![InflowSeasonalStatsRow {
-            hydro_id: EntityId(1),
-            stage_id: 0,
-            mean_m3s: 100.0,
-            std_m3s: 10.0,
-            ar_order: 2,
-        }];
-        let coefficients = vec![InflowArCoefficientRow {
-            hydro_id: EntityId(1),
-            stage_id: 0,
-            lag: 1,
-            coefficient: 0.5,
-        }];
-
-        let err = assemble_inflow_models(stats, coefficients).unwrap_err();
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert!(
-                    field.contains("inflow_ar_coefficients"),
-                    "field should mention inflow_ar_coefficients, got: {field}"
-                );
-                assert!(
-                    message.contains("mismatch"),
-                    "message should contain 'mismatch', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// Over-count mismatch: ar_order = 2 but 3 coefficients → `SchemaError`
-    /// with `message` containing `"mismatch"`.
-    #[test]
-    fn test_assemble_inflow_models_over_count_mismatch() {
-        let stats = vec![InflowSeasonalStatsRow {
-            hydro_id: EntityId(1),
-            stage_id: 0,
-            mean_m3s: 100.0,
-            std_m3s: 10.0,
-            ar_order: 2,
-        }];
-        let coefficients = vec![
-            InflowArCoefficientRow {
-                hydro_id: EntityId(1),
-                stage_id: 0,
-                lag: 1,
-                coefficient: 0.5,
-            },
-            InflowArCoefficientRow {
-                hydro_id: EntityId(1),
-                stage_id: 0,
-                lag: 2,
-                coefficient: 0.2,
-            },
-            InflowArCoefficientRow {
-                hydro_id: EntityId(1),
-                stage_id: 0,
-                lag: 3,
-                coefficient: 0.1,
-            },
-        ];
-
-        let err = assemble_inflow_models(stats, coefficients).unwrap_err();
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert!(
-                    field.contains("inflow_ar_coefficients"),
-                    "field should mention inflow_ar_coefficients, got: {field}"
-                );
-                assert!(
-                    message.contains("mismatch"),
-                    "message should contain 'mismatch', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// Both empty inputs return `Ok(vec![])` without error.
     #[test]
     fn test_assemble_inflow_models_both_empty() {
         let models = assemble_inflow_models(vec![], vec![]).unwrap();
         assert!(models.is_empty());
     }
 
-    // ── assemble_load_models ─────────────────────────────────────────────────
-
-    /// Given 4 `LoadSeasonalStatsRow` entries, the result has 4 `LoadModel`
-    /// entries with matching field values.
     #[test]
     fn test_assemble_load_models_four_rows() {
         let stats = vec![
@@ -491,7 +363,6 @@ mod tests {
         assert!((models[3].std_mw - 45.0).abs() < f64::EPSILON);
     }
 
-    /// Empty input produces empty output.
     #[test]
     fn test_assemble_load_models_empty() {
         let models = assemble_load_models(vec![]);

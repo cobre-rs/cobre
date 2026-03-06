@@ -371,8 +371,9 @@ impl crate::Communicator for FerrompiBackend {
     ///
     /// # Errors
     ///
-    /// - [`crate::CommError::InvalidBufferSize`] if any `counts` or `displs`
-    ///   element overflows `i32`.
+    /// - [`crate::CommError::InvalidBufferSize`] if `counts.len() != size`,
+    ///   `displs.len() != size`, `send.len() != counts[rank]`, or any element
+    ///   overflows `i32`.
     /// - [`crate::CommError::CollectiveFailed`] if the underlying MPI call fails.
     fn allgatherv<T: crate::CommData>(
         &self,
@@ -381,6 +382,27 @@ impl crate::Communicator for FerrompiBackend {
         counts: &[usize],
         displs: &[usize],
     ) -> Result<(), crate::CommError> {
+        if counts.len() != self.size {
+            return Err(crate::CommError::InvalidBufferSize {
+                operation: "allgatherv",
+                expected: self.size,
+                actual: counts.len(),
+            });
+        }
+        if displs.len() != self.size {
+            return Err(crate::CommError::InvalidBufferSize {
+                operation: "allgatherv",
+                expected: self.size,
+                actual: displs.len(),
+            });
+        }
+        if send.len() != counts[self.rank] {
+            return Err(crate::CommError::InvalidBufferSize {
+                operation: "allgatherv",
+                expected: counts[self.rank],
+                actual: send.len(),
+            });
+        }
         let i32_counts = to_i32_vec(counts, "allgatherv")?;
         let i32_displs = to_i32_vec(displs, "allgatherv")?;
         self.world
@@ -392,7 +414,8 @@ impl crate::Communicator for FerrompiBackend {
     ///
     /// # Errors
     ///
-    /// - [`crate::CommError::InvalidBufferSize`] if ferrompi rejects buffer sizes.
+    /// - [`crate::CommError::InvalidBufferSize`] if `send.len() != recv.len()`
+    ///   or `send.is_empty()`.
     /// - [`crate::CommError::CollectiveFailed`] if the underlying MPI call fails.
     fn allreduce<T: crate::CommData>(
         &self,
@@ -400,6 +423,20 @@ impl crate::Communicator for FerrompiBackend {
         recv: &mut [T],
         op: crate::ReduceOp,
     ) -> Result<(), crate::CommError> {
+        if send.len() != recv.len() {
+            return Err(crate::CommError::InvalidBufferSize {
+                operation: "allreduce",
+                expected: send.len(),
+                actual: recv.len(),
+            });
+        }
+        if send.is_empty() {
+            return Err(crate::CommError::InvalidBufferSize {
+                operation: "allreduce",
+                expected: 1,
+                actual: 0,
+            });
+        }
         let mpi_op = map_reduce_op(op);
         self.world
             .allreduce(send, recv, mpi_op)

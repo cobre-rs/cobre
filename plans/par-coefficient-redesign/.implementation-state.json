@@ -1,0 +1,139 @@
+{
+  "plan": "par-coefficient-redesign",
+  "last_updated": "2026-03-06T13:38:38Z",
+  "progressive": false,
+  "tickets": {
+    "ticket-001-update-par-and-scenarios-specs.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.95,
+        "readiness_breakdown": {
+          "structure": 0.93,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 0.96,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "agent": "open-source-documentation-writer",
+      "workflow_step": null
+    },
+    "ticket-002-add-dec020-and-update-gap-inventory.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.93,
+        "readiness_breakdown": {
+          "structure": 0.93,
+          "testability": 0.88,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-003-add-residual-std-ratio-to-inflow-model.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-004-add-residual-std-ratio-to-ar-parser.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    },
+    "ticket-005-update-assembly-for-residual-std-ratio.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.9
+        }
+      }
+    },
+    "ticket-006-update-validation-layers.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.7
+        }
+      }
+    },
+    "ticket-007-update-phase5-plan-tickets.md": {
+      "status": "pending",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 0.93,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      }
+    }
+  },
+  "epics": {
+    "epic-01-spec-updates": {
+      "phase": "executing",
+      "learning_extracted": false
+    },
+    "epic-02-core-and-io-updates": {
+      "phase": "executing",
+      "learning_extracted": false
+    },
+    "epic-03-validation-and-plan-patch": {
+      "phase": "executing",
+      "learning_extracted": false
+    }
+  }
+}

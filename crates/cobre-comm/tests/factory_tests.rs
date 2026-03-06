@@ -19,7 +19,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// `Result<LocalBackend, BackendError>`.
 #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
 mod no_feature_factory {
-    use cobre_comm::{create_communicator, BackendError, Communicator};
+    use cobre_comm::{BackendError, Communicator, create_communicator};
 
     /// Unset `COBRE_COMM_BACKEND` → `Ok(LocalBackend)` with rank=0, size=1.
     #[test]
@@ -124,7 +124,7 @@ mod no_feature_factory {
 /// Factory tests for builds with distributed backend features enabled.
 #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
 mod any_feature_factory {
-    use cobre_comm::{create_communicator, BackendError, CommBackend, Communicator};
+    use cobre_comm::{BackendError, CommBackend, Communicator, create_communicator};
 
     /// `COBRE_COMM_BACKEND=local` → `Ok(CommBackend::Local(...))` with rank=0.
     #[test]

@@ -3,7 +3,7 @@
 //! Tests env var handling, backend availability, and trait bounds across
 //! different feature compilation scenarios.
 // Allow expect/unwrap in test code — these guard test setup paths that must not fail.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Mutex;
 
@@ -19,7 +19,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// `Result<LocalBackend, BackendError>`.
 #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
 mod no_feature_factory {
-    use cobre_comm::{BackendError, Communicator, create_communicator};
+    use cobre_comm::{create_communicator, BackendError, Communicator};
 
     /// Unset `COBRE_COMM_BACKEND` → `Ok(LocalBackend)` with rank=0, size=1.
     #[test]
@@ -124,7 +124,7 @@ mod no_feature_factory {
 /// Factory tests for builds with distributed backend features enabled.
 #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
 mod any_feature_factory {
-    use cobre_comm::{BackendError, CommBackend, Communicator, create_communicator};
+    use cobre_comm::{create_communicator, BackendError, CommBackend, Communicator};
 
     /// `COBRE_COMM_BACKEND=local` → `Ok(CommBackend::Local(...))` with rank=0.
     #[test]

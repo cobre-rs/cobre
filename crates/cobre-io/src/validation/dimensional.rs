@@ -30,8 +30,8 @@ use crate::extensions::{ProductionModelConfig, SelectionMode};
 
 /// Performs Layer 4 dimensional consistency validation on the parsed data.
 ///
-/// Checks all 8 coverage rules. When a rule's optional data is absent (empty
-/// `Vec` or `None`), that rule is silently skipped. All 8 rules are always
+/// Checks all 7 coverage rules. When a rule's optional data is absent (empty
+/// `Vec` or `None`), that rule is silently skipped. All 7 rules are always
 /// checked — earlier failures do not short-circuit later rules.
 ///
 /// Any coverage failure adds one [`ErrorKind::DimensionMismatch`] entry to
@@ -802,7 +802,7 @@ mod tests {
         data.buses = vec![make_bus(1)];
         // All optional data is empty — no rules 1, 2, 3, 7, 8 should fire.
         // data.inflow_seasonal_stats == vec![] → skip rule 1
-        // data.load_seasonal_stats == vec![] → skip rule 3
+        // data.load_seasonal_stats == vec![] → skip rule 2
         // data.fpha_hyperplanes == vec![] → skip rule 7
         // data.hydro_geometry == vec![] → skip rule 8
 
@@ -1070,7 +1070,7 @@ mod tests {
         assert_eq!(errors[0].kind, ErrorKind::DimensionMismatch);
     }
 
-    // ── AC 14: All 8 rules checked independently ─────────────────────────────
+    // ── AC 14: All 7 rules checked independently ─────────────────────────────
 
     /// Errors in one rule do not suppress checking of subsequent rules.
     #[test]
@@ -1088,7 +1088,7 @@ mod tests {
         )];
         data.inflow_seasonal_stats = vec![inflow_stats_row(1, 0)]; // missing stage 1
 
-        // Trigger rule 3 violation: bus 1 missing stage 1.
+        // Trigger rule 2 violation: bus 1 missing stage 1.
         data.buses = vec![make_bus(1)];
         data.load_seasonal_stats = vec![load_stats_row(1, 0)]; // missing stage 1
 
@@ -1099,7 +1099,7 @@ mod tests {
         let errors = ctx.errors();
         assert!(
             errors.len() >= 2,
-            "expected at least 2 errors (rules 1 and 3), got {}: {:?}",
+            "expected at least 2 errors (rules 1 and 2), got {}: {:?}",
             errors.len(),
             errors
         );

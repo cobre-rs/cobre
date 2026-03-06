@@ -38,9 +38,10 @@
 //! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
 //! |11  | FPHA hydros: `fpha_turbined_cost > spillage_cost`                       | `penalties.json`                               | `BusinessRuleViolation`  |
 //! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow)            | `scenarios/inflow_seasonal_stats.parquet`      | `ModelQuality` (warning) |
-//! |13  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |14  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |15  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |13  | `residual_std_ratio` consistent across all lag rows of same group       | `scenarios/inflow_ar_coefficients.parquet`     | `InvalidValue`           |
+//! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 
 use std::collections::{HashMap, HashSet};
 
@@ -817,10 +818,6 @@ fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationContext) {
 
 /// Validates inflow model standard deviation and AR coefficient count consistency.
 fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
-    if data.inflow_seasonal_stats.is_empty() {
-        return;
-    }
-
     // Rule 12: std_m3s >= 0.0; warn when == 0.0 (deterministic inflow).
     // Note: std_m3s < 0 is already caught by the schema parser. However, the
     // schema parser only produces a SchemaError; here we emit a ModelQuality
@@ -837,6 +834,40 @@ fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
                     row.hydro_id.0, row.stage_id
                 ),
             );
+        }
+    }
+
+    // Rule 13: residual_std_ratio consistency across lag rows (V-AR-4).
+    // For each (hydro_id, stage_id) group, all lag rows must share the same
+    // residual_std_ratio value. Range validation is already done by the parser
+    // (ticket-004); this rule only checks cross-row consistency within a group.
+    {
+        let mut ratio_by_group: HashMap<(i32, i32), f64> = HashMap::new();
+        for row in &data.inflow_ar_coefficients {
+            let key = (row.hydro_id.0, row.stage_id);
+            match ratio_by_group.entry(key) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(row.residual_std_ratio);
+                }
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    if (*e.get() - row.residual_std_ratio).abs() > f64::EPSILON {
+                        ctx.add_error(
+                            ErrorKind::InvalidValue,
+                            "scenarios/inflow_ar_coefficients.parquet",
+                            Some(format!("Hydro {}", row.hydro_id.0)),
+                            format!(
+                                "Hydro {} stage {}: inconsistent residual_std_ratio across \
+                                 lag rows (first={}, current={}); all lags must share the \
+                                 same ratio",
+                                row.hydro_id.0,
+                                row.stage_id,
+                                e.get(),
+                                row.residual_std_ratio,
+                            ),
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -2558,7 +2589,103 @@ mod tests {
         );
     }
 
-    // ── Rule 13: Correlation matrix symmetry ──────────────────────────────────
+    // ── Rule 13: residual_std_ratio consistency ───────────────────────────────
+
+    /// Two AR coefficient rows for the same (hydro, stage) with identical
+    /// `residual_std_ratio` values produce no `InvalidValue` error.
+    #[test]
+    fn test_5b_residual_std_ratio_consistent_no_error() {
+        let ar_rows = vec![
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.5,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.3,
+                residual_std_ratio: 0.85, // same ratio as lag 1
+            },
+        ];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            ar_rows,
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors = ctx.errors();
+        let invalid_value_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue && e.message.contains("residual_std_ratio")
+            })
+            .collect();
+        assert!(
+            invalid_value_errors.is_empty(),
+            "consistent residual_std_ratio should produce no InvalidValue errors, got: \
+             {invalid_value_errors:?}"
+        );
+    }
+
+    /// Two AR coefficient rows for the same (hydro, stage) with different
+    /// `residual_std_ratio` values produce an `InvalidValue` error whose message
+    /// contains "residual_std_ratio" and "inconsistent".
+    #[test]
+    fn test_5b_residual_std_ratio_inconsistent_error() {
+        let ar_rows = vec![
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.5,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.3,
+                residual_std_ratio: 0.90, // different ratio — triggers V-AR-4
+            },
+        ];
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            ar_rows,
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors = ctx.errors();
+        let invalid_value_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert!(
+            !invalid_value_errors.is_empty(),
+            "inconsistent residual_std_ratio should produce at least one InvalidValue error"
+        );
+        let ratio_error = invalid_value_errors.iter().find(|e| {
+            e.message.contains("residual_std_ratio") && e.message.contains("inconsistent")
+        });
+        assert!(
+            ratio_error.is_some(),
+            "InvalidValue error message should contain 'residual_std_ratio' and 'inconsistent', \
+             got: {invalid_value_errors:?}"
+        );
+    }
+
+    // ── Rule 14: Correlation matrix symmetry ──────────────────────────────────
 
     /// Asymmetric correlation matrix (matrix[0][1]=0.8, matrix[1][0]=0.5) produces
     /// a BusinessRuleViolation error with "symmetric" in the message.

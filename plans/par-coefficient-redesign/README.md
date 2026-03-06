@@ -31,8 +31,8 @@ Emergency implementation plan to redesign PAR coefficient storage across the Cob
 | ticket-003 | Add residual_std_ratio to InflowModel in cobre-core | epic-02 | completed | Detailed | 0.96 | 0.95 | EXCELLENT |
 | ticket-004 | Add residual_std_ratio to InflowArCoefficientRow Parser | epic-02 | completed | Detailed | 0.96 | 0.88 | ACCEPTABLE |
 | ticket-005 | Update Assembly Logic for residual_std_ratio | epic-02 | completed | Detailed | 0.96 | 0.90 | EXCELLENT |
-| ticket-006 | Update Validation Layers for residual_std_ratio | epic-03 | pending | Detailed | 0.94 | -- | -- |
-| ticket-007 | Update Phase 5 Plan Tickets to Remove ASSUMPTION Flags | epic-03 | pending | Detailed | 0.94 | -- | -- |
+| ticket-006 | Update Validation Layers for residual_std_ratio | epic-03 | completed | Detailed | 0.94 | 1.00 | EXCELLENT |
+| ticket-007 | Update Phase 5 Plan Tickets to Remove ASSUMPTION Flags | epic-03 | completed | Detailed | 0.94 | 1.00 | EXCELLENT |
 
 ## Dependency Graph
 

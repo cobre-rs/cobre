@@ -14,6 +14,12 @@
 //!   SipHash-1-3 seed derivation and `Pcg64` random number generation.
 //! - **Scenario trees**: Opening tree construction and scenario sampling
 //!   for iterative optimization algorithms.
+//! - **Stochastic context**: [`StochasticContext`] bundles precomputed PAR
+//!   parameters, correlated factors, and the opening tree into a single
+//!   ready-to-use value for iterative optimization algorithms.
+//! - **Forward sampling**: [`sample_forward`] draws scenario realisations for
+//!   a given iteration using deterministic, communication-free seeds derived
+//!   via [`derive_forward_seed`] and [`derive_opening_seed`].
 //!
 //! Designed to be solver-agnostic — the stochastic models can feed into
 //! any scenario-based iterative optimization algorithm.
@@ -29,15 +35,20 @@
 
 mod error;
 
+pub mod context;
 pub mod correlation;
 pub mod noise;
 pub mod par;
 pub mod sampling;
 pub mod tree;
 
+pub use context::{StochasticContext, build_stochastic_context};
 pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
+pub use noise::rng::rng_from_seed;
+pub use noise::seed::{derive_forward_seed, derive_opening_seed};
 pub use par::{ParValidationReport, ParWarning, PrecomputedParLp, validate_par_parameters};
+pub use sampling::insample::sample_forward;
 pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 
 #[cfg(test)]
@@ -45,7 +56,6 @@ pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 mod tests {
     use super::StochasticError;
 
-    /// Compile-time assertion: `StochasticError` must be `Send + Sync + 'static`.
     #[test]
     fn stochastic_error_is_send_sync_static() {
         fn assert_send_sync_static<E: std::error::Error + Send + Sync + 'static>() {}
@@ -53,31 +63,16 @@ mod tests {
     }
 
     #[test]
-    fn par_module_is_accessible() {
-        use crate::par::precompute as _;
-        use crate::par::validation as _;
-    }
-
-    #[test]
-    fn correlation_module_is_accessible() {
+    fn all_public_modules_accessible() {
+        use crate::context as _;
         use crate::correlation::cholesky as _;
         use crate::correlation::resolve as _;
-    }
-
-    #[test]
-    fn noise_module_is_accessible() {
         use crate::noise::rng as _;
         use crate::noise::seed as _;
-    }
-
-    #[test]
-    fn tree_module_is_accessible() {
+        use crate::par::precompute as _;
+        use crate::par::validation as _;
+        use crate::sampling::insample as _;
         use crate::tree::generate as _;
         use crate::tree::opening_tree as _;
-    }
-
-    #[test]
-    fn sampling_module_is_accessible() {
-        use crate::sampling::insample as _;
     }
 }

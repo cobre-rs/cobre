@@ -30,6 +30,7 @@
 ///
 /// See [Scenario Generation SS2.3a](scenario-generation.md) for the
 /// full type specification and memory layout rationale.
+#[derive(Debug)]
 pub struct OpeningTree {
     data: Box<[f64]>,
     stage_offsets: Box<[usize]>,
@@ -48,7 +49,6 @@ impl OpeningTree {
     ///
     /// Panics if `data.len()` does not equal
     /// `openings_per_stage.iter().sum::<usize>() * dim`.
-    #[allow(dead_code)]
     pub(crate) fn from_parts(data: Vec<f64>, openings_per_stage: Vec<usize>, dim: usize) -> Self {
         let n_stages = openings_per_stage.len();
 

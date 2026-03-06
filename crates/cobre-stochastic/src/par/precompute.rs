@@ -88,6 +88,7 @@ use crate::StochasticError;
 /// assert_eq!(lp.n_hydros(), 1);
 /// assert!((lp.deterministic_base(0, 0) - 100.0).abs() < f64::EPSILON);
 /// ```
+#[derive(Debug)]
 pub struct PrecomputedParLp {
     /// Deterministic base `b_{h,m(t)} = μ_{m(t)} - Σ_ℓ ψ_{m(t),ℓ} · μ_{m(t-ℓ)}`.
     /// Flat array indexed as `[stage * n_hydros + hydro]`.

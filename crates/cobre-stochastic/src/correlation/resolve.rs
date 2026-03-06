@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{CorrelationModel, EntityId};
 
-use crate::{correlation::cholesky::CholeskyFactor, StochasticError};
+use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
 
 /// A single correlation group's Cholesky factor with entity ID mapping.
 #[derive(Debug)]
@@ -224,11 +224,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
+        EntityId,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             CorrelationScheduleEntry,
         },
-        EntityId,
     };
 
     use super::*;

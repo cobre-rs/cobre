@@ -31,7 +31,6 @@
 //! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
 //! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
 //! - Lag contiguity (1, 2, …, p for each (hydro, stage)) — Layer 3/5, Epic 06.
-//! - Coefficient count matching `ar_order` from stats — Layer 3/5, Epic 06.
 //! - `residual_std_ratio` consistency across lag rows of the same (hydro, stage) — Layer 2/5, Epic 06.
 
 use cobre_core::EntityId;
@@ -46,8 +45,8 @@ use crate::LoadError;
 ///
 /// Each row defines one lag coefficient for the PAR(p) model of a
 /// (hydro, stage) pair. Multiple rows with the same `(hydro_id, stage_id)`
-/// cover lags 1 through p, where p is the `ar_order` from
-/// [`InflowSeasonalStatsRow`](super::InflowSeasonalStatsRow).
+/// cover lags 1 through p, where p (the AR order) is derived from the
+/// count of rows in the group.
 ///
 /// # Examples
 ///

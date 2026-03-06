@@ -29,7 +29,7 @@
 //!
 //! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
 //! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
-//! - AR coefficient count consistency — Layer 3/5, Epic 06.
+//! - Coverage: every (hydro, stage) with AR coefficients has a stats row — Layer 4/5.
 
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -69,7 +69,7 @@ pub struct InflowSeasonalStatsRow {
     pub stage_id: i32,
     /// Seasonal mean inflow μ in m³/s. Must be finite.
     pub mean_m3s: f64,
-    /// Seasonal standard deviation σ in m³/s. Must be non-negative and finite.
+    /// Seasonal sample standard deviation `s_m` in m³/s. Must be non-negative and finite.
     pub std_m3s: f64,
 }
 

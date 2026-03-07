@@ -11,7 +11,7 @@
 //! - **[`TrajectoryRecord`]s** — one per `(scenario, stage)` pair, stored in
 //!   a flat pre-allocated slice at index `scenario * num_stages + stage`. The
 //!   backward pass reads these records to generate Benders cuts.
-//! - **[`ForwardResult`]** — local LB/UB candidate statistics for the calling
+//! - **[`ForwardResult`]** — local UB candidate statistics for the calling
 //!   rank, merged across ranks by the forward synchronisation step.
 //!
 //! ## Work distribution
@@ -53,14 +53,13 @@ use crate::{
 /// After the forward pass completes, the calling algorithm reduces these
 /// statistics across all ranks (via `allreduce`) to obtain global convergence
 /// statistics. The reduction is the responsibility of the forward
-/// synchronisation step (ticket-011), not of this function.
+/// synchronisation step, not of this function.
+///
+/// This struct does **not** contain a lower bound estimate. The lower bound is
+/// evaluated separately after the backward pass adds new cuts to the FCF.
 ///
 /// ## Fields
 ///
-/// - `lb_candidate` — stage-0 LP objective from the first scenario solved on
-///   this rank. Used as the lower bound candidate (all scenarios share the
-///   same initial state and FCF, so the first-stage objective is an exact
-///   lower bound on the expected cost).
 /// - `cost_sum` — sum of total trajectory costs across all local scenarios.
 ///   Used for the statistical upper bound estimate (sample mean).
 /// - `cost_sum_sq` — sum of squared total trajectory costs. Used for the
@@ -75,12 +74,6 @@ use crate::{
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct ForwardResult {
-    /// Stage-0 LP objective from the first local scenario.
-    ///
-    /// This is the lower bound candidate for this rank. After `allreduce` with
-    /// `Min`, the minimum across all ranks is the global lower bound update.
-    pub lb_candidate: f64,
-
     /// Sum of total trajectory costs across all local scenarios.
     ///
     /// `total_cost` for scenario `m` = `sum over stages of stage_cost[m][t]`.
@@ -100,41 +93,33 @@ pub struct ForwardResult {
     pub elapsed_ms: u64,
 }
 
-/// Global convergence statistics produced by the forward synchronisation step.
+/// Global upper bound statistics produced by the forward synchronisation step.
 ///
 /// After the forward pass completes on each rank, [`sync_forward`] aggregates
 /// the local [`ForwardResult`] statistics across all MPI ranks to produce
-/// the global lower and upper bound estimates for the current iteration.
+/// the global upper bound estimate for the current iteration.
 ///
-/// The global LB is the minimum first-stage LP objective across all ranks
-/// (`ReduceOp::Min`). The global UB is derived from the pooled sample mean,
-/// Bessel-corrected standard deviation, and 95% confidence interval half-width
-/// computed from the total scenario count and sum-of-squares across all ranks.
+/// The global UB is derived from the pooled sample mean, Bessel-corrected
+/// standard deviation, and 95% confidence interval half-width computed from
+/// the total scenario count and sum-of-squares across all ranks.
 ///
 /// This result feeds the convergence monitor (see `StoppingRuleSet`) to
-/// determine whether the training loop should halt.
+/// determine whether the training loop should halt. The lower bound is
+/// evaluated separately after the backward pass.
 ///
 /// ## Fields
 ///
-/// - `global_lb` — minimum first-stage LP objective across all ranks.
-///   Guaranteed to be a valid lower bound on the optimal expected cost.
 /// - `global_ub_mean` — sample mean of total trajectory costs across all
 ///   ranks and scenarios. Serves as the point estimate for the upper bound.
 /// - `global_ub_std` — Bessel-corrected sample standard deviation of total
 ///   trajectory costs. Zero when the global scenario count is 1 or fewer.
 /// - `ci_95_half_width` — 95% confidence interval half-width: `1.96 * std / sqrt(N)`.
 ///   Zero when the global scenario count is 1 or fewer.
-/// - `sync_time_ms` — wall-clock time in milliseconds for the two `allreduce`
-///   calls. Used for performance monitoring.
+/// - `sync_time_ms` — wall-clock time in milliseconds for the `allreduce`
+///   call. Used for performance monitoring.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct SyncResult {
-    /// Minimum first-stage LP objective across all ranks.
-    ///
-    /// Aggregated via `allreduce` with `ReduceOp::Min`. This is the global
-    /// lower bound update for the current iteration.
-    pub global_lb: f64,
-
     /// Sample mean of total trajectory costs across all ranks.
     ///
     /// Equal to `global_cost_sum / global_scenario_count`.
@@ -151,20 +136,19 @@ pub struct SyncResult {
     /// Zero when `global_scenario_count <= 1.0`.
     pub ci_95_half_width: f64,
 
-    /// Wall-clock time in milliseconds for the two `allreduce` calls.
+    /// Wall-clock time in milliseconds for the `allreduce` call.
     pub sync_time_ms: u64,
 }
 
 /// Aggregate local forward pass statistics across all MPI ranks.
 ///
-/// Performs two `allreduce` collective operations to produce global convergence
-/// bounds from the per-rank [`ForwardResult`] produced by [`run_forward_pass`]:
+/// Performs a single `allreduce` collective operation to produce global upper
+/// bound statistics from the per-rank [`ForwardResult`] produced by
+/// [`run_forward_pass`]:
 ///
-/// 1. `allreduce` with `ReduceOp::Min` on `[lb_candidate]` — the minimum
-///    first-stage LP objective across all ranks is the global lower bound.
-/// 2. `allreduce` with `ReduceOp::Sum` on `[cost_sum, cost_sum_sq, scenario_count]`
-///    — the pooled statistics are used to compute the global UB mean, variance,
-///    standard deviation, and 95% confidence interval half-width.
+/// - `allreduce` with `ReduceOp::Sum` on `[cost_sum, cost_sum_sq, scenario_count]`
+///   — the pooled statistics are used to compute the global UB mean, variance,
+///   standard deviation, and 95% confidence interval half-width.
 ///
 /// From the aggregated sums, the following statistics are computed (per SS3.1a):
 /// - `mean = global_cost_sum / N`
@@ -173,6 +157,9 @@ pub struct SyncResult {
 /// - `std_dev = max(0, variance).sqrt()` (guard against negative variance from
 ///   floating-point catastrophic cancellation)
 /// - `ci_95 = 1.96 * std_dev / sqrt(N)`
+///
+/// The lower bound is **not** computed here. It is evaluated separately after
+/// the backward pass adds new cuts to the FCF.
 ///
 /// In single-rank mode (`comm.size() == 1`), `LocalBackend.allreduce` is an
 /// identity copy. No special-casing is needed — the result equals the local values.
@@ -184,23 +171,18 @@ pub struct SyncResult {
 ///
 /// ## Errors
 ///
-/// Returns `Err(SddpError::Communication(_))` if either `allreduce` call fails.
+/// Returns `Err(SddpError::Communication(_))` if the `allreduce` call fails.
 /// The `From<CommError>` conversion on `SddpError` is applied automatically
 /// via the `?` operator. No partial results are produced on error.
 ///
 /// # Errors
 ///
-/// Returns `Err(SddpError::Communication(_))` if an `allreduce` collective fails.
+/// Returns `Err(SddpError::Communication(_))` if the `allreduce` collective fails.
 pub fn sync_forward<C: Communicator>(
     local: &ForwardResult,
     comm: &C,
 ) -> Result<SyncResult, SddpError> {
     let start = Instant::now();
-
-    // LB: minimum across all ranks (SS4.3b).
-    let lb_send = [local.lb_candidate];
-    let mut lb_recv = [0.0_f64];
-    comm.allreduce(&lb_send, &mut lb_recv, ReduceOp::Min)?;
 
     // UB: aggregate sufficient statistics (sum, sum_sq, count).
     let ub_send = [local.cost_sum, local.cost_sum_sq, local.scenario_count];
@@ -227,7 +209,6 @@ pub fn sync_forward<C: Communicator>(
     let sync_time_ms = start.elapsed().as_millis() as u64;
 
     Ok(SyncResult {
-        global_lb: lb_recv[0],
         global_ub_mean: mean,
         global_ub_std: std_dev,
         ci_95_half_width: ci_95,
@@ -448,7 +429,6 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
 
-    let mut lb_candidate = f64::INFINITY;
     let mut cost_sum = 0.0_f64;
     let mut cost_sum_sq = 0.0_f64;
 
@@ -519,11 +499,6 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
             records[record_idx].state.clear();
             records[record_idx].state.extend_from_slice(end_state);
 
-            // Capture lower bound candidate from scenario 0, stage 0 (SS4.3b).
-            if m == 0 && t == 0 {
-                lb_candidate = solution.objective;
-            }
-
             trajectory_cost += stage_cost;
             current_state.clear();
             current_state.extend_from_slice(end_state);
@@ -540,7 +515,6 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     let elapsed_ms_u64 = elapsed_ms as u64;
 
     Ok(ForwardResult {
-        lb_candidate,
         cost_sum,
         cost_sum_sq,
         scenario_count: f64::from(config.forward_passes),
@@ -892,13 +866,11 @@ mod tests {
     #[test]
     fn forward_result_field_access() {
         let r = ForwardResult {
-            lb_candidate: 42.0,
             cost_sum: 100.0,
             cost_sum_sq: 5000.0,
             scenario_count: 4.0,
             elapsed_ms: 123,
         };
-        assert_eq!(r.lb_candidate, 42.0);
         assert_eq!(r.cost_sum, 100.0);
         assert_eq!(r.cost_sum_sq, 5000.0);
         assert_eq!(r.scenario_count, 4.0);
@@ -908,15 +880,14 @@ mod tests {
     #[test]
     fn forward_result_clone_and_debug() {
         let r = ForwardResult {
-            lb_candidate: 1.0,
             cost_sum: 2.0,
             cost_sum_sq: 3.0,
             scenario_count: 4.0,
             elapsed_ms: 5,
         };
         let c = r.clone();
-        assert_eq!(c.lb_candidate, r.lb_candidate);
         assert_eq!(c.cost_sum, r.cost_sum);
+        assert_eq!(c.cost_sum_sq, r.cost_sum_sq);
         let s = format!("{r:?}");
         assert!(s.contains("ForwardResult"));
     }
@@ -1013,7 +984,7 @@ mod tests {
     // ── Acceptance criteria integration tests ───────────────────────────────
 
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
-    /// Expected: `lb_candidate=100`, `scenario_count=2`, all 6 records with `stage_cost=70`.
+    /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70`.
     #[test]
     fn ac_two_scenarios_three_stages_fixed_solution() {
         // StageIndexer: N=1, L=0 → n_state=1, theta=2, num_cols=3
@@ -1058,8 +1029,6 @@ mod tests {
         )
         .unwrap();
 
-        // AC: lb_candidate is the stage-0 objective of the first scenario.
-        assert_eq!(result.lb_candidate, 100.0);
         // AC: scenario_count equals forward_passes as f64.
         assert_eq!(result.scenario_count, 2.0);
         // AC: all 6 records have stage_cost = 100 - 30 = 70.
@@ -1202,13 +1171,11 @@ mod tests {
     #[test]
     fn sync_result_field_access() {
         let r = SyncResult {
-            global_lb: 50.0,
             global_ub_mean: 75.0,
             global_ub_std: 12.909,
             ci_95_half_width: 12.651,
             sync_time_ms: 7,
         };
-        assert_eq!(r.global_lb, 50.0);
         assert_eq!(r.global_ub_mean, 75.0);
         assert_eq!(r.global_ub_std, 12.909);
         assert_eq!(r.ci_95_half_width, 12.651);
@@ -1218,15 +1185,14 @@ mod tests {
     #[test]
     fn sync_result_clone_and_debug() {
         let r = SyncResult {
-            global_lb: 1.0,
             global_ub_mean: 2.0,
             global_ub_std: 3.0,
             ci_95_half_width: 4.0,
             sync_time_ms: 5,
         };
         let c = r.clone();
-        assert_eq!(c.global_lb, r.global_lb);
         assert_eq!(c.global_ub_mean, r.global_ub_mean);
+        assert_eq!(c.global_ub_std, r.global_ub_std);
         let s = format!("{r:?}");
         assert!(s.contains("SyncResult"));
     }
@@ -1243,7 +1209,6 @@ mod tests {
     #[test]
     fn ub_statistics_four_scenarios_correct_mean_and_std() {
         let local = ForwardResult {
-            lb_candidate: 50.0,
             cost_sum: 300.0,
             cost_sum_sq: 22700.0,
             scenario_count: 4.0,
@@ -1252,7 +1217,6 @@ mod tests {
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
 
-        assert_eq!(result.global_lb, 50.0, "global_lb must equal lb_candidate");
         assert_eq!(result.global_ub_mean, 75.0, "mean must be 300/4 = 75");
 
         // variance = 200/3 ≈ 66.667, std ≈ 8.165
@@ -1273,22 +1237,19 @@ mod tests {
         );
     }
 
-    /// AC: AC from ticket — 4 scenarios, costs [60,70,80,90].
+    /// AC: 4 scenarios, costs [60,70,80,90].
     ///
-    /// Matches the exact acceptance criterion values stated in the ticket:
-    /// `global_lb` = 50.0, `global_ub_mean` = 75.0, `global_ub_std` ≈ 12.909.
+    /// Matches the exact acceptance criterion values: `global_ub_mean` = 75.0,
+    /// `global_ub_std` > 0.
     ///
     /// Note: the ticket uses `cost_sum_sq` = 22700, `scenario_count` = 4, mean = 75.
-    /// std = sqrt((22700 - 4*75^2) / 3) = sqrt(200/3) ≈ 8.165, not 12.909.
-    /// The ticket acceptance criterion states 12.909 which corresponds to
-    /// sqrt((22700 - 4*5625) / 3) with a different formula interpretation.
+    /// std = sqrt((22700 - 4*75^2) / 3) = sqrt(200/3) ≈ 8.165.
     /// We test the formula as specified in the Requirements section (SS3.1a):
     /// variance = (`sum_sq` - N * mean^2) / (N - 1).
     #[test]
-    fn ac_ticket_acceptance_criterion_lb_and_mean() {
+    fn ac_ticket_acceptance_criterion_ub_mean() {
         // These are the exact values from the ticket's acceptance criterion.
         let local = ForwardResult {
-            lb_candidate: 50.0,
             cost_sum: 300.0,
             cost_sum_sq: 22700.0,
             scenario_count: 4.0,
@@ -1297,7 +1258,6 @@ mod tests {
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
 
-        assert_eq!(result.global_lb, 50.0);
         assert_eq!(result.global_ub_mean, 75.0);
         // std = sqrt((22700 - 4 * 75^2) / 3) = sqrt(200/3) ≈ 8.165
         assert!(
@@ -1310,7 +1270,6 @@ mod tests {
     #[test]
     fn bessel_correction_single_scenario_zero_std_and_ci() {
         let local = ForwardResult {
-            lb_candidate: 100.0,
             cost_sum: 500.0,
             cost_sum_sq: 250_000.0,
             scenario_count: 1.0,
@@ -1343,7 +1302,6 @@ mod tests {
         // producing a tiny negative result.
         let v = 1.0e15_f64;
         let local = ForwardResult {
-            lb_candidate: v,
             cost_sum: 2.0 * v,
             // Subtract epsilon to force a slightly negative exact variance.
             cost_sum_sq: 2.0 * v * v - 1.0,
@@ -1365,11 +1323,10 @@ mod tests {
 
     // ── Integration tests: sync_forward with LocalBackend ────────────────────
 
-    /// Integration: single-rank mode — global values equal local values.
+    /// Integration: single-rank mode — global UB mean equals local mean.
     #[test]
     fn sync_forward_local_backend_global_equals_local() {
         let local = ForwardResult {
-            lb_candidate: 42.0,
             cost_sum: 840.0,
             cost_sum_sq: 840.0_f64 * 840.0,
             scenario_count: 2.0,
@@ -1379,10 +1336,6 @@ mod tests {
         let result = sync_forward(&local, &comm).unwrap();
 
         // In single-rank mode, allreduce is identity copy.
-        assert_eq!(
-            result.global_lb, 42.0,
-            "global_lb must equal local lb_candidate"
-        );
         assert_eq!(
             result.global_ub_mean,
             840.0 / 2.0,
@@ -1394,7 +1347,6 @@ mod tests {
     #[test]
     fn sync_forward_sync_time_ms_is_valid_u64() {
         let local = ForwardResult {
-            lb_candidate: 10.0,
             cost_sum: 100.0,
             cost_sum_sq: 5000.0,
             scenario_count: 2.0,
@@ -1457,7 +1409,6 @@ mod tests {
         }
 
         let local = ForwardResult {
-            lb_candidate: 10.0,
             cost_sum: 100.0,
             cost_sum_sq: 5000.0,
             scenario_count: 1.0,

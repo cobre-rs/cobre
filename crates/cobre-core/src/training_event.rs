@@ -97,8 +97,6 @@ pub enum TrainingEvent {
         iteration: u64,
         /// Number of forward scenarios evaluated on this rank.
         scenarios: u32,
-        /// First-stage objective (candidate lower bound) before global reduction.
-        lb_candidate: f64,
         /// Mean total forward cost across local scenarios.
         ub_mean: f64,
         /// Standard deviation of total forward cost across local scenarios.
@@ -114,8 +112,6 @@ pub enum TrainingEvent {
     ForwardSyncComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Global lower bound after allreduce across all ranks.
-        global_lb: f64,
         /// Global upper bound mean after allreduce.
         global_ub_mean: f64,
         /// Global upper bound standard deviation after allreduce.
@@ -313,14 +309,12 @@ mod tests {
             TrainingEvent::ForwardPassComplete {
                 iteration: 1,
                 scenarios: 10,
-                lb_candidate: 100.0,
                 ub_mean: 110.0,
                 ub_std: 5.0,
                 elapsed_ms: 42,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
-                global_lb: 100.0,
                 global_ub_mean: 110.0,
                 global_ub_std: 5.0,
                 sync_time_ms: 3,
@@ -436,7 +430,6 @@ mod tests {
         let event = TrainingEvent::ForwardPassComplete {
             iteration: 7,
             scenarios: 20,
-            lb_candidate: 200.0,
             ub_mean: 210.0,
             ub_std: 3.5,
             elapsed_ms: 55,
@@ -444,7 +437,6 @@ mod tests {
         let TrainingEvent::ForwardPassComplete {
             iteration,
             scenarios,
-            lb_candidate,
             ub_mean,
             ub_std,
             elapsed_ms,
@@ -454,7 +446,6 @@ mod tests {
         };
         assert_eq!(iteration, 7);
         assert_eq!(scenarios, 20);
-        assert!((lb_candidate - 200.0).abs() < f64::EPSILON);
         assert!((ub_mean - 210.0).abs() < f64::EPSILON);
         assert!((ub_std - 3.5).abs() < f64::EPSILON);
         assert_eq!(elapsed_ms, 55);

@@ -1,7 +1,7 @@
 //! Stage LP patch buffer for SDDP forward and backward pass solves.
 //!
 //! [`PatchBuffer`] pre-allocates the three parallel arrays consumed by
-//! [`SolverInterface::set_row_bounds`] and fills them with scenario-dependent
+//! `SolverInterface::set_row_bounds` and fills them with scenario-dependent
 //! values before each LP solve.  Allocating once at training start and reusing
 //! the same buffer across all iterations and stages is critical for hot-path
 //! performance: the training loop calls `fill_forward_patches` or
@@ -56,7 +56,7 @@ use crate::indexer::StageIndexer;
 /// Pre-allocated row-bound patch arrays for one SDDP stage LP solve.
 ///
 /// Holds three parallel `Vec`s of equal length ready for a single
-/// [`SolverInterface::set_row_bounds`] call.  The buffer is sized for
+/// `SolverInterface::set_row_bounds` call.  The buffer is sized for
 /// `N*(2+L)` patches at construction and reused across all iterations.
 ///
 /// # Memory layout
@@ -154,7 +154,7 @@ impl PatchBuffer {
     /// All patches are equality constraints: `lower[i] == upper[i] == value`.
     ///
     /// After this call, pass `&buf.indices`, `&buf.lower`, `&buf.upper` to
-    /// [`SolverInterface::set_row_bounds`].
+    /// `SolverInterface::set_row_bounds`.
     ///
     /// # Arguments
     ///
@@ -239,7 +239,7 @@ impl PatchBuffer {
     ///   `state[N + ℓ·N + h]` for `h ∈ [0, N)`, `ℓ ∈ [0, L)`.
     ///
     /// Pass `&buf.indices[..active_len()]`, `&buf.lower[..active_len()]`, and
-    /// `&buf.upper[..active_len()]` to [`SolverInterface::set_row_bounds`],
+    /// `&buf.upper[..active_len()]` to `SolverInterface::set_row_bounds`,
     /// where `active_len` is `N*(1+L)`.  Use [`state_patch_count`] to obtain
     /// this length.
     ///

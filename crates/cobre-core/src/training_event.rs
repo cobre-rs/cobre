@@ -71,23 +71,23 @@ pub struct StoppingRuleResult {
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
-/// | 1    | [`ForwardPassComplete`]  | Local forward pass done                                |
-/// | 2    | [`ForwardSyncComplete`]  | Global allreduce of bounds done                        |
-/// | 3    | [`BackwardPassComplete`] | Backward sweep done                                    |
-/// | 4    | [`CutSyncComplete`]      | Cut allgatherv done                                    |
-/// | 4a   | [`CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
-/// | 5    | [`ConvergenceUpdate`]    | Stopping rules evaluated                               |
-/// | 6    | [`CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
-/// | 7    | [`IterationSummary`]     | End-of-iteration aggregated summary                    |
+/// | 1    | [`Self::ForwardPassComplete`]  | Local forward pass done                                |
+/// | 2    | [`Self::ForwardSyncComplete`]  | Global allreduce of bounds done                        |
+/// | 3    | [`Self::BackwardPassComplete`] | Backward sweep done                                    |
+/// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
+/// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
+/// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
+/// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
+/// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
 ///
 /// ## Lifecycle events
 ///
-/// | Variant                | When emitted                        |
-/// |------------------------|-------------------------------------|
-/// | [`TrainingStarted`]    | Training loop entry                 |
-/// | [`TrainingFinished`]   | Training loop exit                  |
-/// | [`SimulationProgress`] | Simulation batch completion         |
-/// | [`SimulationFinished`] | Simulation completion               |
+/// | Variant                      | When emitted                        |
+/// |------------------------------|-------------------------------------|
+/// | [`Self::TrainingStarted`]    | Training loop entry                 |
+/// | [`Self::TrainingFinished`]   | Training loop exit                  |
+/// | [`Self::SimulationProgress`] | Simulation batch completion         |
+/// | [`Self::SimulationFinished`] | Simulation completion               |
 #[derive(Clone, Debug)]
 pub enum TrainingEvent {
     // ── Per-iteration events (8) ─────────────────────────────────────────────

@@ -9,8 +9,8 @@
 //! 3. A fallback to [`LocalBackend`](crate::LocalBackend) when no distributed backend
 //!    is available.
 //!
-//! This indirection keeps `cobre-sddp` decoupled from any specific backend: the
-//! training loop only sees the `Communicator` trait, never a concrete type.
+//! This indirection keeps algorithm crates decoupled from any specific backend: the
+//! calling code only sees the `Communicator` trait, never a concrete type.
 
 /// Programmatic backend selector for library-mode callers.
 ///

@@ -137,17 +137,17 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 | 3     | complete    | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc)                                                 |
 | 4     | complete    | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc)                                              |
 | 5     | complete    | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling -- 125 tests (105 unit + 5 conformance + 4 reproducibility + 11 doc) |
-| 6     | not started | Blocked by Phases 1-5                                                                                                                                                     |
+| 6     | complete    | SDDP training loop, forward/backward pass, cut management, convergence monitoring -- 351 tests (297 unit + 13 conformance + 7 integration + 34 doc)                       |
 | 7     | not started | Blocked by Phase 6                                                                                                                                                        |
 | 8     | not started | Blocked by Phase 7                                                                                                                                                        |
 
 ### Current phase
 
-**Phase 5: cobre-stochastic -- Complete.** The stochastic process model layer is implemented: PAR(p) coefficient preprocessing with original-unit conversion and stage-major flat array layout; deterministic noise generation via SipHash-1-3 seed derivation (DEC-017) and Pcg64 RNG; hand-rolled Cholesky decomposition with packed lower-triangular storage and pre-computed entity positions; opening scenario tree with sentinel offset arrays; InSample scenario selection via `sample_forward`; and `StochasticContext` as the single integration entry point. Neutral language enforced throughout -- zero SDDP references in source. All 125 tests pass (105 unit + 5 conformance + 4 reproducibility + 11 doc). Next candidate is Phase 6 (`cobre-sddp`).
+**Phase 6: cobre-sddp -- Complete.** The SDDP training loop is fully implemented: core types and event system (StageIndexer, RiskMeasure, HorizonMode, StoppingRuleSet, CutSelectionStrategy); LP construction with CutPool, CutWireRecord, FutureCostFunction, and StageTemplate/PatchBuffer; forward pass with scenario sampling and forward synchronization (UB via allreduce); backward pass with Benders cut generation; cut synchronization via allgatherv; state exchange for trial points; LB evaluation (rank-0 solves + broadcast); convergence monitoring with gap tracking and composite stopping rules; training loop orchestrator with optional cut selection and external shutdown flag. All 351 tests pass (297 unit + 13 conformance + 7 integration + 34 doc). Workspace total: 1481 tests. Next candidate is Phase 7 (simulation + output).
 
 ### Parallelizable phases
 
-Phase 6 (`cobre-sddp`) is the next candidate. Phases 1–5 are all complete.
+Phase 7 (simulation + output) is the next candidate. Phases 1–6 are all complete.
 
 ### Per-phase spec reading lists
 

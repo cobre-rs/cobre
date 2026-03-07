@@ -20,7 +20,7 @@
 //! - **Zero-cost static dispatch**: generics over `Communicator` eliminate
 //!   dynamic dispatch overhead on the hot path.
 //! - **Additive features**: multiple backends can coexist in one binary.
-//! - **Orthogonal to the solver**: `cobre-sddp` depends on this crate for
+//! - **Orthogonal to the solver**: algorithm crates depend on this crate for
 //!   communication; it does not depend back.
 //!
 //! ## Status

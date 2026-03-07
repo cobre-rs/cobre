@@ -26,7 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -180,6 +182,32 @@ fn collect_local_cuts_for_stage(
 /// Returns `Err(SddpError::Communication(_))` when a collective operation
 /// fails.
 ///
+/// # Examples
+///
+/// ```rust,ignore
+/// use cobre_sddp::{train, TrainingConfig, FutureCostFunction, StageIndexer};
+/// use cobre_sddp::{StoppingRuleSet, StoppingRule, RiskMeasure, HorizonMode};
+/// use cobre_sddp::lp_builder::StageTemplate;
+///
+/// let mut solver = HiggsBackend::new();
+/// let config = TrainingConfig { forward_passes: 100, ..Default::default() };
+/// let mut fcf = FutureCostFunction::new(num_stages - 1, n_state, capacity);
+/// let stopping = StoppingRuleSet::any(vec![
+///     StoppingRule::iteration_limit(100),
+///     StoppingRule::relative_gap(0.01),
+/// ]);
+/// let risk = vec![RiskMeasure::Expectation; num_stages];
+/// let horizon = HorizonMode::finite(num_stages);
+///
+/// let result = train(
+///     &mut solver, config, &mut fcf, &templates, &base_rows,
+///     &indexer, &initial_state, &opening_tree, &stochastic,
+///     &horizon, &risk, stopping, None, None, &comm,
+/// )?;
+///
+/// println!("converged in {} iterations, gap={:.4}", result.iterations, result.final_gap);
+/// ```
+///
 /// # Panics (debug builds only)
 ///
 /// Panics if `templates.len() != horizon.num_stages()` or if
@@ -204,6 +232,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     cut_selection: Option<&CutSelectionStrategy>,
+    shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
 ) -> Result<TrainingResult, SddpError> {
     let num_stages = horizon.num_stages();
@@ -265,6 +294,14 @@ pub fn train<S: SolverInterface, C: Communicator>(
     let mut termination_reason = String::from("iteration_limit");
 
     for iteration in 1..=max_iterations {
+        // Check external shutdown flag before each iteration's convergence
+        // evaluation. The flag is set by signal handlers or test harnesses.
+        if let Some(flag) = shutdown_flag {
+            if flag.load(Ordering::Relaxed) {
+                convergence_monitor.set_shutdown();
+            }
+        }
+
         let iter_start = Instant::now();
         let forward_result = run_forward_pass(
             solver,
@@ -927,6 +964,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            None,
             &comm,
         )
         .unwrap();
@@ -979,6 +1017,7 @@ mod tests {
             &horizon,
             &risk_measures,
             iteration_limit_rules(5),
+            None,
             None,
             &comm,
         );
@@ -1041,6 +1080,7 @@ mod tests {
             &horizon,
             &risk_measures,
             iteration_limit_rules(2),
+            None,
             None,
             &comm,
         )
@@ -1149,6 +1189,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            None,
             &comm,
         )
         .unwrap();
@@ -1201,6 +1242,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
+            None,
             &comm,
         );
 
@@ -1250,6 +1292,7 @@ mod tests {
             &horizon,
             &risk_measures,
             iteration_limit_rules(1),
+            None,
             None,
             &comm,
         )
@@ -1307,6 +1350,7 @@ mod tests {
             &horizon,
             &risk_measures,
             iteration_limit_rules(5),
+            None,
             None,
             &comm,
         )
@@ -1378,6 +1422,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             Some(&strategy),
+            None,
             &comm,
         )
         .unwrap();
@@ -1467,6 +1512,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             Some(&strategy),
+            None,
             &comm,
         )
         .unwrap();
@@ -1544,6 +1590,7 @@ mod tests {
             &horizon,
             &risk_measures,
             iteration_limit_rules(3),
+            None,
             None,
             &comm,
         )

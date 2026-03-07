@@ -169,15 +169,11 @@ pub struct SyncResult {
 /// - `local` — the [`ForwardResult`] from the calling rank's forward pass.
 /// - `comm` — the communicator used for collective operations.
 ///
-/// ## Errors
+/// # Errors
 ///
 /// Returns `Err(SddpError::Communication(_))` if the `allreduce` call fails.
 /// The `From<CommError>` conversion on `SddpError` is applied automatically
 /// via the `?` operator. No partial results are produced on error.
-///
-/// # Errors
-///
-/// Returns `Err(SddpError::Communication(_))` if the `allreduce` collective fails.
 pub fn sync_forward<C: Communicator>(
     local: &ForwardResult,
     comm: &C,

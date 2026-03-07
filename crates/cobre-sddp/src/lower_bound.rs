@@ -72,6 +72,11 @@ use cobre_solver::StageTemplate;
 ///   infeasibility (numerical difficulty, time limit, etc.).
 /// - [`SddpError::Communication`] — The broadcast to non-root ranks failed.
 ///
+/// ## Panics
+///
+/// Panics if `opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must have
+/// at least one opening; this is a caller contract violation.
+///
 /// ## Example
 ///
 /// ```rust,ignore
@@ -99,6 +104,10 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
 
     if comm.rank() == 0 {
         let n_openings = opening_tree.n_openings(0);
+        assert!(
+            n_openings > 0,
+            "evaluate_lower_bound: stage 0 must have at least one opening"
+        );
 
         // Build cut rows once — the cut batch does not change per opening.
         let cut_batch = build_cut_row_batch(fcf, 0, indexer);

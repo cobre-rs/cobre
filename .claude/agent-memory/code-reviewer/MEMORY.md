@@ -77,6 +77,56 @@
 - SAFETY comment in `reset()` says "model is still loaded" (true for HiGHS) but code sets
   `has_model = false`. This is correct behavior but the comment is misleading.
 
+### Phase 4 cobre-comm key facts
+
+- `FerrompiBackend::allreduce` does NOT validate `send.len() == recv.len()` or `send.len() > 0` before calling MPI.
+  ferrompi internally validates `send.len() != recv.len()` and returns `Error::InvalidBuffer`, which maps to
+  `CommError::InvalidBufferSize { expected: 0, actual: 0 }` (sentinel). The empty-buffer case is NOT validated.
+- `FerrompiBackend::allgatherv` does NOT validate `counts.len() == self.size` or `send.len() == counts[self.rank()]`.
+  ferrompi's `allgatherv` passes directly to MPI FFI without validating count array lengths. If `counts.len() < size`,
+  MPI reads past the end of the counts array (UB).
+- `BackendKind` is pub-exported but `create_communicator` doesn't accept it as a parameter — intentional forward-
+  declaration for ticket-011. Same pattern as Phase 1/2 pre-declarations.
+- `CommBackend` enum (feature-gated) has no `#[derive(Debug)]` — `missing_debug_implementations` is not enforced.
+- `FerrompiBackend::new()` calls `world.split_shared()` → stored in `self.shared`. `split_local()` calls
+  `world.split_shared()` AGAIN for each invocation — a new collective per call. `is_leader()` uses the cached
+  `self.shared` from `new()`. This is consistent (same deterministic split result) but slightly wasteful.
+- Unit test `ENV_LOCK` in `factory.rs` and integration test `ENV_LOCK` in `factory_tests.rs` are separate mutexes
+  in separate binaries — they do not serialize across binary boundaries. Safe in default `cargo test` (sequential
+  binary execution) but not with concurrent harnesses like nextest.
+- `LocalBackend` uses `saturating_add` for recv-length validation but plain `+` for the actual slice index on line 95.
+  Theoretical inconsistency; not reachable on any real system (no allocation could overflow usize).
+
+### Phase 5 cobre-stochastic key facts
+
+- `StochasticContext` bundles `PrecomputedParLp`, `DecomposedCorrelation`, `OpeningTree`, `base_seed`, `dim`.
+  All fields immutable after construction; consumed read-only by the optimization loop.
+- `build_stochastic_context` calls `validate_par_parameters` first (fatal check + warnings), then
+  `PrecomputedParLp::build`. The `ParValidationReport` returned from the first call is silently discarded
+  (`let _report = ...`). The report's warning list is never exposed. This is a design gap — callers cannot
+  see low-residual-variance warnings. If warning propagation is needed in Phase 6, refactor to return the report.
+- `PrecomputedParLp::build` uses stage-major layout: `array[stage * n_hydros + hydro]`. The 3-D `psi` array
+  uses `psi[stage * n_hydros * max_order + hydro * max_order + lag]`. All padded with 0.0.
+- `CholeskyFactor` uses packed lower-triangular storage: element (i, j) at index `i*(i+1)/2 + j`.
+  Symmetry tolerance is 1e-10. PD check: diagonal element <= 0 during Cholesky → error.
+- `DecomposedCorrelation` uses `BTreeMap<String, Vec<GroupFactor>>` (deterministic iteration order).
+  `resolve_positions` must be called once before `apply_correlation` to pre-compute entity indices.
+  `apply_group_precomputed` uses stack-allocated buffers (128 bytes × 2) for groups ≤ 64 entities.
+- `derive_forward_seed` (20 bytes: base+iter+scenario+stage) and `derive_opening_seed` (16 bytes:
+  base+opening+stage) use `SipHasher13::new()` with zero key. Domain separation relies on different
+  message lengths — SipHash-1-3 incorporates length into state. Golden-value test pins output.
+- `sample_forward` uses `rng.random::<u64>() % n` (modulo bias). For small `n` (branching factor),
+  bias is negligible in practice but is a correctness defect. Fix: `rng.random_range(0..n)`.
+- `StochasticError::SeedDerivationError` and `InsufficientData` are pre-declared but never constructed
+  in Phase 5 production code. They lack deferred-phase comments (unlike Phase 1/2 pre-declarations).
+- `OpeningTree::from_parts` is `pub(crate)` — only callable by `generate.rs` (tree generation module).
+  Public API is `generate_opening_tree` (free function) and `OpeningTree` accessors.
+- `infrastructure_genericity_no_sddp_references` test in `reproducibility.rs` spawns `grep` subprocess.
+  Linux-only; works in CI but would fail on Windows. Acceptable for this codebase (Linux CI only).
+- Broken intra-doc links in Phase 5: `[j]` in `cholesky.rs:22` and `[apply_correlation]` in
+  `resolve.rs:178` produce rustdoc warnings. Fix: escape brackets in cholesky.rs, use
+  `Self::apply_correlation` in resolve.rs.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

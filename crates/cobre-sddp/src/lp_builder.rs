@@ -341,7 +341,7 @@ pub fn ar_dynamics_row_offset(base_row: usize, hydro_index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{ar_dynamics_row_offset, PatchBuffer};
+    use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

@@ -23,10 +23,7 @@
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
 
-// Relax strict production lints for test builds. These lints (unwrap_used,
-// expect_used, panic, float_cmp) guard library code but are normal in test
-// contexts. float_cmp is allowed for direct equality checks of known
-// constant values in unit tests.
+// Relax strict production lints for test builds (normal in test contexts).
 #![cfg_attr(
     test,
     allow(
@@ -41,6 +38,7 @@ pub mod config;
 pub mod cut;
 pub mod cut_selection;
 pub mod error;
+pub mod forward;
 pub mod horizon_mode;
 pub mod indexer;
 pub mod lp_builder;
@@ -52,9 +50,10 @@ pub use config::TrainingConfig;
 pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
 pub use error::SddpError;
+pub use forward::{run_forward_pass, sync_forward, ForwardResult, SyncResult};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
-pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
+pub use lp_builder::{ar_dynamics_row_offset, PatchBuffer};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
 pub use trajectory::TrajectoryRecord;

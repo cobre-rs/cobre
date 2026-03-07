@@ -20,5 +20,8 @@ cobre-stochastic = { version = "0.0.1", path = "../cobre-stochastic" }
 cobre-io = { version = "0.0.1", path = "../cobre-io" }
 thiserror = "2"
 
+[dev-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true

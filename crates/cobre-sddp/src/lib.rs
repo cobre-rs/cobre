@@ -24,21 +24,37 @@
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
 
 // Relax strict production lints for test builds. These lints (unwrap_used,
-// expect_used, panic) guard library code but are normal in test contexts.
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+// expect_used, panic, float_cmp) guard library code but are normal in test
+// contexts. float_cmp is allowed for direct equality checks of known
+// constant values in unit tests.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::float_cmp,
+    )
+)]
 
 pub mod config;
+pub mod cut;
 pub mod cut_selection;
 pub mod error;
 pub mod horizon_mode;
 pub mod indexer;
+pub mod lp_builder;
 pub mod risk_measure;
 pub mod stopping_rule;
+pub mod trajectory;
 
 pub use config::TrainingConfig;
+pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
 pub use error::SddpError;
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
+pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
+pub use trajectory::TrajectoryRecord;

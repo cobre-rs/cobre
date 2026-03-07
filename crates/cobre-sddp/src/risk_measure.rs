@@ -213,7 +213,7 @@ impl RiskMeasure {
     }
 }
 
-/// Compute CVaR weights via greedy allocation (continuous knapsack on objective values).
+/// Compute `CVaR` weights via greedy allocation (continuous knapsack on objective values).
 fn compute_cvar_weights(
     outcomes: &[BackwardOutcome],
     probabilities: &[f64],
@@ -247,7 +247,7 @@ fn compute_cvar_weights(
     mu
 }
 
-/// Compute CVaR weights via greedy allocation on scalar cost values.
+/// Compute `CVaR` weights via greedy allocation on scalar cost values.
 fn compute_cvar_weights_from_costs(
     costs: &[f64],
     probabilities: &[f64],

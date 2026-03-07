@@ -172,8 +172,8 @@ impl CascadeTopology {
 mod tests {
     use super::CascadeTopology;
     use crate::{
-        EntityId, Hydro,
         entities::{HydroGenerationModel, HydroPenalties},
+        EntityId, Hydro,
     };
 
     fn make_hydro(id: i32, downstream_id: Option<i32>) -> Hydro {

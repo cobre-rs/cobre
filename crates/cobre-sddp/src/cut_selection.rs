@@ -1,0 +1,678 @@
+//! Cut selection strategy for controlling cut pool growth during SDDP training.
+//!
+//! This module defines [`CutSelectionStrategy`] (three variants: Level1, LML1,
+//! Dominated), [`CutMetadata`] (per-cut tracking data), and [`DeactivationSet`]
+//! (the output of a selection scan for one stage).
+//!
+//! ## Design
+//!
+//! All three methods (`should_run`, `select`, `update_activity`) are pure and
+//! infallible. Configuration parameters are validated at load time, so runtime
+//! panics from zero `check_frequency` are impossible.
+//!
+//! The `Dominated` variant's `select` is a stub returning an empty
+//! [`DeactivationSet`]; full implementation requires access to forward pass
+//! visited states and is deferred to Epic 04.
+//!
+//! ## Usage
+//!
+//! ```rust
+//! use cobre_sddp::cut_selection::{
+//!     CutMetadata, CutSelectionStrategy, DeactivationSet,
+//! };
+//!
+//! let strategy = CutSelectionStrategy::Level1 {
+//!     threshold: 0,
+//!     check_frequency: 5,
+//! };
+//!
+//! // Should run at multiples of check_frequency (excluding 0).
+//! assert!(!strategy.should_run(0));
+//! assert!(!strategy.should_run(3));
+//! assert!(strategy.should_run(5));
+//! assert!(strategy.should_run(10));
+//!
+//! // Cuts with zero active_count are deactivated.
+//! let metadata = vec![
+//!     CutMetadata { iteration_generated: 1, forward_pass_index: 0,
+//!                   active_count: 0, last_active_iter: 1, domination_count: 0 },
+//!     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
+//!                   active_count: 3, last_active_iter: 5, domination_count: 0 },
+//! ];
+//! let deact = strategy.select(&metadata, 10);
+//! assert_eq!(deact.indices, vec![0]);
+//! ```
+
+// ---------------------------------------------------------------------------
+// CutMetadata
+// ---------------------------------------------------------------------------
+
+/// Per-cut tracking metadata for cut selection strategies.
+///
+/// Stored alongside cut coefficients and intercepts in the pre-allocated cut
+/// pool. All fields are initialized to zero / default values when the cut
+/// slot is first populated. Updated during the backward pass via
+/// [`CutSelectionStrategy::update_activity`].
+#[derive(Debug, Clone)]
+pub struct CutMetadata {
+    /// Iteration at which this cut was generated (1-based).
+    ///
+    /// Used to prevent deactivation of cuts generated in the current
+    /// iteration.
+    pub iteration_generated: u64,
+
+    /// Forward pass index that generated this cut.
+    ///
+    /// Combined with `iteration_generated`, uniquely identifies the
+    /// deterministic slot for this cut.
+    pub forward_pass_index: u32,
+
+    /// Cumulative number of times this cut was binding at an LP solution.
+    ///
+    /// Used by [`CutSelectionStrategy::Level1`]: deactivate if
+    /// `active_count <= threshold`.
+    /// Initialized to 0; incremented by `update_activity` for Level1.
+    pub active_count: u64,
+
+    /// Most recent iteration at which this cut was binding.
+    ///
+    /// Used by [`CutSelectionStrategy::Lml1`]: deactivate if
+    /// `current_iteration - last_active_iter > memory_window`.
+    /// Initialized to `iteration_generated`; updated by `update_activity` for
+    /// LML1.
+    pub last_active_iter: u64,
+
+    /// Number of visited states at which this cut is dominated by other cuts.
+    ///
+    /// Used by [`CutSelectionStrategy::Dominated`]: deactivate if dominated
+    /// at ALL visited states. Reset to 0 when the cut is binding at any
+    /// state.
+    pub domination_count: u64,
+}
+
+// ---------------------------------------------------------------------------
+// DeactivationSet
+// ---------------------------------------------------------------------------
+
+/// Set of cut indices to deactivate at a single stage.
+///
+/// Returned by [`CutSelectionStrategy::select`]. The caller applies each
+/// index to the activity bitmap by clearing the corresponding bit and
+/// decrementing the active count. Indices are zero-based slot positions in
+/// the pre-allocated cut pool.
+///
+/// The set may be empty if no cuts meet the deactivation criteria.
+#[derive(Debug, Clone)]
+pub struct DeactivationSet {
+    /// Stage index (0-based) that this deactivation set belongs to.
+    pub stage_index: u32,
+
+    /// Cut slot indices to deactivate.
+    pub indices: Vec<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// CutSelectionStrategy
+// ---------------------------------------------------------------------------
+
+/// Cut selection strategy for controlling cut pool growth during SDDP training.
+///
+/// One strategy is active for the entire training run (global setting, one
+/// variant per run). All stages use the same strategy. Selection runs
+/// periodically via [`should_run`] to amortize the cost of scanning the pool.
+///
+/// [`should_run`]: CutSelectionStrategy::should_run
+#[derive(Debug, Clone)]
+pub enum CutSelectionStrategy {
+    /// Level-1 selection: retain any cut that has ever been binding.
+    ///
+    /// A cut is deactivated only if its cumulative `active_count` is at or
+    /// below `threshold`. With `threshold = 0` (recommended), a cut is
+    /// deactivated if and only if it has never been binding at any visited
+    /// state. This is the least aggressive strategy and preserves the
+    /// convergence guarantee.
+    Level1 {
+        /// Activity count threshold. A cut is deactivated when
+        /// `active_count <= threshold`. Typical value: 0.
+        threshold: u64,
+
+        /// Number of iterations between selection runs. Must be > 0.
+        check_frequency: u64,
+    },
+
+    /// Limited Memory Level-1 (LML1): retain cuts active within a recent window.
+    ///
+    /// Each cut is timestamped with the most recent iteration at which it was
+    /// binding. Cuts whose timestamp is older than `memory_window` iterations
+    /// are deactivated. More aggressive than Level1 because cuts that were
+    /// active early but are now dominated by newer cuts will eventually be
+    /// removed.
+    Lml1 {
+        /// Number of iterations to retain inactive cuts before deactivation.
+        /// A cut is deactivated when `current_iteration - last_active_iter >
+        /// memory_window`.
+        memory_window: u64,
+
+        /// Number of iterations between selection runs. Must be > 0.
+        check_frequency: u64,
+    },
+
+    /// Dominated cut detection: remove cuts dominated at all visited states.
+    ///
+    /// A cut is dominated if at every visited forward pass state, some other
+    /// active cut achieves a higher (or equal within threshold) value.
+    /// Computationally expensive: O(|active cuts| × |visited states|) per
+    /// stage per check.
+    ///
+    /// **Note:** `select` for this variant is a stub returning an empty
+    /// [`DeactivationSet`]. Full implementation requires visited states from
+    /// the forward pass and is deferred to Epic 04.
+    Dominated {
+        /// Activity threshold epsilon. Ignored by the stub implementation.
+        threshold: f64,
+
+        /// Number of iterations between selection runs. Must be > 0.
+        check_frequency: u64,
+    },
+}
+
+impl CutSelectionStrategy {
+    /// Determine whether cut selection should run at the given iteration.
+    ///
+    /// Returns `true` if `iteration > 0` and `iteration` is a multiple of
+    /// the variant's `check_frequency`. Never runs at iteration 0 (no cuts
+    /// exist yet).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cobre_sddp::cut_selection::CutSelectionStrategy;
+    ///
+    /// let s = CutSelectionStrategy::Level1 { threshold: 0, check_frequency: 5 };
+    /// assert!(!s.should_run(0));
+    /// assert!(!s.should_run(3));
+    /// assert!(s.should_run(5));
+    /// assert!(s.should_run(10));
+    /// ```
+    #[must_use]
+    pub fn should_run(&self, iteration: u64) -> bool {
+        let freq = match self {
+            Self::Level1 {
+                check_frequency, ..
+            }
+            | Self::Lml1 {
+                check_frequency, ..
+            }
+            | Self::Dominated {
+                check_frequency, ..
+            } => *check_frequency,
+        };
+        iteration > 0 && iteration % freq == 0
+    }
+
+    /// Scan the cut pool metadata for a single stage and identify cuts to
+    /// deactivate.
+    ///
+    /// Returns a [`DeactivationSet`] whose `indices` are the zero-based slot
+    /// positions of cuts that should be deactivated. The caller is responsible
+    /// for applying the deactivation to the activity bitmap. This method does
+    /// not modify the metadata — it is a pure query.
+    ///
+    /// `stage_index` identifies which stage this selection runs for (used to
+    /// populate [`DeactivationSet::stage_index`]).
+    ///
+    /// # Variant behavior
+    ///
+    /// - **Level1**: deactivates cuts with `active_count <= threshold`.
+    /// - **Lml1**: deactivates cuts with
+    ///   `current_iteration - last_active_iter > memory_window`.
+    /// - **Dominated**: stub — always returns an empty set (Epic 04).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cobre_sddp::cut_selection::{CutMetadata, CutSelectionStrategy};
+    ///
+    /// let strategy = CutSelectionStrategy::Level1 { threshold: 0, check_frequency: 5 };
+    /// let metadata = vec![
+    ///     CutMetadata { iteration_generated: 1, forward_pass_index: 0,
+    ///                   active_count: 0, last_active_iter: 1, domination_count: 0 },
+    ///     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
+    ///                   active_count: 2, last_active_iter: 5, domination_count: 0 },
+    /// ];
+    /// let deact = strategy.select(&metadata, 10);
+    /// assert_eq!(deact.indices, vec![0]);
+    /// ```
+    #[must_use]
+    pub fn select(&self, metadata: &[CutMetadata], current_iteration: u64) -> DeactivationSet {
+        self.select_for_stage(metadata, current_iteration, 0)
+    }
+
+    /// Scan the cut pool metadata for a specific stage and identify cuts to
+    /// deactivate.
+    ///
+    /// Identical to [`select`] but also sets [`DeactivationSet::stage_index`].
+    ///
+    /// [`select`]: CutSelectionStrategy::select
+    #[must_use]
+    pub fn select_for_stage(
+        &self,
+        metadata: &[CutMetadata],
+        current_iteration: u64,
+        stage_index: u32,
+    ) -> DeactivationSet {
+        // Cut pool capacity is bounded by a u32 field in the pool header, so
+        // enumerate indices always fit in u32. The cast is safe by structural
+        // invariant established at pool construction time.
+        #[allow(clippy::cast_possible_truncation)]
+        let indices = match self {
+            Self::Level1 { threshold, .. } => metadata
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.active_count <= *threshold)
+                .map(|(i, _)| i as u32)
+                .collect(),
+
+            Self::Lml1 { memory_window, .. } => metadata
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| {
+                    current_iteration.saturating_sub(m.last_active_iter) > *memory_window
+                })
+                .map(|(i, _)| i as u32)
+                .collect(),
+
+            // Stub: Dominated selection requires visited forward pass states.
+            // Full implementation deferred to Epic 04.
+            Self::Dominated { .. } => vec![],
+        };
+
+        DeactivationSet {
+            stage_index,
+            indices,
+        }
+    }
+
+    /// Update tracking metadata for a cut that was binding at an LP solution.
+    ///
+    /// Called during the backward pass for every cut whose dual multiplier
+    /// exceeds the solver tolerance (`is_binding == true`). When
+    /// `is_binding == false`, the metadata is not modified.
+    ///
+    /// The update performed depends on the active strategy:
+    ///
+    /// | Strategy  | Update                                          |
+    /// |-----------|--------------------------------------------------|
+    /// | Level1    | Increments `metadata.active_count` by 1         |
+    /// | Lml1      | Sets `metadata.last_active_iter = current_iteration` |
+    /// | Dominated | Resets `metadata.domination_count` to 0          |
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cobre_sddp::cut_selection::{CutMetadata, CutSelectionStrategy};
+    ///
+    /// let strategy = CutSelectionStrategy::Level1 { threshold: 0, check_frequency: 5 };
+    /// let mut meta = CutMetadata {
+    ///     iteration_generated: 1, forward_pass_index: 0,
+    ///     active_count: 0, last_active_iter: 1, domination_count: 0,
+    /// };
+    /// strategy.update_activity(&mut meta, true, 5);
+    /// assert_eq!(meta.active_count, 1);
+    /// ```
+    pub fn update_activity(
+        &self,
+        metadata: &mut CutMetadata,
+        is_binding: bool,
+        current_iteration: u64,
+    ) {
+        if !is_binding {
+            return;
+        }
+
+        match self {
+            Self::Level1 { .. } => {
+                metadata.active_count += 1;
+            }
+            Self::Lml1 { .. } => {
+                metadata.last_active_iter = current_iteration;
+            }
+            Self::Dominated { .. } => {
+                metadata.domination_count = 0;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+
+    fn make_meta(active_count: u64, last_active_iter: u64, domination_count: u64) -> CutMetadata {
+        CutMetadata {
+            iteration_generated: 1,
+            forward_pass_index: 0,
+            active_count,
+            last_active_iter,
+            domination_count,
+        }
+    }
+
+    #[test]
+    fn should_run_false_at_zero() {
+        let s = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        assert!(!s.should_run(0));
+    }
+
+    #[test]
+    fn should_run_false_between_multiples() {
+        let s = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        assert!(!s.should_run(3));
+        assert!(!s.should_run(7));
+    }
+
+    #[test]
+    fn should_run_true_at_multiples() {
+        let s = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        assert!(s.should_run(5));
+        assert!(s.should_run(10));
+        assert!(s.should_run(15));
+    }
+
+    #[test]
+    fn should_run_lml1_respects_check_frequency() {
+        let s = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        assert!(!s.should_run(0));
+        assert!(!s.should_run(3));
+        assert!(s.should_run(5));
+        assert!(s.should_run(10));
+    }
+
+    #[test]
+    fn should_run_dominated_respects_check_frequency() {
+        let s = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 10,
+        };
+        assert!(!s.should_run(5));
+        assert!(s.should_run(10));
+    }
+
+    #[test]
+    fn level1_deactivates_zero_activity_cuts() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0)];
+        let deact = strategy.select(&metadata, 10);
+        assert_eq!(
+            deact.indices,
+            vec![0],
+            "only the inactive cut is deactivated"
+        );
+    }
+
+    #[test]
+    fn level1_retains_positive_activity_cuts() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(3, 1, 0), make_meta(7, 5, 0)];
+        let deact = strategy.select(&metadata, 10);
+        assert!(
+            deact.indices.is_empty(),
+            "no cuts should be deactivated when all have activity"
+        );
+    }
+
+    #[test]
+    fn level1_threshold_1_deactivates_cuts_with_count_at_most_1() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 1,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0), make_meta(2, 8, 0)];
+        let deact = strategy.select(&metadata, 10);
+        assert_eq!(deact.indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn level1_empty_metadata_returns_empty_set() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let deact = strategy.select(&[], 10);
+        assert!(deact.indices.is_empty());
+    }
+
+    #[test]
+    fn lml1_deactivates_cuts_outside_memory_window() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 5, 0)]; // last_active_iter = 5
+        let deact = strategy.select(&metadata, 20);
+        assert_eq!(deact.indices, vec![0]);
+    }
+
+    #[test]
+    fn lml1_retains_cuts_within_memory_window() {
+        // memory_window=10, iteration=20. Cut with last_active_iter=12:
+        // 20 - 12 = 8, not > 10 → retained.
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 12, 0)];
+        let deact = strategy.select(&metadata, 20);
+        assert!(deact.indices.is_empty());
+    }
+
+    #[test]
+    fn lml1_retains_cuts_exactly_at_boundary() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 10, 0)];
+        let deact = strategy.select(&metadata, 20);
+        assert!(
+            deact.indices.is_empty(),
+            "boundary case: exactly at window edge, retained"
+        );
+    }
+
+    #[test]
+    fn lml1_mixed_cuts_deactivates_correct_indices() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 5, 0), make_meta(0, 12, 0), make_meta(0, 1, 0)];
+        let deact = strategy.select(&metadata, 20);
+        assert_eq!(deact.indices, vec![0, 2]);
+    }
+
+    // Dominated select (stub): always returns empty set
+
+    #[test]
+    fn dominated_select_always_returns_empty_set() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.001,
+            check_frequency: 10,
+        };
+        let metadata = vec![make_meta(0, 1, 5), make_meta(0, 1, 10)];
+        let deact = strategy.select(&metadata, 20);
+        assert!(deact.indices.is_empty());
+    }
+
+    #[test]
+    fn level1_update_activity_increments_active_count_when_binding() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let mut meta = make_meta(0, 1, 0);
+        strategy.update_activity(&mut meta, true, 5);
+        assert_eq!(meta.active_count, 1);
+        strategy.update_activity(&mut meta, true, 6);
+        assert_eq!(meta.active_count, 2);
+    }
+
+    #[test]
+    fn level1_update_activity_does_nothing_when_not_binding() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let mut meta = make_meta(3, 1, 0);
+        strategy.update_activity(&mut meta, false, 5);
+        assert_eq!(meta.active_count, 3, "must not modify when not binding");
+    }
+
+    #[test]
+    fn lml1_update_activity_sets_last_active_iter_when_binding() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let mut meta = make_meta(0, 1, 0);
+        strategy.update_activity(&mut meta, true, 15);
+        assert_eq!(meta.last_active_iter, 15);
+    }
+
+    #[test]
+    fn lml1_update_activity_does_nothing_when_not_binding() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let mut meta = make_meta(0, 7, 0);
+        strategy.update_activity(&mut meta, false, 15);
+        assert_eq!(meta.last_active_iter, 7, "must not modify when not binding");
+    }
+
+    #[test]
+    fn dominated_update_activity_resets_domination_count_when_binding() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.001,
+            check_frequency: 10,
+        };
+        let mut meta = make_meta(0, 1, 42);
+        strategy.update_activity(&mut meta, true, 10);
+        assert_eq!(
+            meta.domination_count, 0,
+            "domination_count must be reset when cut is binding"
+        );
+    }
+
+    #[test]
+    fn dominated_update_activity_does_nothing_when_not_binding() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.001,
+            check_frequency: 10,
+        };
+        let mut meta = make_meta(0, 1, 42);
+        strategy.update_activity(&mut meta, false, 10);
+        assert_eq!(
+            meta.domination_count, 42,
+            "must not modify when not binding"
+        );
+    }
+
+    #[test]
+    fn ac_level1_threshold_0_deactivates_zero_activity_cut() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let metadata = vec![CutMetadata {
+            iteration_generated: 1,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 1,
+            domination_count: 0,
+        }];
+        let deact = strategy.select(&metadata, 10);
+        assert!(deact.indices.contains(&0));
+    }
+
+    #[test]
+    fn ac_lml1_deactivates_cut_outside_memory_window() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 10,
+            check_frequency: 5,
+        };
+        let metadata = vec![CutMetadata {
+            iteration_generated: 1,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 5,
+            domination_count: 0,
+        }];
+        let deact = strategy.select(&metadata, 20);
+        assert!(deact.indices.contains(&0));
+    }
+
+    #[test]
+    fn select_for_stage_sets_stage_index() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let metadata = vec![make_meta(0, 1, 0)];
+        let deact = strategy.select_for_stage(&metadata, 10, 7);
+        assert_eq!(deact.stage_index, 7);
+    }
+
+    #[test]
+    fn select_sets_stage_index_to_zero() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 5,
+        };
+        let metadata: Vec<CutMetadata> = vec![];
+        let deact = strategy.select(&metadata, 10);
+        assert_eq!(deact.stage_index, 0);
+    }
+
+    #[test]
+    fn deactivation_set_derives_debug_and_clone() {
+        let deact = DeactivationSet {
+            stage_index: 2,
+            indices: vec![0, 3, 7],
+        };
+        let cloned = deact.clone();
+        assert_eq!(cloned.stage_index, 2);
+        assert_eq!(cloned.indices, vec![0, 3, 7]);
+        assert!(!format!("{deact:?}").is_empty());
+    }
+
+    #[test]
+    fn cut_metadata_derives_debug_and_clone() {
+        let meta = make_meta(5, 10, 2);
+        let cloned = meta.clone();
+        assert_eq!(cloned.active_count, 5);
+        assert!(!format!("{meta:?}").is_empty());
+    }
+}

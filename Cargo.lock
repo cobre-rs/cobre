@@ -363,6 +363,14 @@ version = "0.0.1"
 [[package]]
 name = "cobre-sddp"
 version = "0.0.1"
+dependencies = [
+ "cobre-comm",
+ "cobre-core",
+ "cobre-io",
+ "cobre-solver",
+ "cobre-stochastic",
+ "thiserror",
+]
 
 [[package]]
 name = "cobre-solver"

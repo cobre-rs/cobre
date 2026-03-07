@@ -22,3 +22,23 @@
 //! This crate is in early development. The API **will** change.
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+
+// Relax strict production lints for test builds. These lints (unwrap_used,
+// expect_used, panic) guard library code but are normal in test contexts.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+pub mod config;
+pub mod cut_selection;
+pub mod error;
+pub mod horizon_mode;
+pub mod indexer;
+pub mod risk_measure;
+pub mod stopping_rule;
+
+pub use config::TrainingConfig;
+pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+pub use error::SddpError;
+pub use horizon_mode::HorizonMode;
+pub use indexer::StageIndexer;
+pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};

@@ -621,37 +621,12 @@ impl SolverInterface for HighsSolver {
     }
 
     fn load_model(&mut self, template: &StageTemplate) {
-        // Convert col_starts into a local Vec<i32>. load_model is not on the
-        // innermost hot path (called ~60 times per iteration, not millions), so
-        // a local allocation is acceptable and avoids keeping a scratch buffer
-        // alive for this single use.
-        let col_starts_i32: Vec<i32> = template
-            .col_starts
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                debug_assert!(
-                    i32::try_from(v).is_ok(),
-                    "col_starts[{i}] = {v} overflows i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                {
-                    v as i32
-                }
-            })
-            .collect();
-
-        let row_indices_ptr = {
-            let row_indices_i32 = self.convert_to_i32_scratch(&template.row_indices);
-            row_indices_i32.as_ptr()
-        };
-
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
         // - All pointer arguments point into owned `Vec` data that remains alive for the
         //   duration of this call.
-        // - `col_starts_i32` is a local Vec alive until the end of this scope.
-        // - `row_indices_ptr` points into `self.scratch_i32`, which is alive for `'self`.
+        // - `template.col_starts` and `template.row_indices` are `Vec<i32>` owned by the
+        //   template, alive for the duration of this borrow.
         // - All slice lengths match the HiGHS API contract:
         //   `num_col + 1` for a_start, `num_nz` for a_index and a_value,
         //   `num_col` for col_cost/col_lower/col_upper, `num_row` for row_lower/row_upper.
@@ -691,8 +666,8 @@ impl SolverInterface for HighsSolver {
                 template.col_upper.as_ptr(),
                 template.row_lower.as_ptr(),
                 template.row_upper.as_ptr(),
-                col_starts_i32.as_ptr(),
-                row_indices_ptr,
+                template.col_starts.as_ptr(),
+                template.row_indices.as_ptr(),
                 template.values.as_ptr(),
             )
         };
@@ -721,29 +696,6 @@ impl SolverInterface for HighsSolver {
     }
 
     fn add_rows(&mut self, cuts: &RowBatch) {
-        // Use local Vec for row_starts, scratch for larger col_indices.
-        let row_starts_i32: Vec<i32> = cuts
-            .row_starts
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                debug_assert!(
-                    i32::try_from(v).is_ok(),
-                    "row_starts[{i}] = {v} overflows i32::MAX"
-                );
-                // SAFETY: debug_assert above verifies v fits in i32.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                {
-                    v as i32
-                }
-            })
-            .collect();
-
-        let col_indices_ptr = {
-            let col_indices_i32 = self.convert_to_i32_scratch(&cuts.col_indices);
-            col_indices_i32.as_ptr()
-        };
-
         assert!(
             i32::try_from(cuts.num_rows).is_ok(),
             "cuts.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
@@ -763,8 +715,8 @@ impl SolverInterface for HighsSolver {
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - All pointer arguments point into owned data alive for the duration of this call.
-        // - `row_starts_i32` is a local Vec alive until the end of this scope.
-        // - `col_indices_ptr` points into `self.scratch_i32`, alive for `'self`.
+        // - `cuts.row_starts` and `cuts.col_indices` are `Vec<i32>` owned by the RowBatch,
+        //   alive for the duration of this borrow.
         // - Slice lengths: `num_rows + 1` for starts, total nnz for index and value,
         //   `num_rows` for lower/upper bounds.
         let status = unsafe {
@@ -774,8 +726,8 @@ impl SolverInterface for HighsSolver {
                 cuts.row_lower.as_ptr(),
                 cuts.row_upper.as_ptr(),
                 num_new_nz,
-                row_starts_i32.as_ptr(),
-                col_indices_ptr,
+                cuts.row_starts.as_ptr(),
+                cuts.col_indices.as_ptr(),
                 cuts.values.as_ptr(),
             )
         };
@@ -1184,8 +1136,8 @@ mod tests {
             num_cols: 3,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0, 2, 2, 3],
-            row_indices: vec![0, 1, 1],
+            col_starts: vec![0_i32, 2, 2, 3],
+            row_indices: vec![0_i32, 1, 1],
             values: vec![1.0, 2.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![10.0, f64::INFINITY, 8.0],
@@ -1206,8 +1158,8 @@ mod tests {
     fn make_fixture_row_batch() -> RowBatch {
         RowBatch {
             num_rows: 2,
-            row_starts: vec![0, 2, 4],
-            col_indices: vec![0, 1, 0, 1],
+            row_starts: vec![0_i32, 2, 4],
+            col_indices: vec![0_i32, 1, 0, 1],
             values: vec![-5.0, 1.0, 3.0, 1.0],
             row_lower: vec![20.0, 80.0],
             row_upper: vec![f64::INFINITY, f64::INFINITY],

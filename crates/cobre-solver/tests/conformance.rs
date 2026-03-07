@@ -38,8 +38,8 @@ fn make_fixture_stage_template() -> StageTemplate {
         num_cols: 3,
         num_rows: 2,
         num_nz: 3,
-        col_starts: vec![0, 2, 2, 3],
-        row_indices: vec![0, 1, 1],
+        col_starts: vec![0_i32, 2, 2, 3],
+        row_indices: vec![0_i32, 1, 1],
         values: vec![1.0, 2.0, 1.0],
         col_lower: vec![0.0, 0.0, 0.0],
         col_upper: vec![10.0, f64::INFINITY, 8.0],
@@ -61,8 +61,8 @@ fn make_fixture_stage_template() -> StageTemplate {
 fn make_fixture_row_batch() -> RowBatch {
     RowBatch {
         num_rows: 2,
-        row_starts: vec![0, 2, 4],
-        col_indices: vec![0, 1, 0, 1],
+        row_starts: vec![0_i32, 2, 4],
+        col_indices: vec![0_i32, 1, 0, 1],
         values: vec![-5.0, 1.0, 3.0, 1.0],
         row_lower: vec![20.0, 80.0],
         row_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -143,8 +143,8 @@ fn test_fixture_stage_template_data() {
     assert_eq!(t.num_cols, 3);
     assert_eq!(t.num_rows, 2);
     assert_eq!(t.num_nz, 3);
-    assert_eq!(t.col_starts, vec![0, 2, 2, 3]);
-    assert_eq!(t.row_indices, vec![0, 1, 1]);
+    assert_eq!(t.col_starts, vec![0_i32, 2, 2, 3]);
+    assert_eq!(t.row_indices, vec![0_i32, 1, 1]);
     assert_eq!(t.values, vec![1.0, 2.0, 1.0]);
     assert_eq!(t.col_lower, vec![0.0, 0.0, 0.0]);
     assert_eq!(t.col_upper[0], 10.0);
@@ -165,8 +165,8 @@ fn test_fixture_stage_template_data() {
 fn test_fixture_row_batch_data() {
     let b = make_fixture_row_batch();
     assert_eq!(b.num_rows, 2);
-    assert_eq!(b.row_starts, vec![0, 2, 4]);
-    assert_eq!(b.col_indices, vec![0, 1, 0, 1]);
+    assert_eq!(b.row_starts, vec![0_i32, 2, 4]);
+    assert_eq!(b.col_indices, vec![0_i32, 1, 0, 1]);
     assert_eq!(b.values, vec![-5.0, 1.0, 3.0, 1.0]);
     assert_eq!(b.row_lower, vec![20.0, 80.0]);
     assert!(b.row_upper[0].is_infinite() && b.row_upper[0].is_sign_positive());
@@ -215,8 +215,8 @@ fn test_solver_highs_add_rows_single_cut() {
     // Construct a 1-row RowBatch containing only Cut 1: -5*x0 + x1 >= 20
     let single_cut = RowBatch {
         num_rows: 1,
-        row_starts: vec![0, 2],
-        col_indices: vec![0, 1],
+        row_starts: vec![0_i32, 2],
+        col_indices: vec![0_i32, 1],
         values: vec![-5.0, 1.0],
         row_lower: vec![20.0],
         row_upper: vec![f64::INFINITY],
@@ -1045,7 +1045,7 @@ fn test_solver_highs_solve_infeasible() {
         num_cols: 1,
         num_rows: 0,
         num_nz: 0,
-        col_starts: vec![0, 0],
+        col_starts: vec![0_i32, 0],
         row_indices: vec![],
         values: vec![],
         col_lower: vec![5.0],
@@ -1107,7 +1107,7 @@ fn test_solver_highs_solve_unbounded() {
         num_cols: 1,
         num_rows: 0,
         num_nz: 0,
-        col_starts: vec![0, 0],
+        col_starts: vec![0_i32, 0],
         row_indices: vec![],
         values: vec![],
         col_lower: vec![f64::NEG_INFINITY],
@@ -1195,8 +1195,8 @@ fn make_larger_lp_template() -> StageTemplate {
         num_cols: 5,
         num_rows: 4,
         num_nz: 8,
-        col_starts: vec![0, 1, 3, 5, 7, 8],
-        row_indices: vec![0, 0, 1, 1, 2, 2, 3, 3],
+        col_starts: vec![0_i32, 1, 3, 5, 7, 8],
+        row_indices: vec![0_i32, 0, 1, 1, 2, 2, 3, 3],
         values: vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         col_lower: vec![0.0, 0.0, 0.0, 0.0, 0.0],
         col_upper: vec![100.0, 100.0, 100.0, 100.0, 100.0],
@@ -1426,8 +1426,8 @@ fn test_solver_highs_infeasible_with_rows() {
         num_cols: 2,
         num_rows: 2,
         num_nz: 4,
-        col_starts: vec![0, 2, 4],
-        row_indices: vec![0, 1, 0, 1],
+        col_starts: vec![0_i32, 2, 4],
+        row_indices: vec![0_i32, 1, 0, 1],
         values: vec![1.0, 1.0, 1.0, 1.0],
         col_lower: vec![0.0, 0.0],
         col_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -1472,8 +1472,8 @@ fn test_solver_highs_infeasible_with_presolve() {
         num_cols: 2,
         num_rows: 2,
         num_nz: 4,
-        col_starts: vec![0, 2, 4],
-        row_indices: vec![0, 1, 0, 1],
+        col_starts: vec![0_i32, 2, 4],
+        row_indices: vec![0_i32, 1, 0, 1],
         values: vec![1.0, 1.0, 1.0, 1.0],
         col_lower: vec![0.0, 0.0],
         col_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -1527,8 +1527,8 @@ fn test_solver_highs_unbounded_with_primal_ray() {
         num_cols: 2,
         num_rows: 1,
         num_nz: 1,
-        col_starts: vec![0, 1, 1],
-        row_indices: vec![0],
+        col_starts: vec![0_i32, 1, 1],
+        row_indices: vec![0_i32],
         values: vec![1.0],
         col_lower: vec![0.0, f64::NEG_INFINITY],
         col_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -1593,8 +1593,8 @@ fn test_solver_highs_unbounded_or_infeasible() {
         num_cols: 2,
         num_rows: 2,
         num_nz: 2,
-        col_starts: vec![0, 2, 2],
-        row_indices: vec![0, 1],
+        col_starts: vec![0_i32, 2, 2],
+        row_indices: vec![0_i32, 1],
         values: vec![1.0, 1.0],
         col_lower: vec![0.0, f64::NEG_INFINITY],
         col_upper: vec![f64::INFINITY, f64::INFINITY],

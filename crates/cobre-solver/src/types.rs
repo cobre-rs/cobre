@@ -180,18 +180,18 @@ pub struct StageTemplate {
     /// Number of non-zero entries in the structural constraint matrix.
     pub num_nz: usize,
 
-    /// CSC column start offsets.
+    /// CSC column start offsets (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: `num_cols + 1`. Entry `col_starts[j]` is the index into
     /// `row_indices` and `values` where column `j` begins.
     /// `col_starts[num_cols]` equals `num_nz`.
-    pub col_starts: Vec<usize>,
+    pub col_starts: Vec<i32>,
 
-    /// CSC row indices for each non-zero entry.
+    /// CSC row indices for each non-zero entry (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: `num_nz`. Entry `row_indices[k]` is the row of the `k`-th
     /// non-zero value.
-    pub row_indices: Vec<usize>,
+    pub row_indices: Vec<i32>,
 
     /// CSC non-zero values.
     ///
@@ -277,18 +277,18 @@ pub struct RowBatch {
     /// Number of active constraint rows (cuts) in this batch.
     pub num_rows: usize,
 
-    /// CSR row start offsets.
+    /// CSR row start offsets (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: `num_rows + 1`. Entry `row_starts[i]` is the index into
     /// `col_indices` and `values` where row `i` begins.
     /// `row_starts[num_rows]` equals the total number of non-zeros.
-    pub row_starts: Vec<usize>,
+    pub row_starts: Vec<i32>,
 
-    /// CSR column indices for each non-zero entry.
+    /// CSR column indices for each non-zero entry (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: total non-zeros across all rows. Entry `col_indices[k]` is the
     /// column of the `k`-th non-zero value.
-    pub col_indices: Vec<usize>,
+    pub col_indices: Vec<i32>,
 
     /// CSR non-zero values.
     ///
@@ -604,8 +604,8 @@ mod tests {
             num_cols: 3,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0, 2, 2, 3],
-            row_indices: vec![0, 1, 1],
+            col_starts: vec![0_i32, 2, 2, 3],
+            row_indices: vec![0_i32, 1, 1],
             values: vec![1.0, 2.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![10.0, f64::INFINITY, 8.0],
@@ -627,8 +627,8 @@ mod tests {
         assert_eq!(tmpl.num_cols, 3);
         assert_eq!(tmpl.num_rows, 2);
         assert_eq!(tmpl.num_nz, 3);
-        assert_eq!(tmpl.col_starts, vec![0, 2, 2, 3]);
-        assert_eq!(tmpl.row_indices, vec![0, 1, 1]);
+        assert_eq!(tmpl.col_starts, vec![0_i32, 2, 2, 3]);
+        assert_eq!(tmpl.row_indices, vec![0_i32, 1, 1]);
         assert_eq!(tmpl.values, vec![1.0, 2.0, 1.0]);
 
         assert_eq!(tmpl.col_lower, vec![0.0, 0.0, 0.0]);
@@ -837,8 +837,8 @@ mod tests {
         // Cut 2:  3*x0 + x1 >= 80  (col_indices [0,1], values [ 3, 1])
         let batch = RowBatch {
             num_rows: 2,
-            row_starts: vec![0, 2, 4],
-            col_indices: vec![0, 1, 0, 1],
+            row_starts: vec![0_i32, 2, 4],
+            col_indices: vec![0_i32, 1, 0, 1],
             values: vec![-5.0, 1.0, 3.0, 1.0],
             row_lower: vec![20.0, 80.0],
             row_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -846,8 +846,8 @@ mod tests {
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts.len(), 3);
-        assert_eq!(batch.row_starts, vec![0, 2, 4]);
-        assert_eq!(batch.col_indices, vec![0, 1, 0, 1]);
+        assert_eq!(batch.row_starts, vec![0_i32, 2, 4]);
+        assert_eq!(batch.col_indices, vec![0_i32, 1, 0, 1]);
         assert_eq!(batch.values, vec![-5.0, 1.0, 3.0, 1.0]);
         assert_eq!(batch.row_lower, vec![20.0, 80.0]);
         assert!(batch.row_upper[0].is_infinite() && batch.row_upper[0] > 0.0);

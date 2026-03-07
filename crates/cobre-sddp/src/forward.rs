@@ -41,7 +41,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{sample_forward, StochasticContext};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -241,6 +241,12 @@ pub fn sync_forward<C: Communicator>(
 /// - `fcf` — Future Cost Function containing the cut pools.
 /// - `stage` — 0-based stage index.
 /// - `indexer` — LP layout map; provides `n_state` and `theta`.
+///
+/// # Panics
+///
+/// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
+/// which would exceed the `HiGHS` API index limit. In practice this cannot occur
+/// for any realistic problem size.
 #[must_use]
 pub fn build_cut_row_batch(
     fcf: &FutureCostFunction,
@@ -255,7 +261,7 @@ pub fn build_cut_row_batch(
     if num_cuts == 0 {
         return RowBatch {
             num_rows: 0,
-            row_starts: vec![0],
+            row_starts: vec![0_i32],
             col_indices: vec![],
             values: vec![],
             row_lower: vec![],
@@ -266,13 +272,13 @@ pub fn build_cut_row_batch(
     let nnz_per_cut = n_state + 1;
     let total_nnz = num_cuts * nnz_per_cut;
 
-    let mut row_starts = Vec::with_capacity(num_cuts + 1);
-    let mut col_indices = Vec::with_capacity(total_nnz);
+    let mut row_starts: Vec<i32> = Vec::with_capacity(num_cuts + 1);
+    let mut col_indices: Vec<i32> = Vec::with_capacity(total_nnz);
     let mut values = Vec::with_capacity(total_nnz);
     let mut row_lower = Vec::with_capacity(num_cuts);
     let mut row_upper = Vec::with_capacity(num_cuts);
 
-    let mut nz_offset = 0usize;
+    let mut nz_offset = 0;
 
     for (_slot, intercept, coefficients) in fcf.active_cuts(stage) {
         debug_assert_eq!(
@@ -283,14 +289,25 @@ pub fn build_cut_row_batch(
             expected = n_state,
         );
 
-        row_starts.push(nz_offset);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        row_starts.push(nz_offset as i32);
 
         for (j, &c) in coefficients.iter().enumerate() {
-            col_indices.push(j);
+            debug_assert!(
+                i32::try_from(j).is_ok(),
+                "column index j={j} exceeds i32::MAX"
+            );
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            col_indices.push(j as i32);
             values.push(-c);
         }
 
-        col_indices.push(theta_col);
+        debug_assert!(
+            i32::try_from(theta_col).is_ok(),
+            "theta_col={theta_col} exceeds i32::MAX"
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        col_indices.push(theta_col as i32);
         values.push(1.0_f64);
 
         row_lower.push(intercept);
@@ -299,7 +316,10 @@ pub fn build_cut_row_batch(
         nz_offset += nnz_per_cut;
     }
 
-    row_starts.push(total_nnz);
+    #[allow(clippy::expect_used)]
+    row_starts.push(
+        i32::try_from(total_nnz).expect("total_nnz exceeds i32::MAX; LP exceeds HiGHS API limit"),
+    );
 
     RowBatch {
         num_rows: num_cuts,
@@ -536,12 +556,12 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
-    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
+    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,
@@ -690,8 +710,8 @@ mod tests {
             num_cols: 3,
             num_rows: 1,
             num_nz: 1,
-            col_starts: vec![0, 0, 1, 1], // col 1 (storage_in) has NZ at row 0
-            row_indices: vec![0],
+            col_starts: vec![0_i32, 0, 1, 1], // col 1 (storage_in) has NZ at row 0
+            row_indices: vec![0_i32],
             values: vec![1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],

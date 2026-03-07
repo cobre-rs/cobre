@@ -450,7 +450,7 @@ mod tests {
             num_cols: 1,
             num_rows: 0,
             num_nz: 0,
-            col_starts: vec![0, 0],
+            col_starts: vec![0_i32, 0],
             row_indices: vec![],
             values: vec![],
             col_lower: vec![0.0],
@@ -467,7 +467,7 @@ mod tests {
 
         let batch = RowBatch {
             num_rows: 0,
-            row_starts: vec![0],
+            row_starts: vec![0_i32],
             col_indices: vec![],
             values: vec![],
             row_lower: vec![],

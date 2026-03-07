@@ -127,6 +127,33 @@
   `resolve.rs:178` produce rustdoc warnings. Fix: escape brackets in cholesky.rs, use
   `Self::apply_correlation` in resolve.rs.
 
+### Phase 6 cobre-sddp key facts
+
+- `train()` in `training.rs` destructures `TrainingConfig` into `loop_config` with `event_sender: None`
+  to pass a config without the sender into forward/backward pass. `backward.rs` immediately suppresses
+  both `config` and `comm` via `let _ = config; let _ = comm;` — pre-declarations for Phase 7.
+- Backward pass inner opening loop allocates `Vec<f64>` per opening for `coefficients` despite the
+  doc claiming "no allocations inside the inner opening loop." Also allocates `Vec<usize>` for
+  `binding_slots` per opening when cuts are present. Both are confirmed hot-path allocations.
+- `ConvergenceMonitor::update` clones `lower_bound_history` (O(iterations)) on every call.
+  `MonitorState` owns the history; `BoundStalling` is the only consumer.
+- `evaluate_lower_bound` uses non-debug `assert!` for `n_openings > 0` — fires in release builds
+  on every iteration despite the opening tree being immutable. Should be `debug_assert!`.
+- `TrainingEvent::TrainingStarted` is emitted with `case_name: String::new()` and `timestamp:
+String::new()` — placeholder values because `TrainingConfig` has no mechanism to supply them.
+- `FutureCostFunction::pools` is `pub Vec<CutPool>` — direct access is used extensively in
+  `training.rs` and `backward.rs` for metadata updates and deactivation.
+- Cut slot assignment formula: `slot = warm_start_count + iteration * forward_passes + forward_pass_index`.
+  Deterministic, enables reproducibility and checkpointing.
+- `CutSyncBuffers::sync_cuts` assumes all ranks generate the same number of cuts (uniform `counts`).
+  Acknowledged in doc comment. `allgatherv` is called with the actual send slice length.
+- `collect_local_cuts_for_stage` in `training.rs` causes a double-collect: returns `Vec<(u32, u32,
+u32, f64, Vec<f64>)>` that is immediately re-mapped to `Vec<(u32, u32, u32, f64, &[f64])>`.
+  Documented as acceptable on the backward/sync path (not inner LP loop).
+- `StageIndexer` has `pub` fields used throughout; it is a plain data struct, no invariants to protect.
+- `HorizonMode::Finite` is the only implemented variant; `Cyclic` is deferred.
+- All 20 integration+conformance tests pass; 34 unit tests pass.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

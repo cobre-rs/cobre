@@ -52,9 +52,9 @@ use cobre_solver::{SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
-    state_exchange::ExchangeBuffers,
+    state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
+    StageIndexer, TrainingConfig,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -272,7 +272,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
         TrainingConfig, TrajectoryRecord,
@@ -399,8 +399,8 @@ mod tests {
             num_cols: 3,
             num_rows: 1,
             num_nz: 1,
-            col_starts: vec![0, 0, 1, 1],
-            row_indices: vec![0],
+            col_starts: vec![0_i32, 0, 1, 1],
+            row_indices: vec![0_i32],
             values: vec![1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
@@ -454,7 +454,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -463,6 +462,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;

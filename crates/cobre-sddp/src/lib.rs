@@ -36,6 +36,7 @@
 
 pub mod backward;
 pub mod config;
+pub mod convergence;
 pub mod cut;
 pub mod cut_selection;
 pub mod cut_sync;
@@ -48,10 +49,12 @@ pub mod lp_builder;
 pub mod risk_measure;
 pub mod state_exchange;
 pub mod stopping_rule;
+pub mod training;
 pub mod trajectory;
 
 pub use backward::{BackwardResult, run_backward_pass};
 pub use config::TrainingConfig;
+pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
 pub use cut_sync::CutSyncBuffers;
@@ -64,4 +67,5 @@ pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use state_exchange::ExchangeBuffers;
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
+pub use training::{TrainingResult, train};
 pub use trajectory::TrajectoryRecord;

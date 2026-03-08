@@ -50,3 +50,4 @@ What becomes easier or more difficult because of this change?
 | [004](004-postcard-mpi-serialization.md) | Accepted | postcard for MPI broadcast serialization                    |
 | [005](005-flatbuffers-policy.md)         | Accepted | FlatBuffers for policy data persistence                     |
 | [006](006-soa-bound-patching.md)         | Accepted | SoA bound patching for solver hot path                      |
+| [007](007-raw-basis-status-codes.md)     | Accepted | Raw i32 basis status codes for zero-copy warm-start         |

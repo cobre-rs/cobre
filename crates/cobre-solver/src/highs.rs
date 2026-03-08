@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use crate::{
     SolverInterface, ffi,
-    types::{LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate},
+    types::{RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate},
 };
 
 // ─── Default HiGHS configuration ─────────────────────────────────────────────
@@ -326,21 +326,21 @@ impl HighsSolver {
         unsafe { ffi::cobre_highs_get_model_status(self.handle) }
     }
 
-    /// Interprets a non-optimal status as a `SolverError`.
+    /// Interprets a non-optimal status as a terminal `SolverError`.
     ///
     /// Returns `None` for `SOLVE_ERROR` or `UNKNOWN` (retry continues),
-    /// or `Some(Err(...))` for terminal statuses.
+    /// or `Some(error)` for terminal statuses.
     fn interpret_terminal_status(
         &mut self,
         status: i32,
         solve_time_seconds: f64,
-    ) -> Option<Result<LpSolution, SolverError>> {
+    ) -> Option<SolverError> {
         match status {
             ffi::HIGHS_MODEL_STATUS_OPTIMAL => {
                 // Caller should have handled optimal before reaching here.
                 None
             }
-            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(Err(SolverError::Infeasible)),
+            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(SolverError::Infeasible),
             ffi::HIGHS_MODEL_STATUS_UNBOUNDED_OR_INFEASIBLE => {
                 // Probe for a dual ray to classify as Infeasible, then a primal
                 // ray to classify as Unbounded. The ray values are not stored in
@@ -358,7 +358,7 @@ impl HighsSolver {
                     )
                 };
                 if dual_status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
-                    return Some(Err(SolverError::Infeasible));
+                    return Some(SolverError::Infeasible);
                 }
                 let mut has_primal_ray: i32 = 0;
                 let mut primal_buf = vec![0.0_f64; self.num_cols];
@@ -371,29 +371,29 @@ impl HighsSolver {
                     )
                 };
                 if primal_status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
-                    return Some(Err(SolverError::Unbounded));
+                    return Some(SolverError::Unbounded);
                 }
-                Some(Err(SolverError::Infeasible))
+                Some(SolverError::Infeasible)
             }
-            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(SolverError::Unbounded)),
-            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => Some(Err(SolverError::TimeLimitExceeded {
+            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(SolverError::Unbounded),
+            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => Some(SolverError::TimeLimitExceeded {
                 elapsed_seconds: solve_time_seconds,
-            })),
+            }),
             ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT => {
                 // SAFETY: handle is valid non-null pointer; iteration count is non-negative.
                 #[allow(clippy::cast_sign_loss)]
                 let iterations =
                     unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-                Some(Err(SolverError::IterationLimit { iterations }))
+                Some(SolverError::IterationLimit { iterations })
             }
             ffi::HIGHS_MODEL_STATUS_SOLVE_ERROR | ffi::HIGHS_MODEL_STATUS_UNKNOWN => {
                 // Signal to the caller that retry should continue.
                 None
             }
-            other => Some(Err(SolverError::InternalError {
+            other => Some(SolverError::InternalError {
                 message: format!("HiGHS returned unexpected model status {other}"),
                 error_code: Some(other),
-            })),
+            }),
         }
     }
 
@@ -671,9 +671,7 @@ impl SolverInterface for HighsSolver {
         }
 
         // Check for a definitive terminal status (not a retry-able error).
-        // `interpret_terminal_status` only returns `Some(Err(...))` for non-OPTIMAL
-        // statuses; it never returns `Some(Ok(...))`.
-        if let Some(Err(terminal_err)) = self.interpret_terminal_status(model_status, solve_time) {
+        if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
             self.stats.failure_count += 1;
             return Err(terminal_err);
         }
@@ -747,7 +745,7 @@ impl SolverInterface for HighsSolver {
                 break;
             }
 
-            if let Some(Err(e)) = self.interpret_terminal_status(retry_status, retry_time) {
+            if let Some(e) = self.interpret_terminal_status(retry_status, retry_time) {
                 terminal_err = Some(e);
                 break;
             }

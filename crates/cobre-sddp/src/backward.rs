@@ -43,7 +43,9 @@
 //! - One `RowBatch` per stage built by [`build_cut_row_batch`] (outside the
 //!   trial point loop).
 //!
-//! No allocations occur inside the inner opening loop.
+//! The `binding_slots` buffer is pre-allocated and reused across openings.
+//! The `coefficients` `Vec<f64>` in [`BackwardOutcome`] is still allocated
+//! per opening — a flat buffer optimization is deferred to profiling.
 
 use std::time::Instant;
 
@@ -52,9 +54,9 @@ use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
-    state_exchange::ExchangeBuffers,
+    state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
+    StageIndexer, TrainingConfig,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -145,6 +147,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     let mut cuts_generated: usize = 0;
     let tree_view = stochastic.tree_view();
     let mut outcomes: Vec<BackwardOutcome> = Vec::new();
+    let mut binding_slots: Vec<usize> = Vec::new();
     for t in (0..num_stages.saturating_sub(1)).rev() {
         let successor = t + 1;
         let n_openings = tree_view.n_openings(successor);
@@ -203,20 +206,16 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 let pi_dot_x: f64 = coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
                 let intercept = objective - pi_dot_x;
 
-                let binding_slots: Vec<usize> = if num_cuts_at_successor > 0 {
+                binding_slots.clear();
+                if num_cuts_at_successor > 0 {
                     let cut_duals =
                         &view.dual[template_num_rows..template_num_rows + num_cuts_at_successor];
-                    fcf.active_cuts(successor)
-                        .enumerate()
-                        .filter_map(|(cut_idx, (slot, _, _))| {
-                            (cut_duals[cut_idx] > 0.0).then_some(slot)
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                    binding_slots.extend(fcf.active_cuts(successor).enumerate().filter_map(
+                        |(cut_idx, (slot, _, _))| (cut_duals[cut_idx] > 0.0).then_some(slot),
+                    ));
+                }
 
-                for slot in binding_slots {
+                for &slot in &binding_slots {
                     fcf.pools[successor].metadata[slot].active_count += 1;
                     fcf.pools[successor].metadata[slot].last_active_iter = iteration;
                 }
@@ -270,7 +269,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
         TrainingConfig, TrajectoryRecord,
@@ -485,7 +484,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -494,6 +492,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;

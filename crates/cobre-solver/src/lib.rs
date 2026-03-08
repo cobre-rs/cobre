@@ -42,8 +42,7 @@ pub use trait_def::SolverInterface;
 
 pub mod types;
 pub use types::{
-    Basis, BasisStatus, LpSolution, RawBasis, RowBatch, SolutionView, SolverError,
-    SolverStatistics, StageTemplate,
+    LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
 };
 
 #[cfg(feature = "highs")]

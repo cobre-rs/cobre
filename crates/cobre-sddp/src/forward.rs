@@ -41,7 +41,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{RawBasis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{sample_forward, StochasticContext};
+use cobre_stochastic::{StochasticContext, sample_forward};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -510,15 +510,15 @@ mod tests {
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::{
-        Basis, LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
+        LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
         StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
-    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
+    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,
@@ -666,21 +666,7 @@ mod tests {
             self.do_solve()
         }
 
-        fn solve_with_basis_view(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.do_solve()
-        }
-
         fn reset(&mut self) {}
-
-        fn get_basis(&mut self) -> Basis {
-            Basis {
-                col_status: vec![],
-                row_status: vec![],
-            }
-        }
 
         fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
 

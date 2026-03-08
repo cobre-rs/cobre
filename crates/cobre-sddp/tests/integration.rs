@@ -38,7 +38,7 @@ use cobre_core::{
     },
 };
 use cobre_solver::{
-    Basis, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+    RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
     OpeningTree, StochasticContext, build_stochastic_context,
@@ -221,22 +221,8 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn solve_with_basis_view(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve_view()
-    }
-
     fn reset(&mut self) {
         self.call_count = 0;
-    }
-
-    fn get_basis(&mut self) -> Basis {
-        Basis {
-            col_status: vec![],
-            row_status: vec![],
-        }
     }
 
     fn get_raw_basis(&mut self, _out: &mut RawBasis) {}

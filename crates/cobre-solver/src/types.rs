@@ -1,60 +1,17 @@
 //! Core types for the solver abstraction layer.
 //!
-//! Defines the canonical representations of basis status codes, LP solutions,
+//! Defines the canonical representations of LP solutions, basis management,
 //! and terminal solver errors used throughout the solver interface.
 
 use core::fmt;
 
-/// Simplex basis status for a single variable or constraint.
-///
-/// Maps to solver-specific integer codes:
-/// `HiGHS` uses `HighsInt` (4 bytes), CLP uses `unsigned char` (1 byte).
-/// The implementation translates between this canonical representation
-/// and the solver-specific encoding when calling [`crate::SolverInterface::get_basis`]
-/// or [`crate::SolverInterface::solve_with_basis`].
-///
-/// See [Solver Abstraction SS9](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BasisStatus {
-    /// Variable or constraint is at its lower bound (non-basic).
-    AtLower,
-    /// Variable or constraint is in the basis (between its bounds).
-    Basic,
-    /// Variable or constraint is at its upper bound (non-basic).
-    AtUpper,
-    /// Variable or constraint is free (superbasic, not at any bound).
-    Free,
-    /// Variable or constraint is fixed (lower bound equals upper bound).
-    Fixed,
-}
-
-/// Simplex basis for warm-starting a subsequent LP solve.
-///
-/// Stores one [`BasisStatus`] per column (variable) and one per row
-/// (constraint), capturing the full simplex basis state. The basis is stored
-/// in the original problem space (not presolved) to ensure portability across
-/// solver versions and presolve strategies.
-///
-/// When warm-starting after adding new dynamic constraint rows, the static
-/// portion of the basis (`[0, n_static)`) is reused directly and new rows are
-/// initialized as [`BasisStatus::Basic`]. See Solver Abstraction SS2.3 and SS9.
-#[derive(Debug, Clone)]
-pub struct Basis {
-    /// Basis status for each column (length must equal `num_cols`).
-    pub col_status: Vec<BasisStatus>,
-
-    /// Basis status for each row, including structural and dynamic rows.
-    pub row_status: Vec<BasisStatus>,
-}
-
 /// Simplex basis storing solver-native `i32` status codes for zero-copy round-trip
 /// basis management.
 ///
-/// Unlike [`Basis`], which translates between solver-native integer codes and the
-/// [`BasisStatus`] enum, `RawBasis` stores the raw `i32` codes directly. This
-/// enables zero-copy round-trip warm-starting via `copy_from_slice` (memcpy) instead
-/// of per-element enum translation, which is unnecessary overhead when the caller
-/// only needs to save and restore the basis without inspecting individual statuses.
+/// `RawBasis` stores the raw solver `i32` status codes directly, enabling zero-copy
+/// round-trip warm-starting via `copy_from_slice` (memcpy). This avoids per-element
+/// translation overhead when the caller only needs to save and restore the basis
+/// without inspecting individual statuses.
 ///
 /// `HiGHS` uses `HighsInt` (4 bytes) for status codes; CLP uses `unsigned char`
 /// (1 byte, widened to `i32` in this representation). The caller is responsible
@@ -489,23 +446,8 @@ impl std::error::Error for SolverError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        BasisStatus, LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics,
-        StageTemplate,
+        LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
     };
-
-    #[test]
-    fn test_basis_status_clone_copy() {
-        let original = BasisStatus::AtLower;
-        let copied = original;
-        let vec_of_status = vec![original, BasisStatus::Basic];
-        let cloned_vec = vec_of_status.clone();
-        assert_eq!(original, copied);
-        assert_eq!(vec_of_status, cloned_vec);
-        // Verify variants are comparable
-        assert_ne!(BasisStatus::AtLower, BasisStatus::Basic);
-        assert_ne!(BasisStatus::AtUpper, BasisStatus::Free);
-        assert_ne!(BasisStatus::Fixed, BasisStatus::Basic);
-    }
 
     #[test]
     fn test_raw_basis_new_dimensions_and_zero_fill() {
@@ -526,14 +468,11 @@ mod tests {
     #[test]
     fn test_raw_basis_debug_and_clone() {
         let rb = RawBasis::new(2, 1);
-        // Debug must produce a non-empty string
         let s = format!("{rb:?}");
         assert!(!s.is_empty());
-        // Clone must produce an independent copy
         let cloned = rb.clone();
         assert_eq!(cloned.col_status, rb.col_status);
         assert_eq!(cloned.row_status, rb.row_status);
-        // Mutating the clone does not affect the original
         let mut cloned2 = rb.clone();
         cloned2.col_status[0] = 1_i32;
         assert_eq!(rb.col_status[0], 0_i32);
@@ -543,11 +482,8 @@ mod tests {
     fn test_solver_error_display_infeasible() {
         let err = SolverError::Infeasible { ray: None };
         let msg = format!("{err}");
-        assert!(!msg.is_empty(), "display must be non-empty");
-        assert!(
-            msg.contains("infeasible"),
-            "display must mention infeasible: {msg}"
-        );
+        assert!(!msg.is_empty());
+        assert!(msg.contains("infeasible"));
     }
 
     #[test]
@@ -604,21 +540,13 @@ mod tests {
             ),
         ];
 
-        let mut messages: Vec<String> = Vec::new();
-        for (name, err) in &variants {
-            let msg = format!("{err}");
-            assert!(!msg.is_empty(), "display for {name} must be non-empty");
-            messages.push(msg);
+        let messages: Vec<String> = variants.iter().map(|(_, err)| format!("{err}")).collect();
+        for msg in &messages {
+            assert!(!msg.is_empty());
         }
-
-        // Verify all messages are distinct
         for i in 0..messages.len() {
             for j in (i + 1)..messages.len() {
-                assert_ne!(
-                    messages[i], messages[j],
-                    "display for variant {} and {} must be distinct",
-                    variants[i].0, variants[j].0
-                );
+                assert_ne!(messages[i], messages[j]);
             }
         }
     }
@@ -629,7 +557,6 @@ mod tests {
             message: "test".to_string(),
             error_code: None,
         };
-        // Verify SolverError can be used as &dyn std::error::Error
         let _: &dyn std::error::Error = &err;
     }
 
@@ -820,10 +747,10 @@ mod tests {
 
         for (name, err, expected_text, _) in cases {
             let msg = format!("{err}");
-            assert!(!msg.is_empty(), "{name} must be non-empty: {msg}");
+            assert!(!msg.is_empty());
             assert!(
                 msg.contains(expected_text),
-                "{name} must contain '{expected_text}': {msg}"
+                "{name} missing '{expected_text}'"
             );
         }
     }

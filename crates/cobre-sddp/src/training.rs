@@ -26,9 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -39,6 +39,7 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
+    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -49,7 +50,6 @@ use crate::{
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
-    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -529,25 +529,25 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
+        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
-        Basis, LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
+        LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
         StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
+        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
     };
 
     use super::train;
     use crate::{
-        cut::fcf::FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+        HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule,
+        StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -648,22 +648,8 @@ mod tests {
             })
         }
 
-        fn solve_with_basis_view(
-            &mut self,
-            _b: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve_view()
-        }
-
         fn reset(&mut self) {
             self.call_count = 0;
-        }
-
-        fn get_basis(&mut self) -> Basis {
-            Basis {
-                col_status: vec![],
-                row_status: vec![],
-            }
         }
 
         fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
@@ -732,12 +718,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
+            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

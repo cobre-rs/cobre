@@ -4,17 +4,6 @@
 //! operations. It aggregates errors from dependency crates into a unified
 //! type that is `Send + Sync + 'static`, making it safe to propagate across
 //! threads and store in `Box<dyn Error>` contexts.
-//!
-//! ## Variant overview
-//!
-//! | Variant           | Origin                              |
-//! |-------------------|-------------------------------------|
-//! | `Solver`          | LP solve failure (`cobre-solver`)   |
-//! | `Communication`   | MPI/comm failure (`cobre-comm`)     |
-//! | `Stochastic`      | Scenario generation (`cobre-stochastic`) |
-//! | `Io`              | Case loading failure (`cobre-io`)   |
-//! | `Validation`      | SDDP configuration error            |
-//! | `Infeasible`      | LP infeasibility after recourse     |
 
 use cobre_io::LoadError;
 use cobre_solver::SolverError;
@@ -91,6 +80,15 @@ pub enum SddpError {
         /// Scenario index (0-based) in the forward pass that triggered infeasibility.
         scenario: usize,
     },
+
+    /// A simulation phase operation failed.
+    ///
+    /// Wraps simulation-specific errors (LP infeasibility during policy
+    /// evaluation, I/O channel failure, policy incompatibility) as a
+    /// string message. The detailed error type is
+    /// [`SimulationError`](crate::SimulationError).
+    #[error("simulation error: {0}")]
+    Simulation(String),
 }
 
 impl From<cobre_comm::CommError> for SddpError {
@@ -237,6 +235,7 @@ mod tests {
                 iteration: 1,
                 scenario: 0,
             },
+            SddpError::Simulation("simulation phase failed".to_string()),
         ];
         for err in &variants {
             let _: &dyn std::error::Error = err;
@@ -261,6 +260,7 @@ mod tests {
                 iteration: 2,
                 scenario: 3,
             },
+            SddpError::Simulation("test simulation error".to_string()),
         ];
         for err in &variants {
             assert!(!format!("{err:?}").is_empty());

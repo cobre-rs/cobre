@@ -48,6 +48,7 @@ pub mod scenario;
 pub mod system;
 pub mod temporal;
 pub mod topology;
+pub mod training_event;
 
 pub use entities::{
     Bus, ContractType, DeficitSegment, DiversionChannel, EfficiencyModel, EnergyContract,
@@ -83,3 +84,4 @@ pub use temporal::{
     Transition,
 };
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};
+pub use training_event::{StoppingRuleResult, TrainingEvent};

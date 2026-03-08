@@ -2,4 +2,428 @@
 
 <span class="status-experimental">experimental</span>
 
-This crate is not yet implemented. See the [specification](https://cobre-rs.github.io/cobre-docs/) for the target design.
+`cobre-sddp` implements the Stochastic Dual Dynamic Programming (SDDP) algorithm
+(Pereira & Pinto, 1991) for long-term hydrothermal dispatch and energy planning.
+It is the first algorithm vertical in the Cobre ecosystem: a training loop that
+iteratively improves a piecewise-linear approximation of the value function for
+multi-stage stochastic linear programs.
+
+For the mathematical foundations — including the Benders decomposition,
+cut coefficient derivation, and risk measure theory — see the
+[methodology reference](https://cobre-rs.github.io/cobre-docs/).
+
+This crate depends on `cobre-core` for system data types, `cobre-stochastic` for
+inflow scenario generation, `cobre-solver` for LP subproblem solving, and
+`cobre-comm` for distributed communication.
+
+## Iteration lifecycle
+
+Each training iteration follows a fixed eight-step sequence. The ordering
+reflects the correction introduced in the lower bound plan fix (F-019): the
+lower bound is evaluated **after** the backward pass and cut synchronization,
+not during forward synchronization.
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Step 1  Forward pass                                                   │
+│          Each rank simulates config.forward_passes scenarios through     │
+│          all stages, solving the LP at each (scenario, stage) pair with  │
+│          the current FCF approximation.                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 2  Forward sync                                                   │
+│          allreduce (sum + broadcast) aggregates local UB statistics into │
+│          a global mean, standard deviation, and 95% CI half-width.      │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 3  State exchange                                                 │
+│          allgatherv gathers all ranks' trial point state vectors so     │
+│          every rank can solve the backward pass at ALL trial points.    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 4  Backward pass                                                  │
+│          Sweeps stages T-2 down to 0, solving the successor LP under    │
+│          every opening from the fixed tree, extracting LP duals to form  │
+│          Benders cut coefficients, and inserting one cut per trial point  │
+│          per stage into the Future Cost Function (FCF).                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 5  Cut sync                                                       │
+│          allgatherv shares each rank's newly generated cuts so that all  │
+│          ranks maintain an identical FCF at the end of each iteration.  │
+│                                                                         │
+│  Step 5a Cut selection (optional)                                       │
+│          When a CutSelectionStrategy is configured, inactive cuts are   │
+│          pruned from the pool at multiples of check_frequency.          │
+│                                                                         │
+│  Step 5b LB evaluation                                                  │
+│          Rank 0 solves the stage-0 LP for every opening in the tree    │
+│          and aggregates the objectives via the stage-0 risk measure.    │
+│          The scalar lower bound is broadcast to all ranks.              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 6  Convergence check                                              │
+│          The ConvergenceMonitor updates bound statistics and evaluates   │
+│          the configured stopping rules to determine whether to stop.    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 7  Checkpoint (deferred)                                          │
+│          Periodic FCF checkpointing is planned for Phase 7. The MVP     │
+│          does not write intermediate checkpoints.                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Step 8  Event emission                                                 │
+│          TrainingEvent values are sent to the optional event channel    │
+│          for real-time monitoring by the CLI or TUI layer.              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+The convergence gap is computed as:
+
+```text
+gap = (UB - LB) / max(1.0, |UB|)
+```
+
+The `max(1.0, |UB|)` guard prevents division by zero when the upper bound is
+near zero.
+
+## Module overview
+
+| Module           | Responsibility                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| `training`       | `train`: the top-level loop orchestrator; wires all steps together                    |
+| `forward`        | `run_forward_pass`, `sync_forward`: step 1 and step 2                                 |
+| `state_exchange` | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                     |
+| `backward`       | `run_backward_pass`: step 4 Benders cut generation across all trial points            |
+| `cut_sync`       | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                           |
+| `cut_selection`  | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a pool pruning        |
+| `lower_bound`    | `evaluate_lower_bound`: step 5b risk-adjusted LB computation                          |
+| `convergence`    | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation              |
+| `cut`            | `CutPool`, `FutureCostFunction`, `CutWireHeader`: cut data structures and wire format |
+| `config`         | `TrainingConfig`: algorithm parameters                                                |
+| `stopping_rule`  | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria               |
+| `risk_measure`   | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                   |
+| `horizon_mode`   | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` in MVP)               |
+| `indexer`        | `StageIndexer`: LP column and row offset arithmetic for stage subproblems             |
+| `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves         |
+| `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)       |
+| `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors  |
+
+## Configuration
+
+### `TrainingConfig`
+
+`TrainingConfig` controls the training loop parameters. All fields are public
+and must be set explicitly — there is no `Default` implementation, preventing
+silent misconfigurations.
+
+| Field                 | Type                            | Description                                               |
+| --------------------- | ------------------------------- | --------------------------------------------------------- |
+| `forward_passes`      | `u32`                           | Scenarios per rank per iteration (must be >= 1)           |
+| `max_iterations`      | `u64`                           | Safety bound on total iterations; also sizes the cut pool |
+| `checkpoint_interval` | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled    |
+| `warm_start_cuts`     | `u32`                           | Pre-loaded cuts from a policy file                        |
+| `event_sender`        | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
+
+```rust,ignore
+use cobre_sddp::TrainingConfig;
+
+let config = TrainingConfig {
+    forward_passes: 10,
+    max_iterations: 500,
+    checkpoint_interval: Some(50),
+    warm_start_cuts: 0,
+    event_sender: None,
+};
+```
+
+### `StoppingRuleSet`
+
+The stopping rule set composes one or more termination criteria. Every set
+must include an `IterationLimit` rule as a safety bound against infinite loops.
+
+| Rule variant       | Trigger condition                                                   |
+| ------------------ | ------------------------------------------------------------------- |
+| `IterationLimit`   | `iteration >= limit`                                                |
+| `TimeLimit`        | `wall_time_seconds >= seconds`                                      |
+| `BoundStalling`    | Relative LB improvement over a sliding window falls below tolerance |
+| `SimulationBased`  | Periodic Monte Carlo simulation costs stabilize                     |
+| `GracefulShutdown` | External SIGTERM / SIGINT received (always evaluated first)         |
+
+The `mode` field controls how multiple rules combine:
+
+- `StoppingMode::Any` (OR): stop when any rule triggers.
+- `StoppingMode::All` (AND): stop when all rules trigger simultaneously.
+
+```rust,ignore
+use cobre_sddp::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+
+let stopping_rules = StoppingRuleSet {
+    rules: vec![
+        StoppingRule::IterationLimit { limit: 500 },
+        StoppingRule::BoundStalling {
+            tolerance: 0.001,
+            iterations: 20,
+        },
+        StoppingRule::GracefulShutdown,
+    ],
+    mode: StoppingMode::Any,
+};
+```
+
+### `RiskMeasure`
+
+`RiskMeasure` controls how per-opening backward pass outcomes are aggregated
+into Benders cuts and how the lower bound is computed.
+
+| Variant       | Description                                                                           |
+| ------------- | ------------------------------------------------------------------------------------- |
+| `Expectation` | Risk-neutral expected value. Weights equal opening probabilities.                     |
+| `CVaR`        | Convex combination `(1 - λ)·E[Z] + λ·CVaR_α[Z]`. `alpha` ∈ (0, 1], `lambda` ∈ [0, 1]. |
+
+`alpha = 1` with `CVaR` is equivalent to `Expectation`. `lambda = 0` with
+`CVaR` is also equivalent to `Expectation`. One `RiskMeasure` value is
+assigned per stage from the `stages.json` configuration field `risk_measure`.
+
+### `CutSelectionStrategy`
+
+Cut selection is optional. When configured, it periodically prunes the cut
+pool to control memory growth during long training runs.
+
+| Variant     | Deactivation condition                                               |
+| ----------- | -------------------------------------------------------------------- |
+| `Level1`    | `active_count <= threshold` (never active; least aggressive)         |
+| `Lml1`      | `iteration - last_active_iter > memory_window` (outside time window) |
+| `Dominated` | Dominated at all visited forward pass states (stub in MVP)           |
+
+All variants respect a `check_frequency` parameter: selection only runs at
+iterations that are multiples of `check_frequency` and never at iteration 0.
+
+## Key data structures
+
+### `FutureCostFunction`
+
+The Future Cost Function (FCF) holds one `CutPool` per stage. Each `CutPool`
+is a pre-allocated flat array of cut slots. Cuts are inserted deterministically
+by `(iteration, forward_pass_index)` to guarantee bit-for-bit identical FCF
+state across all MPI ranks.
+
+The FCF is built once before training begins. Total slot capacity is
+`warm_start_cuts + max_iterations * forward_passes * num_ranks` per stage.
+
+### `PatchBuffer`
+
+A `PatchBuffer` holds the three parallel arrays consumed by the LP solver's
+`set_row_bounds` call. It is sized for `N * (2 + L)` patches, where N is the
+number of hydro plants and L is the maximum PAR order:
+
+- **Category 1** `[0, N)` — storage-fixing: equality constraint at incoming storage.
+- **Category 2** `[N, N*(1+L))` — lag-fixing: equality constraint at AR lagged inflows.
+- **Category 3** `[N*(1+L), N*(2+L))` — noise-fixing: equality constraint at scenario noise.
+
+The backward pass uses only categories 1 and 2 (`fill_state_patches`).
+The forward pass uses all three (`fill_forward_patches`).
+
+### `ExchangeBuffers` and `CutSyncBuffers`
+
+Both types pre-allocate all communication buffers once at construction time and
+reuse them across all stages and iterations. This keeps the per-stage exchange
+allocation-free on the hot path.
+
+`ExchangeBuffers` handles the state vector allgatherv (step 3):
+
+- Send buffer: `local_count * n_state` floats.
+- Receive buffer: `local_count * num_ranks * n_state` floats (rank-major order).
+
+`CutSyncBuffers` handles the cut wire allgatherv (step 5):
+
+- Send buffer: `max_cuts_per_rank * cut_wire_size(n_state)` bytes.
+- Receive buffer: `max_cuts_per_rank * num_ranks * cut_wire_size(n_state)` bytes.
+
+## Convergence monitoring
+
+`ConvergenceMonitor` tracks bound statistics and evaluates stopping rules. It
+is constructed once before the loop begins and updated at the end of each
+iteration via `update(lb, &sync_result)`.
+
+```rust
+use cobre_sddp::convergence::ConvergenceMonitor;
+use cobre_sddp::forward::SyncResult;
+use cobre_sddp::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+
+let rule_set = StoppingRuleSet {
+    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+    mode: StoppingMode::Any,
+};
+
+let mut monitor = ConvergenceMonitor::new(rule_set);
+
+let sync = SyncResult {
+    global_ub_mean: 110.0,
+    global_ub_std: 5.0,
+    ci_95_half_width: 2.0,
+    sync_time_ms: 10,
+};
+
+let (stop, results) = monitor.update(100.0, &sync);
+assert!(!stop);
+assert_eq!(monitor.iteration_count(), 1);
+// gap = (110 - 100) / max(1.0, 110.0) = 10/110
+assert!((monitor.gap() - 10.0 / 110.0).abs() < 1e-10);
+```
+
+Accessor methods on `ConvergenceMonitor`:
+
+| Method               | Returns                                            |
+| -------------------- | -------------------------------------------------- |
+| `lower_bound()`      | Latest LB value                                    |
+| `upper_bound()`      | Latest UB mean                                     |
+| `upper_bound_std()`  | Latest UB standard deviation                       |
+| `ci_95_half_width()` | Latest 95% CI half-width                           |
+| `gap()`              | Convergence gap: (UB - LB) / max(1.0, abs(UB))    |
+| `iteration_count()`  | Number of completed `update` calls               |
+| `set_shutdown()`     | Signal a graceful shutdown before next update      |
+
+## Event system
+
+The training loop emits `TrainingEvent` values (from `cobre-core`) at each
+lifecycle step boundary when `config.event_sender` is `Some`. Events carry
+structured data for real-time display in the TUI or CLI layers.
+
+Key events emitted during training:
+
+| Event variant          | When emitted                                       |
+| ---------------------- | -------------------------------------------------- |
+| `ForwardPassComplete`  | After step 1 completes for all local scenarios     |
+| `ForwardSyncComplete`  | After step 2 global UB statistics are merged       |
+| `BackwardPassComplete` | After step 4 cut generation for all trial points   |
+| `CutSyncComplete`      | After step 5 cut allgatherv                        |
+| `CutSelectionComplete` | After step 5a pool pruning (when strategy is set)  |
+| `LowerBoundEvaluated`  | After step 5b LB broadcast                         |
+| `IterationSummary`     | At the end of each iteration (LB, UB, gap, timing) |
+| `TrainingFinished`     | When a stopping rule triggers                      |
+
+## Quick start (pseudocode)
+
+The following shows the shape of a `train` call. All arguments must be built
+from the upstream pipeline (`cobre-io` for system data, `cobre-stochastic` for
+the opening tree, `cobre-solver` for the LP solver instance).
+
+```rust,ignore
+use cobre_sddp::{
+    FutureCostFunction, HorizonMode, RiskMeasure, StageIndexer,
+    TrainingConfig, TrainingResult,
+    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
+    train,
+};
+
+// Build the FCF for num_stages stages, n_state state dimensions,
+// forward_passes scenarios per rank, max_iterations iterations.
+let mut fcf = FutureCostFunction::new(num_stages, n_state, forward_passes, max_iterations, 0);
+
+let config = TrainingConfig {
+    forward_passes: 10,
+    max_iterations: 500,
+    checkpoint_interval: None,
+    warm_start_cuts: 0,
+    event_sender: None,
+};
+
+let stopping_rules = StoppingRuleSet {
+    rules: vec![
+        StoppingRule::IterationLimit { limit: 500 },
+        StoppingRule::GracefulShutdown,
+    ],
+    mode: StoppingMode::Any,
+};
+
+let horizon = HorizonMode::Finite { num_stages };
+
+let result: TrainingResult = train(
+    &mut solver,        // SolverInterface impl (e.g., HiGHS)
+    config,
+    &mut fcf,
+    &templates,         // one StageTemplate per stage
+    &base_rows,         // AR dynamics base row index per stage
+    &indexer,           // StageIndexer from StageIndexer::new(n_hydro, max_par_order)
+    &initial_state,     // known initial storage volumes
+    &opening_tree,      // from cobre_stochastic::build_stochastic_context
+    &stochastic,        // StochasticContext
+    &horizon,
+    &risk_measures,     // one RiskMeasure per stage
+    stopping_rules,
+    None,               // no cut selection in this example
+    None,               // no external shutdown flag
+    &comm,              // Communicator (LocalBackend or FerrompiBackend)
+)?;
+
+println!(
+    "Converged in {} iterations: LB={:.2}, UB={:.2}, gap={:.4}",
+    result.iterations, result.final_lb, result.final_ub, result.final_gap
+);
+```
+
+## Error handling
+
+All fallible operations return `Result<T, SddpError>`. The error type is
+`Send + Sync + 'static` and can be propagated across thread boundaries or
+wrapped by `anyhow`.
+
+| `SddpError` variant | Trigger                                                  |
+| ------------------- | -------------------------------------------------------- |
+| `Infeasible`        | LP has no feasible solution (stage, iteration, scenario) |
+| `Solver`            | LP solve failed for numerical or timeout reasons         |
+| `Communication`     | MPI collective operation failed                          |
+| `Stochastic`        | Scenario generation or PAR model validation failed       |
+| `Io`                | Case directory loading or validation failed              |
+| `Validation`        | Algorithm configuration is semantically invalid          |
+
+## Performance notes
+
+### Pre-allocation discipline
+
+The training loop makes no heap allocations on the hot path inside the
+iteration loop. All workspace buffers are allocated once before the loop:
+
+- `TrajectoryRecord` flat vec: `forward_passes * num_stages` records.
+- `PatchBuffer`: `N * (2 + L)` entries.
+- `ExchangeBuffers`: `local_count * num_ranks * n_state` floats.
+- `CutSyncBuffers`: `max_cuts_per_rank * num_ranks * cut_wire_size(n_state)` bytes.
+
+### Cut wire format
+
+The cut wire format used by `CutSyncBuffers` is a fixed-size record:
+24 bytes of header (slot index, iteration, forward pass index, intercept)
+followed by `n_state * 8` bytes of coefficients. The record size is
+`cut_wire_size(n_state) = 24 + n_state * 8` bytes.
+
+### Communication-free parallelism
+
+Forward pass noise is generated without inter-rank communication. Each rank
+independently derives its noise seed from `(base_seed, iteration, scenario, stage_id)`
+using SipHash-1-3 (DEC-017 from `cobre-stochastic`). The opening tree is
+pre-generated once before training and shared read-only across all iterations.
+
+## Testing
+
+```
+cargo test -p cobre-sddp --all-features
+```
+
+The crate requires no external system libraries beyond what is needed by the
+workspace (HiGHS is always available; MPI is optional via the `mpi` feature
+of `cobre-comm`).
+
+### Test suite overview
+
+The crate has tests across 15 source modules covering:
+
+- Unit tests for each module's core logic.
+- Integration tests using `LocalBackend` (single-rank) for the
+  communication-involving modules (`forward`, `backward`, `cut_sync`,
+  `state_exchange`, `lower_bound`, `training`).
+- Doc-tests for all public types and functions with constructible examples.
+
+## Feature flags
+
+`cobre-sddp` has no optional feature flags of its own. Feature flag propagation
+from `cobre-comm` (the `mpi` feature) controls whether MPI-based distributed
+training is available at link time.
+
+```toml
+# Cargo.toml
+cobre-sddp = { version = "0.0.1" }
+```

@@ -22,3 +22,50 @@
 //! This crate is in early development. The API **will** change.
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+
+// Relax strict production lints for test builds (normal in test contexts).
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::float_cmp,
+    )
+)]
+
+pub mod backward;
+pub mod config;
+pub mod convergence;
+pub mod cut;
+pub mod cut_selection;
+pub mod cut_sync;
+pub mod error;
+pub mod forward;
+pub mod horizon_mode;
+pub mod indexer;
+pub mod lower_bound;
+pub mod lp_builder;
+pub mod risk_measure;
+pub mod state_exchange;
+pub mod stopping_rule;
+pub mod training;
+pub mod trajectory;
+
+pub use backward::{BackwardResult, run_backward_pass};
+pub use config::TrainingConfig;
+pub use convergence::ConvergenceMonitor;
+pub use cut::{CutPool, FutureCostFunction};
+pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+pub use cut_sync::CutSyncBuffers;
+pub use error::SddpError;
+pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
+pub use horizon_mode::HorizonMode;
+pub use indexer::StageIndexer;
+pub use lower_bound::evaluate_lower_bound;
+pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
+pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use state_exchange::ExchangeBuffers;
+pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
+pub use training::{TrainingResult, train};
+pub use trajectory::TrajectoryRecord;

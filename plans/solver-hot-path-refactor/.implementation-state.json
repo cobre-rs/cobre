@@ -1,0 +1,261 @@
+{
+  "plan": "solver-hot-path-refactor",
+  "last_updated": "2026-03-08T01:30:00Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-change-index-types-to-i32.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.73,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 0.5,
+          "type_safety": 0.5,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-002-simplify-load-model-add-rows.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-003-update-sddp-construction.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.925,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.25
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.80
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-004-add-solution-view-type-and-trait-methods.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-005-implement-solve-view-in-highs.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-006-conformance-tests-solution-view.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.85,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-007-migrate-sddp-to-solve-view.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.825,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.60
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-008-add-raw-basis-type-and-trait-methods.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-009-implement-raw-basis-in-highs.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-010-conformance-tests-raw-basis.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    }
+  },
+  "epics": {
+    "epic-01-i32-csc-indices": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-02-solution-view": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-03-raw-basis": {
+      "phase": "completed",
+      "learning_extracted": true
+    }
+  }
+}

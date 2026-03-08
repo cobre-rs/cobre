@@ -1,59 +1,45 @@
 //! Core types for the solver abstraction layer.
 //!
-//! Defines the canonical representations of basis status codes, LP solutions,
+//! Defines the canonical representations of LP solutions, basis management,
 //! and terminal solver errors used throughout the solver interface.
 
 use core::fmt;
 
-/// Simplex basis status for a single variable or constraint.
+/// Simplex basis storing solver-native `i32` status codes for zero-copy round-trip
+/// basis management.
 ///
-/// Maps to solver-specific integer codes:
-/// `HiGHS` uses `HighsInt` (4 bytes), CLP uses `unsigned char` (1 byte).
-/// The implementation translates between this canonical representation
-/// and the solver-specific encoding when calling [`crate::SolverInterface::get_basis`]
-/// or [`crate::SolverInterface::solve_with_basis`].
+/// `Basis` stores the raw solver `i32` status codes directly, enabling zero-copy
+/// round-trip warm-starting via `copy_from_slice` (memcpy). This avoids per-element
+/// translation overhead when the caller only needs to save and restore the basis
+/// without inspecting individual statuses.
 ///
-/// See [Solver Abstraction SS9](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BasisStatus {
-    /// Variable or constraint is at its lower bound (non-basic).
-    AtLower,
-    /// Variable or constraint is in the basis (between its bounds).
-    Basic,
-    /// Variable or constraint is at its upper bound (non-basic).
-    AtUpper,
-    /// Variable or constraint is free (superbasic, not at any bound).
-    Free,
-    /// Variable or constraint is fixed (lower bound equals upper bound).
-    Fixed,
-}
-
-/// Simplex basis for warm-starting a subsequent LP solve.
+/// `HiGHS` uses `HighsInt` (4 bytes) for status codes; CLP uses `unsigned char`
+/// (1 byte, widened to `i32` in this representation). The caller is responsible
+/// for matching the buffer dimensions to the LP model before use.
 ///
-/// Stores one [`BasisStatus`] per column (variable) and one per row
-/// (constraint), capturing the full simplex basis state. The basis is stored
-/// in the original problem space (not presolved) to ensure portability across
-/// solver versions and presolve strategies.
-///
-/// When warm-starting after adding new dynamic constraint rows, the static
-/// portion of the basis (`[0, n_static)`) is reused directly and new rows are
-/// initialized as [`BasisStatus::Basic`]. See Solver Abstraction SS2.3 and SS9.
+/// See Solver Abstraction SS9.
 #[derive(Debug, Clone)]
 pub struct Basis {
-    /// Basis status for each column (decision variable).
-    ///
-    /// Length must equal the number of LP columns (`num_cols`). State
-    /// variables occupy the contiguous prefix `[0, n_state)` per
-    /// Solver Abstraction SS2.1.
-    pub col_status: Vec<BasisStatus>,
+    /// Solver-native `i32` status codes for each column (length must equal `num_cols`).
+    pub col_status: Vec<i32>,
 
-    /// Basis status for each row (constraint), including both static
-    /// structural rows and dynamic constraint rows (e.g., Benders cuts).
+    /// Solver-native `i32` status codes for each row, including structural and dynamic rows.
+    pub row_status: Vec<i32>,
+}
+
+impl Basis {
+    /// Creates a new `Basis` with pre-allocated, zero-filled status code buffers.
     ///
-    /// Length must equal the total number of LP rows at the time the basis
-    /// was extracted. Dynamic constraint rows appended via
-    /// [`crate::SolverInterface::add_rows`] are included at the end.
-    pub row_status: Vec<BasisStatus>,
+    /// Both `col_status` and `row_status` are allocated to the requested lengths
+    /// and filled with `0_i32`. The caller reuses this buffer across solves by
+    /// passing it to [`crate::SolverInterface::get_basis`] on each iteration.
+    #[must_use]
+    pub fn new(num_cols: usize, num_rows: usize) -> Self {
+        Self {
+            col_status: vec![0_i32; num_cols],
+            row_status: vec![0_i32; num_rows],
+        }
+    }
 }
 
 /// Complete solution from a successful LP solve.
@@ -64,41 +50,20 @@ pub struct Basis {
 /// before this struct is returned -- solver-specific sign differences are
 /// resolved within the [`crate::SolverInterface`] implementation.
 ///
-/// This struct is also embedded in [`SolverError`] variants that may carry a
-/// partial solution when the solve terminates prematurely.
-///
 /// See [Solver Interface Trait SS4.1](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
 #[derive(Debug, Clone)]
 pub struct LpSolution {
     /// Optimal objective value (minimization sense).
     pub objective: f64,
 
-    /// Primal variable values, indexed by column.
-    ///
-    /// Length equals `num_cols`. State variables occupy the contiguous prefix
-    /// `[0, n_state)` per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// Transferring state from stage $t$ to stage $t+1$ copies
-    /// `primal[0..n_transfer]`.
+    /// Primal variable values, indexed by column (length equals `num_cols`).
     pub primal: Vec<f64>,
 
-    /// Dual multipliers (shadow prices), indexed by row.
-    ///
-    /// Length equals `num_rows` (structural rows + appended dynamic constraint
-    /// rows). Cut-relevant constraint duals occupy the contiguous prefix
-    /// `[0, n_dual_relevant)` per
-    /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// Extracting cut coefficients is a single contiguous slice read:
-    /// `cut_coefficients = dual[0..n_dual_relevant]`.
-    ///
-    /// Sign convention: normalized to the canonical convention (positive dual
-    /// on a `<=` constraint means increasing RHS increases the objective)
-    /// before returning.
+    /// Dual multipliers (shadow prices), indexed by row (length equals `num_rows`).
+    /// Normalized to canonical sign convention.
     pub dual: Vec<f64>,
 
-    /// Reduced costs, indexed by column.
-    ///
-    /// Length equals `num_cols`.
+    /// Reduced costs, indexed by column (length equals `num_cols`).
     pub reduced_costs: Vec<f64>,
 
     /// Number of simplex iterations performed for this solve.
@@ -106,6 +71,57 @@ pub struct LpSolution {
 
     /// Wall-clock solve time in seconds (excluding retry overhead).
     pub solve_time_seconds: f64,
+}
+
+/// Zero-copy view of an LP solution, borrowing directly from solver-internal buffers.
+///
+/// Valid until the next mutating method call on the solver (any `&mut self` call).
+/// This is enforced at compile time by the Rust borrow checker: the lifetime `'a`
+/// ties the view to the solver instance that produced it.
+///
+/// Use [`SolutionView::to_owned`] to convert to an owned [`LpSolution`] when the
+/// solution data must outlive the current borrow, or when the same data will be
+/// accessed after a subsequent solver call.
+///
+/// See [Solver Interface Trait SS4.1](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
+#[derive(Debug, Clone, Copy)]
+pub struct SolutionView<'a> {
+    /// Optimal objective value (minimization sense).
+    pub objective: f64,
+
+    /// Primal variable values, indexed by column (length equals `num_cols`).
+    pub primal: &'a [f64],
+
+    /// Dual multipliers (shadow prices), indexed by row (length equals `num_rows`).
+    /// Normalized to canonical sign convention.
+    pub dual: &'a [f64],
+
+    /// Reduced costs, indexed by column (length equals `num_cols`).
+    pub reduced_costs: &'a [f64],
+
+    /// Number of simplex iterations performed for this solve.
+    pub iterations: u64,
+
+    /// Wall-clock solve time in seconds (excluding retry overhead).
+    pub solve_time_seconds: f64,
+}
+
+impl SolutionView<'_> {
+    /// Clones the borrowed slices into owned [`Vec`]s, producing an [`LpSolution`].
+    ///
+    /// Use this when the solution data must outlive the current solver borrow,
+    /// or when the same solution will be read after a subsequent solver call.
+    #[must_use]
+    pub fn to_owned(&self) -> LpSolution {
+        LpSolution {
+            objective: self.objective,
+            primal: self.primal.to_vec(),
+            dual: self.dual.to_vec(),
+            reduced_costs: self.reduced_costs.to_vec(),
+            iterations: self.iterations,
+            solve_time_seconds: self.solve_time_seconds,
+        }
+    }
 }
 
 /// Accumulated solve metrics for a single solver instance.
@@ -134,24 +150,12 @@ pub struct SolverStatistics {
     pub total_iterations: u64,
 
     /// Total retry attempts summed across all failed solves.
-    ///
-    /// One retry attempt corresponds to one escalation step in the retry
-    /// sequence (e.g., clear basis, disable presolve, switch algorithm).
     pub retry_count: u64,
 
     /// Cumulative wall-clock time spent in solver calls, in seconds.
-    ///
-    /// Excludes retry overhead between attempts; includes time for all
-    /// individual solve invocations.
     pub total_solve_time_seconds: f64,
 
-    /// Number of times `solve_with_basis` fell back to cold-start because the
-    /// solver rejected the supplied basis.
-    ///
-    /// A non-zero value indicates that warm-starting failed for some solves,
-    /// which has a direct performance impact. Investigate if this counter
-    /// grows — common causes are singular basis matrices or factorization
-    /// failures after LP structure changes.
+    /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
     pub basis_rejections: u64,
 }
 
@@ -173,65 +177,37 @@ pub struct StageTemplate {
     /// Number of columns (decision variables) in the structural LP.
     pub num_cols: usize,
 
-    /// Number of static rows (structural constraints, excluding dynamic
-    /// constraints added at runtime via `add_rows`).
+    /// Number of static rows (structural constraints, excluding dynamic rows).
     pub num_rows: usize,
 
     /// Number of non-zero entries in the structural constraint matrix.
     pub num_nz: usize,
 
-    /// CSC column start offsets.
-    ///
-    /// Length: `num_cols + 1`. Entry `col_starts[j]` is the index into
-    /// `row_indices` and `values` where column `j` begins.
-    /// `col_starts[num_cols]` equals `num_nz`.
-    pub col_starts: Vec<usize>,
+    /// CSC column start offsets (length: `num_cols + 1`; `col_starts[num_cols] == num_nz`).
+    pub col_starts: Vec<i32>,
 
-    /// CSC row indices for each non-zero entry.
-    ///
-    /// Length: `num_nz`. Entry `row_indices[k]` is the row of the `k`-th
-    /// non-zero value.
-    pub row_indices: Vec<usize>,
+    /// CSC row indices for each non-zero entry (length: `num_nz`).
+    pub row_indices: Vec<i32>,
 
-    /// CSC non-zero values.
-    ///
-    /// Length: `num_nz`. Entry `values[k]` is the coefficient of the `k`-th
-    /// non-zero, at row `row_indices[k]` in its column.
+    /// CSC non-zero values (length: `num_nz`).
     pub values: Vec<f64>,
 
-    /// Column lower bounds.
-    ///
-    /// Length: `num_cols`. Use `f64::NEG_INFINITY` for unbounded below.
+    /// Column lower bounds (length: `num_cols`; use `f64::NEG_INFINITY` for unbounded).
     pub col_lower: Vec<f64>,
 
-    /// Column upper bounds.
-    ///
-    /// Length: `num_cols`. Use `f64::INFINITY` for unbounded above.
+    /// Column upper bounds (length: `num_cols`; use `f64::INFINITY` for unbounded).
     pub col_upper: Vec<f64>,
 
-    /// Objective coefficients (minimization sense).
-    ///
-    /// Length: `num_cols`.
+    /// Objective coefficients, minimization sense (length: `num_cols`).
     pub objective: Vec<f64>,
 
-    /// Row lower bounds.
-    ///
-    /// Length: `num_rows`. For equality constraints, set equal to `row_upper`.
-    /// Use `f64::NEG_INFINITY` for constraints with no lower bound.
+    /// Row lower bounds (length: `num_rows`; set equal to `row_upper` for equality).
     pub row_lower: Vec<f64>,
 
-    /// Row upper bounds.
-    ///
-    /// Length: `num_rows`. For equality constraints, set equal to `row_lower`.
-    /// Use `f64::INFINITY` for constraints with no upper bound.
+    /// Row upper bounds (length: `num_rows`; set equal to `row_lower` for equality).
     pub row_upper: Vec<f64>,
 
     /// Number of state variables (contiguous prefix of columns).
-    ///
-    /// Equal to `N * (1 + L)` where `N` is the number of operating hydros
-    /// and `L` is the maximum PAR order across all operating hydros, per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// State transfer copies `primal[0..n_transfer]`.
     pub n_state: usize,
 
     /// Number of state values transferred between consecutive stages.
@@ -277,18 +253,18 @@ pub struct RowBatch {
     /// Number of active constraint rows (cuts) in this batch.
     pub num_rows: usize,
 
-    /// CSR row start offsets.
+    /// CSR row start offsets (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: `num_rows + 1`. Entry `row_starts[i]` is the index into
     /// `col_indices` and `values` where row `i` begins.
     /// `row_starts[num_rows]` equals the total number of non-zeros.
-    pub row_starts: Vec<usize>,
+    pub row_starts: Vec<i32>,
 
-    /// CSR column indices for each non-zero entry.
+    /// CSR column indices for each non-zero entry (`i32` for `HiGHS` FFI compatibility).
     ///
     /// Length: total non-zeros across all rows. Entry `col_indices[k]` is the
     /// column of the `k`-th non-zero value.
-    pub col_indices: Vec<usize>,
+    pub col_indices: Vec<i32>,
 
     /// CSR non-zero values.
     ///
@@ -311,9 +287,9 @@ pub struct RowBatch {
 /// Terminal LP solve error returned after all retry attempts are exhausted.
 ///
 /// The calling algorithm uses the variant to determine its response:
-/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or proceed with
-/// degraded quality (`NumericalDifficulty`, `TimeLimitExceeded`,
-/// `IterationLimit`) when a partial solution is available.
+/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or terminate
+/// with a diagnostic error (`NumericalDifficulty`, `TimeLimitExceeded`,
+/// `IterationLimit`).
 ///
 /// The six variants correspond to the error categories defined in
 /// Solver Abstraction SS6. Solver-internal errors (e.g., factorization
@@ -324,51 +300,31 @@ pub enum SolverError {
     ///
     /// Indicates a data error (inconsistent bounds or constraints) or a
     /// modeling error. The calling algorithm should perform a hard stop.
-    Infeasible {
-        /// Infeasibility ray (proof of infeasibility), if available from the
-        /// solver. Not all solver backends provide this.
-        ray: Option<Vec<f64>>,
-    },
+    Infeasible,
 
     /// The LP objective is unbounded below.
     ///
     /// Indicates a modeling error (missing bounds, incorrect objective sign).
     /// The calling algorithm should perform a hard stop.
-    Unbounded {
-        /// Unbounded direction certificate, if available from the solver.
-        /// Not all solver backends provide this.
-        direction: Option<Vec<f64>>,
-    },
+    Unbounded,
 
     /// Solver encountered numerical difficulties that persisted through all
     /// retry attempts.
     ///
-    /// May have a partial (non-optimal) solution. The calling algorithm may
-    /// log a warning and proceed if the partial solution is usable.
+    /// The calling algorithm should log the error and perform a hard stop.
     NumericalDifficulty {
-        /// Best solution found before the numerical difficulty, if any.
-        partial_solution: Option<LpSolution>,
         /// Human-readable description of the numerical issue from the solver.
         message: String,
     },
 
     /// Per-solve wall-clock time budget exhausted.
-    ///
-    /// May have a partial solution from the best iteration reached within the
-    /// budget.
     TimeLimitExceeded {
-        /// Best solution found within the time budget, if any.
-        partial_solution: Option<LpSolution>,
         /// Elapsed wall-clock time in seconds at the point of termination.
         elapsed_seconds: f64,
     },
 
     /// Solver simplex iteration limit reached.
-    ///
-    /// May have a partial solution from the last completed iteration.
     IterationLimit {
-        /// Best solution found within the iteration budget, if any.
-        partial_solution: Option<LpSolution>,
         /// Number of simplex iterations performed before the limit was hit.
         iterations: u64,
     },
@@ -389,64 +345,16 @@ pub enum SolverError {
 impl fmt::Display for SolverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Infeasible { ray } => {
-                if ray.is_some() {
-                    write!(f, "LP is infeasible (infeasibility ray available)")
-                } else {
-                    write!(f, "LP is infeasible")
-                }
+            Self::Infeasible => write!(f, "LP is infeasible"),
+            Self::Unbounded => write!(f, "LP is unbounded"),
+            Self::NumericalDifficulty { message } => {
+                write!(f, "numerical difficulty: {message}")
             }
-            Self::Unbounded { direction } => {
-                if direction.is_some() {
-                    write!(f, "LP is unbounded (unbounded direction available)")
-                } else {
-                    write!(f, "LP is unbounded")
-                }
+            Self::TimeLimitExceeded { elapsed_seconds } => {
+                write!(f, "time limit exceeded after {elapsed_seconds:.3}s")
             }
-            Self::NumericalDifficulty {
-                partial_solution,
-                message,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "numerical difficulty (partial solution available): {message}"
-                    )
-                } else {
-                    write!(f, "numerical difficulty (no partial solution): {message}")
-                }
-            }
-            Self::TimeLimitExceeded {
-                partial_solution,
-                elapsed_seconds,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "time limit exceeded after {elapsed_seconds:.3}s (partial solution available)"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "time limit exceeded after {elapsed_seconds:.3}s (no partial solution)"
-                    )
-                }
-            }
-            Self::IterationLimit {
-                partial_solution,
-                iterations,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "iteration limit reached after {iterations} iterations (partial solution available)"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "iteration limit reached after {iterations} iterations (no partial solution)"
-                    )
-                }
+            Self::IterationLimit { iterations } => {
+                write!(f, "iteration limit reached after {iterations} iterations")
             }
             Self::InternalError {
                 message,
@@ -466,102 +374,64 @@ impl std::error::Error for SolverError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{BasisStatus, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate};
+    use super::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate};
 
     #[test]
-    fn test_basis_status_clone_copy() {
-        let original = BasisStatus::AtLower;
-        let copied = original;
-        let vec_of_status = vec![original, BasisStatus::Basic];
-        let cloned_vec = vec_of_status.clone();
-        assert_eq!(original, copied);
-        assert_eq!(vec_of_status, cloned_vec);
-        // Verify variants are comparable
-        assert_ne!(BasisStatus::AtLower, BasisStatus::Basic);
-        assert_ne!(BasisStatus::AtUpper, BasisStatus::Free);
-        assert_ne!(BasisStatus::Fixed, BasisStatus::Basic);
+    fn test_basis_new_dimensions_and_zero_fill() {
+        let rb = Basis::new(3, 2);
+        assert_eq!(rb.col_status.len(), 3);
+        assert_eq!(rb.row_status.len(), 2);
+        assert!(rb.col_status.iter().all(|&v| v == 0_i32));
+        assert!(rb.row_status.iter().all(|&v| v == 0_i32));
+    }
+
+    #[test]
+    fn test_basis_new_empty() {
+        let rb = Basis::new(0, 0);
+        assert!(rb.col_status.is_empty());
+        assert!(rb.row_status.is_empty());
+    }
+
+    #[test]
+    fn test_basis_debug_and_clone() {
+        let rb = Basis::new(2, 1);
+        assert!(!format!("{rb:?}").is_empty());
+        let cloned = rb.clone();
+        assert_eq!(cloned.col_status, rb.col_status);
+        assert_eq!(cloned.row_status, rb.row_status);
+        let mut cloned2 = rb.clone();
+        cloned2.col_status[0] = 1_i32;
+        assert_eq!(rb.col_status[0], 0_i32);
     }
 
     #[test]
     fn test_solver_error_display_infeasible() {
-        let err = SolverError::Infeasible { ray: None };
-        let msg = format!("{err}");
-        assert!(!msg.is_empty(), "display must be non-empty");
-        assert!(
-            msg.contains("infeasible"),
-            "display must mention infeasible: {msg}"
-        );
+        let msg = format!("{}", SolverError::Infeasible);
+        assert!(msg.contains("infeasible"));
     }
 
     #[test]
     fn test_solver_error_display_all_variants() {
-        let partial = Some(LpSolution {
-            objective: 0.0,
-            primal: vec![],
-            dual: vec![],
-            reduced_costs: vec![],
-            iterations: 0,
-            solve_time_seconds: 0.0,
-        });
-
-        let variants: Vec<(&str, SolverError)> = vec![
-            (
-                "Infeasible",
-                SolverError::Infeasible {
-                    ray: Some(vec![1.0, 0.0]),
-                },
-            ),
-            (
-                "Unbounded",
-                SolverError::Unbounded {
-                    direction: Some(vec![0.0, 1.0]),
-                },
-            ),
-            (
-                "NumericalDifficulty",
-                SolverError::NumericalDifficulty {
-                    partial_solution: partial,
-                    message: "factorization failed".to_string(),
-                },
-            ),
-            (
-                "TimeLimitExceeded",
-                SolverError::TimeLimitExceeded {
-                    partial_solution: None,
-                    elapsed_seconds: 60.0,
-                },
-            ),
-            (
-                "IterationLimit",
-                SolverError::IterationLimit {
-                    partial_solution: None,
-                    iterations: 10_000,
-                },
-            ),
-            (
-                "InternalError",
-                SolverError::InternalError {
-                    message: "segfault in HiGHS".to_string(),
-                    error_code: Some(-1),
-                },
-            ),
+        let variants = [
+            SolverError::Infeasible,
+            SolverError::Unbounded,
+            SolverError::NumericalDifficulty {
+                message: "factorization failed".to_string(),
+            },
+            SolverError::TimeLimitExceeded {
+                elapsed_seconds: 60.0,
+            },
+            SolverError::IterationLimit { iterations: 10_000 },
+            SolverError::InternalError {
+                message: "segfault in HiGHS".to_string(),
+                error_code: Some(-1),
+            },
         ];
 
-        let mut messages: Vec<String> = Vec::new();
-        for (name, err) in &variants {
-            let msg = format!("{err}");
-            assert!(!msg.is_empty(), "display for {name} must be non-empty");
-            messages.push(msg);
-        }
-
-        // Verify all messages are distinct
+        let messages: Vec<String> = variants.iter().map(|err| format!("{err}")).collect();
         for i in 0..messages.len() {
             for j in (i + 1)..messages.len() {
-                assert_ne!(
-                    messages[i], messages[j],
-                    "display for variant {} and {} must be distinct",
-                    variants[i].0, variants[j].0
-                );
+                assert_ne!(messages[i], messages[j]);
             }
         }
     }
@@ -572,7 +442,6 @@ mod tests {
             message: "test".to_string(),
             error_code: None,
         };
-        // Verify SolverError can be used as &dyn std::error::Error
         let _: &dyn std::error::Error = &err;
     }
 
@@ -585,27 +454,16 @@ mod tests {
         assert_eq!(stats.total_iterations, 0);
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
+        assert_eq!(stats.basis_rejections, 0);
     }
 
-    // Shared fixture from Solver Interface Testing SS1.1:
-    // 3 variables, 2 structural constraints, 3 non-zeros.
-    //
-    //   min  0*x0 + 1*x1 + 50*x2
-    //   s.t. x0            = 6   (state-fixing)
-    //        2*x0 + x2     = 14  (power balance)
-    //   x0 in [0, 10], x1 in [0, +inf), x2 in [0, 8]
-    //
-    // CSC matrix A = [[1, 0, 0], [2, 0, 1]]:
-    //   col_starts  = [0, 2, 2, 3]
-    //   row_indices = [0, 1, 1]
-    //   values      = [1.0, 2.0, 1.0]
     fn make_fixture_stage_template() -> StageTemplate {
         StageTemplate {
             num_cols: 3,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0, 2, 2, 3],
-            row_indices: vec![0, 1, 1],
+            col_starts: vec![0_i32, 2, 2, 3],
+            row_indices: vec![0_i32, 1, 1],
             values: vec![1.0, 2.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![10.0, f64::INFINITY, 8.0],
@@ -627,8 +485,8 @@ mod tests {
         assert_eq!(tmpl.num_cols, 3);
         assert_eq!(tmpl.num_rows, 2);
         assert_eq!(tmpl.num_nz, 3);
-        assert_eq!(tmpl.col_starts, vec![0, 2, 2, 3]);
-        assert_eq!(tmpl.row_indices, vec![0, 1, 1]);
+        assert_eq!(tmpl.col_starts, vec![0_i32, 2, 2, 3]);
+        assert_eq!(tmpl.row_indices, vec![0_i32, 1, 1]);
         assert_eq!(tmpl.values, vec![1.0, 2.0, 1.0]);
 
         assert_eq!(tmpl.col_lower, vec![0.0, 0.0, 0.0]);
@@ -649,97 +507,27 @@ mod tests {
 
     #[test]
     fn test_solver_error_display_all_branches() {
-        let partial = LpSolution {
-            objective: 42.0,
-            primal: vec![1.0],
-            dual: vec![2.0],
-            reduced_costs: vec![3.0],
-            iterations: 5,
-            solve_time_seconds: 0.1,
-        };
-
         let cases = vec![
+            ("Infeasible", SolverError::Infeasible, "infeasible"),
+            ("Unbounded", SolverError::Unbounded, "unbounded"),
             (
-                "Infeasible/None",
-                SolverError::Infeasible { ray: None },
-                "infeasible",
-                false,
-            ),
-            (
-                "Infeasible/Some",
-                SolverError::Infeasible {
-                    ray: Some(vec![1.0, 0.0]),
-                },
-                "infeasibility ray available",
-                true,
-            ),
-            (
-                "Unbounded/None",
-                SolverError::Unbounded { direction: None },
-                "unbounded",
-                false,
-            ),
-            (
-                "Unbounded/Some",
-                SolverError::Unbounded {
-                    direction: Some(vec![0.0, 1.0]),
-                },
-                "unbounded direction available",
-                true,
-            ),
-            (
-                "NumericalDifficulty/None",
+                "NumericalDifficulty",
                 SolverError::NumericalDifficulty {
-                    partial_solution: None,
                     message: "singular matrix".to_string(),
                 },
-                "no partial solution",
-                true,
+                "singular matrix",
             ),
             (
-                "NumericalDifficulty/Some",
-                SolverError::NumericalDifficulty {
-                    partial_solution: Some(partial.clone()),
-                    message: "factorization failed".to_string(),
-                },
-                "partial solution available",
-                true,
-            ),
-            (
-                "TimeLimitExceeded/None",
+                "TimeLimitExceeded",
                 SolverError::TimeLimitExceeded {
-                    partial_solution: None,
                     elapsed_seconds: 60.0,
                 },
-                "no partial solution",
-                true,
+                "60.000s",
             ),
             (
-                "TimeLimitExceeded/Some",
-                SolverError::TimeLimitExceeded {
-                    partial_solution: Some(partial.clone()),
-                    elapsed_seconds: 120.0,
-                },
-                "partial solution available",
-                true,
-            ),
-            (
-                "IterationLimit/None",
-                SolverError::IterationLimit {
-                    partial_solution: None,
-                    iterations: 10_000,
-                },
-                "no partial solution",
-                true,
-            ),
-            (
-                "IterationLimit/Some",
-                SolverError::IterationLimit {
-                    partial_solution: Some(partial.clone()),
-                    iterations: 50_000,
-                },
-                "partial solution available",
-                true,
+                "IterationLimit",
+                SolverError::IterationLimit { iterations: 10_000 },
+                "10000 iterations",
             ),
             (
                 "InternalError/None",
@@ -748,7 +536,6 @@ mod tests {
                     error_code: None,
                 },
                 "unknown failure",
-                false,
             ),
             (
                 "InternalError/Some",
@@ -757,64 +544,31 @@ mod tests {
                     error_code: Some(-1),
                 },
                 "code -1",
-                true,
             ),
         ];
 
-        for (name, err, expected_text, _) in cases {
+        for (name, err, expected_text) in cases {
             let msg = format!("{err}");
-            assert!(!msg.is_empty(), "{name} must be non-empty: {msg}");
+            assert!(!msg.is_empty());
             assert!(
                 msg.contains(expected_text),
-                "{name} must contain '{expected_text}': {msg}"
+                "{name} missing '{expected_text}'"
             );
         }
     }
 
     #[test]
     fn test_solver_error_is_std_error_all_variants() {
-        let partial = LpSolution {
-            objective: 0.0,
-            primal: vec![],
-            dual: vec![],
-            reduced_costs: vec![],
-            iterations: 0,
-            solve_time_seconds: 0.0,
-        };
-
         let errors: Vec<SolverError> = vec![
-            SolverError::Infeasible { ray: None },
-            SolverError::Infeasible {
-                ray: Some(vec![1.0]),
-            },
-            SolverError::Unbounded { direction: None },
-            SolverError::Unbounded {
-                direction: Some(vec![1.0]),
-            },
+            SolverError::Infeasible,
+            SolverError::Unbounded,
             SolverError::NumericalDifficulty {
-                partial_solution: None,
-                message: "test".to_string(),
-            },
-            SolverError::NumericalDifficulty {
-                partial_solution: Some(partial.clone()),
                 message: "test".to_string(),
             },
             SolverError::TimeLimitExceeded {
-                partial_solution: None,
                 elapsed_seconds: 1.0,
             },
-            SolverError::TimeLimitExceeded {
-                partial_solution: Some(partial.clone()),
-                elapsed_seconds: 1.0,
-            },
-            SolverError::IterationLimit {
-                partial_solution: None,
-                iterations: 1,
-            },
-            SolverError::IterationLimit {
-                partial_solution: Some(partial),
-                iterations: 1,
-            },
+            SolverError::IterationLimit { iterations: 1 },
             SolverError::InternalError {
                 message: "test".to_string(),
                 error_code: None,
@@ -831,14 +585,50 @@ mod tests {
     }
 
     #[test]
+    fn test_solution_view_to_owned() {
+        let primal = [1.0, 2.0];
+        let dual = [3.0];
+        let rc = [4.0, 5.0];
+        let view = SolutionView {
+            objective: 42.0,
+            primal: &primal,
+            dual: &dual,
+            reduced_costs: &rc,
+            iterations: 7,
+            solve_time_seconds: 0.5,
+        };
+        let owned = view.to_owned();
+        assert_eq!(owned.objective, 42.0);
+        assert_eq!(owned.primal, vec![1.0, 2.0]);
+        assert_eq!(owned.dual, vec![3.0]);
+        assert_eq!(owned.reduced_costs, vec![4.0, 5.0]);
+        assert_eq!(owned.iterations, 7);
+        assert_eq!(owned.solve_time_seconds, 0.5);
+    }
+
+    #[test]
+    fn test_solution_view_is_copy() {
+        let primal = [1.0];
+        let dual = [2.0];
+        let rc = [3.0];
+        let view = SolutionView {
+            objective: 0.0,
+            primal: &primal,
+            dual: &dual,
+            reduced_costs: &rc,
+            iterations: 0,
+            solve_time_seconds: 0.0,
+        };
+        let copy = view;
+        assert_eq!(view.objective, copy.objective);
+    }
+
+    #[test]
     fn test_row_batch_construction() {
-        // Benders cut fixture from Solver Interface Testing SS1.2:
-        // Cut 1: -5*x0 + x1 >= 20  (col_indices [0,1], values [-5, 1])
-        // Cut 2:  3*x0 + x1 >= 80  (col_indices [0,1], values [ 3, 1])
         let batch = RowBatch {
             num_rows: 2,
-            row_starts: vec![0, 2, 4],
-            col_indices: vec![0, 1, 0, 1],
+            row_starts: vec![0_i32, 2, 4],
+            col_indices: vec![0_i32, 1, 0, 1],
             values: vec![-5.0, 1.0, 3.0, 1.0],
             row_lower: vec![20.0, 80.0],
             row_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -846,8 +636,8 @@ mod tests {
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts.len(), 3);
-        assert_eq!(batch.row_starts, vec![0, 2, 4]);
-        assert_eq!(batch.col_indices, vec![0, 1, 0, 1]);
+        assert_eq!(batch.row_starts, vec![0_i32, 2, 4]);
+        assert_eq!(batch.col_indices, vec![0_i32, 1, 0, 1]);
         assert_eq!(batch.values, vec![-5.0, 1.0, 3.0, 1.0]);
         assert_eq!(batch.row_lower, vec![20.0, 80.0]);
         assert!(batch.row_upper[0].is_infinite() && batch.row_upper[0] > 0.0);

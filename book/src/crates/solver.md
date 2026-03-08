@@ -15,13 +15,13 @@ dispatch overhead on the hot path where iterative LP solving occurs.
 
 ## Module overview
 
-| Module      | Purpose                                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `ffi`       | Raw `unsafe` FFI bindings to the `cobre_highs_*` C wrapper functions                                                       |
-| `types`     | Canonical data types: `StageTemplate`, `RowBatch`, `Basis`, `LpSolution`, `SolverError`, `SolverStatistics`, `BasisStatus` |
-| `trait_def` | `SolverInterface` trait definition with all 10 method contracts                                                            |
-| `highs`     | `HighsSolver` — the HiGHS backend implementing `SolverInterface`                                                           |
-| (root)      | Re-exports: `SolverInterface`, `HighsSolver`, and all public types                                                         |
+| Module      | Purpose                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `ffi`       | Raw `unsafe` FFI bindings to the `cobre_highs_*` C wrapper functions                                                        |
+| `types`     | Canonical data types: `StageTemplate`, `RowBatch`, `Basis`, `LpSolution`, `SolutionView`, `SolverError`, `SolverStatistics` |
+| `trait_def` | `SolverInterface` trait definition with all 10 method contracts                                                             |
+| `highs`     | `HighsSolver` — the HiGHS backend implementing `SolverInterface`                                                            |
+| (root)      | Re-exports: `SolverInterface`, `HighsSolver`, and all public types                                                          |
 
 The `ffi` and `highs` modules are compiled only when the `highs` feature is
 enabled (the default). The `trait_def` and `types` modules are always compiled,
@@ -150,19 +150,15 @@ of the LP matrix. See the [`RowBatch` rustdoc](../api/cobre_solver/struct.RowBat
 
 ### `Basis`
 
-Simplex basis for warm-starting subsequent solves. Contains one `BasisStatus`
-per column and one per row, stored in the original (unpresolved) problem space
-for portability across solver versions and presolve strategies. When the LP gains
-new dynamic constraint rows after a basis was saved, `solve_with_basis` handles
-the dimension mismatch by initializing the new rows as `BasisStatus::Basic`. See
-the [`Basis` rustdoc](../api/cobre_solver/struct.Basis.html).
-
-### `BasisStatus`
-
-Enum with five variants: `AtLower`, `Basic`, `AtUpper`, `Free`, `Fixed`. Maps
-to solver-specific integer codes internally; the public API always uses the
-canonical Cobre representation. See the [`BasisStatus`
-rustdoc](../api/cobre_solver/enum.BasisStatus.html).
+Raw simplex basis stored as solver-native `i32` status codes — one per column
+and one per row. The codes are opaque to the calling algorithm; they are
+extracted from one solve via `get_basis` and passed back to the next via
+`solve_with_basis` for warm-starting. Stored in the original (unpresolved)
+problem space for portability across solver versions and presolve strategies.
+When the LP gains new dynamic constraint rows after a basis was saved,
+`solve_with_basis` handles the dimension mismatch by filling new row slots
+with the solver-native "Basic" code. See the
+[`Basis` rustdoc](../api/cobre_solver/struct.Basis.html).
 
 ### `LpSolution`
 
@@ -178,19 +174,19 @@ no negation. See the [`LpSolution` rustdoc](../api/cobre_solver/struct.LpSolutio
 Terminal LP solve error returned after all retry attempts are exhausted. Six
 variants correspond to six failure categories:
 
-| Variant               | Hard stop? | Carries partial solution?  |
-| --------------------- | ---------- | -------------------------- |
-| `Infeasible`          | Yes        | No (infeasibility ray)     |
-| `Unbounded`           | Yes        | No (direction certificate) |
-| `NumericalDifficulty` | No         | Optional                   |
-| `TimeLimitExceeded`   | No         | Optional                   |
-| `IterationLimit`      | No         | Optional                   |
-| `InternalError`       | Yes        | No                         |
+| Variant               | Hard stop? | Diagnostic |
+| --------------------- | ---------- | ---------- |
+| `Infeasible`          | Yes        | No         |
+| `Unbounded`           | Yes        | No         |
+| `NumericalDifficulty` | No         | Yes        |
+| `TimeLimitExceeded`   | No         | Yes        |
+| `IterationLimit`      | No         | Yes        |
+| `InternalError`       | Yes        | No         |
 
-`Infeasible`, `Unbounded`, and `InternalError` indicate data or modeling errors
-and require a hard stop. `NumericalDifficulty`, `TimeLimitExceeded`, and
-`IterationLimit` may carry a partial solution that the calling algorithm can
-inspect before deciding how to proceed. See the [`SolverError`
+`Infeasible` and `Unbounded` are unit variants (no fields). `NumericalDifficulty`
+carries a `message`, `TimeLimitExceeded` carries `elapsed_seconds`, and
+`IterationLimit` carries `iterations`. `InternalError` carries `message` and
+an optional `error_code`. See the [`SolverError`
 rustdoc](../api/cobre_solver/enum.SolverError.html).
 
 ### `SolverStatistics`
@@ -262,13 +258,11 @@ placed in `LpSolution.reduced_costs`.
 
 ### Warm-start basis management
 
-`solve_with_basis` translates the canonical `Basis` into HiGHS-specific `i32`
-status codes using pre-allocated buffers (`basis_col_i32`, `basis_row_i32`)
-sized at `load_model` time and grown (but never shrunk) by `add_rows`. When the
-saved basis has fewer rows than the current LP (because new dynamic constraint
-rows were added since the basis was extracted), the extra rows are initialized
-as `HIGHS_BASIS_STATUS_BASIC`. When the saved basis has more rows than the
-current LP (a cut was removed), the extra saved entries are silently truncated.
+`solve_with_basis` loads the `Basis` status codes directly into HiGHS via
+`Highs_setBasis`. When the saved basis has fewer rows than the current LP
+(because new dynamic constraint rows were added since the basis was extracted),
+the extra rows are filled with the HiGHS "Basic" status code (1). When the
+saved basis has more rows than the current LP, the extra entries are truncated.
 If HiGHS rejects the basis (returns `HIGHS_STATUS_ERROR` from `Highs_setBasis`),
 the method falls back to a cold-start solve and increments
 `SolverStatistics.basis_rejections`. After setting the basis, `solve_with_basis`
@@ -303,7 +297,7 @@ bounds, solve, and extract the basis for the next iteration.
 
 ```rust,no_run
 use cobre_solver::{
-    Basis, BasisStatus, HighsSolver, LpSolution, RowBatch, SolverError,
+    Basis, HighsSolver, LpSolution, RowBatch, SolverError,
     SolverInterface, StageTemplate,
 };
 

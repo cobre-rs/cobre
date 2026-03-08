@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use crate::{
     SolverInterface, ffi,
-    types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate},
+    types::{LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate},
 };
 
 // ─── Default HiGHS configuration ─────────────────────────────────────────────
@@ -249,7 +249,7 @@ impl HighsSolver {
     /// option name if any configuration call returns `HIGHS_STATUS_ERROR`.
     fn apply_default_config(handle: *mut c_void) -> Result<(), SolverError> {
         for opt in &default_options() {
-            // SAFETY: `handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
+            // SAFETY: `handle` is a valid, non-null HiGHS pointer.
             let status = unsafe { opt.apply(handle) };
             if status == ffi::HIGHS_STATUS_ERROR {
                 return Err(SolverError::InternalError {
@@ -264,26 +264,14 @@ impl HighsSolver {
         Ok(())
     }
 
-    /// Extracts the full optimal solution from `HiGHS` into pre-allocated buffers.
+    /// Extracts the optimal solution from `HiGHS` into pre-allocated buffers and returns
+    /// a [`SolutionView`] borrowing directly from those buffers.
     ///
-    /// Calls `cobre_highs_get_solution`, `cobre_highs_get_objective_value`, and
-    /// `cobre_highs_get_simplex_iteration_count`, then builds an [`LpSolution`].
-    ///
-    /// `col_dual` from `HiGHS` is the reduced cost vector (per `HiGHS` Implementation
-    /// SS2.4). Row duals are already in the canonical sign convention -- no negation
-    /// needed (per Solver Abstraction SS8).
-    ///
-    /// # Panics
-    ///
-    /// Does not panic. The `iterations` cast from `i32` to `u64` is safe because
-    /// `HiGHS` iteration counts are always non-negative.
-    fn extract_solution(&mut self, solve_time_seconds: f64) -> LpSolution {
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - All four mutable pointer arguments point into owned Vec buffers that were
-        //   resized to at least `num_cols` / `num_rows` entries in `load_model` or
-        //   `add_rows`. HiGHS writes exactly `num_cols` values into col_* buffers and
-        //   `num_rows` values into row_* buffers, which is within bounds.
+    /// The returned view borrows solver-internal buffers and is valid until the next
+    /// `&mut self` call. `col_dual` is the reduced cost vector. Row duals follow the
+    /// canonical sign convention (per Solver Abstraction SS8).
+    fn extract_solution_view(&mut self, solve_time_seconds: f64) -> SolutionView<'_> {
+        // SAFETY: buffers resized in `load_model`/`add_rows`; HiGHS writes within bounds.
         let status = unsafe {
             ffi::cobre_highs_get_solution(
                 self.handle,
@@ -302,76 +290,25 @@ impl HighsSolver {
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
         let objective = unsafe { ffi::cobre_highs_get_objective_value(self.handle) };
 
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. The return value
-        // is a non-negative simplex iteration count; casting i32 -> u64 is safe.
+        // SAFETY: iteration count is non-negative so cast is safe.
         #[allow(clippy::cast_sign_loss)]
         let iterations =
             unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
 
-        // col_dual from HiGHS IS the reduced cost vector. row_dual is already in
-        // canonical sign convention (positive dual on <= constraint means increasing
-        // RHS increases the objective). No sign negation is needed for HiGHS.
-        LpSolution {
+        SolutionView {
             objective,
-            primal: self.col_value.clone(),
-            dual: self.row_dual.clone(),
-            reduced_costs: self.col_dual.clone(),
+            primal: &self.col_value[..self.num_cols],
+            dual: &self.row_dual[..self.num_rows],
+            reduced_costs: &self.col_dual[..self.num_cols],
             iterations,
             solve_time_seconds,
         }
     }
 
-    /// Attempts to extract a partial solution after a non-optimal termination.
+    /// Restores default options after retry escalation.
     ///
-    /// Returns `None` if solution extraction is unavailable (e.g. after a
-    /// `SOLVE_ERROR`). Returns `Some(solution)` when `HiGHS` has a best-effort
-    /// primal/dual solution available (e.g. after `TIME_LIMIT` or `ITERATION_LIMIT`).
-    fn try_extract_partial_solution(&mut self, solve_time_seconds: f64) -> Option<LpSolution> {
-        // Attempt the extraction; if HiGHS has no solution available the buffers will
-        // be filled with zeros or unchanged values. We consider the extraction valid
-        // as long as HiGHS reports a finite objective value.
-        // SAFETY: same guarantees as `extract_solution`.
-        let _status = unsafe {
-            ffi::cobre_highs_get_solution(
-                self.handle,
-                self.col_value.as_mut_ptr(),
-                self.col_dual.as_mut_ptr(),
-                self.row_value.as_mut_ptr(),
-                self.row_dual.as_mut_ptr(),
-            )
-        };
-
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
-        let objective = unsafe { ffi::cobre_highs_get_objective_value(self.handle) };
-
-        // A non-finite objective means HiGHS has no valid solution to report.
-        if !objective.is_finite() {
-            return None;
-        }
-
-        // SAFETY: same as `extract_solution`.
-        #[allow(clippy::cast_sign_loss)]
-        let iterations =
-            unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-
-        Some(LpSolution {
-            objective,
-            primal: self.col_value.clone(),
-            dual: self.row_dual.clone(),
-            reduced_costs: self.col_dual.clone(),
-            iterations,
-            solve_time_seconds,
-        })
-    }
-
-    /// Restores the seven performance-tuned default options after a retry escalation.
-    ///
-    /// Called unconditionally after the retry loop to ensure subsequent solves
-    /// see the standard configuration regardless of which retry levels were
-    /// reached (`HiGHS` Implementation SS3, restore-defaults requirement).
+    /// Errors are silently ignored — already in recovery path.
     fn restore_default_settings(&mut self) {
-        // Errors from restore calls are silently ignored -- we are already in the
-        // error recovery path and cannot do anything useful if option reset fails.
         for opt in &default_options() {
             // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
             unsafe { opt.apply(self.handle) };
@@ -379,12 +316,8 @@ impl HighsSolver {
     }
 
     /// Runs the solver once and returns the raw `HiGHS` model status.
-    ///
-    /// Does not update statistics -- statistics are managed by the caller.
-    /// Returns the model status integer for dispatch.
     fn run_once(&mut self) -> i32 {
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. `cobre_highs_run`
-        // drives the HiGHS solver on the currently loaded model.
+        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
         let run_status = unsafe { ffi::cobre_highs_run(self.handle) };
         if run_status == ffi::HIGHS_STATUS_ERROR {
             return ffi::HIGHS_MODEL_STATUS_SOLVE_ERROR;
@@ -393,63 +326,10 @@ impl HighsSolver {
         unsafe { ffi::cobre_highs_get_model_status(self.handle) }
     }
 
-    /// Converts a `HiGHS` infeasible model status into a `SolverError::Infeasible`.
+    /// Interprets a non-optimal status as a `SolverError`.
     ///
-    /// Attempts to retrieve the dual ray. If the call succeeds and `has_dual_ray`
-    /// is set, the ray values are included in the error.
-    fn make_infeasible_error(&self) -> SolverError {
-        let mut has_dual_ray: i32 = 0;
-        let mut ray_buf = vec![0.0_f64; self.num_rows];
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - `has_dual_ray` is a stack-allocated i32; pointer is valid.
-        // - `ray_buf` is a heap-allocated Vec of length `num_rows`; pointer is valid
-        //   for the duration of this call.
-        let status = unsafe {
-            ffi::cobre_highs_get_dual_ray(self.handle, &raw mut has_dual_ray, ray_buf.as_mut_ptr())
-        };
-        let ray = if status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
-            Some(ray_buf)
-        } else {
-            None
-        };
-        SolverError::Infeasible { ray }
-    }
-
-    /// Converts a `HiGHS` unbounded model status into a `SolverError::Unbounded`.
-    ///
-    /// Attempts to retrieve the primal ray. If the call succeeds and `has_primal_ray`
-    /// is set, the direction values are included in the error.
-    fn make_unbounded_error(&self) -> SolverError {
-        let mut has_primal_ray: i32 = 0;
-        let mut ray_buf = vec![0.0_f64; self.num_cols];
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - `has_primal_ray` is a stack-allocated i32; pointer is valid.
-        // - `ray_buf` is a heap-allocated Vec of length `num_cols`; pointer is valid.
-        let status = unsafe {
-            ffi::cobre_highs_get_primal_ray(
-                self.handle,
-                &raw mut has_primal_ray,
-                ray_buf.as_mut_ptr(),
-            )
-        };
-        let direction = if status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
-            Some(ray_buf)
-        } else {
-            None
-        };
-        SolverError::Unbounded { direction }
-    }
-
-    /// Interprets a non-optimal model status as a `SolverError`, extracting a
-    /// partial solution where possible.
-    ///
-    /// This is the single dispatch point for all terminal error statuses. It is
-    /// called both from the initial solve and from each retry level.
-    ///
-    /// Returns `None` if the status is `SOLVE_ERROR` or `UNKNOWN` (retry should
-    /// continue), or `Some(Err(...))` for all other terminal statuses.
+    /// Returns `None` for `SOLVE_ERROR` or `UNKNOWN` (retry continues),
+    /// or `Some(Err(...))` for terminal statuses.
     fn interpret_terminal_status(
         &mut self,
         status: i32,
@@ -460,12 +340,16 @@ impl HighsSolver {
                 // Caller should have handled optimal before reaching here.
                 None
             }
-            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(Err(self.make_infeasible_error())),
+            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(Err(SolverError::Infeasible)),
             ffi::HIGHS_MODEL_STATUS_UNBOUNDED_OR_INFEASIBLE => {
-                // Try dual ray first; if found, treat as infeasible.
+                // Probe for a dual ray to classify as Infeasible, then a primal
+                // ray to classify as Unbounded. The ray values are not stored in
+                // the error -- only the classification matters.
                 let mut has_dual_ray: i32 = 0;
+                // A scratch buffer is needed for the HiGHS API even though the
+                // values are discarded after classification.
                 let mut dual_buf = vec![0.0_f64; self.num_rows];
-                // SAFETY: handle is valid non-null pointer; dual_buf is heap-allocated Vec.
+                // SAFETY: valid non-null HiGHS pointer; buffers are valid.
                 let dual_status = unsafe {
                     ffi::cobre_highs_get_dual_ray(
                         self.handle,
@@ -474,14 +358,11 @@ impl HighsSolver {
                     )
                 };
                 if dual_status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
-                    return Some(Err(SolverError::Infeasible {
-                        ray: Some(dual_buf),
-                    }));
+                    return Some(Err(SolverError::Infeasible));
                 }
-                // Try primal ray; if found, treat as unbounded.
                 let mut has_primal_ray: i32 = 0;
                 let mut primal_buf = vec![0.0_f64; self.num_cols];
-                // SAFETY: handle is valid non-null pointer; primal_buf is heap-allocated Vec.
+                // SAFETY: valid non-null HiGHS pointer; buffers are valid.
                 let primal_status = unsafe {
                     ffi::cobre_highs_get_primal_ray(
                         self.handle,
@@ -490,31 +371,20 @@ impl HighsSolver {
                     )
                 };
                 if primal_status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
-                    return Some(Err(SolverError::Unbounded {
-                        direction: Some(primal_buf),
-                    }));
+                    return Some(Err(SolverError::Unbounded));
                 }
-                // Default: treat as infeasible with no ray.
-                Some(Err(SolverError::Infeasible { ray: None }))
+                Some(Err(SolverError::Infeasible))
             }
-            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(self.make_unbounded_error())),
-            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => {
-                let partial_solution = self.try_extract_partial_solution(solve_time_seconds);
-                Some(Err(SolverError::TimeLimitExceeded {
-                    partial_solution,
-                    elapsed_seconds: solve_time_seconds,
-                }))
-            }
+            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(SolverError::Unbounded)),
+            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => Some(Err(SolverError::TimeLimitExceeded {
+                elapsed_seconds: solve_time_seconds,
+            })),
             ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT => {
-                let partial_solution = self.try_extract_partial_solution(solve_time_seconds);
                 // SAFETY: handle is valid non-null pointer; iteration count is non-negative.
                 #[allow(clippy::cast_sign_loss)]
                 let iterations =
                     unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-                Some(Err(SolverError::IterationLimit {
-                    partial_solution,
-                    iterations,
-                }))
+                Some(Err(SolverError::IterationLimit { iterations }))
             }
             ffi::HIGHS_MODEL_STATUS_SOLVE_ERROR | ffi::HIGHS_MODEL_STATUS_UNKNOWN => {
                 // Signal to the caller that retry should continue.
@@ -527,62 +397,9 @@ impl HighsSolver {
         }
     }
 
-    /// Converts a [`crate::types::BasisStatus`] to the corresponding `HiGHS` basis status code.
+    /// Converts `usize` indices to `i32` in the internal scratch buffer.
     ///
-    /// Mapping (`HiGHS` Implementation SS2.6):
-    /// - `AtLower` -> `HIGHS_BASIS_STATUS_LOWER` (0)
-    /// - `Basic`   -> `HIGHS_BASIS_STATUS_BASIC` (1)
-    /// - `AtUpper` -> `HIGHS_BASIS_STATUS_UPPER` (2)
-    /// - `Free`    -> `HIGHS_BASIS_STATUS_ZERO`  (3)
-    /// - `Fixed`   -> `HIGHS_BASIS_STATUS_LOWER` (0) -- for fixed variables lb == ub, so
-    ///   "at lower" and "at upper" are the same point; `HiGHS` expects lower.
-    fn basis_status_to_highs(status: crate::types::BasisStatus) -> i32 {
-        use crate::types::BasisStatus;
-        // AtLower and Fixed both map to LOWER (0): Fixed variables have lb == ub so
-        // "at lower" and "at upper" are the same point; HiGHS uses LOWER for both.
-        #[allow(clippy::match_same_arms)]
-        match status {
-            BasisStatus::AtLower | BasisStatus::Fixed => ffi::HIGHS_BASIS_STATUS_LOWER,
-            BasisStatus::Basic => ffi::HIGHS_BASIS_STATUS_BASIC,
-            BasisStatus::AtUpper => ffi::HIGHS_BASIS_STATUS_UPPER,
-            BasisStatus::Free => ffi::HIGHS_BASIS_STATUS_ZERO,
-        }
-    }
-
-    /// Converts a `HiGHS` basis status code to the canonical [`crate::types::BasisStatus`].
-    ///
-    /// Mapping (`HiGHS` Implementation SS2.6):
-    /// - 0 (`LOWER`)    -> `AtLower`
-    /// - 1 (`BASIC`)    -> `Basic`
-    /// - 2 (`UPPER`)    -> `AtUpper`
-    /// - 3 (`ZERO`)     -> `Free`
-    /// - 4 (`NONBASIC`) -> `AtLower` (default nonbasic position per `HiGHS` docs)
-    ///
-    /// # Panics
-    ///
-    /// Panics on any code outside 0-4, which should never occur with a functioning solver.
-    #[allow(clippy::panic)]
-    fn highs_to_basis_status(code: i32) -> crate::types::BasisStatus {
-        use crate::types::BasisStatus;
-        match code {
-            c if c == ffi::HIGHS_BASIS_STATUS_LOWER => BasisStatus::AtLower,
-            c if c == ffi::HIGHS_BASIS_STATUS_BASIC => BasisStatus::Basic,
-            c if c == ffi::HIGHS_BASIS_STATUS_UPPER => BasisStatus::AtUpper,
-            c if c == ffi::HIGHS_BASIS_STATUS_ZERO => BasisStatus::Free,
-            // NONBASIC (4) is HiGHS's generic nonbasic designation; map to AtLower.
-            c if c == ffi::HIGHS_BASIS_STATUS_NONBASIC => BasisStatus::AtLower,
-            other => panic!("invalid HiGHS basis status code {other}: expected 0-4"),
-        }
-    }
-
-    /// Converts a slice of `usize` indices into `i32` using the internal scratch buffer.
-    ///
-    /// Grows `scratch_i32` if the source length exceeds the current capacity, but
-    /// never shrinks it to prevent reallocation churn on the hot path. Each element
-    /// is bounds-checked with a `debug_assert` (elided in release builds); the cast
-    /// is safe because LP dimensions in HPC solvers are never within 2^31 of overflow.
-    ///
-    /// Returns a shared reference to the filled prefix of `scratch_i32`.
+    /// Grows but never shrinks the buffer. Each element is debug-asserted to fit in i32.
     fn convert_to_i32_scratch(&mut self, source: &[usize]) -> &[i32] {
         if source.len() > self.scratch_i32.len() {
             self.scratch_i32.resize(source.len(), 0);
@@ -592,9 +409,7 @@ impl HighsSolver {
                 i32::try_from(v).is_ok(),
                 "usize index {v} overflows i32::MAX at position {i}"
             );
-            // SAFETY: debug_assert above verifies v fits in i32. The cast is
-            // intentional: HiGHS C API requires i32 indices and LP dimensions
-            // (columns, rows, non-zeros) never approach i32::MAX in practice.
+            // SAFETY: debug_assert verifies v fits in i32; cast to HiGHS C API i32.
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             {
                 self.scratch_i32[i] = v as i32;
@@ -606,11 +421,7 @@ impl HighsSolver {
 
 impl Drop for HighsSolver {
     fn drop(&mut self) {
-        // SAFETY: `self.handle` is a valid, non-null `HiGHS` pointer obtained
-        // from `cobre_highs_create()` during construction. Drop is called
-        // exactly once per `HighsSolver` instance (Rust's ownership model
-        // guarantees single-drop). After this call, `self.handle` is invalid
-        // but the struct is being destroyed so it will never be accessed again.
+        // SAFETY: valid HiGHS pointer from construction, called once per instance.
         unsafe { ffi::cobre_highs_destroy(self.handle) };
     }
 }
@@ -621,37 +432,12 @@ impl SolverInterface for HighsSolver {
     }
 
     fn load_model(&mut self, template: &StageTemplate) {
-        // Convert col_starts into a local Vec<i32>. load_model is not on the
-        // innermost hot path (called ~60 times per iteration, not millions), so
-        // a local allocation is acceptable and avoids keeping a scratch buffer
-        // alive for this single use.
-        let col_starts_i32: Vec<i32> = template
-            .col_starts
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                debug_assert!(
-                    i32::try_from(v).is_ok(),
-                    "col_starts[{i}] = {v} overflows i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                {
-                    v as i32
-                }
-            })
-            .collect();
-
-        let row_indices_ptr = {
-            let row_indices_i32 = self.convert_to_i32_scratch(&template.row_indices);
-            row_indices_i32.as_ptr()
-        };
-
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
         // - All pointer arguments point into owned `Vec` data that remains alive for the
         //   duration of this call.
-        // - `col_starts_i32` is a local Vec alive until the end of this scope.
-        // - `row_indices_ptr` points into `self.scratch_i32`, which is alive for `'self`.
+        // - `template.col_starts` and `template.row_indices` are `Vec<i32>` owned by the
+        //   template, alive for the duration of this borrow.
         // - All slice lengths match the HiGHS API contract:
         //   `num_col + 1` for a_start, `num_nz` for a_index and a_value,
         //   `num_col` for col_cost/col_lower/col_upper, `num_row` for row_lower/row_upper.
@@ -691,8 +477,8 @@ impl SolverInterface for HighsSolver {
                 template.col_upper.as_ptr(),
                 template.row_lower.as_ptr(),
                 template.row_upper.as_ptr(),
-                col_starts_i32.as_ptr(),
-                row_indices_ptr,
+                template.col_starts.as_ptr(),
+                template.row_indices.as_ptr(),
                 template.values.as_ptr(),
             )
         };
@@ -721,29 +507,6 @@ impl SolverInterface for HighsSolver {
     }
 
     fn add_rows(&mut self, cuts: &RowBatch) {
-        // Use local Vec for row_starts, scratch for larger col_indices.
-        let row_starts_i32: Vec<i32> = cuts
-            .row_starts
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                debug_assert!(
-                    i32::try_from(v).is_ok(),
-                    "row_starts[{i}] = {v} overflows i32::MAX"
-                );
-                // SAFETY: debug_assert above verifies v fits in i32.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                {
-                    v as i32
-                }
-            })
-            .collect();
-
-        let col_indices_ptr = {
-            let col_indices_i32 = self.convert_to_i32_scratch(&cuts.col_indices);
-            col_indices_i32.as_ptr()
-        };
-
         assert!(
             i32::try_from(cuts.num_rows).is_ok(),
             "cuts.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
@@ -763,8 +526,8 @@ impl SolverInterface for HighsSolver {
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - All pointer arguments point into owned data alive for the duration of this call.
-        // - `row_starts_i32` is a local Vec alive until the end of this scope.
-        // - `col_indices_ptr` points into `self.scratch_i32`, alive for `'self`.
+        // - `cuts.row_starts` and `cuts.col_indices` are `Vec<i32>` owned by the RowBatch,
+        //   alive for the duration of this borrow.
         // - Slice lengths: `num_rows + 1` for starts, total nnz for index and value,
         //   `num_rows` for lower/upper bounds.
         let status = unsafe {
@@ -774,8 +537,8 @@ impl SolverInterface for HighsSolver {
                 cuts.row_lower.as_ptr(),
                 cuts.row_upper.as_ptr(),
                 num_new_nz,
-                row_starts_i32.as_ptr(),
-                col_indices_ptr,
+                cuts.row_starts.as_ptr(),
+                cuts.col_indices.as_ptr(),
                 cuts.values.as_ptr(),
             )
         };
@@ -882,7 +645,7 @@ impl SolverInterface for HighsSolver {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn solve(&mut self) -> Result<LpSolution, SolverError> {
+    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve called without a loaded model — call load_model first"
@@ -894,24 +657,38 @@ impl SolverInterface for HighsSolver {
         self.stats.solve_count += 1;
 
         if model_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
-            let solution = self.extract_solution(solve_time);
+            // Read iteration count from FFI BEFORE establishing the shared borrow
+            // via extract_solution_view, so stats can be updated without violating
+            // the aliasing rules.
+            // SAFETY: handle is valid non-null HiGHS pointer.
+            #[allow(clippy::cast_sign_loss)]
+            let iterations =
+                unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
             self.stats.success_count += 1;
-            self.stats.total_iterations += solution.iterations;
+            self.stats.total_iterations += iterations;
             self.stats.total_solve_time_seconds += solve_time;
-            return Ok(solution);
+            return Ok(self.extract_solution_view(solve_time));
         }
 
         // Check for a definitive terminal status (not a retry-able error).
-        if let Some(terminal) = self.interpret_terminal_status(model_status, solve_time) {
+        // `interpret_terminal_status` only returns `Some(Err(...))` for non-OPTIMAL
+        // statuses; it never returns `Some(Ok(...))`.
+        if let Some(Err(terminal_err)) = self.interpret_terminal_status(model_status, solve_time) {
             self.stats.failure_count += 1;
-            return terminal;
+            return Err(terminal_err);
         }
 
         // 5-level retry escalation (HiGHS Implementation SS3). Apply progressively
         // more permissive strategies on SOLVE_ERROR/UNKNOWN; break on OPTIMAL or
         // definitive terminal status.
         let mut retry_attempts: u64 = 0;
-        let mut final_result: Option<Result<LpSolution, SolverError>> = None;
+        // None = retry loop exhausted without success; Some(Err) = terminal failure.
+        // We accumulate the error, then after restoring settings we either return
+        // it or return Ok(view).
+        let mut terminal_err: Option<SolverError> = None;
+        let mut found_optimal = false;
+        let mut optimal_time = 0.0_f64;
+        let mut optimal_iterations: u64 = 0;
 
         for level in 0..5_u32 {
             // SAFETY: handle is valid non-null HiGHS pointer; option names/values
@@ -959,13 +736,19 @@ impl SolverInterface for HighsSolver {
             let retry_time = t_retry.elapsed().as_secs_f64();
 
             if retry_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
-                let solution = self.extract_solution(retry_time);
-                final_result = Some(Ok(solution));
+                // Capture stats before establishing the borrow.
+                // SAFETY: handle is valid non-null HiGHS pointer.
+                #[allow(clippy::cast_sign_loss)]
+                let iters =
+                    unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
+                found_optimal = true;
+                optimal_time = retry_time;
+                optimal_iterations = iters;
                 break;
             }
 
-            if let Some(terminal) = self.interpret_terminal_status(retry_status, retry_time) {
-                final_result = Some(terminal);
+            if let Some(Err(e)) = self.interpret_terminal_status(retry_status, retry_time) {
+                terminal_err = Some(e);
                 break;
             }
             // Still SOLVE_ERROR or UNKNOWN -- continue to next level.
@@ -977,99 +760,21 @@ impl SolverInterface for HighsSolver {
         // Update statistics with accumulated retry attempts.
         self.stats.retry_count += retry_attempts;
 
-        match final_result {
-            Some(Ok(solution)) => {
-                self.stats.success_count += 1;
-                self.stats.total_iterations += solution.iterations;
-                self.stats.total_solve_time_seconds += solution.solve_time_seconds;
-                Ok(solution)
+        if found_optimal {
+            self.stats.success_count += 1;
+            self.stats.total_iterations += optimal_iterations;
+            self.stats.total_solve_time_seconds += optimal_time;
+            return Ok(self.extract_solution_view(optimal_time));
+        }
+
+        self.stats.failure_count += 1;
+        Err(terminal_err.unwrap_or_else(|| {
+            // All 5 retry levels exhausted without a definitive result.
+            SolverError::NumericalDifficulty {
+                message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
+                    .to_string(),
             }
-            Some(Err(e)) => {
-                self.stats.failure_count += 1;
-                Err(e)
-            }
-            None => {
-                // All 5 retry levels exhausted without a definitive result.
-                self.stats.failure_count += 1;
-                let partial_solution = self.try_extract_partial_solution(0.0);
-                Err(SolverError::NumericalDifficulty {
-                    partial_solution,
-                    message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
-                        .to_string(),
-                })
-            }
-        }
-    }
-
-    fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
-        assert!(
-            self.has_model,
-            "solve_with_basis called without a loaded model — call load_model first"
-        );
-        // Column count must match exactly -- columns never change between stages
-        // for the same template (Solver Abstraction SS2.3).
-        assert!(
-            basis.col_status.len() == self.num_cols,
-            "basis column count {} does not match LP column count {}",
-            basis.col_status.len(),
-            self.num_cols
-        );
-
-        // Translate column statuses into the pre-allocated i32 buffer.
-        // `basis_col_i32` was sized to `num_cols` in `load_model`.
-        for (i, &status) in basis.col_status.iter().enumerate() {
-            self.basis_col_i32[i] = Self::basis_status_to_highs(status);
-        }
-
-        // Translate row statuses, handling dimension mismatch for dynamic cuts
-        // (Solver Abstraction SS2.3):
-        // - Fewer rows than LP: extend with BASIC (new cut rows get Basic status).
-        // - More rows than LP: truncate to current num_rows.
-        let basis_rows = basis.row_status.len();
-        let lp_rows = self.num_rows;
-
-        // Fill the overlapping prefix from the saved basis.
-        let copy_len = basis_rows.min(lp_rows);
-        for i in 0..copy_len {
-            self.basis_row_i32[i] = Self::basis_status_to_highs(basis.row_status[i]);
-        }
-        // If the LP has more rows than the saved basis (new cuts added), initialize
-        // the extra rows as Basic -- newly added dynamic constraint rows have no
-        // prior basis information.
-        if lp_rows > basis_rows {
-            for i in basis_rows..lp_rows {
-                self.basis_row_i32[i] = ffi::HIGHS_BASIS_STATUS_BASIC;
-            }
-        }
-        // If lp_rows < basis_rows the extra saved entries are simply ignored
-        // (the truncation is implicit: we only pass lp_rows entries to HiGHS).
-
-        // Attempt to install the basis in HiGHS.
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
-        // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
-        // - We pass exactly `num_cols` col entries and `num_rows` row entries,
-        //   which matches the current model dimensions.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let set_status = unsafe {
-            ffi::cobre_highs_set_basis(
-                self.handle,
-                self.basis_col_i32.as_ptr(),
-                self.basis_row_i32.as_ptr(),
-            )
-        };
-
-        // Basis rejection tracking: singular factorization is the only realistic
-        // failure (dimensions and status codes are prevented by assertions above).
-        // Fall back to cold-start and track for performance diagnostics.
-        if set_status == ffi::HIGHS_STATUS_ERROR {
-            self.stats.basis_rejections += 1;
-            debug_assert!(false, "basis rejected; falling back to cold-start");
-        }
-
-        // Delegate to solve() which handles retry escalation and statistics updates.
-        self.solve()
+        }))
     }
 
     fn reset(&mut self) {
@@ -1091,23 +796,25 @@ impl SolverInterface for HighsSolver {
         // lifetime of the instance (per trait contract, SS4.3).
     }
 
-    fn get_basis(&mut self) -> Basis {
+    fn get_basis(&mut self, out: &mut crate::types::Basis) {
         assert!(
             self.has_model,
             "get_basis called without a loaded model — call load_model first"
         );
-        // Reuse the pre-allocated i32 buffers as output targets.
+
+        out.col_status.resize(self.num_cols, 0);
+        out.row_status.resize(self.num_rows, 0);
+
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
-        // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
-        // - HiGHS writes exactly `num_cols` values to the col pointer and `num_rows`
-        //   values to the row pointer, which is within the allocated lengths.
+        // - `out.col_status` has been resized to `num_cols` entries above.
+        // - `out.row_status` has been resized to `num_rows` entries above.
+        // - HiGHS writes exactly `num_cols` col values and `num_rows` row values.
         let get_status = unsafe {
             ffi::cobre_highs_get_basis(
                 self.handle,
-                self.basis_col_i32.as_mut_ptr(),
-                self.basis_row_i32.as_mut_ptr(),
+                out.col_status.as_mut_ptr(),
+                out.row_status.as_mut_ptr(),
             )
         };
 
@@ -1116,22 +823,60 @@ impl SolverInterface for HighsSolver {
             ffi::HIGHS_STATUS_ERROR,
             "cobre_highs_get_basis failed: basis must exist after a successful solve (programming error)"
         );
+    }
 
-        // Translate HiGHS i32 codes back to canonical BasisStatus.
-        let col_status: Vec<crate::types::BasisStatus> = self.basis_col_i32[..self.num_cols]
-            .iter()
-            .map(|&code| Self::highs_to_basis_status(code))
-            .collect();
+    fn solve_with_basis(
+        &mut self,
+        basis: &crate::types::Basis,
+    ) -> Result<crate::types::SolutionView<'_>, SolverError> {
+        assert!(
+            self.has_model,
+            "solve_with_basis called without a loaded model — call load_model first"
+        );
+        assert!(
+            basis.col_status.len() == self.num_cols,
+            "basis column count {} does not match LP column count {}",
+            basis.col_status.len(),
+            self.num_cols
+        );
 
-        let row_status: Vec<crate::types::BasisStatus> = self.basis_row_i32[..self.num_rows]
-            .iter()
-            .map(|&code| Self::highs_to_basis_status(code))
-            .collect();
+        // Copy raw i32 codes directly into the pre-allocated buffers — no enum
+        // translation. Zero-copy warm-start path.
+        self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
 
-        Basis {
-            col_status,
-            row_status,
+        // Handle dimension mismatch for dynamic cuts:
+        // - Fewer rows than LP: extend with BASIC.
+        // - More rows than LP: truncate (extra entries ignored).
+        let basis_rows = basis.row_status.len();
+        let lp_rows = self.num_rows;
+        let copy_len = basis_rows.min(lp_rows);
+        self.basis_row_i32[..copy_len].copy_from_slice(&basis.row_status[..copy_len]);
+        if lp_rows > basis_rows {
+            self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
         }
+
+        // Attempt to install the basis in HiGHS.
+        // SAFETY:
+        // - `self.handle` is a valid, non-null HiGHS pointer.
+        // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
+        // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
+        // - We pass exactly `num_cols` col entries and `num_rows` row entries.
+        let set_status = unsafe {
+            ffi::cobre_highs_set_basis(
+                self.handle,
+                self.basis_col_i32.as_ptr(),
+                self.basis_row_i32.as_ptr(),
+            )
+        };
+
+        // Basis rejection tracking: fall back to cold-start and track for diagnostics.
+        if set_status == ffi::HIGHS_STATUS_ERROR {
+            self.stats.basis_rejections += 1;
+            debug_assert!(false, "raw basis rejected; falling back to cold-start");
+        }
+
+        // Delegate to solve() which handles retry escalation and statistics updates.
+        self.solve()
     }
 
     fn statistics(&self) -> SolverStatistics {
@@ -1164,7 +909,7 @@ mod tests {
     use super::HighsSolver;
     use crate::{
         SolverInterface,
-        types::{RowBatch, StageTemplate},
+        types::{Basis, RowBatch, StageTemplate},
     };
 
     // Shared LP fixture from Solver Interface Testing SS1.1:
@@ -1184,8 +929,8 @@ mod tests {
             num_cols: 3,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0, 2, 2, 3],
-            row_indices: vec![0, 1, 1],
+            col_starts: vec![0_i32, 2, 2, 3],
+            row_indices: vec![0_i32, 1, 1],
             values: vec![1.0, 2.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0],
             col_upper: vec![10.0, f64::INFINITY, 8.0],
@@ -1206,8 +951,8 @@ mod tests {
     fn make_fixture_row_batch() -> RowBatch {
         RowBatch {
             num_rows: 2,
-            row_starts: vec![0, 2, 4],
-            col_indices: vec![0, 1, 0, 1],
+            row_starts: vec![0_i32, 2, 4],
+            col_indices: vec![0_i32, 1, 0, 1],
             values: vec![-5.0, 1.0, 3.0, 1.0],
             row_lower: vec![20.0, 80.0],
             row_upper: vec![f64::INFINITY, f64::INFINITY],
@@ -1334,8 +1079,9 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        let result = solver.solve();
-        let solution = result.expect("solve() must succeed on a feasible LP");
+        let solution = solver
+            .solve()
+            .expect("solve() must succeed on a feasible LP");
 
         assert!(
             (solution.objective - 100.0).abs() < 1e-8,
@@ -1371,8 +1117,9 @@ mod tests {
         solver.load_model(&template);
         solver.add_rows(&cuts);
 
-        let result = solver.solve();
-        let solution = result.expect("solve() must succeed on a feasible LP with cuts");
+        let solution = solver
+            .solve()
+            .expect("solve() must succeed on a feasible LP with cuts");
 
         assert!(
             (solution.objective - 162.0).abs() < 1e-8,
@@ -1409,8 +1156,9 @@ mod tests {
         // Patch row 0 (x0=6 equality) to x0=4.
         solver.set_row_bounds(&[0], &[4.0], &[4.0]);
 
-        let result = solver.solve();
-        let solution = result.expect("solve() must succeed after RHS patch");
+        let solution = solver
+            .solve()
+            .expect("solve() must succeed after RHS patch");
 
         assert!(
             (solution.objective - 368.0).abs() < 1e-8,
@@ -1520,210 +1268,138 @@ mod tests {
         );
     }
 
-    /// Solve SS1.1, then call `get_basis()`. Verify the returned `Basis` has
-    /// the correct dimension: 3 column statuses and 2 row statuses.
+    /// After `load_model` + `solve()`, `get_basis` must return i32 codes
+    /// that are all valid `HiGHS` basis status values (0..=4).
     #[test]
-    fn test_highs_get_basis_dimensions() {
+    fn test_get_basis_valid_status_codes() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
         solver.solve().expect("solve must succeed before get_basis");
 
-        let basis = solver.get_basis();
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
 
-        assert_eq!(
-            basis.col_status.len(),
-            3,
-            "col_status must have 3 entries (one per LP column)"
-        );
-        assert_eq!(
-            basis.row_status.len(),
-            2,
-            "row_status must have 2 entries (one per LP row)"
-        );
-    }
-
-    /// Solve SS1.1, then verify basis values match the hand-computed optimal basis.
-    ///
-    /// SS1.1 optimal: x0=6 (Basic), x1=0 (`AtLower`), x2=2 (Basic).
-    /// Both equality constraints are active (`row_lower` == `row_upper`), so their
-    /// row basis statuses are nonbasic at a bound. `HiGHS` may report either
-    /// `AtLower` or `AtUpper` for equality constraints; both are valid.
-    /// The test verifies the column statuses exactly (these are unambiguous) and
-    /// verifies that row statuses are one of the two valid nonbasic positions.
-    #[test]
-    fn test_highs_get_basis_values() {
-        use crate::types::BasisStatus;
-
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        let template = make_fixture_stage_template();
-        solver.load_model(&template);
-        solver.solve().expect("solve must succeed before get_basis");
-
-        let basis = solver.get_basis();
-
-        assert_eq!(
-            basis.col_status[0],
-            BasisStatus::Basic,
-            "col 0 (x0=6, bound by equality) must be Basic"
-        );
-        assert_eq!(
-            basis.col_status[1],
-            BasisStatus::AtLower,
-            "col 1 (x1=0, at lower bound) must be AtLower"
-        );
-        assert_eq!(
-            basis.col_status[2],
-            BasisStatus::Basic,
-            "col 2 (x2=2, between bounds) must be Basic"
-        );
-        // Equality constraints (row_lower == row_upper) may be reported as either
-        // AtLower or AtUpper by HiGHS -- both are valid for a nonbasic constraint
-        // at its unique feasible bound value.
-        assert!(
-            basis.row_status[0] == BasisStatus::AtLower
-                || basis.row_status[0] == BasisStatus::AtUpper,
-            "row 0 (x0=6 equality) must be nonbasic at a bound (AtLower or AtUpper), got {:?}",
-            basis.row_status[0]
-        );
-        assert!(
-            basis.row_status[1] == BasisStatus::AtLower
-                || basis.row_status[1] == BasisStatus::AtUpper,
-            "row 1 (power balance equality) must be nonbasic at a bound (AtLower or AtUpper), got {:?}",
-            basis.row_status[1]
-        );
-    }
-
-    /// Solve SS1.1, capture the basis, then `solve_with_basis` on the same LP.
-    /// The solution must be identical and iteration count must be <= cold-start count.
-    #[test]
-    fn test_highs_solve_with_basis_warm_start() {
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        let template = make_fixture_stage_template();
-        solver.load_model(&template);
-
-        let cold_solution = solver.solve().expect("cold-start solve must succeed");
-        let cold_iterations = cold_solution.iterations;
-        let basis = solver.get_basis();
-
-        // Reload the same model (simulates an iterative algorithm reusing the same template).
-        solver.load_model(&template);
-        let warm_solution = solver
-            .solve_with_basis(&basis)
-            .expect("warm-start solve must succeed");
-
-        assert!(
-            (warm_solution.objective - 100.0).abs() < 1e-8,
-            "warm-start objective must be 100.0, got {}",
-            warm_solution.objective
-        );
-        assert!(
-            warm_solution.iterations <= cold_iterations,
-            "warm-start iterations ({}) must not exceed cold-start iterations ({})",
-            warm_solution.iterations,
-            cold_iterations
-        );
-    }
-
-    /// Solve SS1.1 (2 rows), save basis. Then load model + add 2 cuts (4 rows total).
-    /// Call `solve_with_basis` with the 2-row basis. The 2 extra rows must be initialized
-    /// as Basic and the solve must succeed with objective = 162.0 (SS1.2 result).
-    #[test]
-    fn test_highs_solve_with_basis_row_extension() {
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        let template = make_fixture_stage_template();
-        let cuts = make_fixture_row_batch();
-
-        // Solve SS1.1 to get the 2-row basis.
-        solver.load_model(&template);
-        solver.solve().expect("SS1.1 solve must succeed");
-        let basis_2rows = solver.get_basis();
-        assert_eq!(
-            basis_2rows.row_status.len(),
-            2,
-            "saved basis must have 2 row statuses"
-        );
-
-        // Reload model and add cuts to get 4-row LP (SS1.1 + SS1.2 cuts).
-        solver.load_model(&template);
-        solver.add_rows(&cuts);
-        assert_eq!(solver.num_rows, 4, "LP must have 4 rows after add_rows");
-
-        // Warm-start with the 2-row basis. The 2 extra rows are extended as Basic.
-        let solution = solver
-            .solve_with_basis(&basis_2rows)
-            .expect("warm-start solve with row extension must succeed");
-
-        assert!(
-            (solution.objective - 162.0).abs() < 1e-8,
-            "objective after row extension must be 162.0, got {}",
-            solution.objective
-        );
-    }
-
-    /// Verify `BasisStatus -> HiGHS code -> BasisStatus` roundtrip for all variants.
-    ///
-    /// `Fixed` maps to `LOWER` (0), which maps back to `AtLower` -- this is the
-    /// documented lossy mapping (Fixed has no `HiGHS` equivalent; `AtLower` is the
-    /// correct recovery for a fixed variable).
-    #[test]
-    fn test_basis_status_to_highs_roundtrip() {
-        use crate::types::BasisStatus;
-
-        let roundtrip_pairs = [
-            (BasisStatus::AtLower, BasisStatus::AtLower),
-            (BasisStatus::Basic, BasisStatus::Basic),
-            (BasisStatus::AtUpper, BasisStatus::AtUpper),
-            (BasisStatus::Free, BasisStatus::Free),
-            // Fixed maps to LOWER (0) then back to AtLower -- documented lossy path.
-            (BasisStatus::Fixed, BasisStatus::AtLower),
-        ];
-
-        for (input, expected_roundtrip) in roundtrip_pairs {
-            let code = HighsSolver::basis_status_to_highs(input);
-            let recovered = HighsSolver::highs_to_basis_status(code);
-            assert_eq!(
-                recovered, expected_roundtrip,
-                "roundtrip for {input:?}: code={code}, recovered={recovered:?}, expected={expected_roundtrip:?}"
+        for &code in &basis.col_status {
+            assert!(
+                (0..=4).contains(&code),
+                "col_status code {code} is outside valid HiGHS range 0..=4"
+            );
+        }
+        for &code in &basis.row_status {
+            assert!(
+                (0..=4).contains(&code),
+                "row_status code {code} is outside valid HiGHS range 0..=4"
             );
         }
     }
 
-    /// Verify all five `HiGHS` basis status codes map to the expected `BasisStatus`.
+    /// Starting from an empty `Basis`, `get_basis` must resize the output
+    /// buffers to match the current LP dimensions (3 cols, 2 rows for SS1.1).
     #[test]
-    fn test_highs_to_basis_status_all_codes() {
-        use crate::{
-            ffi::{
-                HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER, HIGHS_BASIS_STATUS_NONBASIC,
-                HIGHS_BASIS_STATUS_UPPER, HIGHS_BASIS_STATUS_ZERO,
-            },
-            types::BasisStatus,
-        };
+    fn test_get_basis_resizes_output() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        solver.load_model(&template);
+        solver.solve().expect("solve must succeed before get_basis");
+
+        let mut basis = Basis::new(0, 0);
+        assert_eq!(
+            basis.col_status.len(),
+            0,
+            "initial col_status must be empty"
+        );
+        assert_eq!(
+            basis.row_status.len(),
+            0,
+            "initial row_status must be empty"
+        );
+
+        solver.get_basis(&mut basis);
 
         assert_eq!(
-            HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_LOWER),
-            BasisStatus::AtLower,
-            "LOWER (0) must map to AtLower"
+            basis.col_status.len(),
+            3,
+            "col_status must be resized to 3 (num_cols of SS1.1)"
         );
         assert_eq!(
-            HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_BASIC),
-            BasisStatus::Basic,
-            "BASIC (1) must map to Basic"
+            basis.row_status.len(),
+            2,
+            "row_status must be resized to 2 (num_rows of SS1.1)"
         );
-        assert_eq!(
-            HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_UPPER),
-            BasisStatus::AtUpper,
-            "UPPER (2) must map to AtUpper"
+    }
+
+    /// Warm-start via `solve_with_basis` on the same LP must reproduce
+    /// the optimal objective and complete in at most 1 simplex iteration.
+    #[test]
+    fn test_solve_with_basis_warm_start() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        solver.load_model(&template);
+        solver.solve().expect("cold-start solve must succeed");
+
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
+
+        // Reload the same model to reset HiGHS internal state.
+        solver.load_model(&template);
+        let result = solver
+            .solve_with_basis(&basis)
+            .expect("warm-start solve must succeed");
+
+        assert!(
+            (result.objective - 100.0).abs() < 1e-8,
+            "warm-start objective must be 100.0, got {}",
+            result.objective
         );
-        assert_eq!(
-            HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_ZERO),
-            BasisStatus::Free,
-            "ZERO (3) must map to Free"
+        assert!(
+            result.iterations <= 1,
+            "warm-start from exact basis must use at most 1 iteration, got {}",
+            result.iterations
         );
+
+        let stats = solver.statistics();
         assert_eq!(
-            HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_NONBASIC),
-            BasisStatus::AtLower,
-            "NONBASIC (4) must map to AtLower (default nonbasic position)"
+            stats.basis_rejections, 0,
+            "basis_rejections must be 0 when raw basis is accepted, got {}",
+            stats.basis_rejections
+        );
+    }
+
+    /// When the basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
+    /// `solve_with_basis` must extend missing rows as Basic and solve correctly.
+    /// SS1.2 objective with both cuts active is 162.0.
+    #[test]
+    fn test_solve_with_basis_dimension_mismatch() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        let cuts = make_fixture_row_batch();
+
+        // First solve on 2-row LP to capture a 2-row basis.
+        solver.load_model(&template);
+        solver.solve().expect("SS1.1 solve must succeed");
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
+        assert_eq!(
+            basis.row_status.len(),
+            2,
+            "captured basis must have 2 row statuses"
+        );
+
+        // Reload model and add 2 cuts to get a 4-row LP.
+        solver.load_model(&template);
+        solver.add_rows(&cuts);
+        assert_eq!(solver.num_rows, 4, "LP must have 4 rows after add_rows");
+
+        // Warm-start with the 2-row basis; extra rows are extended as Basic.
+        let result = solver
+            .solve_with_basis(&basis)
+            .expect("solve with dimension-mismatched basis must succeed");
+
+        assert!(
+            (result.objective - 162.0).abs() < 1e-8,
+            "objective with both cuts active must be 162.0, got {}",
+            result.objective
         );
     }
 }

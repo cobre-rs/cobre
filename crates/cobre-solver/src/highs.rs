@@ -1169,9 +1169,7 @@ impl SolverInterface for HighsSolver {
         let copy_len = basis_rows.min(lp_rows);
         self.basis_row_i32[..copy_len].copy_from_slice(&basis.row_status[..copy_len]);
         if lp_rows > basis_rows {
-            for i in basis_rows..lp_rows {
-                self.basis_row_i32[i] = ffi::HIGHS_BASIS_STATUS_BASIC;
-            }
+            self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
         }
 
         // Attempt to install the basis in HiGHS.

@@ -138,16 +138,16 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 | 4     | complete    | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc)                                              |
 | 5     | complete    | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling -- 125 tests (105 unit + 5 conformance + 4 reproducibility + 11 doc) |
 | 6     | complete    | SDDP training loop, forward/backward pass, cut management, convergence monitoring -- 351 tests (297 unit + 13 conformance + 7 integration + 34 doc)                       |
-| 7     | not started | Blocked by Phase 6                                                                                                                                                        |
+| 7     | complete    | Simulation pipeline, Parquet output writers, FlatBuffers policy checkpoint, manifest/dictionary writers, genericity gate -- cobre-io: 749 tests, cobre-sddp: 456 tests    |
 | 8     | not started | Blocked by Phase 7                                                                                                                                                        |
 
 ### Current phase
 
-**Phase 6: cobre-sddp -- Complete.** The SDDP training loop is fully implemented: core types and event system (StageIndexer, RiskMeasure, HorizonMode, StoppingRuleSet, CutSelectionStrategy); LP construction with CutPool, CutWireRecord, FutureCostFunction, and StageTemplate/PatchBuffer; forward pass with scenario sampling and forward synchronization (UB via allreduce); backward pass with Benders cut generation; cut synchronization via allgatherv; state exchange for trial points; LB evaluation (rank-0 solves + broadcast); convergence monitoring with gap tracking and composite stopping rules; training loop orchestrator with optional cut selection and external shutdown flag. All 351 tests pass (297 unit + 13 conformance + 7 integration + 34 doc). Workspace total: 1481 tests. Next candidate is Phase 7 (simulation + output).
+**Phase 7: cobre-sddp + cobre-io -- Complete.** Simulation pipeline (forward-only policy evaluation with scenario distribution, result extraction, MPI aggregation); output infrastructure (Hive-partitioned Parquet writers for training convergence/timing and simulation per-entity results, manifest/metadata JSON writers, dictionary writers for codes/entities/variables/bounds/state); FlatBuffers policy checkpoint (runtime builder API, commit-point semantics); TrainingOutput bridge from training events. Workspace total: 1718 tests. Next candidate is Phase 8 (cobre-cli).
 
 ### Parallelizable phases
 
-Phase 7 (simulation + output) is the next candidate. Phases 1–6 are all complete.
+Phase 8 (cobre-cli) is the next candidate. Phases 1–7 are all complete.
 
 ### Per-phase spec reading lists
 

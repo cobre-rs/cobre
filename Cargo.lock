@@ -374,6 +374,9 @@ dependencies = [
  "cobre-io",
  "cobre-solver",
  "cobre-stochastic",
+ "parquet",
+ "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

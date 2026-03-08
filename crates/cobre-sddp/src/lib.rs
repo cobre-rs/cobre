@@ -51,6 +51,7 @@ pub mod simulation;
 pub mod state_exchange;
 pub mod stopping_rule;
 pub mod training;
+pub mod training_output;
 pub mod trajectory;
 
 pub use backward::{run_backward_pass, BackwardResult};
@@ -78,4 +79,5 @@ pub use simulation::{
 pub use state_exchange::ExchangeBuffers;
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
 pub use training::{train, TrainingResult};
+pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;

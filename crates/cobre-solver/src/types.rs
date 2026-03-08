@@ -108,6 +108,69 @@ pub struct LpSolution {
     pub solve_time_seconds: f64,
 }
 
+/// Zero-copy view of an LP solution, borrowing directly from solver-internal buffers.
+///
+/// Valid until the next mutating method call on the solver (any `&mut self` call).
+/// This is enforced at compile time by the Rust borrow checker: the lifetime `'a`
+/// ties the view to the solver instance that produced it.
+///
+/// Use [`SolutionView::to_owned`] to convert to an owned [`LpSolution`] when the
+/// solution data must outlive the current borrow, or when the same data will be
+/// accessed after a subsequent solver call.
+///
+/// See [Solver Interface Trait SS4.1](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
+#[derive(Debug, Clone, Copy)]
+pub struct SolutionView<'a> {
+    /// Optimal objective value (minimization sense).
+    pub objective: f64,
+
+    /// Primal variable values, indexed by column.
+    ///
+    /// Length equals `num_cols`. State variables occupy the contiguous prefix
+    /// `[0, n_state)` per
+    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
+    pub primal: &'a [f64],
+
+    /// Dual multipliers (shadow prices), indexed by row.
+    ///
+    /// Length equals `num_rows` (structural rows + appended dynamic constraint
+    /// rows). Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
+    ///
+    /// Sign convention: normalized to the canonical convention before returning
+    /// (positive dual on a `<=` constraint means increasing RHS increases the
+    /// objective).
+    pub dual: &'a [f64],
+
+    /// Reduced costs, indexed by column.
+    ///
+    /// Length equals `num_cols`.
+    pub reduced_costs: &'a [f64],
+
+    /// Number of simplex iterations performed for this solve.
+    pub iterations: u64,
+
+    /// Wall-clock solve time in seconds (excluding retry overhead).
+    pub solve_time_seconds: f64,
+}
+
+impl SolutionView<'_> {
+    /// Clones the borrowed slices into owned [`Vec`]s, producing an [`LpSolution`].
+    ///
+    /// Use this when the solution data must outlive the current solver borrow,
+    /// or when the same solution will be read after a subsequent solver call.
+    #[must_use]
+    pub fn to_owned(&self) -> LpSolution {
+        LpSolution {
+            objective: self.objective,
+            primal: self.primal.to_vec(),
+            dual: self.dual.to_vec(),
+            reduced_costs: self.reduced_costs.to_vec(),
+            iterations: self.iterations,
+            solve_time_seconds: self.solve_time_seconds,
+        }
+    }
+}
+
 /// Accumulated solve metrics for a single solver instance.
 ///
 /// Counters grow monotonically from construction. They are thread-local --
@@ -466,7 +529,10 @@ impl std::error::Error for SolverError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{BasisStatus, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate};
+    use super::{
+        BasisStatus, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics,
+        StageTemplate,
+    };
 
     #[test]
     fn test_basis_status_clone_copy() {
@@ -828,6 +894,46 @@ mod tests {
         for err in &errors {
             let _: &dyn std::error::Error = err;
         }
+    }
+
+    #[test]
+    fn test_solution_view_to_owned() {
+        let primal = [1.0, 2.0];
+        let dual = [3.0];
+        let rc = [4.0, 5.0];
+        let view = SolutionView {
+            objective: 42.0,
+            primal: &primal,
+            dual: &dual,
+            reduced_costs: &rc,
+            iterations: 7,
+            solve_time_seconds: 0.5,
+        };
+        let owned = view.to_owned();
+        assert_eq!(owned.objective, 42.0);
+        assert_eq!(owned.primal, vec![1.0, 2.0]);
+        assert_eq!(owned.dual, vec![3.0]);
+        assert_eq!(owned.reduced_costs, vec![4.0, 5.0]);
+        assert_eq!(owned.iterations, 7);
+        assert_eq!(owned.solve_time_seconds, 0.5);
+    }
+
+    #[test]
+    fn test_solution_view_is_copy() {
+        let primal = [1.0];
+        let dual = [2.0];
+        let rc = [3.0];
+        let view = SolutionView {
+            objective: 0.0,
+            primal: &primal,
+            dual: &dual,
+            reduced_costs: &rc,
+            iterations: 0,
+            solve_time_seconds: 0.0,
+        };
+        // SolutionView is Copy: the copy here does not move the original.
+        let copy = view;
+        assert_eq!(view.objective, copy.objective);
     }
 
     #[test]

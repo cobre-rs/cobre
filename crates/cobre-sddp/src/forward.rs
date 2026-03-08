@@ -490,7 +490,7 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
                 &patch_buf.upper[..patch_count],
             );
 
-            let solution = solver.solve().map_err(|e| match e {
+            let view = solver.solve_view().map_err(|e| match e {
                 SolverError::Infeasible { .. } => SddpError::Infeasible {
                     stage: t,
                     iteration,
@@ -500,24 +500,25 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
             })?;
 
             // Stage cost = LP objective minus theta (future cost variable).
-            let stage_cost = solution.objective - solution.primal[indexer.theta];
-            let end_state = &solution.primal[..indexer.n_state];
+            let stage_cost = view.objective - view.primal[indexer.theta];
 
-            // Populate trajectory record.
+            // Populate trajectory record: copy directly from solver buffers into the
+            // record buffers (no intermediate owned Vec).
             let record_idx = m * num_stages + t;
             records[record_idx].primal.clear();
-            records[record_idx]
-                .primal
-                .extend_from_slice(&solution.primal);
+            records[record_idx].primal.extend_from_slice(view.primal);
             records[record_idx].dual.clear();
-            records[record_idx].dual.extend_from_slice(&solution.dual);
+            records[record_idx].dual.extend_from_slice(view.dual);
             records[record_idx].stage_cost = stage_cost;
             records[record_idx].state.clear();
-            records[record_idx].state.extend_from_slice(end_state);
+            records[record_idx]
+                .state
+                .extend_from_slice(&view.primal[..indexer.n_state]);
 
             trajectory_cost += stage_cost;
             current_state.clear();
-            current_state.extend_from_slice(end_state);
+            current_state.extend_from_slice(&view.primal[..indexer.n_state]);
+            // view is dropped here; the &mut self borrow on solver is released.
         }
 
         cost_sum += trajectory_cost;
@@ -622,27 +623,43 @@ mod tests {
     /// calls starting from 0.
     struct MockSolver {
         solution: LpSolution,
-        /// If `Some(n)`, the n-th `solve()` call (0-indexed) returns infeasible.
+        /// If `Some(n)`, the n-th `solve_view()` call (0-indexed) returns infeasible.
         infeasible_at: Option<usize>,
         call_count: usize,
+        /// Internal buffers that `SolutionView` borrows from.
+        buf_primal: Vec<f64>,
+        buf_dual: Vec<f64>,
+        buf_reduced_costs: Vec<f64>,
     }
 
     impl MockSolver {
         /// Create a solver that always returns `solution`.
         fn always_ok(solution: LpSolution) -> Self {
+            let buf_primal = solution.primal.clone();
+            let buf_dual = solution.dual.clone();
+            let buf_reduced_costs = solution.reduced_costs.clone();
             Self {
                 solution,
                 infeasible_at: None,
                 call_count: 0,
+                buf_primal,
+                buf_dual,
+                buf_reduced_costs,
             }
         }
 
         /// Create a solver that returns infeasible on the `n`-th solve call.
         fn infeasible_on(solution: LpSolution, n: usize) -> Self {
+            let buf_primal = solution.primal.clone();
+            let buf_dual = solution.dual.clone();
+            let buf_reduced_costs = solution.reduced_costs.clone();
             Self {
                 solution,
                 infeasible_at: Some(n),
                 call_count: 0,
+                buf_primal,
+                buf_dual,
+                buf_reduced_costs,
             }
         }
     }
@@ -656,17 +673,32 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
                 return Err(SolverError::Infeasible { ray: None });
             }
-            Ok(self.solution.clone())
+            // Fill internal buffers from the stored solution.
+            self.buf_primal.clone_from(&self.solution.primal);
+            self.buf_dual.clone_from(&self.solution.dual);
+            self.buf_reduced_costs
+                .clone_from(&self.solution.reduced_costs);
+            Ok(cobre_solver::SolutionView {
+                objective: self.solution.objective,
+                primal: &self.buf_primal,
+                dual: &self.buf_dual,
+                reduced_costs: &self.buf_reduced_costs,
+                iterations: self.solution.iterations,
+                solve_time_seconds: self.solution.solve_time_seconds,
+            })
         }
 
-        fn solve_with_basis(&mut self, _basis: &Basis) -> Result<LpSolution, SolverError> {
-            self.solve()
+        fn solve_with_basis_view(
+            &mut self,
+            _basis: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn reset(&mut self) {}

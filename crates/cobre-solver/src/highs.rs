@@ -25,7 +25,9 @@ use std::time::Instant;
 
 use crate::{
     SolverInterface, ffi,
-    types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate},
+    types::{
+        Basis, LpSolution, RowBatch, SolverError, SolverStatistics, SolutionView, StageTemplate,
+    },
 };
 
 // ─── Default HiGHS configuration ─────────────────────────────────────────────
@@ -264,10 +266,12 @@ impl HighsSolver {
         Ok(())
     }
 
-    /// Extracts the full optimal solution from `HiGHS` into pre-allocated buffers.
+    /// Extracts the optimal solution from `HiGHS` into pre-allocated buffers and returns
+    /// a [`SolutionView`] borrowing directly from those buffers.
     ///
-    /// Calls `cobre_highs_get_solution`, `cobre_highs_get_objective_value`, and
-    /// `cobre_highs_get_simplex_iteration_count`, then builds an [`LpSolution`].
+    /// The returned view borrows `self.col_value[..self.num_cols]`,
+    /// `self.row_dual[..self.num_rows]`, and `self.col_dual[..self.num_cols]`.
+    /// The caller must not make any `&mut self` calls while the view is live.
     ///
     /// `col_dual` from `HiGHS` is the reduced cost vector (per `HiGHS` Implementation
     /// SS2.4). Row duals are already in the canonical sign convention -- no negation
@@ -277,7 +281,7 @@ impl HighsSolver {
     ///
     /// Does not panic. The `iterations` cast from `i32` to `u64` is safe because
     /// `HiGHS` iteration counts are always non-negative.
-    fn extract_solution(&mut self, solve_time_seconds: f64) -> LpSolution {
+    fn extract_solution_view(&mut self, solve_time_seconds: f64) -> SolutionView<'_> {
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - All four mutable pointer arguments point into owned Vec buffers that were
@@ -302,20 +306,16 @@ impl HighsSolver {
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
         let objective = unsafe { ffi::cobre_highs_get_objective_value(self.handle) };
 
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. The return value
-        // is a non-negative simplex iteration count; casting i32 -> u64 is safe.
+        // SAFETY: handle is valid; iteration count is non-negative so cast is safe.
         #[allow(clippy::cast_sign_loss)]
         let iterations =
             unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
 
-        // col_dual from HiGHS IS the reduced cost vector. row_dual is already in
-        // canonical sign convention (positive dual on <= constraint means increasing
-        // RHS increases the objective). No sign negation is needed for HiGHS.
-        LpSolution {
+        SolutionView {
             objective,
-            primal: self.col_value.clone(),
-            dual: self.row_dual.clone(),
-            reduced_costs: self.col_dual.clone(),
+            primal: &self.col_value[..self.num_cols],
+            dual: &self.row_dual[..self.num_rows],
+            reduced_costs: &self.col_dual[..self.num_cols],
             iterations,
             solve_time_seconds,
         }
@@ -330,7 +330,8 @@ impl HighsSolver {
         // Attempt the extraction; if HiGHS has no solution available the buffers will
         // be filled with zeros or unchanged values. We consider the extraction valid
         // as long as HiGHS reports a finite objective value.
-        // SAFETY: same guarantees as `extract_solution`.
+        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer; all buffers are
+        // correctly sized from `load_model` / `add_rows`.
         let _status = unsafe {
             ffi::cobre_highs_get_solution(
                 self.handle,
@@ -349,7 +350,7 @@ impl HighsSolver {
             return None;
         }
 
-        // SAFETY: same as `extract_solution`.
+        // SAFETY: handle is valid; iteration count is non-negative so cast is safe.
         #[allow(clippy::cast_sign_loss)]
         let iterations =
             unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
@@ -833,8 +834,16 @@ impl SolverInterface for HighsSolver {
         );
     }
 
-    #[allow(clippy::too_many_lines)]
     fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        self.solve_view().map(|v| v.to_owned())
+    }
+
+    fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
+        self.solve_with_basis_view(basis).map(|v| v.to_owned())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn solve_view(&mut self) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve called without a loaded model — call load_model first"
@@ -846,24 +855,38 @@ impl SolverInterface for HighsSolver {
         self.stats.solve_count += 1;
 
         if model_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
-            let solution = self.extract_solution(solve_time);
+            // Read iteration count from FFI BEFORE establishing the shared borrow
+            // via extract_solution_view, so stats can be updated without violating
+            // the aliasing rules.
+            // SAFETY: handle is valid non-null HiGHS pointer.
+            #[allow(clippy::cast_sign_loss)]
+            let iterations =
+                unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
             self.stats.success_count += 1;
-            self.stats.total_iterations += solution.iterations;
+            self.stats.total_iterations += iterations;
             self.stats.total_solve_time_seconds += solve_time;
-            return Ok(solution);
+            return Ok(self.extract_solution_view(solve_time));
         }
 
         // Check for a definitive terminal status (not a retry-able error).
-        if let Some(terminal) = self.interpret_terminal_status(model_status, solve_time) {
+        // `interpret_terminal_status` only returns `Some(Err(...))` for non-OPTIMAL
+        // statuses; it never returns `Some(Ok(...))`.
+        if let Some(Err(terminal_err)) = self.interpret_terminal_status(model_status, solve_time) {
             self.stats.failure_count += 1;
-            return terminal;
+            return Err(terminal_err);
         }
 
         // 5-level retry escalation (HiGHS Implementation SS3). Apply progressively
         // more permissive strategies on SOLVE_ERROR/UNKNOWN; break on OPTIMAL or
         // definitive terminal status.
         let mut retry_attempts: u64 = 0;
-        let mut final_result: Option<Result<LpSolution, SolverError>> = None;
+        // None = retry loop exhausted without success; Some(Err) = terminal failure.
+        // We accumulate the error, then after restoring settings we either return
+        // it or return Ok(view).
+        let mut terminal_err: Option<SolverError> = None;
+        let mut found_optimal = false;
+        let mut optimal_time = 0.0_f64;
+        let mut optimal_iterations: u64 = 0;
 
         for level in 0..5_u32 {
             // SAFETY: handle is valid non-null HiGHS pointer; option names/values
@@ -911,13 +934,19 @@ impl SolverInterface for HighsSolver {
             let retry_time = t_retry.elapsed().as_secs_f64();
 
             if retry_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
-                let solution = self.extract_solution(retry_time);
-                final_result = Some(Ok(solution));
+                // Capture stats before establishing the borrow.
+                // SAFETY: handle is valid non-null HiGHS pointer.
+                #[allow(clippy::cast_sign_loss)]
+                let iters =
+                    unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
+                found_optimal = true;
+                optimal_time = retry_time;
+                optimal_iterations = iters;
                 break;
             }
 
-            if let Some(terminal) = self.interpret_terminal_status(retry_status, retry_time) {
-                final_result = Some(terminal);
+            if let Some(Err(e)) = self.interpret_terminal_status(retry_status, retry_time) {
+                terminal_err = Some(e);
                 break;
             }
             // Still SOLVE_ERROR or UNKNOWN -- continue to next level.
@@ -929,31 +958,29 @@ impl SolverInterface for HighsSolver {
         // Update statistics with accumulated retry attempts.
         self.stats.retry_count += retry_attempts;
 
-        match final_result {
-            Some(Ok(solution)) => {
-                self.stats.success_count += 1;
-                self.stats.total_iterations += solution.iterations;
-                self.stats.total_solve_time_seconds += solution.solve_time_seconds;
-                Ok(solution)
-            }
-            Some(Err(e)) => {
-                self.stats.failure_count += 1;
-                Err(e)
-            }
-            None => {
-                // All 5 retry levels exhausted without a definitive result.
-                self.stats.failure_count += 1;
-                let partial_solution = self.try_extract_partial_solution(0.0);
-                Err(SolverError::NumericalDifficulty {
-                    partial_solution,
-                    message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
-                        .to_string(),
-                })
-            }
+        if found_optimal {
+            self.stats.success_count += 1;
+            self.stats.total_iterations += optimal_iterations;
+            self.stats.total_solve_time_seconds += optimal_time;
+            return Ok(self.extract_solution_view(optimal_time));
         }
+
+        self.stats.failure_count += 1;
+        Err(terminal_err.unwrap_or_else(|| {
+            // All 5 retry levels exhausted without a definitive result.
+            let partial_solution = self.try_extract_partial_solution(0.0);
+            SolverError::NumericalDifficulty {
+                partial_solution,
+                message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
+                    .to_string(),
+            }
+        }))
     }
 
-    fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
+    fn solve_with_basis_view(
+        &mut self,
+        basis: &Basis,
+    ) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve_with_basis called without a loaded model — call load_model first"
@@ -1020,8 +1047,8 @@ impl SolverInterface for HighsSolver {
             debug_assert!(false, "basis rejected; falling back to cold-start");
         }
 
-        // Delegate to solve() which handles retry escalation and statistics updates.
-        self.solve()
+        // Delegate to solve_view() which handles retry escalation and statistics updates.
+        self.solve_view()
     }
 
     fn reset(&mut self) {

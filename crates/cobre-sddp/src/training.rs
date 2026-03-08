@@ -593,7 +593,7 @@ mod tests {
 
     /// Mock solver that returns fixed objective values in sequence.
     ///
-    /// Each call to `solve()` returns the next value from `objectives`,
+    /// Each call to `solve_view()` returns the next value from `objectives`,
     /// wrapping around. If `infeasible_on_first` is set, the first call
     /// returns `SolverError::Infeasible`.
     struct MockSolver {
@@ -626,18 +626,36 @@ mod tests {
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
         fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
 
-        fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_first && call == 0 {
                 return Err(SolverError::Infeasible { ray: None });
             }
             let obj = self.objectives[call % self.objectives.len()];
-            Ok(fixed_solution(obj))
+            // Return a view with primal[2] = 0.0 (theta = 0) so that the forward pass
+            // computes stage_cost = objective - primal[theta] = obj - 0 = obj.
+            // The fixed_solution helper provides compatible primal/dual arrays.
+            let sol = fixed_solution(obj);
+            // We cannot borrow from a temporary, so we use static empty slices.
+            // training.rs mock only needs to satisfy the SolverInterface bound;
+            // the actual slice contents are not checked by the training loop.
+            let _ = sol;
+            Ok(cobre_solver::SolutionView {
+                objective: obj,
+                primal: &[0.0, 0.0, 0.0],
+                dual: &[0.0],
+                reduced_costs: &[0.0, 0.0, 0.0],
+                iterations: 0,
+                solve_time_seconds: 0.0,
+            })
         }
 
-        fn solve_with_basis(&mut self, _b: &Basis) -> Result<LpSolution, SolverError> {
-            self.solve()
+        fn solve_with_basis_view(
+            &mut self,
+            _b: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn reset(&mut self) {

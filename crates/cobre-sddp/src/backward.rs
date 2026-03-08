@@ -192,7 +192,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                     &patch_buf.upper[..patch_count],
                 );
 
-                let solution = solver.solve().map_err(|e| match e {
+                let view = solver.solve_view().map_err(|e| match e {
                     SolverError::Infeasible { .. } => SddpError::Infeasible {
                         stage: t,
                         iteration,
@@ -203,19 +203,20 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                     other => SddpError::Solver(other),
                 })?;
 
-                let objective = solution.objective;
-                let coefficients: Vec<f64> = solution.dual[..indexer.n_state]
-                    .iter()
-                    .map(|&d| -d)
-                    .collect();
+                let objective = view.objective;
+                let coefficients: Vec<f64> =
+                    view.dual[..indexer.n_state].iter().map(|&d| -d).collect();
                 let pi_dot_x: f64 = coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
                 let intercept = objective - pi_dot_x;
 
-                if num_cuts_at_successor > 0 {
-                    let cut_duals = &solution.dual
-                        [template_num_rows..template_num_rows + num_cuts_at_successor];
-                    let binding_slots: Vec<usize> = fcf
-                        .active_cuts(successor)
+                // Collect binding cut slot indices while the view (and its borrow of the
+                // solver buffers) is still live. Metadata updates are deferred until
+                // after the view is dropped, because those writes go to `fcf` (a
+                // separate object), but dropping the view first keeps the code clear.
+                let binding_slots: Vec<usize> = if num_cuts_at_successor > 0 {
+                    let cut_duals =
+                        &view.dual[template_num_rows..template_num_rows + num_cuts_at_successor];
+                    fcf.active_cuts(successor)
                         .enumerate()
                         .filter_map(|(cut_idx, (slot, _, _))| {
                             if cut_duals[cut_idx] > 0.0 {
@@ -224,11 +225,16 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                                 None
                             }
                         })
-                        .collect();
-                    for slot in binding_slots {
-                        fcf.pools[successor].metadata[slot].active_count += 1;
-                        fcf.pools[successor].metadata[slot].last_active_iter = iteration;
-                    }
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                // view is dropped here; the &mut self borrow on solver is released.
+
+                // Update cut metadata using the collected slot indices.
+                for slot in binding_slots {
+                    fcf.pools[successor].metadata[slot].active_count += 1;
+                    fcf.pools[successor].metadata[slot].last_active_iter = iteration;
                 }
 
                 outcomes.push(BackwardOutcome {
@@ -319,32 +325,51 @@ mod tests {
     }
 
     /// Mock solver for testing: returns fixed solution or infeasible error on demand.
+    ///
+    /// Buffer fields (`buf_primal`, `buf_dual`, `buf_reduced_costs`) store the
+    /// solution data that [`SolutionView`] borrows from. They are filled in
+    /// `solve_view` before the borrow is established.
     struct MockSolver {
         solution: LpSolution,
         infeasible_at: Option<usize>,
         call_count: usize,
         /// Tracks the current number of rows (template + appended cuts).
         current_num_rows: usize,
+        buf_primal: Vec<f64>,
+        buf_dual: Vec<f64>,
+        buf_reduced_costs: Vec<f64>,
     }
 
     impl MockSolver {
         fn always_ok(solution: LpSolution) -> Self {
             let base_rows = solution.dual.len();
+            let buf_primal = solution.primal.clone();
+            let buf_dual = solution.dual.clone();
+            let buf_reduced_costs = solution.reduced_costs.clone();
             Self {
                 solution,
                 infeasible_at: None,
                 call_count: 0,
                 current_num_rows: base_rows,
+                buf_primal,
+                buf_dual,
+                buf_reduced_costs,
             }
         }
 
         fn infeasible_on(solution: LpSolution, n: usize) -> Self {
             let base_rows = solution.dual.len();
+            let buf_primal = solution.primal.clone();
+            let buf_dual = solution.dual.clone();
+            let buf_reduced_costs = solution.reduced_costs.clone();
             Self {
                 solution,
                 infeasible_at: Some(n),
                 call_count: 0,
                 current_num_rows: base_rows,
+                buf_primal,
+                buf_dual,
+                buf_reduced_costs,
             }
         }
     }
@@ -361,19 +386,33 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
                 return Err(SolverError::Infeasible { ray: None });
             }
-            let mut sol = self.solution.clone();
-            sol.dual.resize(self.current_num_rows, 0.0);
-            Ok(sol)
+            // Fill internal buffers, resizing dual to match current LP row count.
+            self.buf_primal.clone_from(&self.solution.primal);
+            self.buf_dual.clone_from(&self.solution.dual);
+            self.buf_dual.resize(self.current_num_rows, 0.0);
+            self.buf_reduced_costs
+                .clone_from(&self.solution.reduced_costs);
+            Ok(cobre_solver::SolutionView {
+                objective: self.solution.objective,
+                primal: &self.buf_primal,
+                dual: &self.buf_dual,
+                reduced_costs: &self.buf_reduced_costs,
+                iterations: self.solution.iterations,
+                solve_time_seconds: self.solution.solve_time_seconds,
+            })
         }
 
-        fn solve_with_basis(&mut self, _basis: &Basis) -> Result<LpSolution, SolverError> {
-            self.solve()
+        fn solve_with_basis_view(
+            &mut self,
+            _basis: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn reset(&mut self) {}

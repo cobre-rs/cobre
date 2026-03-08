@@ -3,7 +3,9 @@
 //! This module defines the central abstraction through which optimization
 //! algorithms interact with LP solvers.
 
-use crate::types::{Basis, LpSolution, RowBatch, SolverError, SolverStatistics, StageTemplate};
+use crate::types::{
+    Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
+};
 
 /// Backend-agnostic interface for LP solver instances.
 ///
@@ -218,7 +220,36 @@ pub trait SolverInterface: Send {
     /// this instance.
     ///
     /// See [Solver Interface Trait SS2.4](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
-    fn solve(&mut self) -> Result<LpSolution, SolverError>;
+    fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        self.solve_view().map(|v| v.to_owned())
+    }
+
+    /// Zero-copy variant of [`solve`](Self::solve): returns a [`SolutionView`] borrowing
+    /// directly from solver-internal buffers.
+    ///
+    /// Identical preconditions, postconditions, and error semantics as [`solve`](Self::solve).
+    /// The returned [`SolutionView`] holds shared borrows into solver-internal buffers
+    /// and is valid until the next `&mut self` call on the solver — enforced at compile
+    /// time by the borrow checker via the `'_` lifetime.
+    ///
+    /// Use this on the hot path to avoid three `Vec::clone()` calls per LP solve.
+    /// Call [`SolutionView::to_owned`] when the solution must outlive the current borrow.
+    ///
+    /// **Preconditions:** Same as [`solve`](Self::solve).
+    ///
+    /// **Postconditions (on `Ok`):** Same as [`solve`](Self::solve), but the returned
+    /// slices borrow from `&self` rather than owning their data.
+    ///
+    /// **Postconditions (on `Err`):** Same as [`solve`](Self::solve).
+    ///
+    /// **Fallibility:** Same as [`solve`](Self::solve).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`solve`](Self::solve).
+    ///
+    /// See [Solver Interface Trait SS2.4](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
+    fn solve_view(&mut self) -> Result<SolutionView<'_>, SolverError>;
 
     /// Sets a cached basis for warm-starting, then solves the LP.
     ///
@@ -261,7 +292,34 @@ pub trait SolverInterface: Send {
     /// instance.
     ///
     /// See [Solver Interface Trait SS2.5](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
-    fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError>;
+    fn solve_with_basis(&mut self, basis: &Basis) -> Result<LpSolution, SolverError> {
+        self.solve_with_basis_view(basis).map(|v| v.to_owned())
+    }
+
+    /// Zero-copy variant of [`solve_with_basis`](Self::solve_with_basis): returns a
+    /// [`SolutionView`] borrowing directly from solver-internal buffers.
+    ///
+    /// Identical preconditions, postconditions, and error semantics as
+    /// [`solve_with_basis`](Self::solve_with_basis). The returned [`SolutionView`]
+    /// is valid until the next `&mut self` call on the solver.
+    ///
+    /// Use this on the hot path to avoid three `Vec::clone()` calls per LP solve.
+    ///
+    /// **Preconditions:** Same as [`solve_with_basis`](Self::solve_with_basis).
+    ///
+    /// **Postconditions (on `Ok`):** Same as [`solve_with_basis`](Self::solve_with_basis),
+    /// but the returned slices borrow from `&self` rather than owning their data.
+    ///
+    /// **Postconditions (on `Err`):** Same as [`solve_with_basis`](Self::solve_with_basis).
+    ///
+    /// **Fallibility:** Same as [`solve_with_basis`](Self::solve_with_basis).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`solve_with_basis`](Self::solve_with_basis).
+    ///
+    /// See [Solver Interface Trait SS2.5](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
+    fn solve_with_basis_view(&mut self, basis: &Basis) -> Result<SolutionView<'_>, SolverError>;
 
     /// Clears all internal solver state, returning the instance to a clean state.
     ///
@@ -368,17 +426,19 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<crate::types::LpSolution, crate::types::SolverError> {
+        fn solve_view(
+            &mut self,
+        ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "noop".to_string(),
                 error_code: None,
             })
         }
 
-        fn solve_with_basis(
+        fn solve_with_basis_view(
             &mut self,
             _basis: &crate::types::Basis,
-        ) -> Result<crate::types::LpSolution, crate::types::SolverError> {
+        ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "noop".to_string(),
                 error_code: None,
@@ -485,13 +545,25 @@ mod tests {
         solver.set_row_bounds(&[], &[], &[]);
         solver.set_col_bounds(&[], &[], &[]);
 
-        // Both solve and solve_with_basis return InternalError for NoopSolver.
+        // Both solve and solve_with_basis return InternalError for NoopSolver
+        // (via their default implementations that delegate to solve_view /
+        // solve_with_basis_view).
         assert!(matches!(
             solver.solve(),
             Err(SolverError::InternalError { .. })
         ));
         assert!(matches!(
             solver.solve_with_basis(&basis),
+            Err(SolverError::InternalError { .. })
+        ));
+
+        // solve_view and solve_with_basis_view also return InternalError.
+        assert!(matches!(
+            solver.solve_view(),
+            Err(SolverError::InternalError { .. })
+        ));
+        assert!(matches!(
+            solver.solve_with_basis_view(&basis),
             Err(SolverError::InternalError { .. })
         ));
 

@@ -15,7 +15,7 @@
     )
 )]
 
-use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate};
+use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate, SolutionView};
 
 #[cfg(feature = "test-support")]
 use cobre_solver::test_support;
@@ -1633,4 +1633,144 @@ fn test_solver_highs_unbounded_or_infeasible() {
             other.as_ref().map(|s| s.objective)
         ),
     }
+}
+
+// ─── SolutionView conformance tests ──────────────────────────────────────────
+
+/// `solve_view()` + `to_owned()` must be numerically identical to `solve()`.
+///
+/// Both paths read from the same `HiGHS` internal buffers; values must be
+/// bitwise-equal (same IEEE 754 bits), not merely close.
+#[test]
+fn solve_view_equals_solve() {
+    // Solver A: owned path
+    let mut solver_a = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver_a.load_model(&make_fixture_stage_template());
+    let owned = solver_a.solve().expect("solve() must succeed");
+
+    // Solver B: zero-copy view path
+    let mut solver_b = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver_b.load_model(&make_fixture_stage_template());
+    let view = solver_b.solve_view().expect("solve_view() must succeed");
+    let from_view = view.to_owned();
+
+    assert_eq!(owned.objective, from_view.objective, "objectives must be bitwise equal");
+    assert_eq!(owned.primal, from_view.primal, "primals must be bitwise equal");
+    assert_eq!(owned.dual, from_view.dual, "duals must be bitwise equal");
+    assert_eq!(
+        owned.reduced_costs, from_view.reduced_costs,
+        "reduced_costs must be bitwise equal"
+    );
+    assert_eq!(owned.iterations, from_view.iterations, "iterations must match");
+}
+
+/// `solve_with_basis_view()` + `to_owned()` must match `solve_with_basis()`.
+#[test]
+fn solve_with_basis_view_equals_solve_with_basis() {
+    let template = make_fixture_stage_template();
+    let cuts = make_fixture_row_batch();
+
+    // Solver A: get a basis with cuts, then solve_with_basis (owned path).
+    let mut solver_a = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver_a.load_model(&template);
+    solver_a.add_rows(&cuts);
+    solver_a.solve().expect("initial solve must succeed");
+    let basis = solver_a.get_basis();
+
+    // Re-load for a clean comparison.
+    solver_a.load_model(&template);
+    solver_a.add_rows(&cuts);
+    let owned = solver_a
+        .solve_with_basis(&basis)
+        .expect("solve_with_basis() must succeed");
+
+    // Solver B: view path.
+    let mut solver_b = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver_b.load_model(&template);
+    solver_b.add_rows(&cuts);
+    let view = solver_b
+        .solve_with_basis_view(&basis)
+        .expect("solve_with_basis_view() must succeed");
+    let from_view = view.to_owned();
+
+    assert_eq!(
+        owned.objective, from_view.objective,
+        "objectives must be bitwise equal"
+    );
+    assert_eq!(owned.primal, from_view.primal, "primals must be bitwise equal");
+    assert_eq!(owned.dual, from_view.dual, "duals must be bitwise equal");
+    assert_eq!(
+        owned.reduced_costs, from_view.reduced_costs,
+        "reduced_costs must be bitwise equal"
+    );
+    assert_eq!(owned.iterations, from_view.iterations, "iterations must match");
+}
+
+/// Calling `solve_view()` twice on the same loaded model (borrow-drop cycle) succeeds.
+///
+/// Verifies that: (a) the first view is correctly dropped at end of the scope,
+/// (b) the second `solve_view()` call acquires the `&mut self` borrow without conflict,
+/// and (c) both results are identical.
+#[test]
+fn solve_view_borrows_internal_buffers() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&make_fixture_stage_template());
+
+    // First solve_view — read a couple of values then let it go out of scope.
+    let (obj1, primal0_first) = {
+        let view = solver.solve_view().expect("first solve_view() must succeed");
+        (view.objective, view.primal[0])
+    };
+    // view is dropped here; the &mut self borrow is released.
+
+    // Second solve_view — model is unchanged, so results must be identical.
+    let view2 = solver.solve_view().expect("second solve_view() must succeed");
+    assert_eq!(obj1, view2.objective, "objective must be identical on both calls");
+    assert_eq!(primal0_first, view2.primal[0], "primal[0] must be identical on both calls");
+}
+
+/// After `add_rows`, `solve_view()` must reflect the extended LP.
+///
+/// The fixture with two Benders cuts has an optimal objective of 162.0
+/// (x0=6, x1=62, x2=2; the tighter cut forces x1 up to 62).
+/// `view.dual.len()` must equal `template.num_rows + cuts.num_rows` (2 + 2 = 4).
+#[test]
+fn solve_view_after_add_rows() {
+    let template = make_fixture_stage_template();
+    let cuts = make_fixture_row_batch();
+
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&template);
+    solver.add_rows(&cuts);
+
+    let view = solver.solve_view().expect("solve_view() after add_rows must succeed");
+
+    assert!(
+        (view.objective - 162.0).abs() < 1e-8,
+        "objective must be 162.0 after adding Benders cuts, got {}",
+        view.objective
+    );
+    assert_eq!(
+        view.dual.len(),
+        template.num_rows + cuts.num_rows,
+        "dual length must equal template.num_rows ({}) + cuts.num_rows ({}) = {}",
+        template.num_rows,
+        cuts.num_rows,
+        template.num_rows + cuts.num_rows,
+    );
+}
+
+/// After `solve_view()`, `statistics().solve_count` and `success_count` must each be 1.
+///
+/// Confirms that `solve_view` updates statistics identically to `solve`.
+#[test]
+fn solve_view_statistics_updated() {
+    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+    solver.load_model(&make_fixture_stage_template());
+
+    let _view: SolutionView<'_> = solver.solve_view().expect("solve_view() must succeed");
+
+    let stats = solver.statistics();
+    assert_eq!(stats.solve_count, 1, "solve_count must be 1 after one solve_view call");
+    assert_eq!(stats.success_count, 1, "success_count must be 1 after a successful solve_view");
 }

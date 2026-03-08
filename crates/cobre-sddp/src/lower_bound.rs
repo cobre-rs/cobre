@@ -131,7 +131,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 &patch_buf.upper[..n_patches],
             );
 
-            let solution = solver.solve().map_err(|e| match e {
+            let view = solver.solve_view().map_err(|e| match e {
                 SolverError::Infeasible { .. } => SddpError::Infeasible {
                     stage: 0,
                     iteration: 0,
@@ -140,7 +140,8 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 other => SddpError::Solver(other),
             })?;
 
-            objectives.push(solution.objective);
+            objectives.push(view.objective);
+            // view is dropped here.
         }
 
         #[allow(clippy::cast_precision_loss)]
@@ -167,7 +168,7 @@ mod tests {
     use crate::{FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer};
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
-        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+        Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::OpeningTree;
 
@@ -195,20 +196,6 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
-        }
-    }
-
-    /// Build an `LpSolution` with a fixed objective value.
-    ///
-    /// Primal is zeroed (the mock solver ignores actual LP values).
-    fn fixed_solution(objective: f64) -> LpSolution {
-        LpSolution {
-            objective,
-            primal: vec![0.0; 3],
-            dual: vec![0.0; 1],
-            reduced_costs: vec![0.0; 3],
-            iterations: 0,
-            solve_time_seconds: 0.0,
         }
     }
 
@@ -413,18 +400,30 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<LpSolution, SolverError> {
+        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_call == Some(call) {
                 return Err(SolverError::Infeasible { ray: None });
             }
             let obj = self.objectives[call % self.objectives.len()];
-            Ok(fixed_solution(obj))
+            // Return a minimal view; evaluate_lower_bound only reads `view.objective`.
+            // Use static empty slices for primal/dual/reduced_costs.
+            Ok(cobre_solver::SolutionView {
+                objective: obj,
+                primal: &[],
+                dual: &[],
+                reduced_costs: &[],
+                iterations: 0,
+                solve_time_seconds: 0.0,
+            })
         }
 
-        fn solve_with_basis(&mut self, _basis: &Basis) -> Result<LpSolution, SolverError> {
-            self.solve()
+        fn solve_with_basis_view(
+            &mut self,
+            _basis: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn reset(&mut self) {

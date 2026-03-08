@@ -27,7 +27,7 @@
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_sddp::forward::SyncResult;
 use cobre_solver::{
-    Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+    Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 
 // ── LocalComm ────────────────────────────────────────────────────────────────
@@ -104,25 +104,28 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<LpSolution, SolverError> {
+    fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
             return Err(SolverError::Infeasible { ray: None });
         }
         let obj = self.objectives[call % self.objectives.len()];
-        Ok(LpSolution {
+        Ok(cobre_solver::SolutionView {
             objective: obj,
-            primal: vec![0.0; 3],
-            dual: vec![0.0; 1],
-            reduced_costs: vec![0.0; 3],
+            primal: &[0.0, 0.0, 0.0],
+            dual: &[0.0],
+            reduced_costs: &[0.0, 0.0, 0.0],
             iterations: 0,
             solve_time_seconds: 0.0,
         })
     }
 
-    fn solve_with_basis(&mut self, _basis: &Basis) -> Result<LpSolution, SolverError> {
-        self.solve()
+    fn solve_with_basis_view(
+        &mut self,
+        _basis: &Basis,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        self.solve_view()
     }
 
     fn reset(&mut self) {
@@ -171,12 +174,12 @@ fn minimal_template() -> StageTemplate {
 fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
     use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
     use std::collections::BTreeMap;
@@ -535,8 +538,8 @@ mod cut_conformance {
     //! Conformance tests for `CutPool` and `CutWireHeader` round-trip.
 
     use cobre_sddp::cut::{
+        wire::{cut_wire_size, deserialize_cut, serialize_cut, CutWireHeader},
         CutPool,
-        wire::{CutWireHeader, cut_wire_size, deserialize_cut, serialize_cut},
     };
 
     /// Verify `CutWireHeader` serialize/deserialize round-trip with `n_state=3`.
@@ -781,9 +784,9 @@ mod convergence_conformance {
 mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
-    use cobre_sddp::{PatchBuffer, RiskMeasure, StageIndexer, lower_bound::evaluate_lower_bound};
+    use cobre_sddp::{lower_bound::evaluate_lower_bound, PatchBuffer, RiskMeasure, StageIndexer};
 
-    use super::{LocalComm, MockSolver, make_fcf, minimal_template, simple_opening_tree};
+    use super::{make_fcf, minimal_template, simple_opening_tree, LocalComm, MockSolver};
 
     /// Conformance contract: `evaluate_lower_bound` returns a higher (or equal)
     /// value when the mock solver produces higher objectives, simulating the

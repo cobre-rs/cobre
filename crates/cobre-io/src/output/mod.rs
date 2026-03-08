@@ -7,12 +7,26 @@
 //! it accepts aggregate result types and writes all output artifacts to the
 //! specified directory.
 
+pub mod dictionary;
 pub mod error;
+pub mod manifest;
 pub mod parquet_config;
 pub(crate) mod schemas;
+pub mod simulation_writer;
+pub mod training_writer;
 
+pub use dictionary::write_dictionaries;
 pub use error::OutputError;
+pub use manifest::{
+    write_metadata, write_simulation_manifest, write_training_manifest, ManifestChecksum,
+    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
+    MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
+    MetadataProblemDimensions, MetadataRunInfo, SimulationManifest, TrainingManifest,
+    TrainingMetadata,
+};
 pub use parquet_config::ParquetWriterConfig;
+pub use simulation_writer::SimulationParquetWriter;
+pub use training_writer::TrainingParquetWriter;
 
 use cobre_core::System;
 use std::path::Path;
@@ -152,20 +166,34 @@ pub struct SimulationOutput {
 ///
 /// This function is the symmetric counterpart of [`crate::load_case`]: it
 /// accepts the aggregate result types produced by the solver and writes
-/// every output artifact — convergence tables, dictionaries, and optionally
-/// simulation partitions — to the specified root directory.
+/// every output artifact — convergence tables, dictionaries, manifests,
+/// metadata, and optionally simulation artifacts — to the specified root
+/// directory.
 ///
-/// The function first creates the complete directory structure and then
-/// delegates to sub-writers (added by subsequent tickets).
+/// The function creates the complete directory structure, delegates to
+/// sub-writers in the order required by the output specification, and
+/// writes `_SUCCESS` marker files after all artifacts are complete.
 ///
-/// # Directory layout created
+/// # Directory layout produced
 ///
 /// ```text
 /// output_dir/
 ///   training/
+///     _SUCCESS
+///     _manifest.json
+///     metadata.json
+///     convergence.parquet
 ///     dictionaries/
+///       codes.json
+///       entities.csv
+///       variables.csv
+///       bounds.parquet
+///       state_dictionary.json
 ///     timing/
+///       iterations.parquet
 ///   simulation/
+///     _SUCCESS              (only when simulation_output is Some)
+///     _manifest.json        (only when simulation_output is Some)
 /// ```
 ///
 /// # Parameters
@@ -177,13 +205,13 @@ pub struct SimulationOutput {
 ///   and still causes the `simulation/` directory to be created.
 /// - `system` — the loaded system, used by dictionary writers to enumerate
 ///   entity identifiers.
-/// - `config` — run configuration supplying writer settings.
+/// - `config` — run configuration supplying writer settings and metadata.
 ///
 /// # Errors
 ///
-/// - [`OutputError::IoError`] — directory creation failed (permission denied,
-///   disk full, or invalid path component). The `path` field of the error
-///   variant identifies the directory that could not be created.
+/// - [`OutputError::IoError`] — directory creation or file write failed.
+/// - [`OutputError::SerializationError`] — Arrow batch construction failed.
+/// - [`OutputError::ManifestError`] — JSON serialization failed.
 ///
 /// # Examples
 ///
@@ -192,7 +220,6 @@ pub struct SimulationOutput {
 /// use std::path::Path;
 ///
 /// # fn main() -> Result<(), cobre_io::OutputError> {
-/// // Minimal usage — sub-writers (future tickets) fill in the artifacts.
 /// # let system = unimplemented!();
 /// # let config = unimplemented!();
 /// let training = TrainingOutput {
@@ -214,12 +241,17 @@ pub struct SimulationOutput {
 /// # Ok(())
 /// # }
 /// ```
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
 pub fn write_results(
     output_dir: &Path,
-    _training_output: &TrainingOutput,
-    _simulation_output: Option<&SimulationOutput>,
-    _system: &System,
-    _config: &Config,
+    training_output: &TrainingOutput,
+    simulation_output: Option<&SimulationOutput>,
+    system: &System,
+    config: &Config,
 ) -> Result<(), OutputError> {
     std::fs::create_dir_all(output_dir.join("training/dictionaries"))
         .map_err(|e| OutputError::io(output_dir.join("training/dictionaries"), e))?;
@@ -227,6 +259,110 @@ pub fn write_results(
         .map_err(|e| OutputError::io(output_dir.join("training/timing"), e))?;
     std::fs::create_dir_all(output_dir.join("simulation"))
         .map_err(|e| OutputError::io(output_dir.join("simulation"), e))?;
+
+    write_dictionaries(&output_dir.join("training/dictionaries"), system, config)?;
+
+    let parquet_config = ParquetWriterConfig::default();
+    let writer = TrainingParquetWriter::new(output_dir, &parquet_config)?;
+    writer.write(training_output)?;
+
+    let converged_at = training_output
+        .converged
+        .then_some(training_output.iterations_completed);
+    let training_manifest = TrainingManifest {
+        version: "2.0.0".to_string(),
+        status: "complete".to_string(),
+        started_at: None,
+        completed_at: None,
+        iterations: ManifestIterations {
+            max_iterations: None,
+            completed: training_output.iterations_completed,
+            converged_at,
+        },
+        convergence: ManifestConvergence {
+            achieved: training_output.converged,
+            final_gap_percent: training_output.final_gap_percent,
+            termination_reason: training_output.termination_reason.clone(),
+        },
+        cuts: ManifestCuts {
+            total_generated: training_output.cut_stats.total_generated,
+            total_active: training_output.cut_stats.total_active,
+            peak_active: training_output.cut_stats.peak_active,
+        },
+        checksum: None,
+        mpi_info: ManifestMpiInfo::default(),
+    };
+    write_training_manifest(
+        &output_dir.join("training/_manifest.json"),
+        &training_manifest,
+    )?;
+
+    let training_metadata = TrainingMetadata {
+        version: "2.0.0".to_string(),
+        run_info: MetadataRunInfo {
+            run_id: "not-implemented".to_string(),
+            started_at: None,
+            completed_at: None,
+            duration_seconds: Some(training_output.total_time_ms as f64 / 1_000.0),
+            cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+            solver: None,
+            solver_version: None,
+            hostname: None,
+            user: None,
+        },
+        configuration_snapshot: MetadataConfigSnapshot {
+            seed: config.training.seed,
+            forward_passes: config.training.forward_passes,
+            stopping_mode: config.training.stopping_mode.clone(),
+            policy_mode: config.policy.mode.clone(),
+        },
+        problem_dimensions: MetadataProblemDimensions {
+            num_stages: system.n_stages() as u32,
+            num_hydros: system.n_hydros() as u32,
+            num_thermals: system.n_thermals() as u32,
+            num_buses: system.n_buses() as u32,
+            num_lines: system.n_lines() as u32,
+        },
+        performance_summary: None,
+        data_integrity: None,
+        environment: MetadataEnvironment {
+            mpi_implementation: None,
+            mpi_version: None,
+            num_ranks: None,
+            cpus_per_rank: None,
+            memory_per_rank_gb: None,
+        },
+    };
+    write_metadata(
+        &output_dir.join("training/metadata.json"),
+        &training_metadata,
+    )?;
+
+    if let Some(sim_output) = simulation_output {
+        let sim_manifest = SimulationManifest {
+            version: "2.0.0".to_string(),
+            status: "complete".to_string(),
+            started_at: None,
+            completed_at: None,
+            scenarios: ManifestScenarios {
+                total: sim_output.n_scenarios,
+                completed: sim_output.completed,
+                failed: sim_output.failed,
+            },
+            partitions_written: sim_output.partitions_written.clone(),
+            checksum: None,
+            mpi_info: ManifestMpiInfo::default(),
+        };
+        write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
+    }
+
+    std::fs::write(output_dir.join("training/_SUCCESS"), b"")
+        .map_err(|e| OutputError::io(output_dir.join("training/_SUCCESS"), e))?;
+    if simulation_output.is_some() {
+        std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
+            .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
+    }
+
     Ok(())
 }
 
@@ -433,6 +569,239 @@ mod tests {
         assert_eq!(stats.total_active, 200);
         assert_eq!(stats.peak_active, 250);
     }
+
+    // ── New tests: ticket-013 acceptance criteria ─────────────────────────────
+
+    #[test]
+    fn write_results_creates_success_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        assert!(
+            tmp.path().join("training/_SUCCESS").is_file(),
+            "training/_SUCCESS must exist after write_results"
+        );
+    }
+
+    #[test]
+    fn write_results_creates_training_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        let path = tmp.path().join("training/_manifest.json");
+        assert!(path.is_file(), "training/_manifest.json must exist");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("_manifest.json must contain valid JSON");
+    }
+
+    #[test]
+    fn write_results_creates_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        let path = tmp.path().join("training/metadata.json");
+        assert!(path.is_file(), "training/metadata.json must exist");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("metadata.json must contain valid JSON");
+    }
+
+    #[test]
+    fn write_results_creates_convergence_parquet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(3);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        assert!(
+            tmp.path().join("training/convergence.parquet").is_file(),
+            "training/convergence.parquet must exist"
+        );
+    }
+
+    #[test]
+    fn write_results_convergence_parquet_row_count() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(3);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        let path = tmp.path().join("training/convergence.parquet");
+        let file = std::fs::File::open(&path).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let total_rows: usize = reader
+            .map(|b| b.expect("batch must be Ok").num_rows())
+            .sum();
+        assert_eq!(total_rows, 3, "convergence.parquet must have 3 rows");
+    }
+
+    #[test]
+    fn write_results_empty_training_convergence_parquet_correct_schema() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        let path = tmp.path().join("training/convergence.parquet");
+        assert!(path.is_file(), "training/convergence.parquet must exist");
+
+        let file = std::fs::File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let reader = builder.build().unwrap();
+
+        let total_rows: usize = reader
+            .map(|b| b.expect("batch must be Ok").num_rows())
+            .sum();
+        assert_eq!(total_rows, 0, "empty training must produce 0 rows");
+        assert_eq!(
+            schema.fields().len(),
+            14,
+            "convergence schema must have 14 columns"
+        );
+
+        assert!(
+            tmp.path().join("training/_SUCCESS").is_file(),
+            "training/_SUCCESS must exist even with 0 records"
+        );
+    }
+
+    #[test]
+    fn write_results_simulation_success_marker_conditional() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+        let simulation = SimulationOutput {
+            n_scenarios: 10,
+            completed: 10,
+            failed: 0,
+            partitions_written: vec![],
+        };
+
+        // With simulation_output = Some: both markers must exist.
+        write_results(
+            tmp.path(),
+            &training,
+            Some(&simulation),
+            &make_system(),
+            &make_config(),
+        )
+        .expect("write_results must succeed");
+
+        assert!(
+            tmp.path().join("simulation/_SUCCESS").is_file(),
+            "simulation/_SUCCESS must exist when simulation_output is Some"
+        );
+        assert!(
+            tmp.path().join("training/_SUCCESS").is_file(),
+            "training/_SUCCESS must exist"
+        );
+
+        // With simulation_output = None: simulation/_SUCCESS must NOT exist.
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_results(tmp2.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        assert!(
+            !tmp2.path().join("simulation/_SUCCESS").exists(),
+            "simulation/_SUCCESS must NOT exist when simulation_output is None"
+        );
+    }
+
+    #[test]
+    fn write_results_simulation_manifest_scenarios_total() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(3);
+        let simulation = SimulationOutput {
+            n_scenarios: 10,
+            completed: 10,
+            failed: 0,
+            partitions_written: vec![],
+        };
+
+        write_results(
+            tmp.path(),
+            &training,
+            Some(&simulation),
+            &make_system(),
+            &make_config(),
+        )
+        .expect("write_results must succeed");
+
+        let path = tmp.path().join("simulation/_manifest.json");
+        assert!(path.is_file(), "simulation/_manifest.json must exist");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            value["scenarios"]["total"].as_u64(),
+            Some(10),
+            "$.scenarios.total must equal 10"
+        );
+    }
+
+    #[test]
+    fn write_results_creates_dictionaries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        assert!(
+            tmp.path()
+                .join("training/dictionaries/codes.json")
+                .is_file(),
+            "training/dictionaries/codes.json must exist"
+        );
+    }
+
+    #[test]
+    fn write_results_codes_json_contains_operative_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_results(tmp.path(), &training, None, &make_system(), &make_config())
+            .expect("write_results must succeed");
+
+        let path = tmp.path().join("training/dictionaries/codes.json");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(
+            value["operative_state"].is_object(),
+            "codes.json must contain an operative_state object"
+        );
+        assert_eq!(
+            value["operative_state"]["2"].as_str(),
+            Some("operating"),
+            r#"codes.json operative_state["2"] must equal "operating""#
+        );
+    }
+
+    // ── Helper: Build a minimal [`System`] for use in tests. ─────────────────
 
     /// Build a minimal [`System`] for use in tests.
     ///

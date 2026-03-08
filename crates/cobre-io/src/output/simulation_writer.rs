@@ -36,13 +36,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::{BooleanBuilder, Float64Builder, Int8Builder, Int32Builder, RecordBatch};
+use arrow::array::{BooleanBuilder, Float64Builder, Int32Builder, Int8Builder, RecordBatch};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
 use cobre_core::System;
 
-use crate::output::SimulationOutput;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
@@ -50,6 +49,7 @@ use crate::output::schemas::{
     hydros_schema, inflow_lags_schema, non_controllables_schema, pumping_stations_schema,
     thermals_schema,
 };
+use crate::output::SimulationOutput;
 
 // Payload types (mirrors solver simulation result types)
 
@@ -1336,7 +1336,7 @@ fn write_parquet_atomic(
 
     let props = WriterProperties::builder()
         .set_compression(config.compression)
-        .set_max_row_group_size(config.row_group_size)
+        .set_max_row_group_row_count(Some(config.row_group_size))
         .set_dictionary_enabled(config.dictionary_encoding)
         .build();
 

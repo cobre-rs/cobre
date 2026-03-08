@@ -14,13 +14,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int8Builder, Int32Builder, RecordBatch};
+use arrow::array::{Float64Builder, Int32Builder, Int8Builder, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use cobre_core::System;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
@@ -28,6 +27,7 @@ use crate::output::schemas::{
     generic_violations_schema, hydros_schema, inflow_lags_schema, iteration_timing_schema,
     non_controllables_schema, pumping_stations_schema, rank_timing_schema, thermals_schema,
 };
+use crate::Config;
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
 
@@ -925,7 +925,7 @@ fn write_parquet_atomic(
 
     let props = WriterProperties::builder()
         .set_compression(config.compression)
-        .set_max_row_group_size(config.row_group_size)
+        .set_max_row_group_row_count(Some(config.row_group_size))
         .set_dictionary_enabled(config.dictionary_encoding)
         .build();
 
@@ -962,13 +962,13 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
-        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
         resolved::{
             ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds,
             ResolvedBounds, ThermalStageBounds,
         },
+        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
+        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+        StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
     };
 
     // ── Fixtures ─────────────────────────────────────────────────────────────

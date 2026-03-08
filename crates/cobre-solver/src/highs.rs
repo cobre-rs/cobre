@@ -376,11 +376,9 @@ impl HighsSolver {
                 Some(Err(SolverError::Infeasible))
             }
             ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(SolverError::Unbounded)),
-            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => {
-                Some(Err(SolverError::TimeLimitExceeded {
-                    elapsed_seconds: solve_time_seconds,
-                }))
-            }
+            ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => Some(Err(SolverError::TimeLimitExceeded {
+                elapsed_seconds: solve_time_seconds,
+            })),
             ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT => {
                 // SAFETY: handle is valid non-null pointer; iteration count is non-negative.
                 #[allow(clippy::cast_sign_loss)]
@@ -1277,9 +1275,7 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver
-            .solve()
-            .expect("solve must succeed before get_basis");
+        solver.solve().expect("solve must succeed before get_basis");
 
         let mut basis = Basis::new(0, 0);
         solver.get_basis(&mut basis);
@@ -1305,9 +1301,7 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver
-            .solve()
-            .expect("solve must succeed before get_basis");
+        solver.solve().expect("solve must succeed before get_basis");
 
         let mut basis = Basis::new(0, 0);
         assert_eq!(

@@ -62,9 +62,7 @@ fn test_solver_highs_load_model_and_solve() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver
-        .solve()
-        .expect("solve() must succeed on feasible LP");
+    let solution = solver.solve().expect("solve() must succeed on feasible LP");
 
     let obj = solution.objective;
     assert!(
@@ -357,9 +355,7 @@ fn test_solver_highs_solve_dual_values() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver
-        .solve()
-        .expect("solve() must succeed on feasible LP");
+    let solution = solver.solve().expect("solve() must succeed on feasible LP");
 
     assert_eq!(
         solution.dual.len(),
@@ -418,9 +414,7 @@ fn test_solver_highs_solve_reduced_costs() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver
-        .solve()
-        .expect("solve() must succeed on feasible LP");
+    let solution = solver.solve().expect("solve() must succeed on feasible LP");
 
     assert_eq!(
         solution.reduced_costs.len(),
@@ -443,9 +437,7 @@ fn test_solver_highs_solve_iterations_reported() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver
-        .solve()
-        .expect("solve() must succeed on feasible LP");
+    let solution = solver.solve().expect("solve() must succeed on feasible LP");
 
     assert!(
         solution.iterations >= 1,
@@ -469,9 +461,7 @@ fn test_solver_highs_dual_normalization_cut_relevant_row() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver
-        .solve()
-        .expect("solve() must succeed on feasible LP");
+    let solution = solver.solve().expect("solve() must succeed on feasible LP");
 
     // dual[0] is the cut-relevant state-fixing row dual (n_dual_relevant = 1)
     let pi_0 = solution.dual[0];
@@ -544,12 +534,8 @@ fn test_solver_highs_reset_preserves_statistics() {
 
     // Solve twice to accumulate non-trivial statistics
     solver.load_model(&template);
-    solver
-        .solve()
-        .expect("first solve() must succeed");
-    solver
-        .solve()
-        .expect("second solve() must succeed");
+    solver.solve().expect("first solve() must succeed");
+    solver.solve().expect("second solve() must succeed");
 
     let stats_before = solver.statistics();
     assert_eq!(
@@ -632,15 +618,9 @@ fn test_solver_highs_statistics_increment() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    solver
-        .solve()
-        .expect("first solve() must succeed");
-    solver
-        .solve()
-        .expect("second solve() must succeed");
-    solver
-        .solve()
-        .expect("third solve() must succeed");
+    solver.solve().expect("first solve() must succeed");
+    solver.solve().expect("second solve() must succeed");
+    solver.solve().expect("third solve() must succeed");
 
     let stats = solver.statistics();
     assert_eq!(
@@ -1032,7 +1012,6 @@ fn test_solver_highs_restore_defaults_after_limit() {
     assert!(stats.success_count >= 1);
 }
 
-
 // ─── Retry escalation note ────────────────────────────────────────────────────
 //
 // The 5-level retry escalation loop in `highs.rs` lines 920-1006 is entered
@@ -1277,10 +1256,7 @@ fn solve_equals_solve_owned() {
     // Solver A: view path converted to owned
     let mut solver_a = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver_a.load_model(&make_fixture_stage_template());
-    let owned = solver_a
-        .solve()
-        .expect("solve() must succeed")
-        .to_owned();
+    let owned = solver_a.solve().expect("solve() must succeed").to_owned();
 
     // Solver B: zero-copy view path
     let mut solver_b = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -1319,17 +1295,13 @@ fn solve_borrows_internal_buffers() {
 
     // First solve — read a couple of values then let it go out of scope.
     let (obj1, primal0_first) = {
-        let view = solver
-            .solve()
-            .expect("first solve() must succeed");
+        let view = solver.solve().expect("first solve() must succeed");
         (view.objective, view.primal[0])
     };
     // view is dropped here; the &mut self borrow is released.
 
     // Second solve — model is unchanged, so results must be identical.
-    let view2 = solver
-        .solve()
-        .expect("second solve() must succeed");
+    let view2 = solver.solve().expect("second solve() must succeed");
     assert_eq!(
         obj1, view2.objective,
         "objective must be identical on both calls"
@@ -1354,9 +1326,7 @@ fn solve_after_add_rows() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
 
-    let view = solver
-        .solve()
-        .expect("solve() after add_rows must succeed");
+    let view = solver.solve().expect("solve() after add_rows must succeed");
 
     assert!(
         (view.objective - 162.0).abs() < 1e-8,
@@ -1466,9 +1436,7 @@ fn basis_warm_start_iterations() {
     solver.get_basis(&mut basis);
 
     solver.load_model(&template);
-    let warm_view = solver
-        .solve_with_basis(&basis)
-        .expect("warm-start");
+    let warm_view = solver.solve_with_basis(&basis).expect("warm-start");
 
     assert!(
         warm_view.iterations <= cold_iterations,

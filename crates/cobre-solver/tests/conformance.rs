@@ -15,7 +15,7 @@
     )
 )]
 
-use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate, SolutionView};
+use cobre_solver::{HighsSolver, RawBasis, RowBatch, SolverError, SolverInterface, StageTemplate, SolutionView};
 
 #[cfg(feature = "test-support")]
 use cobre_solver::test_support;
@@ -1773,4 +1773,139 @@ fn solve_view_statistics_updated() {
     let stats = solver.statistics();
     assert_eq!(stats.solve_count, 1, "solve_count must be 1 after one solve_view call");
     assert_eq!(stats.success_count, 1, "success_count must be 1 after a successful solve_view");
+}
+
+// --- RawBasis conformance tests ---
+
+/// Enum-basis and raw-basis warm-start paths must produce bit-for-bit identical solutions.
+///
+/// Two independent solvers both cold-solve the SS1.1 fixture. One extracts `get_basis()`
+/// (enum path); the other extracts `get_raw_basis()` (raw i32 path). Both reload the
+/// fixture and warm-start. The resulting `LpSolution` fields must be equal.
+#[test]
+fn raw_basis_roundtrip_equals_enum_basis() {
+    let template = make_fixture_stage_template();
+
+    // Solver A: enum-based path
+    let mut solver_a = HighsSolver::new().expect("solver_a");
+    solver_a.load_model(&template);
+    solver_a.solve().expect("cold solve A");
+    let enum_basis = solver_a.get_basis();
+
+    // Solver B: raw-based path
+    let mut solver_b = HighsSolver::new().expect("solver_b");
+    solver_b.load_model(&template);
+    solver_b.solve().expect("cold solve B");
+    let mut raw_basis = RawBasis::new(template.num_cols, template.num_rows);
+    solver_b.get_raw_basis(&mut raw_basis);
+
+    // Reload both and warm-start
+    solver_a.load_model(&template);
+    let view_a = solver_a
+        .solve_with_basis_view(&enum_basis)
+        .expect("warm-start A");
+    let result_a = view_a.to_owned();
+
+    solver_b.load_model(&template);
+    let view_b = solver_b
+        .solve_with_raw_basis_view(&raw_basis)
+        .expect("warm-start B");
+    let result_b = view_b.to_owned();
+
+    assert_eq!(result_a.objective, result_b.objective, "objectives differ");
+    assert_eq!(result_a.primal, result_b.primal, "primals differ");
+    assert_eq!(result_a.dual, result_b.dual, "duals differ");
+    assert_eq!(result_a.reduced_costs, result_b.reduced_costs, "reduced costs differ");
+}
+
+/// `get_raw_basis` must write exactly `num_cols` col statuses and `num_rows` row
+/// statuses, each in the valid `HiGHS` range [0, 4].
+#[test]
+fn raw_basis_dimensions_after_solve() {
+    let mut solver = HighsSolver::new().expect("solver");
+    let template = make_fixture_stage_template();
+    solver.load_model(&template);
+    solver.solve().expect("solve");
+
+    let mut raw_basis = RawBasis::new(template.num_cols, template.num_rows);
+    solver.get_raw_basis(&mut raw_basis);
+
+    assert_eq!(raw_basis.col_status.len(), 3, "expected 3 col statuses");
+    assert_eq!(raw_basis.row_status.len(), 2, "expected 2 row statuses");
+
+    for (i, &code) in raw_basis.col_status.iter().enumerate() {
+        assert!(
+            (0..=4).contains(&code),
+            "col_status[{i}] = {code} is not a valid HiGHS basis status (0..=4)"
+        );
+    }
+    for (i, &code) in raw_basis.row_status.iter().enumerate() {
+        assert!(
+            (0..=4).contains(&code),
+            "row_status[{i}] = {code} is not a valid HiGHS basis status (0..=4)"
+        );
+    }
+}
+
+/// A raw basis extracted from a 2-row LP must remain valid after 2 Benders cuts are
+/// added, and the warm-started objective must equal 162.0.
+#[test]
+fn raw_basis_cut_extension() {
+    let mut solver = HighsSolver::new().expect("solver");
+    let template = make_fixture_stage_template();
+    solver.load_model(&template);
+    solver.solve().expect("cold solve");
+
+    let mut raw_basis = RawBasis::new(template.num_cols, template.num_rows);
+    solver.get_raw_basis(&mut raw_basis);
+
+    // Reload and add cuts (2 structural + 2 cuts = 4 rows)
+    solver.load_model(&template);
+    let cuts = make_fixture_row_batch();
+    solver.add_rows(&cuts);
+
+    let view = solver
+        .solve_with_raw_basis_view(&raw_basis)
+        .expect("warm-start with cuts");
+
+    assert!(
+        (view.objective - 162.0).abs() < 1e-8,
+        "expected objective 162.0, got {}",
+        view.objective
+    );
+}
+
+/// A warm-start via `solve_with_raw_basis_view` must not require more simplex
+/// iterations than a cold-start, and `basis_rejections` must remain zero.
+#[test]
+fn raw_basis_warm_start_iterations() {
+    let mut solver = HighsSolver::new().expect("solver");
+    let template = make_fixture_stage_template();
+    solver.load_model(&template);
+    let cold_view = solver.solve_view().expect("cold solve");
+    let cold_iterations = cold_view.iterations;
+    // cold_view is dropped here; the &mut self borrow on solver is released.
+
+    let mut raw_basis = RawBasis::new(template.num_cols, template.num_rows);
+    solver.get_raw_basis(&mut raw_basis);
+
+    solver.load_model(&template);
+    let warm_view = solver
+        .solve_with_raw_basis_view(&raw_basis)
+        .expect("warm-start");
+
+    assert!(
+        warm_view.iterations <= cold_iterations,
+        "warm-start iterations ({}) must not exceed cold-start iterations ({})",
+        warm_view.iterations,
+        cold_iterations
+    );
+    // warm_view is dropped here; the &mut self borrow on solver is released.
+
+    let stats = solver.statistics();
+    assert_eq!(
+        stats.basis_rejections, 0,
+        "basis_rejections must be 0 after accepted raw basis, got {}",
+        stats.basis_rejections
+    );
 }

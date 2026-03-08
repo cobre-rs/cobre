@@ -1113,6 +1113,91 @@ impl SolverInterface for HighsSolver {
         }
     }
 
+    fn get_raw_basis(&mut self, out: &mut crate::types::RawBasis) {
+        assert!(
+            self.has_model,
+            "get_raw_basis called without a loaded model — call load_model first"
+        );
+
+        out.col_status.resize(self.num_cols, 0);
+        out.row_status.resize(self.num_rows, 0);
+
+        // SAFETY:
+        // - `self.handle` is a valid, non-null HiGHS pointer.
+        // - `out.col_status` has been resized to `num_cols` entries above.
+        // - `out.row_status` has been resized to `num_rows` entries above.
+        // - HiGHS writes exactly `num_cols` col values and `num_rows` row values.
+        let get_status = unsafe {
+            ffi::cobre_highs_get_basis(
+                self.handle,
+                out.col_status.as_mut_ptr(),
+                out.row_status.as_mut_ptr(),
+            )
+        };
+
+        assert_ne!(
+            get_status,
+            ffi::HIGHS_STATUS_ERROR,
+            "cobre_highs_get_basis failed: basis must exist after a successful solve (programming error)"
+        );
+    }
+
+    fn solve_with_raw_basis_view(
+        &mut self,
+        basis: &crate::types::RawBasis,
+    ) -> Result<crate::types::SolutionView<'_>, SolverError> {
+        assert!(
+            self.has_model,
+            "solve_with_raw_basis called without a loaded model — call load_model first"
+        );
+        assert!(
+            basis.col_status.len() == self.num_cols,
+            "raw basis column count {} does not match LP column count {}",
+            basis.col_status.len(),
+            self.num_cols
+        );
+
+        // Copy raw i32 codes directly into the pre-allocated buffers — no enum
+        // translation. This is the zero-copy path compared to solve_with_basis_view.
+        self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
+
+        // Handle dimension mismatch for dynamic cuts (same policy as solve_with_basis_view):
+        // - Fewer rows than LP: extend with BASIC.
+        // - More rows than LP: truncate (extra entries ignored).
+        let basis_rows = basis.row_status.len();
+        let lp_rows = self.num_rows;
+        let copy_len = basis_rows.min(lp_rows);
+        self.basis_row_i32[..copy_len].copy_from_slice(&basis.row_status[..copy_len]);
+        if lp_rows > basis_rows {
+            for i in basis_rows..lp_rows {
+                self.basis_row_i32[i] = ffi::HIGHS_BASIS_STATUS_BASIC;
+            }
+        }
+
+        // Attempt to install the basis in HiGHS.
+        // SAFETY:
+        // - `self.handle` is a valid, non-null HiGHS pointer.
+        // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
+        // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
+        // - We pass exactly `num_cols` col entries and `num_rows` row entries.
+        let set_status = unsafe {
+            ffi::cobre_highs_set_basis(
+                self.handle,
+                self.basis_col_i32.as_ptr(),
+                self.basis_row_i32.as_ptr(),
+            )
+        };
+
+        // Basis rejection tracking: fall back to cold-start and track for diagnostics.
+        if set_status == ffi::HIGHS_STATUS_ERROR {
+            self.stats.basis_rejections += 1;
+            debug_assert!(false, "raw basis rejected; falling back to cold-start");
+        }
+
+        // Delegate to solve_view() which handles retry escalation and statistics updates.
+        self.solve_view()
+    }
+
     fn statistics(&self) -> SolverStatistics {
         self.stats.clone()
     }
@@ -1143,7 +1228,7 @@ mod tests {
     use super::HighsSolver;
     use crate::{
         SolverInterface,
-        types::{RowBatch, StageTemplate},
+        types::{RawBasis, RowBatch, StageTemplate},
     };
 
     // Shared LP fixture from Solver Interface Testing SS1.1:
@@ -1703,6 +1788,141 @@ mod tests {
             HighsSolver::highs_to_basis_status(HIGHS_BASIS_STATUS_NONBASIC),
             BasisStatus::AtLower,
             "NONBASIC (4) must map to AtLower (default nonbasic position)"
+        );
+    }
+
+    /// After `load_model` + `solve()`, `get_raw_basis` must return i32 codes
+    /// that are all valid `HiGHS` basis status values (0..=4).
+    #[test]
+    fn test_get_raw_basis_valid_status_codes() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        solver.load_model(&template);
+        solver.solve().expect("solve must succeed before get_raw_basis");
+
+        let mut raw_basis = RawBasis::new(0, 0);
+        solver.get_raw_basis(&mut raw_basis);
+
+        for &code in &raw_basis.col_status {
+            assert!(
+                (0..=4).contains(&code),
+                "col_status code {code} is outside valid HiGHS range 0..=4"
+            );
+        }
+        for &code in &raw_basis.row_status {
+            assert!(
+                (0..=4).contains(&code),
+                "row_status code {code} is outside valid HiGHS range 0..=4"
+            );
+        }
+    }
+
+    /// Starting from an empty `RawBasis`, `get_raw_basis` must resize the output
+    /// buffers to match the current LP dimensions (3 cols, 2 rows for SS1.1).
+    #[test]
+    fn test_get_raw_basis_resizes_output() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        solver.load_model(&template);
+        solver.solve().expect("solve must succeed before get_raw_basis");
+
+        let mut raw_basis = RawBasis::new(0, 0);
+        assert_eq!(
+            raw_basis.col_status.len(),
+            0,
+            "initial col_status must be empty"
+        );
+        assert_eq!(
+            raw_basis.row_status.len(),
+            0,
+            "initial row_status must be empty"
+        );
+
+        solver.get_raw_basis(&mut raw_basis);
+
+        assert_eq!(
+            raw_basis.col_status.len(),
+            3,
+            "col_status must be resized to 3 (num_cols of SS1.1)"
+        );
+        assert_eq!(
+            raw_basis.row_status.len(),
+            2,
+            "row_status must be resized to 2 (num_rows of SS1.1)"
+        );
+    }
+
+    /// Warm-start via `solve_with_raw_basis_view` on the same LP must reproduce
+    /// the optimal objective and complete in at most 1 simplex iteration.
+    #[test]
+    fn test_solve_with_raw_basis_view_warm_start() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        solver.load_model(&template);
+        solver.solve().expect("cold-start solve must succeed");
+
+        let mut raw_basis = RawBasis::new(0, 0);
+        solver.get_raw_basis(&mut raw_basis);
+
+        // Reload the same model to reset HiGHS internal state.
+        solver.load_model(&template);
+        let result = solver
+            .solve_with_raw_basis_view(&raw_basis)
+            .expect("warm-start solve must succeed");
+
+        assert!(
+            (result.objective - 100.0).abs() < 1e-8,
+            "warm-start objective must be 100.0, got {}",
+            result.objective
+        );
+        assert!(
+            result.iterations <= 1,
+            "warm-start from exact basis must use at most 1 iteration, got {}",
+            result.iterations
+        );
+
+        let stats = solver.statistics();
+        assert_eq!(
+            stats.basis_rejections, 0,
+            "basis_rejections must be 0 when raw basis is accepted, got {}",
+            stats.basis_rejections
+        );
+    }
+
+    /// When the raw basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
+    /// `solve_with_raw_basis_view` must extend missing rows as Basic and solve correctly.
+    /// SS1.2 objective with both cuts active is 162.0.
+    #[test]
+    fn test_solve_with_raw_basis_view_dimension_mismatch() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+        let cuts = make_fixture_row_batch();
+
+        // First solve on 2-row LP to capture a 2-row raw basis.
+        solver.load_model(&template);
+        solver.solve().expect("SS1.1 solve must succeed");
+        let mut raw_basis = RawBasis::new(0, 0);
+        solver.get_raw_basis(&mut raw_basis);
+        assert_eq!(
+            raw_basis.row_status.len(),
+            2,
+            "captured basis must have 2 row statuses"
+        );
+
+        // Reload model and add 2 cuts to get a 4-row LP.
+        solver.load_model(&template);
+        solver.add_rows(&cuts);
+        assert_eq!(solver.num_rows, 4, "LP must have 4 rows after add_rows");
+
+        // Warm-start with the 2-row basis; extra rows are extended as Basic.
+        let result = solver
+            .solve_with_raw_basis_view(&raw_basis)
+            .expect("solve with dimension-mismatched raw basis must succeed");
+
+        assert!(
+            (result.objective - 162.0).abs() < 1e-8,
+            "objective with both cuts active must be 162.0, got {}",
+            result.objective
         );
     }
 }

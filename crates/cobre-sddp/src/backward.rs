@@ -265,7 +265,8 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
 mod tests {
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
-        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+        Basis, LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
+        StageTemplate,
     };
 
     use super::{run_backward_pass, BackwardResult};
@@ -412,6 +413,15 @@ mod tests {
                 col_status: vec![],
                 row_status: vec![],
             }
+        }
+
+        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+
+        fn solve_with_raw_basis_view(
+            &mut self,
+            _basis: &RawBasis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn statistics(&self) -> SolverStatistics {

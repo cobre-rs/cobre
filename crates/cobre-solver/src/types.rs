@@ -47,6 +47,44 @@ pub struct Basis {
     pub row_status: Vec<BasisStatus>,
 }
 
+/// Simplex basis storing solver-native `i32` status codes for zero-copy round-trip
+/// basis management.
+///
+/// Unlike [`Basis`], which translates between solver-native integer codes and the
+/// [`BasisStatus`] enum, `RawBasis` stores the raw `i32` codes directly. This
+/// enables zero-copy round-trip warm-starting via `copy_from_slice` (memcpy) instead
+/// of per-element enum translation, which is unnecessary overhead when the caller
+/// only needs to save and restore the basis without inspecting individual statuses.
+///
+/// `HiGHS` uses `HighsInt` (4 bytes) for status codes; CLP uses `unsigned char`
+/// (1 byte, widened to `i32` in this representation). The caller is responsible
+/// for matching the buffer dimensions to the LP model before use.
+///
+/// See Solver Abstraction SS9.
+#[derive(Debug, Clone)]
+pub struct RawBasis {
+    /// Solver-native `i32` status codes for each column (length must equal `num_cols`).
+    pub col_status: Vec<i32>,
+
+    /// Solver-native `i32` status codes for each row, including structural and dynamic rows.
+    pub row_status: Vec<i32>,
+}
+
+impl RawBasis {
+    /// Creates a new `RawBasis` with pre-allocated, zero-filled status code buffers.
+    ///
+    /// Both `col_status` and `row_status` are allocated to the requested lengths
+    /// and filled with `0_i32`. The caller reuses this buffer across solves by
+    /// passing it to [`crate::SolverInterface::get_raw_basis`] on each iteration.
+    #[must_use]
+    pub fn new(num_cols: usize, num_rows: usize) -> Self {
+        Self {
+            col_status: vec![0_i32; num_cols],
+            row_status: vec![0_i32; num_rows],
+        }
+    }
+}
+
 /// Complete solution from a successful LP solve.
 ///
 /// All values are in the original (unscaled) problem space. Dual values
@@ -451,7 +489,7 @@ impl std::error::Error for SolverError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        BasisStatus, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics,
+        BasisStatus, LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics,
         StageTemplate,
     };
 
@@ -467,6 +505,38 @@ mod tests {
         assert_ne!(BasisStatus::AtLower, BasisStatus::Basic);
         assert_ne!(BasisStatus::AtUpper, BasisStatus::Free);
         assert_ne!(BasisStatus::Fixed, BasisStatus::Basic);
+    }
+
+    #[test]
+    fn test_raw_basis_new_dimensions_and_zero_fill() {
+        let rb = RawBasis::new(3, 2);
+        assert_eq!(rb.col_status.len(), 3);
+        assert_eq!(rb.row_status.len(), 2);
+        assert!(rb.col_status.iter().all(|&v| v == 0_i32));
+        assert!(rb.row_status.iter().all(|&v| v == 0_i32));
+    }
+
+    #[test]
+    fn test_raw_basis_new_empty() {
+        let rb = RawBasis::new(0, 0);
+        assert!(rb.col_status.is_empty());
+        assert!(rb.row_status.is_empty());
+    }
+
+    #[test]
+    fn test_raw_basis_debug_and_clone() {
+        let rb = RawBasis::new(2, 1);
+        // Debug must produce a non-empty string
+        let s = format!("{rb:?}");
+        assert!(!s.is_empty());
+        // Clone must produce an independent copy
+        let cloned = rb.clone();
+        assert_eq!(cloned.col_status, rb.col_status);
+        assert_eq!(cloned.row_status, rb.row_status);
+        // Mutating the clone does not affect the original
+        let mut cloned2 = rb.clone();
+        cloned2.col_status[0] = 1_i32;
+        assert_eq!(rb.col_status[0], 0_i32);
     }
 
     #[test]

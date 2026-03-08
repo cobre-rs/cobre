@@ -499,7 +499,8 @@ mod tests {
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::{
-        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+        Basis, LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
+        StageTemplate,
     };
     use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
@@ -652,6 +653,15 @@ mod tests {
                 col_status: vec![],
                 row_status: vec![],
             }
+        }
+
+        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+
+        fn solve_with_raw_basis_view(
+            &mut self,
+            _basis: &RawBasis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_view()
         }
 
         fn statistics(&self) -> SolverStatistics {

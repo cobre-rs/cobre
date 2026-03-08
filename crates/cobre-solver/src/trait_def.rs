@@ -4,7 +4,8 @@
 //! algorithms interact with LP solvers.
 
 use crate::types::{
-    Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
+    Basis, LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics,
+    StageTemplate,
 };
 
 /// Backend-agnostic interface for LP solver instances.
@@ -165,6 +166,54 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.7.
     fn get_basis(&mut self) -> Basis;
 
+    /// Writes solver-native `i32` status codes into a caller-owned [`RawBasis`] buffer.
+    ///
+    /// This is the zero-copy counterpart of [`get_basis`](Self::get_basis). The
+    /// caller pre-allocates a [`RawBasis`] with [`RawBasis::new`] and reuses it
+    /// across iterations, eliminating per-element [`BasisStatus`] enum translation.
+    ///
+    /// The buffer is not resized by this method. The implementation writes into
+    /// the first `num_cols` entries of `out.col_status` and the first `num_rows`
+    /// entries of `out.row_status`. Panics if no model is loaded (same as
+    /// [`get_basis`](Self::get_basis)).
+    ///
+    /// See Solver Interface Trait SS2.7.
+    fn get_raw_basis(&mut self, out: &mut RawBasis);
+
+    /// Injects a raw basis and solves, returning a zero-copy [`SolutionView`].
+    ///
+    /// The zero-copy counterpart of [`solve_with_basis_view`](Self::solve_with_basis_view).
+    /// Status codes in `basis` are injected directly without per-element enum
+    /// translation. On success the returned view borrows solver-internal buffers
+    /// and is valid until the next `&mut self` call.
+    ///
+    /// # Errors
+    ///
+    /// Same error contract as [`solve_with_basis_view`](Self::solve_with_basis_view).
+    ///
+    /// See Solver Interface Trait SS2.5.
+    fn solve_with_raw_basis_view(
+        &mut self,
+        basis: &RawBasis,
+    ) -> Result<SolutionView<'_>, SolverError>;
+
+    /// Warm-starts from a raw basis, then solves, returning an owned [`LpSolution`].
+    ///
+    /// Default implementation delegates to
+    /// [`solve_with_raw_basis_view`](Self::solve_with_raw_basis_view) and calls
+    /// [`SolutionView::to_owned`] on the result. Prefer
+    /// [`solve_with_raw_basis_view`](Self::solve_with_raw_basis_view) on the hot
+    /// path to avoid the allocation.
+    ///
+    /// # Errors
+    ///
+    /// Same error contract as [`solve_with_raw_basis_view`](Self::solve_with_raw_basis_view).
+    ///
+    /// See Solver Interface Trait SS2.5.
+    fn solve_with_raw_basis(&mut self, basis: &RawBasis) -> Result<LpSolution, SolverError> {
+        self.solve_with_raw_basis_view(basis).map(|v| v.to_owned())
+    }
+
     /// Returns accumulated solve metrics (snapshot of monotonically increasing counters).
     ///
     /// Statistics accumulate since construction; [`reset`] does not zero them.
@@ -229,6 +278,18 @@ mod tests {
             }
         }
 
+        fn get_raw_basis(&mut self, _out: &mut crate::types::RawBasis) {}
+
+        fn solve_with_raw_basis_view(
+            &mut self,
+            _basis: &crate::types::RawBasis,
+        ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
+            Err(crate::types::SolverError::InternalError {
+                message: "noop".to_string(),
+                error_code: None,
+            })
+        }
+
         fn statistics(&self) -> crate::types::SolverStatistics {
             crate::types::SolverStatistics::default()
         }
@@ -275,6 +336,45 @@ mod tests {
         let basis = solver.get_basis();
         assert!(basis.col_status.is_empty());
         assert!(basis.row_status.is_empty());
+    }
+
+    #[test]
+    fn test_noop_solver_get_raw_basis_noop() {
+        use crate::types::RawBasis;
+
+        let mut solver = NoopSolver;
+        let mut raw = RawBasis::new(3, 2);
+        // Pre-fill to detect any inadvertent writes
+        raw.col_status.iter_mut().for_each(|v| *v = 99_i32);
+        raw.row_status.iter_mut().for_each(|v| *v = 99_i32);
+        solver.get_raw_basis(&mut raw);
+        // NoopSolver does not modify the buffer
+        assert!(raw.col_status.iter().all(|&v| v == 99_i32));
+        assert!(raw.row_status.iter().all(|&v| v == 99_i32));
+    }
+
+    #[test]
+    fn test_noop_solver_solve_with_raw_basis_view_returns_internal_error() {
+        use crate::types::{RawBasis, SolverError};
+
+        let mut solver = NoopSolver;
+        let raw = RawBasis::new(0, 0);
+        assert!(matches!(
+            solver.solve_with_raw_basis_view(&raw),
+            Err(SolverError::InternalError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_noop_solver_solve_with_raw_basis_returns_internal_error() {
+        use crate::types::{RawBasis, SolverError};
+
+        let mut solver = NoopSolver;
+        let raw = RawBasis::new(0, 0);
+        assert!(matches!(
+            solver.solve_with_raw_basis(&raw),
+            Err(SolverError::InternalError { .. })
+        ));
     }
 
     #[test]

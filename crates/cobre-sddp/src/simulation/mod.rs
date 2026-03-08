@@ -4,12 +4,20 @@
 //! of scenarios and streams per-scenario results through a bounded channel to
 //! a background I/O thread for Parquet output writing.
 
+pub mod aggregation;
 pub mod config;
 pub mod error;
+pub mod extraction;
+pub mod pipeline;
 pub mod types;
 
+pub use aggregation::aggregate_simulation;
 pub use config::SimulationConfig;
 pub use error::SimulationError;
+pub use extraction::{
+    accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts,
+};
+pub use pipeline::simulate;
 pub use types::{
     CategoryCostStats, ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult,
     SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,

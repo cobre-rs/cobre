@@ -859,9 +859,9 @@ fn test_solver_highs_solve_unbounded() {
 
 // ─── Edge case: time and iteration limits ─────────────────────────────────────
 //
-// These tests exercise the time-limit and iteration-limit branches in `highs.rs`
-// lines 504-521 and the `try_extract_partial_solution` function (lines 312-348),
-// which are never reached by tests that only use perfectly solvable LPs.
+// These tests exercise the time-limit and iteration-limit branches in
+// `interpret_terminal_status`, which are never reached by tests that only
+// use perfectly solvable LPs.
 //
 // The SS1.1 fixture (3 vars, 2 constraints) is too small to trigger these limits:
 // HiGHS's crash heuristic produces an optimal starting point without entering the
@@ -1069,18 +1069,14 @@ fn test_solver_highs_restore_defaults_after_limit() {
 // HiGHS does not compute dual/primal rays. These tests use multi-row LPs that
 // force simplex to discover infeasibility/unboundedness, producing rays.
 
-/// SS3.3: infeasible LP with constraints — exercises `make_infeasible_error` ray path.
+/// SS3.3: infeasible LP with constraints — exercises the infeasible classification path.
 ///
 /// A 2-variable LP with row constraints that cannot be simultaneously satisfied:
 ///   x0 + x1 >= 10   (row 0)
 ///   x0 + x1 <= 5    (row 1)
 ///   x0, x1 >= 0
 ///
-/// `HiGHS` simplex discovers infeasibility. Whether a dual ray is available
-/// depends on the solver path taken (with presolve off, dual simplex may not
-/// compute the infeasibility certificate). This test verifies the
-/// `make_infeasible_error()` function is called and exercises both branches
-/// of the ray extraction (Some or None).
+/// `HiGHS` simplex discovers infeasibility and returns `SolverError::Infeasible`.
 #[test]
 fn test_solver_highs_infeasible_with_rows() {
     // CSC: 2 cols, 2 rows, 4 non-zeros
@@ -1170,8 +1166,7 @@ fn test_solver_highs_infeasible_with_presolve() {
 ///   s.t. x0 <= 10    (row 0, only constrains x0)
 ///   x0 >= 0, x1 free
 ///
-/// `HiGHS` simplex discovers unboundedness and provides a primal ray (direction
-/// of unbounded improvement). The `make_unbounded_error()` path extracts it.
+/// `HiGHS` simplex discovers unboundedness and returns `SolverError::Unbounded`.
 #[test]
 fn test_solver_highs_unbounded_with_primal_ray() {
     // CSC: 2 cols, 1 row, 1 non-zero

@@ -287,8 +287,9 @@ pub struct RowBatch {
 /// Terminal LP solve error returned after all retry attempts are exhausted.
 ///
 /// The calling algorithm uses the variant to determine its response:
-/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or log and
-/// proceed (`NumericalDifficulty`, `TimeLimitExceeded`, `IterationLimit`).
+/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or terminate
+/// with a diagnostic error (`NumericalDifficulty`, `TimeLimitExceeded`,
+/// `IterationLimit`).
 ///
 /// The six variants correspond to the error categories defined in
 /// Solver Abstraction SS6. Solver-internal errors (e.g., factorization
@@ -411,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_solver_error_display_all_variants() {
-        let variants = vec![
+        let variants = [
             SolverError::Infeasible,
             SolverError::Unbounded,
             SolverError::NumericalDifficulty {

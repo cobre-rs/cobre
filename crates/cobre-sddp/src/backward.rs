@@ -100,7 +100,6 @@ pub struct BackwardResult {
 /// - `risk_measures.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-#[allow(unused_variables)]
 pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     templates: &[StageTemplate],
@@ -108,13 +107,13 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     fcf: &mut FutureCostFunction,
     exchange: &ExchangeBuffers,
     stochastic: &StochasticContext,
-    config: &TrainingConfig,
+    _config: &TrainingConfig, // Phase 7: cut synchronization
     iteration: u64,
     horizon: &HorizonMode,
     risk_measures: &[RiskMeasure],
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
-    comm: &C,
+    _comm: &C, // Phase 7: cut synchronization
     basis_cache: &mut [Option<Basis>],
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();

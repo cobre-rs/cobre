@@ -91,18 +91,18 @@ complete contracts.
 
 ### Method summary
 
-| Method             | `&self` / `&mut self` | Returns                           | Description                                                                 |
-| ------------------ | --------------------- | --------------------------------- | --------------------------------------------------------------------------- |
-| `load_model`       | `&mut self`           | `()`                              | Bulk-loads a structural LP from a `StageTemplate`; replaces any prior model |
-| `add_rows`         | `&mut self`           | `()`                              | Appends a `RowBatch` of constraint rows to the dynamic region               |
-| `set_row_bounds`   | `&mut self`           | `()`                              | Updates row lower/upper bounds at indexed positions                         |
-| `set_col_bounds`   | `&mut self`           | `()`                              | Updates column lower/upper bounds at indexed positions                      |
-| `solve`            | `&mut self`           | `Result<LpSolution, SolverError>` | Solves the current LP; encapsulates internal retry logic                    |
-| `solve_with_basis` | `&mut self`           | `Result<LpSolution, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
-| `reset`            | `&mut self`           | `()`                              | Clears solver state for error recovery or model switch                      |
-| `get_basis`        | `&mut self`           | `Basis`                           | Extracts the current simplex basis after a successful solve                 |
-| `statistics`       | `&self`               | `SolverStatistics`                | Returns accumulated monotonic solve counters                                |
-| `name`             | `&self`               | `&'static str`                    | Returns a static string identifying the backend                             |
+| Method             | `&self` / `&mut self` | Returns                                 | Description                                                                 |
+| ------------------ | --------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| `load_model`       | `&mut self`           | `()`                                    | Bulk-loads a structural LP from a `StageTemplate`; replaces any prior model |
+| `add_rows`         | `&mut self`           | `()`                                    | Appends a `RowBatch` of constraint rows to the dynamic region               |
+| `set_row_bounds`   | `&mut self`           | `()`                                    | Updates row lower/upper bounds at indexed positions                         |
+| `set_col_bounds`   | `&mut self`           | `()`                                    | Updates column lower/upper bounds at indexed positions                      |
+| `solve`            | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Solves the current LP; encapsulates internal retry logic                    |
+| `solve_with_basis` | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
+| `reset`            | `&mut self`           | `()`                                    | Clears solver state for error recovery or model switch                      |
+| `get_basis`        | `&mut self`           | `()`                                    | Writes basis status codes into a caller-owned `&mut Basis`                  |
+| `statistics`       | `&self`               | `SolverStatistics`                      | Returns accumulated monotonic solve counters                                |
+| `name`             | `&self`               | `&'static str`                          | Returns a static string identifying the backend                             |
 
 ### Mutability convention
 
@@ -160,14 +160,25 @@ When the LP gains new dynamic constraint rows after a basis was saved,
 with the solver-native "Basic" code. See the
 [`Basis` rustdoc](../api/cobre_solver/struct.Basis.html).
 
+### `SolutionView<'a>`
+
+Zero-copy borrowed view over solver-internal buffers, returned by `solve` and
+`solve_with_basis`. Provides `objective()`, `primal()`, `dual()`,
+`reduced_costs()`, `iterations()`, and `solve_time_seconds()` as slice
+references into the solver's internal arrays. The view borrows the solver and
+is valid until the next `&mut self` call. Call `to_owned()` to copy the data
+into an `LpSolution` when the solution must outlive the borrow. See the
+[`SolutionView` rustdoc](../api/cobre_solver/struct.SolutionView.html).
+
 ### `LpSolution`
 
-Complete solution from a successful LP solve: `objective` (f64, minimization
-sense), `primal` (Vec of column values), `dual` (Vec of row dual multipliers,
-normalized to the canonical sign convention), `reduced_costs`, `iterations`,
-and `solve_time_seconds`. Dual values are normalized before the struct is
-returned — HiGHS row duals are already in the canonical convention and require
-no negation. See the [`LpSolution` rustdoc](../api/cobre_solver/struct.LpSolution.html).
+Owned solution produced by `SolutionView::to_owned()`: `objective` (f64,
+minimization sense), `primal` (Vec of column values), `dual` (Vec of row dual
+multipliers, normalized to the canonical sign convention), `reduced_costs`,
+`iterations`, and `solve_time_seconds`. Dual values are normalized before the
+struct is returned — HiGHS row duals are already in the canonical convention
+and require no negation. See the [`LpSolution`
+rustdoc](../api/cobre_solver/struct.LpSolution.html).
 
 ### `SolverError`
 
@@ -309,7 +320,8 @@ fn solve_stage(
     lower: &[f64],
     upper: &[f64],
     cached_basis: Option<&Basis>,
-) -> Result<(LpSolution, Basis), SolverError> {
+    basis_buf: &mut Basis,
+) -> Result<LpSolution, SolverError> {
     // Step 1: load structural LP (replaces any prior model).
     solver.load_model(template);
 
@@ -320,15 +332,18 @@ fn solve_stage(
     solver.set_row_bounds(row_indices, lower, upper);
 
     // Step 4: solve, optionally warm-starting from a cached basis.
-    let solution = match cached_basis {
+    let view = match cached_basis {
         Some(basis) => solver.solve_with_basis(basis)?,
         None => solver.solve()?,
     };
 
-    // Step 5: extract basis for warm-starting the next iteration.
-    let basis = solver.get_basis();
+    // Step 5: copy the zero-copy view into an owned solution.
+    let solution = view.to_owned();
 
-    Ok((solution, basis))
+    // Step 6: extract basis into the caller-owned buffer for warm-starting.
+    solver.get_basis(basis_buf);
+
+    Ok(solution)
 }
 
 fn main() -> Result<(), SolverError> {

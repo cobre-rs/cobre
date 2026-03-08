@@ -7,7 +7,7 @@ cobre/crates/
 ├── cobre-core/         Entity model (buses, hydros, thermals, lines)
 ├── cobre-io/           JSON/Parquet input, FlatBuffers/Parquet output
 ├── cobre-stochastic/   PAR(p) models, scenario generation
-├── cobre-solver/       LP solver abstraction (HiGHS, CLP backends)
+├── cobre-solver/       LP solver abstraction (HiGHS backend)
 ├── cobre-comm/         Communication abstraction (MPI, TCP, shm, local)
 ├── cobre-sddp/         SDDP training loop, simulation, cut management
 ├── cobre-cli/          Binary: run/validate/report/compare/serve
@@ -17,5 +17,3 @@ cobre/crates/
 ```
 
 For the full dependency graph and crate responsibilities, see the [methodology reference](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html).
-
-Individual crate pages below will be filled as each crate is implemented.

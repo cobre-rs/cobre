@@ -50,6 +50,7 @@ use crate::{
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
+    stopping_rule::RULE_ITERATION_LIMIT,
 };
 
 // ---------------------------------------------------------------------------
@@ -282,7 +283,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
     let mut final_ub = 0.0;
     let mut final_gap = 0.0;
     let mut completed_iterations = 0u64;
-    let mut termination_reason = "iteration_limit".to_string();
+    let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
 
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence

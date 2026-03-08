@@ -47,9 +47,11 @@ pub mod indexer;
 pub mod lower_bound;
 pub mod lp_builder;
 pub mod risk_measure;
+pub mod simulation;
 pub mod state_exchange;
 pub mod stopping_rule;
 pub mod training;
+pub mod training_output;
 pub mod trajectory;
 
 pub use backward::{BackwardResult, run_backward_pass};
@@ -65,7 +67,17 @@ pub use indexer::StageIndexer;
 pub use lower_bound::evaluate_lower_bound;
 pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use simulation::{
+    CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
+    SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
+    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
+    SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
+    SimulationStageResult, SimulationSummary, SimulationThermalResult, StageSummaryStats,
+    accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
+    simulate,
+};
 pub use state_exchange::ExchangeBuffers;
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
 pub use training::{TrainingResult, train};
+pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;

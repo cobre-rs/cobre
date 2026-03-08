@@ -1,10 +1,14 @@
 //! # cobre-io
 //!
-//! Case directory loading and validation for the [Cobre](https://github.com/cobre-rs/cobre)
-//! power systems ecosystem.
+//! Case directory loading, validation, and result writing for the
+//! [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
 //!
-//! This crate provides the [`load_case`] function, which reads a case directory and
-//! produces a fully-validated [`cobre_core::System`] ready for use by the solver.
+//! This crate provides two top-level entry points:
+//!
+//! - [`load_case`] — reads a case directory and produces a fully-validated
+//!   [`cobre_core::System`] ready for use by the solver.
+//! - [`write_results`] — accepts aggregate result types and writes all output
+//!   artifacts to a specified root directory.
 //!
 //! ## Loading pipeline
 //!
@@ -69,6 +73,19 @@ pub use extensions::{
     parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
 };
 pub use initial_conditions::parse_initial_conditions;
+pub use output::policy::{
+    PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    serialize_stage_basis, serialize_stage_cuts, write_policy_checkpoint,
+};
+pub use output::{
+    CutStatistics, IterationRecord, ManifestChecksum, ManifestConvergence, ManifestCuts,
+    ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
+    MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
+    MetadataProblemDimensions, MetadataRunInfo, OutputError, ParquetWriterConfig,
+    SimulationManifest, SimulationOutput, TrainingManifest, TrainingMetadata, TrainingOutput,
+    TrainingParquetWriter, write_dictionaries, write_metadata, write_results,
+    write_simulation_manifest, write_training_manifest,
+};
 pub use penalties::parse_penalties;
 pub use report::{ReportEntry, ValidationReport, generate_report};
 pub use resolution::{resolve_bounds, resolve_penalties};

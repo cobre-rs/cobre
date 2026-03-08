@@ -48,92 +48,36 @@ use crate::{
     TrajectoryRecord,
 };
 
-/// Local statistics produced by one rank's forward pass.
+/// Local statistics from one rank's forward pass (reduced via `allreduce`).
 ///
-/// After the forward pass completes, the calling algorithm reduces these
-/// statistics across all ranks (via `allreduce`) to obtain global convergence
-/// statistics. The reduction is the responsibility of the forward
-/// synchronisation step, not of this function.
-///
-/// This struct does **not** contain a lower bound estimate. The lower bound is
-/// evaluated separately after the backward pass adds new cuts to the FCF.
-///
-/// ## Fields
-///
-/// - `cost_sum` — sum of total trajectory costs across all local scenarios.
-///   Used for the statistical upper bound estimate (sample mean).
-/// - `cost_sum_sq` — sum of squared total trajectory costs. Used for the
-///   sample variance calculation when computing the upper bound confidence
-///   interval.
-/// - `scenario_count` — number of scenarios solved on this rank (equal to
-///   `config.forward_passes` as `f64`). Included so the forward
-///   synchronisation step can correctly compute the global mean without
-///   requiring every rank to have an identical `forward_passes` count.
-/// - `elapsed_ms` — wall-clock time in milliseconds for this rank's forward
-///   pass (all scenarios, all stages). Used for performance monitoring.
+/// Does not contain lower bound estimate (evaluated separately after backward pass).
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct ForwardResult {
     /// Sum of total trajectory costs across all local scenarios.
-    ///
-    /// `total_cost` for scenario `m` = `sum over stages of stage_cost[m][t]`.
     pub cost_sum: f64,
 
-    /// Sum of squared total trajectory costs across all local scenarios.
-    ///
-    /// Used for the statistical upper bound variance estimate.
+    /// Sum of squared total trajectory costs (for variance estimate).
     pub cost_sum_sq: f64,
 
     /// Number of scenarios solved on this rank, as `f64`.
-    ///
-    /// Equal to `config.forward_passes as f64`.
     pub scenario_count: f64,
 
     /// Wall-clock time in milliseconds for this rank's forward pass.
     pub elapsed_ms: u64,
 }
 
-/// Global upper bound statistics produced by the forward synchronisation step.
-///
-/// After the forward pass completes on each rank, [`sync_forward`] aggregates
-/// the local [`ForwardResult`] statistics across all MPI ranks to produce
-/// the global upper bound estimate for the current iteration.
-///
-/// The global UB is derived from the pooled sample mean, Bessel-corrected
-/// standard deviation, and 95% confidence interval half-width computed from
-/// the total scenario count and sum-of-squares across all ranks.
-///
-/// This result feeds the convergence monitor (see `StoppingRuleSet`) to
-/// determine whether the training loop should halt. The lower bound is
-/// evaluated separately after the backward pass.
-///
-/// ## Fields
-///
-/// - `global_ub_mean` — sample mean of total trajectory costs across all
-///   ranks and scenarios. Serves as the point estimate for the upper bound.
-/// - `global_ub_std` — Bessel-corrected sample standard deviation of total
-///   trajectory costs. Zero when the global scenario count is 1 or fewer.
-/// - `ci_95_half_width` — 95% confidence interval half-width: `1.96 * std / sqrt(N)`.
-///   Zero when the global scenario count is 1 or fewer.
-/// - `sync_time_ms` — wall-clock time in milliseconds for the `allreduce`
-///   call. Used for performance monitoring.
+/// Global upper bound statistics from forward synchronisation step (`allreduce`).
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct SyncResult {
     /// Sample mean of total trajectory costs across all ranks.
-    ///
-    /// Equal to `global_cost_sum / global_scenario_count`.
     pub global_ub_mean: f64,
 
     /// Bessel-corrected sample standard deviation of total trajectory costs.
-    ///
-    /// Computed as `sqrt(max(0, (sum_sq - N * mean^2) / (N - 1)))`.
-    /// Zero when `global_scenario_count <= 1.0`.
     pub global_ub_std: f64,
 
     /// 95% confidence interval half-width: `1.96 * std / sqrt(N)`.
-    ///
-    /// Zero when `global_scenario_count <= 1.0`.
     pub ci_95_half_width: f64,
 
     /// Wall-clock time in milliseconds for the `allreduce` call.

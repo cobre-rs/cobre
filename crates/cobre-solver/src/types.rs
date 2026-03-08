@@ -40,19 +40,10 @@ pub enum BasisStatus {
 /// initialized as [`BasisStatus::Basic`]. See Solver Abstraction SS2.3 and SS9.
 #[derive(Debug, Clone)]
 pub struct Basis {
-    /// Basis status for each column (decision variable).
-    ///
-    /// Length must equal the number of LP columns (`num_cols`). State
-    /// variables occupy the contiguous prefix `[0, n_state)` per
-    /// Solver Abstraction SS2.1.
+    /// Basis status for each column (length must equal `num_cols`).
     pub col_status: Vec<BasisStatus>,
 
-    /// Basis status for each row (constraint), including both static
-    /// structural rows and dynamic constraint rows (e.g., Benders cuts).
-    ///
-    /// Length must equal the total number of LP rows at the time the basis
-    /// was extracted. Dynamic constraint rows appended via
-    /// [`crate::SolverInterface::add_rows`] are included at the end.
+    /// Basis status for each row, including structural and dynamic rows.
     pub row_status: Vec<BasisStatus>,
 }
 
@@ -73,32 +64,14 @@ pub struct LpSolution {
     /// Optimal objective value (minimization sense).
     pub objective: f64,
 
-    /// Primal variable values, indexed by column.
-    ///
-    /// Length equals `num_cols`. State variables occupy the contiguous prefix
-    /// `[0, n_state)` per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// Transferring state from stage $t$ to stage $t+1$ copies
-    /// `primal[0..n_transfer]`.
+    /// Primal variable values, indexed by column (length equals `num_cols`).
     pub primal: Vec<f64>,
 
-    /// Dual multipliers (shadow prices), indexed by row.
-    ///
-    /// Length equals `num_rows` (structural rows + appended dynamic constraint
-    /// rows). Cut-relevant constraint duals occupy the contiguous prefix
-    /// `[0, n_dual_relevant)` per
-    /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// Extracting cut coefficients is a single contiguous slice read:
-    /// `cut_coefficients = dual[0..n_dual_relevant]`.
-    ///
-    /// Sign convention: normalized to the canonical convention (positive dual
-    /// on a `<=` constraint means increasing RHS increases the objective)
-    /// before returning.
+    /// Dual multipliers (shadow prices), indexed by row (length equals `num_rows`).
+    /// Normalized to canonical sign convention.
     pub dual: Vec<f64>,
 
-    /// Reduced costs, indexed by column.
-    ///
-    /// Length equals `num_cols`.
+    /// Reduced costs, indexed by column (length equals `num_cols`).
     pub reduced_costs: Vec<f64>,
 
     /// Number of simplex iterations performed for this solve.
@@ -124,26 +97,14 @@ pub struct SolutionView<'a> {
     /// Optimal objective value (minimization sense).
     pub objective: f64,
 
-    /// Primal variable values, indexed by column.
-    ///
-    /// Length equals `num_cols`. State variables occupy the contiguous prefix
-    /// `[0, n_state)` per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
+    /// Primal variable values, indexed by column (length equals `num_cols`).
     pub primal: &'a [f64],
 
-    /// Dual multipliers (shadow prices), indexed by row.
-    ///
-    /// Length equals `num_rows` (structural rows + appended dynamic constraint
-    /// rows). Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
-    ///
-    /// Sign convention: normalized to the canonical convention before returning
-    /// (positive dual on a `<=` constraint means increasing RHS increases the
-    /// objective).
+    /// Dual multipliers (shadow prices), indexed by row (length equals `num_rows`).
+    /// Normalized to canonical sign convention.
     pub dual: &'a [f64],
 
-    /// Reduced costs, indexed by column.
-    ///
-    /// Length equals `num_cols`.
+    /// Reduced costs, indexed by column (length equals `num_cols`).
     pub reduced_costs: &'a [f64],
 
     /// Number of simplex iterations performed for this solve.
@@ -197,24 +158,12 @@ pub struct SolverStatistics {
     pub total_iterations: u64,
 
     /// Total retry attempts summed across all failed solves.
-    ///
-    /// One retry attempt corresponds to one escalation step in the retry
-    /// sequence (e.g., clear basis, disable presolve, switch algorithm).
     pub retry_count: u64,
 
     /// Cumulative wall-clock time spent in solver calls, in seconds.
-    ///
-    /// Excludes retry overhead between attempts; includes time for all
-    /// individual solve invocations.
     pub total_solve_time_seconds: f64,
 
-    /// Number of times `solve_with_basis` fell back to cold-start because the
-    /// solver rejected the supplied basis.
-    ///
-    /// A non-zero value indicates that warm-starting failed for some solves,
-    /// which has a direct performance impact. Investigate if this counter
-    /// grows — common causes are singular basis matrices or factorization
-    /// failures after LP structure changes.
+    /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
     pub basis_rejections: u64,
 }
 
@@ -236,65 +185,37 @@ pub struct StageTemplate {
     /// Number of columns (decision variables) in the structural LP.
     pub num_cols: usize,
 
-    /// Number of static rows (structural constraints, excluding dynamic
-    /// constraints added at runtime via `add_rows`).
+    /// Number of static rows (structural constraints, excluding dynamic rows).
     pub num_rows: usize,
 
     /// Number of non-zero entries in the structural constraint matrix.
     pub num_nz: usize,
 
-    /// CSC column start offsets (`i32` for `HiGHS` FFI compatibility).
-    ///
-    /// Length: `num_cols + 1`. Entry `col_starts[j]` is the index into
-    /// `row_indices` and `values` where column `j` begins.
-    /// `col_starts[num_cols]` equals `num_nz`.
+    /// CSC column start offsets (length: `num_cols + 1`; `col_starts[num_cols] == num_nz`).
     pub col_starts: Vec<i32>,
 
-    /// CSC row indices for each non-zero entry (`i32` for `HiGHS` FFI compatibility).
-    ///
-    /// Length: `num_nz`. Entry `row_indices[k]` is the row of the `k`-th
-    /// non-zero value.
+    /// CSC row indices for each non-zero entry (length: `num_nz`).
     pub row_indices: Vec<i32>,
 
-    /// CSC non-zero values.
-    ///
-    /// Length: `num_nz`. Entry `values[k]` is the coefficient of the `k`-th
-    /// non-zero, at row `row_indices[k]` in its column.
+    /// CSC non-zero values (length: `num_nz`).
     pub values: Vec<f64>,
 
-    /// Column lower bounds.
-    ///
-    /// Length: `num_cols`. Use `f64::NEG_INFINITY` for unbounded below.
+    /// Column lower bounds (length: `num_cols`; use `f64::NEG_INFINITY` for unbounded).
     pub col_lower: Vec<f64>,
 
-    /// Column upper bounds.
-    ///
-    /// Length: `num_cols`. Use `f64::INFINITY` for unbounded above.
+    /// Column upper bounds (length: `num_cols`; use `f64::INFINITY` for unbounded).
     pub col_upper: Vec<f64>,
 
-    /// Objective coefficients (minimization sense).
-    ///
-    /// Length: `num_cols`.
+    /// Objective coefficients, minimization sense (length: `num_cols`).
     pub objective: Vec<f64>,
 
-    /// Row lower bounds.
-    ///
-    /// Length: `num_rows`. For equality constraints, set equal to `row_upper`.
-    /// Use `f64::NEG_INFINITY` for constraints with no lower bound.
+    /// Row lower bounds (length: `num_rows`; set equal to `row_upper` for equality).
     pub row_lower: Vec<f64>,
 
-    /// Row upper bounds.
-    ///
-    /// Length: `num_rows`. For equality constraints, set equal to `row_lower`.
-    /// Use `f64::INFINITY` for constraints with no upper bound.
+    /// Row upper bounds (length: `num_rows`; set equal to `row_lower` for equality).
     pub row_upper: Vec<f64>,
 
     /// Number of state variables (contiguous prefix of columns).
-    ///
-    /// Equal to `N * (1 + L)` where `N` is the number of operating hydros
-    /// and `L` is the maximum PAR order across all operating hydros, per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// State transfer copies `primal[0..n_transfer]`.
     pub n_state: usize,
 
     /// Number of state values transferred between consecutive stages.

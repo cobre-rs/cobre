@@ -56,10 +56,6 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// Summary statistics produced when the training loop terminates.
-///
-/// Returned by [`train`] on normal termination (convergence or budget
-/// exhausted). Callers use these fields to report final quality and timing
-/// information to the user.
 #[derive(Debug, Clone)]
 pub struct TrainingResult {
     /// Final lower bound at termination.
@@ -74,9 +70,7 @@ pub struct TrainingResult {
     /// Total number of iterations completed.
     pub iterations: u64,
 
-    /// Human-readable termination reason.
-    ///
-    /// Examples: `"iteration_limit"`, `"bound_stalling"`, `"graceful_shutdown"`.
+    /// Human-readable termination reason (e.g., `"iteration_limit"`, `"graceful_shutdown"`).
     pub reason: String,
 
     /// Total wall-clock time for the training run, in milliseconds.
@@ -87,9 +81,7 @@ pub struct TrainingResult {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Send a training event if the channel is present.
-///
-/// Silently ignores `None` (no channel) and `Err` (receiver dropped).
+/// Send a training event if the channel is present (ignores `None` or receiver drop).
 #[inline]
 fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
     if let Some(s) = sender {

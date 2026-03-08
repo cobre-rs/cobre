@@ -30,12 +30,7 @@ use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 
-// ── LocalComm ────────────────────────────────────────────────────────────────
-
 /// Single-rank stub communicator for tests.
-///
-/// `broadcast` is a no-op: in single-rank mode the buffer value is already set
-/// by the rank-0 computation.
 struct LocalComm;
 
 impl Communicator for LocalComm {
@@ -75,13 +70,7 @@ impl Communicator for LocalComm {
     }
 }
 
-// ── MockSolver ───────────────────────────────────────────────────────────────
-
 /// Mock solver that returns configurable objective values in sequence.
-///
-/// Each call to `solve()` returns the next value from `objectives`. The
-/// sequence wraps around when exhausted. If `infeasible_on_call` matches the
-/// current call index, returns `SolverError::Infeasible` instead.
 struct MockSolver {
     objectives: Vec<f64>,
     call_count: usize,
@@ -108,7 +97,7 @@ impl SolverInterface for MockSolver {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
-            return Err(SolverError::Infeasible { ray: None });
+            return Err(SolverError::Infeasible);
         }
         let obj = self.objectives[call % self.objectives.len()];
         Ok(cobre_solver::SolutionView {

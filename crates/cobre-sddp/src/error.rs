@@ -108,46 +108,28 @@ mod tests {
     use cobre_stochastic::StochasticError;
     use std::path::PathBuf;
 
-    // ── Compile-time bound assertion ─────────────────────────────────────────
-
     fn assert_send_sync_static<E: std::error::Error + Send + Sync + 'static>() {}
 
     #[test]
     fn sddp_error_is_send_sync_static() {
-        // This test exists purely as a compile-time assertion: if `SddpError`
-        // is not `Send + Sync + 'static`, this function call will not compile.
         assert_send_sync_static::<SddpError>();
     }
 
-    // ── Display output ───────────────────────────────────────────────────────
-
     #[test]
     fn display_solver_variant_contains_solver_and_underlying_message() {
-        let inner = SolverError::Infeasible { ray: None };
+        let inner = SolverError::Infeasible;
         let err = SddpError::Solver(inner);
         let msg = err.to_string();
-        assert!(
-            msg.contains("solver"),
-            "display must contain 'solver': {msg}"
-        );
-        assert!(
-            msg.contains("infeasible"),
-            "display must forward underlying SolverError message: {msg}"
-        );
+        assert!(msg.contains("solver"), "{msg}");
+        assert!(msg.contains("infeasible"), "{msg}");
     }
 
     #[test]
     fn display_communication_variant_contains_message() {
         let err = SddpError::Communication("allgatherv timed out".to_string());
         let msg = err.to_string();
-        assert!(
-            msg.contains("communication"),
-            "display must contain 'communication': {msg}"
-        );
-        assert!(
-            msg.contains("allgatherv timed out"),
-            "display must include the wrapped string: {msg}"
-        );
+        assert!(msg.contains("communication"), "{msg}");
+        assert!(msg.contains("allgatherv timed out"), "{msg}");
     }
 
     #[test]
@@ -157,14 +139,8 @@ mod tests {
         };
         let err = SddpError::Stochastic(inner);
         let msg = err.to_string();
-        assert!(
-            msg.contains("stochastic"),
-            "display must contain 'stochastic': {msg}"
-        );
-        assert!(
-            msg.contains("insufficient data"),
-            "display must forward underlying StochasticError message: {msg}"
-        );
+        assert!(msg.contains("stochastic"), "{msg}");
+        assert!(msg.contains("insufficient data"), "{msg}");
     }
 
     #[test]
@@ -174,28 +150,21 @@ mod tests {
         };
         let err = SddpError::Io(inner);
         let msg = err.to_string();
-        // Acceptance criterion: "produces a message containing 'I/O'" — check case-insensitively
         assert!(
             msg.to_lowercase().contains("i/o") || msg.to_lowercase().contains("io"),
-            "display must reference I/O: {msg}"
+            "{msg}"
         );
-        assert!(
-            msg.contains("hydro cascade contains a cycle"),
-            "display must forward underlying LoadError message: {msg}"
-        );
+        assert!(msg.contains("hydro cascade contains a cycle"), "{msg}");
     }
 
     #[test]
     fn display_validation_variant_contains_message() {
         let err = SddpError::Validation("forward_passes must be greater than zero".to_string());
         let msg = err.to_string();
-        assert!(
-            msg.contains("validation"),
-            "display must contain 'validation': {msg}"
-        );
+        assert!(msg.contains("validation"), "{msg}");
         assert!(
             msg.contains("forward_passes must be greater than zero"),
-            "display must include the wrapped string: {msg}"
+            "{msg}"
         );
     }
 
@@ -207,21 +176,10 @@ mod tests {
             scenario: 3,
         };
         let msg = err.to_string();
-        assert!(
-            msg.contains('5'),
-            "display must contain stage index 5: {msg}"
-        );
-        assert!(
-            msg.contains("42"),
-            "display must contain iteration 42: {msg}"
-        );
-        assert!(
-            msg.contains('3'),
-            "display must contain scenario index 3: {msg}"
-        );
+        assert!(msg.contains('5'), "{msg}");
+        assert!(msg.contains("42"), "{msg}");
+        assert!(msg.contains('3'), "{msg}");
     }
-
-    // ── From conversions ─────────────────────────────────────────────────────
 
     #[test]
     fn from_solver_error() {
@@ -257,23 +215,15 @@ mod tests {
     fn from_comm_error_wraps_as_string() {
         let inner = CommError::InvalidCommunicator;
         let err: SddpError = inner.into();
-        // CommError is wrapped as String — verify the variant is Communication
         assert!(matches!(err, SddpError::Communication(_)));
-        // Verify the string representation of CommError is preserved
         let msg = err.to_string();
-        assert!(
-            msg.contains("MPI"),
-            "Communication display must include CommError text: {msg}"
-        );
+        assert!(msg.contains("MPI"), "{msg}");
     }
-
-    // ── std::error::Error trait ──────────────────────────────────────────────
 
     #[test]
     fn sddp_error_satisfies_std_error_trait() {
-        // Verify each variant can be used as `&dyn std::error::Error`
         let variants: Vec<SddpError> = vec![
-            SddpError::Solver(SolverError::Infeasible { ray: None }),
+            SddpError::Solver(SolverError::Infeasible),
             SddpError::Communication("network partition".to_string()),
             SddpError::Stochastic(StochasticError::InsufficientData {
                 context: "no data".to_string(),
@@ -293,12 +243,10 @@ mod tests {
         }
     }
 
-    // ── Debug output ─────────────────────────────────────────────────────────
-
     #[test]
     fn all_variants_debug_non_empty() {
         let variants: Vec<SddpError> = vec![
-            SddpError::Solver(SolverError::Unbounded { direction: None }),
+            SddpError::Solver(SolverError::Unbounded),
             SddpError::Communication("test comm error".to_string()),
             SddpError::Stochastic(StochasticError::InvalidCorrelation {
                 profile_name: "test".to_string(),
@@ -315,8 +263,7 @@ mod tests {
             },
         ];
         for err in &variants {
-            let debug = format!("{err:?}");
-            assert!(!debug.is_empty(), "debug output must not be empty");
+            assert!(!format!("{err:?}").is_empty());
         }
     }
 }

@@ -132,7 +132,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             );
 
             let view = solver.solve().map_err(|e| match e {
-                SolverError::Infeasible { .. } => SddpError::Infeasible {
+                SolverError::Infeasible => SddpError::Infeasible {
                     stage: 0,
                     iteration: 0,
                     scenario: opening_idx,
@@ -141,7 +141,6 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             })?;
 
             objectives.push(view.objective);
-            // view is dropped here.
         }
 
         #[allow(clippy::cast_precision_loss)]
@@ -171,8 +170,6 @@ mod tests {
         Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::OpeningTree;
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// Minimal stage template for N=1 hydro, L=0 PAR order.
     ///
@@ -404,7 +401,7 @@ mod tests {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_call == Some(call) {
-                return Err(SolverError::Infeasible { ray: None });
+                return Err(SolverError::Infeasible);
             }
             let obj = self.objectives[call % self.objectives.len()];
             // Return a minimal view; evaluate_lower_bound only reads `view.objective`.

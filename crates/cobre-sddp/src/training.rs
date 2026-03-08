@@ -626,7 +626,7 @@ mod tests {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_first && call == 0 {
-                return Err(SolverError::Infeasible { ray: None });
+                return Err(SolverError::Infeasible);
             }
             let obj = self.objectives[call % self.objectives.len()];
             // Return a view with primal[2] = 0.0 (theta = 0) so that the forward pass

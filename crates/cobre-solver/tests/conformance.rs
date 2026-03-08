@@ -730,8 +730,8 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
     solver.set_row_bounds(&[0], &[8.0], &[8.0]);
     let result = solver.solve();
     assert!(
-        matches!(result, Err(cobre_solver::SolverError::Infeasible { .. })),
-        "step 4: expected Err(SolverError::Infeasible {{ .. }}), got {:?}",
+        matches!(result, Err(cobre_solver::SolverError::Infeasible)),
+        "step 4: expected Err(SolverError::Infeasible), got {:?}",
         result.map(|s| s.objective)
     );
 }
@@ -774,8 +774,8 @@ fn test_solver_highs_solve_infeasible() {
     let result = solver.solve().map(|s| s.objective);
 
     assert!(
-        matches!(result, Err(cobre_solver::SolverError::Infeasible { .. })),
-        "expected Err(SolverError::Infeasible {{ .. }}), got {result:?}"
+        matches!(result, Err(cobre_solver::SolverError::Infeasible)),
+        "expected Err(SolverError::Infeasible), got {result:?}"
     );
 
     let stats = solver.statistics();
@@ -835,8 +835,8 @@ fn test_solver_highs_solve_unbounded() {
     let result = solver.solve().map(|s| s.objective);
 
     assert!(
-        matches!(result, Err(cobre_solver::SolverError::Unbounded { .. })),
-        "expected Err(SolverError::Unbounded {{ .. }}), got {result:?}"
+        matches!(result, Err(cobre_solver::SolverError::Unbounded)),
+        "expected Err(SolverError::Unbounded), got {result:?}"
     );
 
     let stats = solver.statistics();
@@ -939,16 +939,8 @@ fn test_solver_highs_solve_time_limit() {
     let result = solver.solve().map(|s| s.objective);
     assert!(matches!(result, Err(SolverError::TimeLimitExceeded { .. })));
 
-    if let Err(SolverError::TimeLimitExceeded {
-        elapsed_seconds,
-        partial_solution,
-    }) = result
-    {
+    if let Err(SolverError::TimeLimitExceeded { elapsed_seconds }) = result {
         assert!(elapsed_seconds >= 0.0);
-        assert!(
-            partial_solution.is_some(),
-            "crash point should provide partial solution"
-        );
     }
 
     let stats = solver.statistics();
@@ -983,16 +975,8 @@ fn test_solver_highs_solve_iteration_limit() {
     let result = solver.solve().map(|s| s.objective);
     assert!(matches!(result, Err(SolverError::IterationLimit { .. })));
 
-    if let Err(SolverError::IterationLimit {
-        iterations,
-        partial_solution,
-    }) = result
-    {
+    if let Err(SolverError::IterationLimit { iterations }) = result {
         assert_eq!(iterations, 0, "no pivots before iteration_limit=0");
-        assert!(
-            partial_solution.is_some(),
-            "crash point should provide partial solution"
-        );
     }
 
     let stats = solver.statistics();
@@ -1048,36 +1032,6 @@ fn test_solver_highs_restore_defaults_after_limit() {
     assert!(stats.success_count >= 1);
 }
 
-/// SS limit row 4: partial solution extraction after iteration limit.
-///
-/// Verifies that `try_extract_partial_solution` returns a finite objective and
-/// properly-sized primal/dual vectors (reflecting the crash-point solution).
-#[cfg(feature = "test-support")]
-#[test]
-fn test_solver_highs_partial_solution_on_limit() {
-    let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-    solver.load_model(&make_larger_lp_template());
-
-    unsafe {
-        test_support::cobre_highs_set_int_option(
-            solver.raw_handle(),
-            c"simplex_iteration_limit".as_ptr(),
-            0,
-        );
-    }
-
-    let partial = match solver.solve() {
-        Err(SolverError::IterationLimit {
-            partial_solution, ..
-        }) => partial_solution,
-        other => panic!("expected IterationLimit, got {:?}", other.map(|_| ())),
-    };
-
-    let sol = partial.expect("partial_solution should be Some after ITERATION_LIMIT");
-    assert!(sol.objective.is_finite());
-    assert_eq!(sol.primal.len(), 5);
-    assert_eq!(sol.dual.len(), 4);
-}
 
 // ─── Retry escalation note ────────────────────────────────────────────────────
 //
@@ -1155,19 +1109,11 @@ fn test_solver_highs_infeasible_with_rows() {
     solver.load_model(&infeasible_with_rows);
     let result = solver.solve();
 
-    match result {
-        Err(SolverError::Infeasible { ray }) => {
-            // If a dual ray is present, verify it is well-formed.
-            if let Some(ref ray_vals) = ray {
-                assert_eq!(ray_vals.len(), 2, "dual ray should have one entry per row");
-            }
-            // Both Some and None are valid — HiGHS may or may not provide the ray.
-        }
-        other => panic!(
-            "expected Err(SolverError::Infeasible {{ .. }}), got {:?}",
-            other.map(|_| ())
-        ),
-    }
+    assert!(
+        matches!(result, Err(SolverError::Infeasible)),
+        "expected Err(SolverError::Infeasible), got {:?}",
+        result.map(|_| ())
+    );
 }
 
 /// SS3.3b: infeasible LP with presolve — exercises dual ray extraction with presolve on.
@@ -1211,10 +1157,9 @@ fn test_solver_highs_infeasible_with_presolve() {
     solver.load_model(&infeasible_with_rows);
     let result = solver.solve().map(|s| s.objective);
 
-    // Accept Infeasible with or without ray.
     assert!(
-        matches!(result, Err(SolverError::Infeasible { .. })),
-        "expected Err(SolverError::Infeasible {{ .. }}), got {result:?}"
+        matches!(result, Err(SolverError::Infeasible)),
+        "expected Err(SolverError::Infeasible), got {result:?}"
     );
 }
 
@@ -1255,26 +1200,11 @@ fn test_solver_highs_unbounded_with_primal_ray() {
     solver.load_model(&unbounded_with_rows);
     let result = solver.solve();
 
-    match result {
-        Err(SolverError::Unbounded { direction }) => {
-            // HiGHS should provide a primal ray for this LP.
-            assert!(
-                direction.is_some(),
-                "expected primal ray for unbounded LP with rows"
-            );
-            let dir = direction.unwrap();
-            assert_eq!(dir.len(), 2, "primal ray should have one entry per column");
-            // The ray must be non-trivial.
-            assert!(
-                dir.iter().any(|&v| v.abs() > 1e-12),
-                "primal ray should be non-trivial"
-            );
-        }
-        other => panic!(
-            "expected Err(SolverError::Unbounded {{ direction: Some(..) }}), got {:?}",
-            other.map(|_| ())
-        ),
-    }
+    assert!(
+        matches!(result, Err(SolverError::Unbounded)),
+        "expected Err(SolverError::Unbounded), got {:?}",
+        result.map(|_| ())
+    );
 }
 
 /// SS3.5: unbounded-or-infeasible LP — presolve detects ambiguous status.
@@ -1334,7 +1264,7 @@ fn test_solver_highs_unbounded_or_infeasible() {
     // Accept either UNBOUNDED_OR_INFEASIBLE or INFEASIBLE — both are valid
     // responses for this LP depending on the HiGHS solver path taken.
     match &result {
-        Err(SolverError::Infeasible { .. } | SolverError::Unbounded { .. }) => {
+        Err(SolverError::Infeasible | SolverError::Unbounded) => {
             // Both are acceptable outcomes.
         }
         other => panic!("expected Infeasible or Unbounded error, got {other:?}"),

@@ -100,6 +100,7 @@ pub struct BackwardResult {
 /// - `risk_measures.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
+#[allow(unused_variables)]
 pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     templates: &[StageTemplate],
@@ -140,9 +141,6 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
         got = risk_measures.len(),
         expected = num_stages,
     );
-
-    let _ = comm;
-    let _ = config;
 
     let start = Instant::now();
     let mut cuts_generated: usize = 0;
@@ -189,7 +187,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 .map_err(|e| {
                     basis_cache[successor] = None;
                     match e {
-                        SolverError::Infeasible { .. } => SddpError::Infeasible {
+                        SolverError::Infeasible => SddpError::Infeasible {
                             stage: t,
                             iteration,
                             // m is the global trial point index — cast is safe
@@ -389,7 +387,7 @@ mod tests {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
-                return Err(SolverError::Infeasible { ray: None });
+                return Err(SolverError::Infeasible);
             }
             // Fill internal buffers, resizing dual to match current LP row count.
             self.buf_primal.clone_from(&self.solution.primal);

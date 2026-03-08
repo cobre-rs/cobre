@@ -305,44 +305,6 @@ impl HighsSolver {
         }
     }
 
-    /// Attempts to extract a partial solution after non-optimal termination.
-    ///
-    /// Returns `None` if the objective is non-finite (no valid solution available).
-    /// Returns `Some(solution)` when a best-effort solution exists.
-    fn try_extract_partial_solution(&mut self, solve_time_seconds: f64) -> Option<LpSolution> {
-        // SAFETY: buffers correctly sized from `load_model` / `add_rows`.
-        let _status = unsafe {
-            ffi::cobre_highs_get_solution(
-                self.handle,
-                self.col_value.as_mut_ptr(),
-                self.col_dual.as_mut_ptr(),
-                self.row_value.as_mut_ptr(),
-                self.row_dual.as_mut_ptr(),
-            )
-        };
-
-        // SAFETY: valid non-null HiGHS pointer.
-        let objective = unsafe { ffi::cobre_highs_get_objective_value(self.handle) };
-
-        if !objective.is_finite() {
-            return None;
-        }
-
-        // SAFETY: iteration count is non-negative so cast is safe.
-        #[allow(clippy::cast_sign_loss)]
-        let iterations =
-            unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-
-        Some(LpSolution {
-            objective,
-            primal: self.col_value.clone(),
-            dual: self.row_dual.clone(),
-            reduced_costs: self.col_dual.clone(),
-            iterations,
-            solve_time_seconds,
-        })
-    }
-
     /// Restores default options after retry escalation.
     ///
     /// Errors are silently ignored — already in recovery path.
@@ -364,43 +326,7 @@ impl HighsSolver {
         unsafe { ffi::cobre_highs_get_model_status(self.handle) }
     }
 
-    /// Converts a `HiGHS` infeasible status into a `SolverError::Infeasible`.
-    fn make_infeasible_error(&self) -> SolverError {
-        let mut has_dual_ray: i32 = 0;
-        let mut ray_buf = vec![0.0_f64; self.num_rows];
-        // SAFETY: valid non-null HiGHS pointer; buffers are valid for this call.
-        let status = unsafe {
-            ffi::cobre_highs_get_dual_ray(self.handle, &raw mut has_dual_ray, ray_buf.as_mut_ptr())
-        };
-        let ray = if status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
-            Some(ray_buf)
-        } else {
-            None
-        };
-        SolverError::Infeasible { ray }
-    }
-
-    /// Converts a `HiGHS` unbounded status into a `SolverError::Unbounded`.
-    fn make_unbounded_error(&self) -> SolverError {
-        let mut has_primal_ray: i32 = 0;
-        let mut ray_buf = vec![0.0_f64; self.num_cols];
-        // SAFETY: valid non-null HiGHS pointer; buffers are valid for this call.
-        let status = unsafe {
-            ffi::cobre_highs_get_primal_ray(
-                self.handle,
-                &raw mut has_primal_ray,
-                ray_buf.as_mut_ptr(),
-            )
-        };
-        let direction = if status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
-            Some(ray_buf)
-        } else {
-            None
-        };
-        SolverError::Unbounded { direction }
-    }
-
-    /// Interprets a non-optimal status as a `SolverError`, extracting a partial solution.
+    /// Interprets a non-optimal status as a `SolverError`.
     ///
     /// Returns `None` for `SOLVE_ERROR` or `UNKNOWN` (retry continues),
     /// or `Some(Err(...))` for terminal statuses.
@@ -414,9 +340,14 @@ impl HighsSolver {
                 // Caller should have handled optimal before reaching here.
                 None
             }
-            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(Err(self.make_infeasible_error())),
+            ffi::HIGHS_MODEL_STATUS_INFEASIBLE => Some(Err(SolverError::Infeasible)),
             ffi::HIGHS_MODEL_STATUS_UNBOUNDED_OR_INFEASIBLE => {
+                // Probe for a dual ray to classify as Infeasible, then a primal
+                // ray to classify as Unbounded. The ray values are not stored in
+                // the error -- only the classification matters.
                 let mut has_dual_ray: i32 = 0;
+                // A scratch buffer is needed for the HiGHS API even though the
+                // values are discarded after classification.
                 let mut dual_buf = vec![0.0_f64; self.num_rows];
                 // SAFETY: valid non-null HiGHS pointer; buffers are valid.
                 let dual_status = unsafe {
@@ -427,9 +358,7 @@ impl HighsSolver {
                     )
                 };
                 if dual_status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
-                    return Some(Err(SolverError::Infeasible {
-                        ray: Some(dual_buf),
-                    }));
+                    return Some(Err(SolverError::Infeasible));
                 }
                 let mut has_primal_ray: i32 = 0;
                 let mut primal_buf = vec![0.0_f64; self.num_cols];
@@ -442,30 +371,22 @@ impl HighsSolver {
                     )
                 };
                 if primal_status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
-                    return Some(Err(SolverError::Unbounded {
-                        direction: Some(primal_buf),
-                    }));
+                    return Some(Err(SolverError::Unbounded));
                 }
-                Some(Err(SolverError::Infeasible { ray: None }))
+                Some(Err(SolverError::Infeasible))
             }
-            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(self.make_unbounded_error())),
+            ffi::HIGHS_MODEL_STATUS_UNBOUNDED => Some(Err(SolverError::Unbounded)),
             ffi::HIGHS_MODEL_STATUS_TIME_LIMIT => {
-                let partial_solution = self.try_extract_partial_solution(solve_time_seconds);
                 Some(Err(SolverError::TimeLimitExceeded {
-                    partial_solution,
                     elapsed_seconds: solve_time_seconds,
                 }))
             }
             ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT => {
-                let partial_solution = self.try_extract_partial_solution(solve_time_seconds);
                 // SAFETY: handle is valid non-null pointer; iteration count is non-negative.
                 #[allow(clippy::cast_sign_loss)]
                 let iterations =
                     unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-                Some(Err(SolverError::IterationLimit {
-                    partial_solution,
-                    iterations,
-                }))
+                Some(Err(SolverError::IterationLimit { iterations }))
             }
             ffi::HIGHS_MODEL_STATUS_SOLVE_ERROR | ffi::HIGHS_MODEL_STATUS_UNKNOWN => {
                 // Signal to the caller that retry should continue.
@@ -851,9 +772,7 @@ impl SolverInterface for HighsSolver {
         self.stats.failure_count += 1;
         Err(terminal_err.unwrap_or_else(|| {
             // All 5 retry levels exhausted without a definitive result.
-            let partial_solution = self.try_extract_partial_solution(0.0);
             SolverError::NumericalDifficulty {
-                partial_solution,
                 message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
                     .to_string(),
             }

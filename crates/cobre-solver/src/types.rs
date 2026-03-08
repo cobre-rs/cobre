@@ -50,9 +50,6 @@ impl Basis {
 /// before this struct is returned -- solver-specific sign differences are
 /// resolved within the [`crate::SolverInterface`] implementation.
 ///
-/// This struct is also embedded in [`SolverError`] variants that may carry a
-/// partial solution when the solve terminates prematurely.
-///
 /// See [Solver Interface Trait SS4.1](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
 #[derive(Debug, Clone)]
 pub struct LpSolution {
@@ -290,9 +287,8 @@ pub struct RowBatch {
 /// Terminal LP solve error returned after all retry attempts are exhausted.
 ///
 /// The calling algorithm uses the variant to determine its response:
-/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or proceed with
-/// degraded quality (`NumericalDifficulty`, `TimeLimitExceeded`,
-/// `IterationLimit`) when a partial solution is available.
+/// hard stop (`Infeasible`, `Unbounded`, `InternalError`) or log and
+/// proceed (`NumericalDifficulty`, `TimeLimitExceeded`, `IterationLimit`).
 ///
 /// The six variants correspond to the error categories defined in
 /// Solver Abstraction SS6. Solver-internal errors (e.g., factorization
@@ -303,51 +299,31 @@ pub enum SolverError {
     ///
     /// Indicates a data error (inconsistent bounds or constraints) or a
     /// modeling error. The calling algorithm should perform a hard stop.
-    Infeasible {
-        /// Infeasibility ray (proof of infeasibility), if available from the
-        /// solver. Not all solver backends provide this.
-        ray: Option<Vec<f64>>,
-    },
+    Infeasible,
 
     /// The LP objective is unbounded below.
     ///
     /// Indicates a modeling error (missing bounds, incorrect objective sign).
     /// The calling algorithm should perform a hard stop.
-    Unbounded {
-        /// Unbounded direction certificate, if available from the solver.
-        /// Not all solver backends provide this.
-        direction: Option<Vec<f64>>,
-    },
+    Unbounded,
 
     /// Solver encountered numerical difficulties that persisted through all
     /// retry attempts.
     ///
-    /// May have a partial (non-optimal) solution. The calling algorithm may
-    /// log a warning and proceed if the partial solution is usable.
+    /// The calling algorithm should log the error and perform a hard stop.
     NumericalDifficulty {
-        /// Best solution found before the numerical difficulty, if any.
-        partial_solution: Option<LpSolution>,
         /// Human-readable description of the numerical issue from the solver.
         message: String,
     },
 
     /// Per-solve wall-clock time budget exhausted.
-    ///
-    /// May have a partial solution from the best iteration reached within the
-    /// budget.
     TimeLimitExceeded {
-        /// Best solution found within the time budget, if any.
-        partial_solution: Option<LpSolution>,
         /// Elapsed wall-clock time in seconds at the point of termination.
         elapsed_seconds: f64,
     },
 
     /// Solver simplex iteration limit reached.
-    ///
-    /// May have a partial solution from the last completed iteration.
     IterationLimit {
-        /// Best solution found within the iteration budget, if any.
-        partial_solution: Option<LpSolution>,
         /// Number of simplex iterations performed before the limit was hit.
         iterations: u64,
     },
@@ -368,64 +344,16 @@ pub enum SolverError {
 impl fmt::Display for SolverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Infeasible { ray } => {
-                if ray.is_some() {
-                    write!(f, "LP is infeasible (infeasibility ray available)")
-                } else {
-                    write!(f, "LP is infeasible")
-                }
+            Self::Infeasible => write!(f, "LP is infeasible"),
+            Self::Unbounded => write!(f, "LP is unbounded"),
+            Self::NumericalDifficulty { message } => {
+                write!(f, "numerical difficulty: {message}")
             }
-            Self::Unbounded { direction } => {
-                if direction.is_some() {
-                    write!(f, "LP is unbounded (unbounded direction available)")
-                } else {
-                    write!(f, "LP is unbounded")
-                }
+            Self::TimeLimitExceeded { elapsed_seconds } => {
+                write!(f, "time limit exceeded after {elapsed_seconds:.3}s")
             }
-            Self::NumericalDifficulty {
-                partial_solution,
-                message,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "numerical difficulty (partial solution available): {message}"
-                    )
-                } else {
-                    write!(f, "numerical difficulty (no partial solution): {message}")
-                }
-            }
-            Self::TimeLimitExceeded {
-                partial_solution,
-                elapsed_seconds,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "time limit exceeded after {elapsed_seconds:.3}s (partial solution available)"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "time limit exceeded after {elapsed_seconds:.3}s (no partial solution)"
-                    )
-                }
-            }
-            Self::IterationLimit {
-                partial_solution,
-                iterations,
-            } => {
-                if partial_solution.is_some() {
-                    write!(
-                        f,
-                        "iteration limit reached after {iterations} iterations (partial solution available)"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "iteration limit reached after {iterations} iterations (no partial solution)"
-                    )
-                }
+            Self::IterationLimit { iterations } => {
+                write!(f, "iteration limit reached after {iterations} iterations")
             }
             Self::InternalError {
                 message,
@@ -445,9 +373,7 @@ impl std::error::Error for SolverError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
-    };
+    use super::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate};
 
     #[test]
     fn test_basis_new_dimensions_and_zero_fill() {
@@ -468,8 +394,7 @@ mod tests {
     #[test]
     fn test_basis_debug_and_clone() {
         let rb = Basis::new(2, 1);
-        let s = format!("{rb:?}");
-        assert!(!s.is_empty());
+        assert!(!format!("{rb:?}").is_empty());
         let cloned = rb.clone();
         assert_eq!(cloned.col_status, rb.col_status);
         assert_eq!(cloned.row_status, rb.row_status);
@@ -480,70 +405,29 @@ mod tests {
 
     #[test]
     fn test_solver_error_display_infeasible() {
-        let err = SolverError::Infeasible { ray: None };
-        let msg = format!("{err}");
-        assert!(!msg.is_empty());
+        let msg = format!("{}", SolverError::Infeasible);
         assert!(msg.contains("infeasible"));
     }
 
     #[test]
     fn test_solver_error_display_all_variants() {
-        let partial = Some(LpSolution {
-            objective: 0.0,
-            primal: vec![],
-            dual: vec![],
-            reduced_costs: vec![],
-            iterations: 0,
-            solve_time_seconds: 0.0,
-        });
-
-        let variants: Vec<(&str, SolverError)> = vec![
-            (
-                "Infeasible",
-                SolverError::Infeasible {
-                    ray: Some(vec![1.0, 0.0]),
-                },
-            ),
-            (
-                "Unbounded",
-                SolverError::Unbounded {
-                    direction: Some(vec![0.0, 1.0]),
-                },
-            ),
-            (
-                "NumericalDifficulty",
-                SolverError::NumericalDifficulty {
-                    partial_solution: partial,
-                    message: "factorization failed".to_string(),
-                },
-            ),
-            (
-                "TimeLimitExceeded",
-                SolverError::TimeLimitExceeded {
-                    partial_solution: None,
-                    elapsed_seconds: 60.0,
-                },
-            ),
-            (
-                "IterationLimit",
-                SolverError::IterationLimit {
-                    partial_solution: None,
-                    iterations: 10_000,
-                },
-            ),
-            (
-                "InternalError",
-                SolverError::InternalError {
-                    message: "segfault in HiGHS".to_string(),
-                    error_code: Some(-1),
-                },
-            ),
+        let variants = vec![
+            SolverError::Infeasible,
+            SolverError::Unbounded,
+            SolverError::NumericalDifficulty {
+                message: "factorization failed".to_string(),
+            },
+            SolverError::TimeLimitExceeded {
+                elapsed_seconds: 60.0,
+            },
+            SolverError::IterationLimit { iterations: 10_000 },
+            SolverError::InternalError {
+                message: "segfault in HiGHS".to_string(),
+                error_code: Some(-1),
+            },
         ];
 
-        let messages: Vec<String> = variants.iter().map(|(_, err)| format!("{err}")).collect();
-        for msg in &messages {
-            assert!(!msg.is_empty());
-        }
+        let messages: Vec<String> = variants.iter().map(|err| format!("{err}")).collect();
         for i in 0..messages.len() {
             for j in (i + 1)..messages.len() {
                 assert_ne!(messages[i], messages[j]);
@@ -569,20 +453,9 @@ mod tests {
         assert_eq!(stats.total_iterations, 0);
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
+        assert_eq!(stats.basis_rejections, 0);
     }
 
-    // Shared fixture from Solver Interface Testing SS1.1:
-    // 3 variables, 2 structural constraints, 3 non-zeros.
-    //
-    //   min  0*x0 + 1*x1 + 50*x2
-    //   s.t. x0            = 6   (state-fixing)
-    //        2*x0 + x2     = 14  (power balance)
-    //   x0 in [0, 10], x1 in [0, +inf), x2 in [0, 8]
-    //
-    // CSC matrix A = [[1, 0, 0], [2, 0, 1]]:
-    //   col_starts  = [0, 2, 2, 3]
-    //   row_indices = [0, 1, 1]
-    //   values      = [1.0, 2.0, 1.0]
     fn make_fixture_stage_template() -> StageTemplate {
         StageTemplate {
             num_cols: 3,
@@ -633,97 +506,27 @@ mod tests {
 
     #[test]
     fn test_solver_error_display_all_branches() {
-        let partial = LpSolution {
-            objective: 42.0,
-            primal: vec![1.0],
-            dual: vec![2.0],
-            reduced_costs: vec![3.0],
-            iterations: 5,
-            solve_time_seconds: 0.1,
-        };
-
         let cases = vec![
+            ("Infeasible", SolverError::Infeasible, "infeasible"),
+            ("Unbounded", SolverError::Unbounded, "unbounded"),
             (
-                "Infeasible/None",
-                SolverError::Infeasible { ray: None },
-                "infeasible",
-                false,
-            ),
-            (
-                "Infeasible/Some",
-                SolverError::Infeasible {
-                    ray: Some(vec![1.0, 0.0]),
-                },
-                "infeasibility ray available",
-                true,
-            ),
-            (
-                "Unbounded/None",
-                SolverError::Unbounded { direction: None },
-                "unbounded",
-                false,
-            ),
-            (
-                "Unbounded/Some",
-                SolverError::Unbounded {
-                    direction: Some(vec![0.0, 1.0]),
-                },
-                "unbounded direction available",
-                true,
-            ),
-            (
-                "NumericalDifficulty/None",
+                "NumericalDifficulty",
                 SolverError::NumericalDifficulty {
-                    partial_solution: None,
                     message: "singular matrix".to_string(),
                 },
-                "no partial solution",
-                true,
+                "singular matrix",
             ),
             (
-                "NumericalDifficulty/Some",
-                SolverError::NumericalDifficulty {
-                    partial_solution: Some(partial.clone()),
-                    message: "factorization failed".to_string(),
-                },
-                "partial solution available",
-                true,
-            ),
-            (
-                "TimeLimitExceeded/None",
+                "TimeLimitExceeded",
                 SolverError::TimeLimitExceeded {
-                    partial_solution: None,
                     elapsed_seconds: 60.0,
                 },
-                "no partial solution",
-                true,
+                "60.000s",
             ),
             (
-                "TimeLimitExceeded/Some",
-                SolverError::TimeLimitExceeded {
-                    partial_solution: Some(partial.clone()),
-                    elapsed_seconds: 120.0,
-                },
-                "partial solution available",
-                true,
-            ),
-            (
-                "IterationLimit/None",
-                SolverError::IterationLimit {
-                    partial_solution: None,
-                    iterations: 10_000,
-                },
-                "no partial solution",
-                true,
-            ),
-            (
-                "IterationLimit/Some",
-                SolverError::IterationLimit {
-                    partial_solution: Some(partial.clone()),
-                    iterations: 50_000,
-                },
-                "partial solution available",
-                true,
+                "IterationLimit",
+                SolverError::IterationLimit { iterations: 10_000 },
+                "10000 iterations",
             ),
             (
                 "InternalError/None",
@@ -732,7 +535,6 @@ mod tests {
                     error_code: None,
                 },
                 "unknown failure",
-                false,
             ),
             (
                 "InternalError/Some",
@@ -741,11 +543,10 @@ mod tests {
                     error_code: Some(-1),
                 },
                 "code -1",
-                true,
             ),
         ];
 
-        for (name, err, expected_text, _) in cases {
+        for (name, err, expected_text) in cases {
             let msg = format!("{err}");
             assert!(!msg.is_empty());
             assert!(
@@ -757,48 +558,16 @@ mod tests {
 
     #[test]
     fn test_solver_error_is_std_error_all_variants() {
-        let partial = LpSolution {
-            objective: 0.0,
-            primal: vec![],
-            dual: vec![],
-            reduced_costs: vec![],
-            iterations: 0,
-            solve_time_seconds: 0.0,
-        };
-
         let errors: Vec<SolverError> = vec![
-            SolverError::Infeasible { ray: None },
-            SolverError::Infeasible {
-                ray: Some(vec![1.0]),
-            },
-            SolverError::Unbounded { direction: None },
-            SolverError::Unbounded {
-                direction: Some(vec![1.0]),
-            },
+            SolverError::Infeasible,
+            SolverError::Unbounded,
             SolverError::NumericalDifficulty {
-                partial_solution: None,
-                message: "test".to_string(),
-            },
-            SolverError::NumericalDifficulty {
-                partial_solution: Some(partial.clone()),
                 message: "test".to_string(),
             },
             SolverError::TimeLimitExceeded {
-                partial_solution: None,
                 elapsed_seconds: 1.0,
             },
-            SolverError::TimeLimitExceeded {
-                partial_solution: Some(partial.clone()),
-                elapsed_seconds: 1.0,
-            },
-            SolverError::IterationLimit {
-                partial_solution: None,
-                iterations: 1,
-            },
-            SolverError::IterationLimit {
-                partial_solution: Some(partial),
-                iterations: 1,
-            },
+            SolverError::IterationLimit { iterations: 1 },
             SolverError::InternalError {
                 message: "test".to_string(),
                 error_code: None,
@@ -849,16 +618,12 @@ mod tests {
             iterations: 0,
             solve_time_seconds: 0.0,
         };
-        // SolutionView is Copy: the copy here does not move the original.
         let copy = view;
         assert_eq!(view.objective, copy.objective);
     }
 
     #[test]
     fn test_row_batch_construction() {
-        // Benders cut fixture from Solver Interface Testing SS1.2:
-        // Cut 1: -5*x0 + x1 >= 20  (col_indices [0,1], values [-5, 1])
-        // Cut 2:  3*x0 + x1 >= 80  (col_indices [0,1], values [ 3, 1])
         let batch = RowBatch {
             num_rows: 2,
             row_starts: vec![0_i32, 2, 4],

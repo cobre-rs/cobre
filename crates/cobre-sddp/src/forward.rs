@@ -443,7 +443,7 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
             .map_err(|e| {
                 basis_cache[t] = None;
                 match e {
-                    SolverError::Infeasible { .. } => SddpError::Infeasible {
+                    SolverError::Infeasible => SddpError::Infeasible {
                         stage: t,
                         iteration,
                         scenario: m,
@@ -634,7 +634,7 @@ mod tests {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
-                return Err(SolverError::Infeasible { ray: None });
+                return Err(SolverError::Infeasible);
             }
             // Fill internal buffers from the stored solution.
             self.buf_primal.clone_from(&self.solution.primal);

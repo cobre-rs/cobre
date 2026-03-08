@@ -208,7 +208,7 @@ impl SolverInterface for MockSolver {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
-            return Err(SolverError::Infeasible { ray: None });
+            return Err(SolverError::Infeasible);
         }
         let obj = self.objectives[call % self.objectives.len()];
         Ok(cobre_solver::SolutionView {

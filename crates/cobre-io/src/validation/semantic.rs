@@ -45,7 +45,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
@@ -963,7 +963,6 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -974,13 +973,14 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+        validation::{schema::ParsedData, ErrorKind, ValidationContext},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1649,7 +1649,7 @@ mod tests {
     fn test_fpha_negative_gamma_v() {
         let mut row = make_fpha_row(1, None, 0);
         row.gamma_v = -0.5; // invalid: must be > 0
-        // Add two more valid planes so rule 11 (count) doesn't trigger.
+                            // Add two more valid planes so rule 11 (count) doesn't trigger.
         let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
         let data = make_data(
             vec![make_hydro(1, None)],

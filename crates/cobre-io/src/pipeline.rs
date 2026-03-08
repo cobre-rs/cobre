@@ -7,20 +7,20 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{SystemBuilder, scenario::CorrelationModel};
+use cobre_core::{scenario::CorrelationModel, SystemBuilder};
 
 use crate::{
-    LoadError,
     resolution::{resolve_bounds, resolve_penalties},
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
-        ValidationContext,
         dimensional::validate_dimensional_consistency,
         referential::validate_referential_integrity,
         schema::validate_schema,
         semantic::{validate_semantic_hydro_thermal, validate_semantic_stages_penalties_scenarios},
         structural::validate_structure,
+        ValidationContext,
     },
+    LoadError,
 };
 
 use cobre_core::System;

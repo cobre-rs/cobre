@@ -49,8 +49,8 @@
 //! that `bus_id` exists) is also deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    EntityId,
     entities::{GnlConfig, Thermal, ThermalCostSegment},
+    EntityId,
 };
 use serde::Deserialize;
 use std::collections::HashSet;

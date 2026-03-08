@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 // ── validate_referential_integrity ───────────────────────────────────────────
 
@@ -564,12 +564,12 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             DiversionChannel, Hydro, HydroGenerationModel, HydroPenalties, Line,
             NonControllableSource, PumpingStation, Thermal, ThermalCostSegment,
         },
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+        EntityId,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -583,7 +583,7 @@ mod tests {
         extensions::HydroGeometryRow,
         scenarios::{InflowSeasonalStatsRow, LoadSeasonalStatsRow},
         validation::{
-            schema::{ParsedData, validate_schema},
+            schema::{validate_schema, ParsedData},
             structural::validate_structure,
         },
     };

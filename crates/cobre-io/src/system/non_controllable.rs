@@ -42,9 +42,9 @@
 //! registry) is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    EntityId,
     entities::NonControllableSource,
-    penalty::{GlobalPenaltyDefaults, resolve_ncs_curtailment_cost},
+    penalty::{resolve_ncs_curtailment_cost, GlobalPenaltyDefaults},
+    EntityId,
 };
 use serde::Deserialize;
 use std::collections::HashSet;

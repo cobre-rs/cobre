@@ -38,6 +38,17 @@
 
 use cobre_core::StoppingRuleResult;
 
+/// Rule name for the iteration limit stopping rule.
+pub const RULE_ITERATION_LIMIT: &str = "iteration_limit";
+/// Rule name for the wall-clock time limit stopping rule.
+pub const RULE_TIME_LIMIT: &str = "time_limit";
+/// Rule name for the lower-bound stalling stopping rule.
+pub const RULE_BOUND_STALLING: &str = "bound_stalling";
+/// Rule name for the simulation-based stopping rule.
+pub const RULE_SIMULATION_BASED: &str = "simulation_based";
+/// Rule name for the graceful-shutdown stopping rule.
+pub const RULE_GRACEFUL_SHUTDOWN: &str = "graceful_shutdown";
+
 // ---------------------------------------------------------------------------
 // MonitorState
 // ---------------------------------------------------------------------------
@@ -195,7 +206,7 @@ impl StoppingRule {
                 let triggered = state.iteration >= *limit;
                 let detail = format!("iteration {}/{}", state.iteration, limit);
                 StoppingRuleResult {
-                    rule_name: "iteration_limit".to_string(),
+                    rule_name: RULE_ITERATION_LIMIT.to_string(),
                     triggered,
                     detail,
                 }
@@ -208,7 +219,7 @@ impl StoppingRule {
                     state.wall_time_seconds, seconds
                 );
                 StoppingRuleResult {
-                    rule_name: "time_limit".to_string(),
+                    rule_name: RULE_TIME_LIMIT.to_string(),
                     triggered,
                     detail,
                 }
@@ -225,7 +236,7 @@ impl StoppingRule {
                 let window = *iterations as usize;
                 if state.lower_bound_history.len() < window {
                     return StoppingRuleResult {
-                        rule_name: "bound_stalling".to_string(),
+                        rule_name: RULE_BOUND_STALLING.to_string(),
                         triggered: false,
                         detail: format!(
                             "insufficient history: {}/{} iterations",
@@ -252,7 +263,7 @@ impl StoppingRule {
                     window
                 );
                 StoppingRuleResult {
-                    rule_name: "bound_stalling".to_string(),
+                    rule_name: RULE_BOUND_STALLING.to_string(),
                     triggered,
                     detail,
                 }
@@ -267,7 +278,7 @@ impl StoppingRule {
                 // Only evaluate at multiples of `period`.
                 if *period == 0 || state.iteration % period != 0 {
                     return StoppingRuleResult {
-                        rule_name: "simulation_based".to_string(),
+                        rule_name: RULE_SIMULATION_BASED.to_string(),
                         triggered: false,
                         detail: format!("not a check iteration ({}/{})", state.iteration, period),
                     };
@@ -278,7 +289,7 @@ impl StoppingRule {
                 // Phase 1 (bound stability) passed and simulations were run.
                 let Some(ref current_costs) = state.simulation_costs else {
                     return StoppingRuleResult {
-                        rule_name: "simulation_based".to_string(),
+                        rule_name: RULE_SIMULATION_BASED.to_string(),
                         triggered: false,
                         detail: "no simulation results available (Phase 1 failed or first check)"
                             .to_string(),
@@ -308,7 +319,7 @@ impl StoppingRule {
                     "simulation distance {distance:.6} / tolerance {distance_tolerance:.6}"
                 );
                 StoppingRuleResult {
-                    rule_name: "simulation_based".to_string(),
+                    rule_name: RULE_SIMULATION_BASED.to_string(),
                     triggered,
                     detail,
                 }
@@ -322,7 +333,7 @@ impl StoppingRule {
                     "no shutdown signal".to_string()
                 };
                 StoppingRuleResult {
-                    rule_name: "graceful_shutdown".to_string(),
+                    rule_name: RULE_GRACEFUL_SHUTDOWN.to_string(),
                     triggered,
                     detail,
                 }

@@ -32,6 +32,7 @@
 //! Conversion from solver-specific types to this payload type is handled by the
 //! solver's output integration layer.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -389,9 +390,9 @@ pub struct SimulationParquetWriter {
     /// passes 0-based `stage_id` values that map to this same ordering
     /// for study stages (IDs >= 0).
     block_durations: Vec<Vec<f64>>,
-    /// Per-line loss factors (`1.0 - losses_percent / 100.0`), indexed by
-    /// position in `system.lines()` (canonical order).
-    loss_factors: Vec<f64>,
+    /// Per-line loss factors (`1.0 - losses_percent / 100.0`), keyed by
+    /// line entity ID for safe lookup with non-contiguous IDs.
+    loss_factors: HashMap<i32, f64>,
     /// Number of scenarios written so far.
     scenarios_written: u32,
     /// Relative partition paths written (one per entity type per scenario).
@@ -429,11 +430,10 @@ impl SimulationParquetWriter {
             .map(|s| s.blocks.iter().map(|b| b.duration_hours).collect())
             .collect();
 
-        // Extract per-line loss factors: loss_factor = 1.0 - losses_percent / 100.0.
-        let loss_factors: Vec<f64> = system
+        let loss_factors: HashMap<i32, f64> = system
             .lines()
             .iter()
-            .map(|l| 1.0 - l.losses_percent / 100.0)
+            .map(|l| (l.id.0, 1.0 - l.losses_percent / 100.0))
             .collect();
 
         // costs: always present (every scenario has at least one stage with cost data).
@@ -955,12 +955,8 @@ fn build_thermals_batch(
 ///   where `loss_factor = 1.0 - losses_percent / 100.0`
 /// - `losses_mwh = losses_mw * block_duration_hours`
 ///
-/// `loss_factors` is indexed by the position of each line in `system.lines()`
-/// (canonical order). The `line_id` in each record is a 1-based entity ID;
-/// since the writer cannot reverse-map IDs to positions without the system,
-/// the loss factor is looked up by matching `line_id` against a
-/// position-ordered parallel vec. For records where `line_id` cannot be
-/// matched (out of range), a loss factor of `1.0` (zero losses) is used.
+/// `loss_factors` maps line entity ID to its loss factor. Unknown IDs
+/// default to `1.0` (zero losses).
 #[allow(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
@@ -969,7 +965,7 @@ fn build_thermals_batch(
 fn build_exchanges_batch(
     records: &[&ExchangeWriteRecord],
     block_durations: &[Vec<f64>],
-    loss_factors: &[f64],
+    loss_factors: &HashMap<i32, f64>,
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(exchanges_schema());
     let n = records.len();
@@ -989,18 +985,7 @@ fn build_exchanges_batch(
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
 
-        // Look up loss_factor by line_id (1-based entity ID -> 0-based position).
-        // line_id is an i32 entity ID; positions are 0-based indices.
-        // We use the entity ID as a 1-based index into the loss_factors slice.
-        // Since entity IDs are contiguous and sorted, ID 1 -> index 0.
-        let lf = if r.line_id > 0 {
-            loss_factors
-                .get((r.line_id - 1) as usize)
-                .copied()
-                .unwrap_or(1.0)
-        } else {
-            1.0
-        };
+        let lf = loss_factors.get(&r.line_id).copied().unwrap_or(1.0);
 
         let net = r.direct_flow_mw - r.reverse_flow_mw;
         let total_flow = r.direct_flow_mw + r.reverse_flow_mw;
@@ -1685,7 +1670,7 @@ mod tests {
         // One stage, one block, 720 hours.
         let block_durations = vec![vec![720.0_f64]];
         // Line 1 has losses_percent=2.5 → loss_factor=0.975 → (1-lf)=0.025
-        let loss_factors = vec![0.975_f64]; // index 0 = line_id 1
+        let loss_factors = HashMap::from([(1, 0.975_f64)]);
 
         let r = ExchangeWriteRecord {
             stage_id: 0,

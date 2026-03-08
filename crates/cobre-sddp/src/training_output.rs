@@ -229,7 +229,8 @@ pub fn build_training_output(
         peak_active,
     };
 
-    let converged = result.reason == "gap_tolerance";
+    let converged = result.reason == crate::stopping_rule::RULE_BOUND_STALLING
+        || result.reason == crate::stopping_rule::RULE_SIMULATION_BASED;
 
     let final_gap_percent = if result.final_lb > 0.0 {
         Some(result.final_gap * 100.0)
@@ -307,8 +308,19 @@ mod tests {
     }
 
     #[test]
-    fn converged_true_for_gap_tolerance() {
-        let result = make_result("gap_tolerance", 100.0, 101.0, 0.01, 5);
+    fn converged_true_for_bound_stalling() {
+        let result = make_result("bound_stalling", 100.0, 101.0, 0.01, 5);
+        let events = vec![make_iteration_summary(1, 100.0, 101.0, 0.01)];
+        let fcf = make_empty_fcf();
+
+        let output = build_training_output(&result, &events, &fcf);
+
+        assert!(output.converged);
+    }
+
+    #[test]
+    fn converged_true_for_simulation_based() {
+        let result = make_result("simulation_based", 100.0, 101.0, 0.01, 5);
         let events = vec![make_iteration_summary(1, 100.0, 101.0, 0.01)];
         let fcf = make_empty_fcf();
 
@@ -371,8 +383,8 @@ mod tests {
     #[test]
     fn converged_false_for_all_other_reasons() {
         let reasons = [
+            "iteration_limit",
             "time_limit",
-            "bound_stalling",
             "graceful_shutdown",
             "unknown",
         ];
@@ -403,7 +415,7 @@ mod tests {
 
     #[test]
     fn gap_percent_computed_correctly() {
-        let result = make_result("gap_tolerance", 100.0, 102.0, 0.02, 3);
+        let result = make_result("bound_stalling", 100.0, 102.0, 0.02, 3);
         let fcf = make_empty_fcf();
 
         let output = build_training_output(&result, &[], &fcf);

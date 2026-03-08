@@ -162,8 +162,8 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
     for rec in records {
         iteration.append_value(rec.iteration as i32);
         lower_bound.append_value(rec.lower_bound);
-        upper_bound_mean.append_option(Some(rec.upper_bound_mean));
-        upper_bound_std.append_option(Some(rec.upper_bound_std));
+        upper_bound_mean.append_value(rec.upper_bound_mean);
+        upper_bound_std.append_value(rec.upper_bound_std);
         gap_percent.append_option(rec.gap_percent);
         cuts_added.append_value(rec.cuts_added as i32);
         cuts_removed.append_value(rec.cuts_removed as i32);

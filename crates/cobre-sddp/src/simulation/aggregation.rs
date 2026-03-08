@@ -88,7 +88,7 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// - `min_cost`, `max_cost` — from `allreduce` (identical on all ranks).
 /// - `mean_cost`, `std_cost`, `cvar`, `category_stats` — computed from the
 ///   `allgatherv` result (identical on all ranks).
-/// - `n_scenarios` — equals `config.n_scenarios`.
+/// - `n_scenarios` — actual count gathered across all ranks (equals `config.n_scenarios`).
 /// - `cvar_alpha` — hardcoded to `0.95`.
 /// - `deficit_frequency`, `total_deficit_mwh`, `total_spillage_mwh` — `0.0`
 ///   (deferred: requires per-stage deficit/spillage accumulation in the
@@ -179,6 +179,11 @@ pub fn aggregate_simulation<C: Communicator>(
             message: format!("allgatherv(costs) failed: {e}"),
         })?;
 
+    debug_assert_eq!(
+        total_gathered, config.n_scenarios as usize,
+        "gathered scenario count must match configured n_scenarios"
+    );
+
     // Compute aggregate statistics from gathered costs.
     let n = total_gathered;
     let (mean_cost, std_cost) = compute_mean_std(&cost_recv);
@@ -220,7 +225,8 @@ pub fn aggregate_simulation<C: Communicator>(
         deficit_frequency: 0.0,
         total_deficit_mwh: 0.0,
         total_spillage_mwh: 0.0,
-        n_scenarios: config.n_scenarios,
+        #[allow(clippy::cast_possible_truncation)]
+        n_scenarios: total_gathered as u32,
         stage_stats: None,
     })
 }

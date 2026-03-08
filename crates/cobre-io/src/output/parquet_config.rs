@@ -53,8 +53,8 @@ pub struct ParquetWriterConfig {
 
 impl Default for ParquetWriterConfig {
     fn default() -> Self {
-        #[allow(clippy::unwrap_used)]
-        let zstd_level = ZstdLevel::try_new(3).unwrap();
+        #[allow(clippy::expect_used)]
+        let zstd_level = ZstdLevel::try_new(3).expect("ZstdLevel 3 is always valid");
         Self {
             compression: Compression::ZSTD(zstd_level),
             row_group_size: 100_000,

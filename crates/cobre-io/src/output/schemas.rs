@@ -207,8 +207,8 @@ pub(crate) fn convergence_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
         Field::new("lower_bound", DataType::Float64, false),
-        Field::new("upper_bound_mean", DataType::Float64, true),
-        Field::new("upper_bound_std", DataType::Float64, true),
+        Field::new("upper_bound_mean", DataType::Float64, false),
+        Field::new("upper_bound_std", DataType::Float64, false),
         Field::new("gap_percent", DataType::Float64, true),
         Field::new("cuts_added", DataType::Int32, false),
         Field::new("cuts_removed", DataType::Int32, false),
@@ -588,14 +588,14 @@ mod tests {
     #[test]
     fn convergence_schema_nullable_fields() {
         let schema = convergence_schema();
-        // upper_bound_mean, upper_bound_std, gap_percent are nullable per spec SS6.1
-        assert!(is_nullable(&schema, "upper_bound_mean"));
-        assert!(is_nullable(&schema, "upper_bound_std"));
+        // gap_percent is nullable (None when LB <= 0)
         assert!(is_nullable(&schema, "gap_percent"));
         // all other fields must not be nullable
         for name in &[
             "iteration",
             "lower_bound",
+            "upper_bound_mean",
+            "upper_bound_std",
             "cuts_added",
             "cuts_removed",
             "cuts_active",

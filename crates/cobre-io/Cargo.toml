@@ -22,6 +22,7 @@ postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+flatbuffers = "25"
 
 [dev-dependencies]
 parquet = { version = "55", default-features = false, features = ["arrow", "zstd"] }

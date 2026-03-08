@@ -11,6 +11,7 @@ pub mod dictionary;
 pub mod error;
 pub mod manifest;
 pub mod parquet_config;
+pub mod policy;
 pub(crate) mod schemas;
 pub mod simulation_writer;
 pub mod training_writer;

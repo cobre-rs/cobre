@@ -90,9 +90,9 @@ pub trait SolverInterface: Send {
 
     /// Solves the LP, returning a zero-copy view or terminal error after retry exhaustion.
     ///
-    /// Hot-path method encapsulating internal retry logic. Requires [`load_model`]
+    /// Hot-path method encapsulating internal retry logic. Requires [`Self::load_model`]
     /// called first and scenario patches applied. On error, caller must call
-    /// [`reset`](Self::reset) before reusing. The returned [`SolutionView`] borrows
+    /// [`Self::reset`] before reusing. The returned [`SolutionView`] borrows
     /// solver-internal buffers and is valid until the next `&mut self` call. Call
     /// [`SolutionView::to_owned`] when the solution must outlive the borrow.
     ///
@@ -108,7 +108,7 @@ pub trait SolverInterface: Send {
 
     /// Clears internal solver state for error recovery or LP structure change.
     ///
-    /// Requires [`load_model`] before next solve. Preserves `SolverStatistics`
+    /// Requires [`Self::load_model`] before next solve. Preserves `SolverStatistics`
     /// counters; does not zero them.
     ///
     /// See Solver Interface Trait SS2.6.
@@ -142,7 +142,7 @@ pub trait SolverInterface: Send {
 
     /// Returns accumulated solve metrics (snapshot of monotonically increasing counters).
     ///
-    /// Statistics accumulate since construction; [`reset`] does not zero them.
+    /// Statistics accumulate since construction; [`Self::reset`] does not zero them.
     /// All fields non-negative.
     ///
     /// See Solver Interface Trait SS2.8.

@@ -23,31 +23,31 @@
 // External crate imports
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
+    OpeningTree, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 use cobre_sddp::{
-    cut::fcf::FutureCostFunction, train, HorizonMode, RiskMeasure, SddpError, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -311,9 +311,9 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
+    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
-    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),

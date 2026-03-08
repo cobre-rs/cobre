@@ -183,12 +183,12 @@ fn minimal_template() -> StageTemplate {
 fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
     use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
     use std::collections::BTreeMap;
@@ -547,8 +547,8 @@ mod cut_conformance {
     //! Conformance tests for `CutPool` and `CutWireHeader` round-trip.
 
     use cobre_sddp::cut::{
-        wire::{cut_wire_size, deserialize_cut, serialize_cut, CutWireHeader},
         CutPool,
+        wire::{CutWireHeader, cut_wire_size, deserialize_cut, serialize_cut},
     };
 
     /// Verify `CutWireHeader` serialize/deserialize round-trip with `n_state=3`.
@@ -793,9 +793,9 @@ mod convergence_conformance {
 mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
-    use cobre_sddp::{lower_bound::evaluate_lower_bound, PatchBuffer, RiskMeasure, StageIndexer};
+    use cobre_sddp::{PatchBuffer, RiskMeasure, StageIndexer, lower_bound::evaluate_lower_bound};
 
-    use super::{make_fcf, minimal_template, simple_opening_tree, LocalComm, MockSolver};
+    use super::{LocalComm, MockSolver, make_fcf, minimal_template, simple_opening_tree};
 
     /// Conformance contract: `evaluate_lower_bound` returns a higher (or equal)
     /// value when the mock solver produces higher objectives, simulating the

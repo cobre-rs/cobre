@@ -48,7 +48,7 @@
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_solver::{SolverError, SolverInterface, StageTemplate};
+use cobre_solver::{RawBasis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
@@ -114,6 +114,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
     comm: &C,
+    basis_cache: &mut [Option<RawBasis>],
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let total_scenarios = exchange.total_scenarios();
@@ -152,8 +153,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
         let n_openings = tree_view.n_openings(successor);
 
         #[allow(clippy::cast_precision_loss)]
-        let prob = 1.0_f64 / n_openings as f64;
-        let probabilities: Vec<f64> = vec![prob; n_openings];
+        let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
         let cut_batch = build_cut_row_batch(fcf, successor, indexer);
         let num_cuts_at_successor = cut_batch.num_rows;
@@ -164,8 +164,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
         }
 
         for m in 0..total_scenarios {
-            let local_count = exchange.local_count();
-            let x_hat = exchange.state_at(m / local_count, m % local_count);
+            let x_hat = exchange.state_at(m / exchange.local_count(), m % exchange.local_count());
 
             outcomes.clear();
 
@@ -182,15 +181,23 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                     &patch_buf.upper[..patch_count],
                 );
 
-                let view = solver.solve_view().map_err(|e| match e {
-                    SolverError::Infeasible { .. } => SddpError::Infeasible {
-                        stage: t,
-                        iteration,
-                        // m is the global trial point index — cast is safe
-                        // because total_scenarios <= usize::MAX.
-                        scenario: m,
-                    },
-                    other => SddpError::Solver(other),
+                let view = (if let Some(rb) = basis_cache[successor].as_ref() {
+                    solver.solve_with_raw_basis_view(rb)
+                } else {
+                    solver.solve_view()
+                })
+                .map_err(|e| {
+                    basis_cache[successor] = None;
+                    match e {
+                        SolverError::Infeasible { .. } => SddpError::Infeasible {
+                            stage: t,
+                            iteration,
+                            // m is the global trial point index — cast is safe
+                            // because total_scenarios <= usize::MAX.
+                            scenario: m,
+                        },
+                        other => SddpError::Solver(other),
+                    }
                 })?;
 
                 let objective = view.objective;
@@ -199,32 +206,31 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 let pi_dot_x: f64 = coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
                 let intercept = objective - pi_dot_x;
 
-                // Collect binding cut slot indices while the view (and its borrow of the
-                // solver buffers) is still live. Metadata updates are deferred until
-                // after the view is dropped, because those writes go to `fcf` (a
-                // separate object), but dropping the view first keeps the code clear.
                 let binding_slots: Vec<usize> = if num_cuts_at_successor > 0 {
                     let cut_duals =
                         &view.dual[template_num_rows..template_num_rows + num_cuts_at_successor];
                     fcf.active_cuts(successor)
                         .enumerate()
                         .filter_map(|(cut_idx, (slot, _, _))| {
-                            if cut_duals[cut_idx] > 0.0 {
-                                Some(slot)
-                            } else {
-                                None
-                            }
+                            (cut_duals[cut_idx] > 0.0).then_some(slot)
                         })
                         .collect()
                 } else {
                     Vec::new()
                 };
-                // view is dropped here; the &mut self borrow on solver is released.
 
-                // Update cut metadata using the collected slot indices.
                 for slot in binding_slots {
                     fcf.pools[successor].metadata[slot].active_count += 1;
                     fcf.pools[successor].metadata[slot].last_active_iter = iteration;
+                }
+
+                if let Some(rb) = &mut basis_cache[successor] {
+                    solver.get_raw_basis(rb);
+                } else {
+                    let mut rb =
+                        RawBasis::new(templates[successor].num_cols, templates[successor].num_rows);
+                    solver.get_raw_basis(&mut rb);
+                    basis_cache[successor] = Some(rb);
                 }
 
                 outcomes.push(BackwardOutcome {
@@ -251,13 +257,12 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
         }
     }
 
-    let elapsed_ms = start.elapsed().as_millis();
     #[allow(clippy::cast_possible_truncation)]
-    let elapsed_ms_u64 = elapsed_ms as u64;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
 
     Ok(BackwardResult {
         cuts_generated,
-        elapsed_ms: elapsed_ms_u64,
+        elapsed_ms,
     })
 }
 
@@ -326,6 +331,8 @@ mod tests {
         call_count: usize,
         /// Tracks the current number of rows (template + appended cuts).
         current_num_rows: usize,
+        /// Number of times `solve_with_raw_basis_view` was called.
+        warm_start_calls: usize,
         buf_primal: Vec<f64>,
         buf_dual: Vec<f64>,
         buf_reduced_costs: Vec<f64>,
@@ -342,6 +349,7 @@ mod tests {
                 infeasible_at: None,
                 call_count: 0,
                 current_num_rows: base_rows,
+                warm_start_calls: 0,
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
@@ -358,6 +366,7 @@ mod tests {
                 infeasible_at: Some(n),
                 call_count: 0,
                 current_num_rows: base_rows,
+                warm_start_calls: 0,
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
@@ -421,6 +430,7 @@ mod tests {
             &mut self,
             _basis: &RawBasis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.warm_start_calls += 1;
             self.solve_view()
         }
 
@@ -721,6 +731,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -781,6 +792,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -841,6 +853,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -897,6 +910,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -952,6 +966,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -1005,6 +1020,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         );
 
         assert!(
@@ -1103,6 +1119,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -1170,6 +1187,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -1247,6 +1265,7 @@ mod tests {
             &mut patch_buf,
             &indexer,
             &comm,
+            &mut vec![None; templates.len()],
         )
         .unwrap();
 
@@ -1257,6 +1276,218 @@ mod tests {
         assert_eq!(
             meta.forward_pass_index, 5,
             "forward_pass_index must be 5 (= global m)"
+        );
+    }
+
+    // ── Unit tests: warm-start basis caching (backward pass) ──────────────────
+
+    /// Warm-start from a pre-populated forward basis: when `basis_cache[successor]`
+    /// is pre-filled with `Some(RawBasis)` before the first backward call, the
+    /// first opening at the successor stage must call `solve_with_raw_basis_view`
+    /// rather than `solve_view`.
+    ///
+    /// AC: Given a 2-stage system, 1 trial point, 1 opening, with
+    /// `basis_cache[1] = Some(RawBasis::new(...))` pre-populated,
+    /// then `solver.warm_start_calls == 1` after the backward pass.
+    #[test]
+    fn warm_start_uses_prepopulated_forward_basis() {
+        let n_stages = 2_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut patch_buf = PatchBuffer::new(1, 0);
+        let config = TrainingConfig {
+            forward_passes,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let solution = solution_1_0(100.0, -5.0);
+        let mut solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+
+        // Pre-populate the basis cache at stage 1 (the successor in a 2-stage system).
+        // This simulates a forward pass having already solved stage 1 and cached its basis.
+        let mut basis_cache: Vec<Option<RawBasis>> = vec![
+            None,
+            Some(RawBasis::new(templates[1].num_cols, templates[1].num_rows)),
+        ];
+
+        let _ = run_backward_pass(
+            &mut solver,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            &config,
+            0,
+            &horizon,
+            &risk_measures,
+            &mut patch_buf,
+            &indexer,
+            &comm,
+            &mut basis_cache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            solver.warm_start_calls, 1,
+            "first opening at successor stage must call solve_with_raw_basis_view \
+             when basis_cache[1] is pre-populated (warm_start_calls == 1, got {})",
+            solver.warm_start_calls
+        );
+    }
+
+    /// Multi-opening warm-start: given 3 openings at the same successor stage,
+    /// the first opening cold-starts (`basis_cache` is None), and openings 2 and 3
+    /// warm-start from the first opening's basis.
+    ///
+    /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
+    /// then `solver.warm_start_calls == 2` after the backward pass (openings 2
+    /// and 3 warm-start; opening 1 cold-starts).
+    #[test]
+    fn multi_opening_warm_start_subsequent_openings_use_basis() {
+        let n_stages = 2_usize;
+        let n_openings = 3_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut patch_buf = PatchBuffer::new(1, 0);
+        let config = TrainingConfig {
+            forward_passes,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let solution = solution_1_0(100.0, -5.0);
+        let mut solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+
+        // Start with an empty cache — opening 1 must cold-start.
+        let mut basis_cache: Vec<Option<RawBasis>> = vec![None; n_stages];
+
+        let _ = run_backward_pass(
+            &mut solver,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            &config,
+            0,
+            &horizon,
+            &risk_measures,
+            &mut patch_buf,
+            &indexer,
+            &comm,
+            &mut basis_cache,
+        )
+        .unwrap();
+
+        // Opening 1: cold-start (cache was None).
+        // Opening 2: warm-start (cache populated by opening 1).
+        // Opening 3: warm-start (cache updated by opening 2).
+        assert_eq!(
+            solver.warm_start_calls, 2,
+            "openings 2 and 3 must call solve_with_raw_basis_view \
+             (warm_start_calls == 2, got {})",
+            solver.warm_start_calls
+        );
+    }
+
+    /// Error invalidation: when a backward solve returns `SolverError::Infeasible`,
+    /// `basis_cache[successor]` must be set to `None` before the error propagates.
+    ///
+    /// AC: Given a 2-stage system, 1 opening, `MockSolver` returns infeasible on
+    /// call 0, then `basis_cache[1]` is `None` after the error.
+    #[test]
+    fn basis_invalidated_on_backward_solver_error() {
+        let n_stages = 2_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut patch_buf = PatchBuffer::new(1, 0);
+        let config = TrainingConfig {
+            forward_passes,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let solution = solution_1_0(0.0, 0.0);
+        // The first backward solve (call 0) returns infeasible.
+        let mut solver = MockSolver::infeasible_on(solution, 0);
+        let comm = StubComm;
+
+        // Pre-populate the cache to verify it gets cleared on error.
+        let mut basis_cache: Vec<Option<RawBasis>> = vec![
+            None,
+            Some(RawBasis::new(templates[1].num_cols, templates[1].num_rows)),
+        ];
+
+        let result = run_backward_pass(
+            &mut solver,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            &config,
+            0,
+            &horizon,
+            &risk_measures,
+            &mut patch_buf,
+            &indexer,
+            &comm,
+            &mut basis_cache,
+        );
+
+        assert!(
+            matches!(result, Err(crate::SddpError::Infeasible { .. })),
+            "expected SddpError::Infeasible, got: {result:?}",
+        );
+        // The cache slot for the successor stage (stage 1) must be invalidated.
+        assert!(
+            basis_cache[1].is_none(),
+            "basis_cache[1] must be None after solver error at successor stage 1"
         );
     }
 }

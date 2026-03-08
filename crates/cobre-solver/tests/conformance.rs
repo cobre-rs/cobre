@@ -15,7 +15,9 @@
     )
 )]
 
-use cobre_solver::{HighsSolver, RawBasis, RowBatch, SolverError, SolverInterface, StageTemplate, SolutionView};
+use cobre_solver::{
+    HighsSolver, RawBasis, RowBatch, SolutionView, SolverError, SolverInterface, StageTemplate,
+};
 
 #[cfg(feature = "test-support")]
 use cobre_solver::test_support;
@@ -1654,14 +1656,23 @@ fn solve_view_equals_solve() {
     let view = solver_b.solve_view().expect("solve_view() must succeed");
     let from_view = view.to_owned();
 
-    assert_eq!(owned.objective, from_view.objective, "objectives must be bitwise equal");
-    assert_eq!(owned.primal, from_view.primal, "primals must be bitwise equal");
+    assert_eq!(
+        owned.objective, from_view.objective,
+        "objectives must be bitwise equal"
+    );
+    assert_eq!(
+        owned.primal, from_view.primal,
+        "primals must be bitwise equal"
+    );
     assert_eq!(owned.dual, from_view.dual, "duals must be bitwise equal");
     assert_eq!(
         owned.reduced_costs, from_view.reduced_costs,
         "reduced_costs must be bitwise equal"
     );
-    assert_eq!(owned.iterations, from_view.iterations, "iterations must match");
+    assert_eq!(
+        owned.iterations, from_view.iterations,
+        "iterations must match"
+    );
 }
 
 /// `solve_with_basis_view()` + `to_owned()` must match `solve_with_basis()`.
@@ -1697,13 +1708,19 @@ fn solve_with_basis_view_equals_solve_with_basis() {
         owned.objective, from_view.objective,
         "objectives must be bitwise equal"
     );
-    assert_eq!(owned.primal, from_view.primal, "primals must be bitwise equal");
+    assert_eq!(
+        owned.primal, from_view.primal,
+        "primals must be bitwise equal"
+    );
     assert_eq!(owned.dual, from_view.dual, "duals must be bitwise equal");
     assert_eq!(
         owned.reduced_costs, from_view.reduced_costs,
         "reduced_costs must be bitwise equal"
     );
-    assert_eq!(owned.iterations, from_view.iterations, "iterations must match");
+    assert_eq!(
+        owned.iterations, from_view.iterations,
+        "iterations must match"
+    );
 }
 
 /// Calling `solve_view()` twice on the same loaded model (borrow-drop cycle) succeeds.
@@ -1718,15 +1735,25 @@ fn solve_view_borrows_internal_buffers() {
 
     // First solve_view — read a couple of values then let it go out of scope.
     let (obj1, primal0_first) = {
-        let view = solver.solve_view().expect("first solve_view() must succeed");
+        let view = solver
+            .solve_view()
+            .expect("first solve_view() must succeed");
         (view.objective, view.primal[0])
     };
     // view is dropped here; the &mut self borrow is released.
 
     // Second solve_view — model is unchanged, so results must be identical.
-    let view2 = solver.solve_view().expect("second solve_view() must succeed");
-    assert_eq!(obj1, view2.objective, "objective must be identical on both calls");
-    assert_eq!(primal0_first, view2.primal[0], "primal[0] must be identical on both calls");
+    let view2 = solver
+        .solve_view()
+        .expect("second solve_view() must succeed");
+    assert_eq!(
+        obj1, view2.objective,
+        "objective must be identical on both calls"
+    );
+    assert_eq!(
+        primal0_first, view2.primal[0],
+        "primal[0] must be identical on both calls"
+    );
 }
 
 /// After `add_rows`, `solve_view()` must reflect the extended LP.
@@ -1743,7 +1770,9 @@ fn solve_view_after_add_rows() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
 
-    let view = solver.solve_view().expect("solve_view() after add_rows must succeed");
+    let view = solver
+        .solve_view()
+        .expect("solve_view() after add_rows must succeed");
 
     assert!(
         (view.objective - 162.0).abs() < 1e-8,
@@ -1771,8 +1800,14 @@ fn solve_view_statistics_updated() {
     let _view: SolutionView<'_> = solver.solve_view().expect("solve_view() must succeed");
 
     let stats = solver.statistics();
-    assert_eq!(stats.solve_count, 1, "solve_count must be 1 after one solve_view call");
-    assert_eq!(stats.success_count, 1, "success_count must be 1 after a successful solve_view");
+    assert_eq!(
+        stats.solve_count, 1,
+        "solve_count must be 1 after one solve_view call"
+    );
+    assert_eq!(
+        stats.success_count, 1,
+        "success_count must be 1 after a successful solve_view"
+    );
 }
 
 // --- RawBasis conformance tests ---
@@ -1815,7 +1850,10 @@ fn raw_basis_roundtrip_equals_enum_basis() {
     assert_eq!(result_a.objective, result_b.objective, "objectives differ");
     assert_eq!(result_a.primal, result_b.primal, "primals differ");
     assert_eq!(result_a.dual, result_b.dual, "duals differ");
-    assert_eq!(result_a.reduced_costs, result_b.reduced_costs, "reduced costs differ");
+    assert_eq!(
+        result_a.reduced_costs, result_b.reduced_costs,
+        "reduced costs differ"
+    );
 }
 
 /// `get_raw_basis` must write exactly `num_cols` col statuses and `num_rows` row

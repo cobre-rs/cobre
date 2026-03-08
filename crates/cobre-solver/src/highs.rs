@@ -26,7 +26,7 @@ use std::time::Instant;
 use crate::{
     SolverInterface, ffi,
     types::{
-        Basis, LpSolution, RowBatch, SolverError, SolverStatistics, SolutionView, StageTemplate,
+        Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
     },
 };
 
@@ -977,10 +977,7 @@ impl SolverInterface for HighsSolver {
         }))
     }
 
-    fn solve_with_basis_view(
-        &mut self,
-        basis: &Basis,
-    ) -> Result<SolutionView<'_>, SolverError> {
+    fn solve_with_basis_view(&mut self, basis: &Basis) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve_with_basis called without a loaded model — call load_model first"
@@ -1796,7 +1793,9 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("solve must succeed before get_raw_basis");
+        solver
+            .solve()
+            .expect("solve must succeed before get_raw_basis");
 
         let mut raw_basis = RawBasis::new(0, 0);
         solver.get_raw_basis(&mut raw_basis);
@@ -1822,7 +1821,9 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("solve must succeed before get_raw_basis");
+        solver
+            .solve()
+            .expect("solve must succeed before get_raw_basis");
 
         let mut raw_basis = RawBasis::new(0, 0);
         assert_eq!(

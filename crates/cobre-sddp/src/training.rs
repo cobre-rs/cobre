@@ -33,6 +33,7 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
+use cobre_solver::RawBasis;
 use cobre_solver::SolverInterface;
 use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
@@ -247,22 +248,20 @@ pub fn train<S: SolverInterface, C: Communicator>(
     let max_cuts_per_rank = total_scenarios;
     let mut cut_sync_bufs = CutSyncBuffers::new(n_state, max_cuts_per_rank, num_ranks);
 
+    let mut basis_cache: Vec<Option<RawBasis>> = vec![None; templates.len()];
+
     let start_time = Instant::now();
 
     let TrainingConfig {
         forward_passes: config_forward_passes,
         max_iterations,
-        checkpoint_interval,
-        warm_start_cuts,
         event_sender,
+        ..
     } = config;
 
     let loop_config = TrainingConfig {
-        forward_passes: config_forward_passes,
-        max_iterations,
-        checkpoint_interval,
-        warm_start_cuts,
         event_sender: None,
+        ..config
     };
 
     #[allow(clippy::cast_possible_truncation)]
@@ -279,11 +278,11 @@ pub fn train<S: SolverInterface, C: Communicator>(
         },
     );
 
-    let mut final_lb = 0.0_f64;
-    let mut final_ub = 0.0_f64;
-    let mut final_gap = 0.0_f64;
-    let mut completed_iterations: u64 = 0;
-    let mut termination_reason = String::from("iteration_limit");
+    let mut final_lb = 0.0;
+    let mut final_ub = 0.0;
+    let mut final_gap = 0.0;
+    let mut completed_iterations = 0u64;
+    let mut termination_reason = "iteration_limit".to_string();
 
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
@@ -309,6 +308,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
             &mut patch_buf,
             indexer,
             comm,
+            &mut basis_cache,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -352,6 +352,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
             &mut patch_buf,
             indexer,
             comm,
+            &mut basis_cache,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
@@ -389,13 +390,13 @@ pub fn train<S: SolverInterface, C: Communicator>(
             },
         );
 
-        #[allow(clippy::cast_possible_truncation)]
         if let Some(strategy) = cut_selection {
             if strategy.should_run(iteration) {
                 let sel_start = Instant::now();
                 let num_sel_stages = num_stages.saturating_sub(1);
-                let mut cuts_deactivated: u32 = 0;
+                let mut cuts_deactivated = 0u32;
 
+                #[allow(clippy::cast_possible_truncation)]
                 for stage in 0..num_sel_stages {
                     let stage_u32 = stage as u32;
                     let deact =
@@ -404,14 +405,17 @@ pub fn train<S: SolverInterface, C: Communicator>(
                     fcf.pools[stage].deactivate(&deact.indices);
                 }
 
+                #[allow(clippy::cast_possible_truncation)]
                 let selection_time_ms = sel_start.elapsed().as_millis() as u64;
 
+                #[allow(clippy::cast_possible_truncation)]
+                let stages_processed = num_sel_stages as u32;
                 emit(
                     event_sender.as_ref(),
                     TrainingEvent::CutSelectionComplete {
                         iteration,
                         cuts_deactivated,
-                        stages_processed: num_sel_stages as u32,
+                        stages_processed,
                         selection_time_ms,
                         allgatherv_time_ms: 0,
                     },

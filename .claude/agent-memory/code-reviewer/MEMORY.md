@@ -15,8 +15,14 @@
 - `NetworkTopology` uses two `static OnceLock<T>` globals as empty-collection sentinels to
   return `&T` (not `Option<&T>`) from accessor methods.
 
-### Patterns to watch in this codebase
+### Recurring patterns to watch in this codebase
 
+- `#[allow(unused_variables)]` at function level to suppress pre-declared Phase N+1 params is too broad.
+  The correct idiom is underscore-prefix: `_param_name`. Function-level allow masks future accidental
+  unused locals introduced inside the body. Found in `backward.rs:103` (Phase 7 pre-declarations).
+- `vec![...]` in test code triggers `clippy::useless_vec` when the vec doesn't need heap allocation.
+  CI runs clippy with `-D warnings`, so this silently breaks CI while `cargo test` still passes.
+  Always check with `cargo clippy --all-targets --all-features -- -D warnings`. Found in `types.rs:414`.
 - `Option<usize>` comparisons in tests can silently pass when `None < Some(x)` in Rust's `Ord`.
   Always `.expect()` before comparing positions. Found in `system.rs:1058-1060`.
 - `windows(2)` duplicate detection reports N-1 errors for N identical IDs (a triplicate gets 2 errors).
@@ -54,28 +60,37 @@
   But in practice it CAN be reached if no new errors were added by validate_schema (pre-existing errors
   from Layer 1 caused validate_schema to return None). This is a logic flaw — see FINDING.
 
-### Phase 3 cobre-solver key facts
+### Phase 3 cobre-solver key facts (post solver-hot-path-refactor)
 
 - `unsafe_code = "allow"` is set at crate level in `Cargo.toml` (overriding workspace `forbid`)
   because FFI to HiGHS requires unsafe blocks. All other workspace lints are manually replicated.
 - `HighsSolver` holds a raw `*mut c_void` handle; `Send` is manually impl'd (not `Sync`).
 - `ffi.rs` uses `#![allow(dead_code)]` intentionally — it's a sys-crate-style bindings file.
-- `self.reduced_costs` (Vec field in `HighsSolver`) is dead storage — it is resized in `load_model`
-  but never written or read. `col_dual` from HiGHS is used as reduced costs in `LpSolution`.
-- `as_ptr().cast_mut()` on `&self` methods (`extract_solution`, `get_basis`) creates mutable pointers
-  from shared references. Technically UB under stacked borrows; Miri would flag it.
-  The correct pattern is `&mut self` or taking `&mut self.field` explicitly.
-- Inner-block pointer extraction for `row_indices_ptr` in `load_model` is sound (no mutation between
-  extraction and FFI call) but fragile. Same pattern in `add_rows` with `col_indices_ptr`.
-- `cobre_highs_get_solution` return is silently discarded in `extract_solution` (not in
-  `try_extract_partial_solution` which uses `_status`). Called after OPTIMAL confirmed.
+- `BasisStatus` enum and `Basis` (old enum-based) are REMOVED. `RawBasis` was renamed to `Basis`
+  (raw i32 codes). `SolverInterface` now has: `solve()→SolutionView`, `get_basis(&mut Basis)`,
+  `solve_with_basis(&Basis)→SolutionView`. The old `solve_view`, `get_raw_basis`,
+  `solve_with_raw_basis_view`, `solve_with_raw_basis` names are gone.
+- `SolverError` variants simplified: `Infeasible` and `Unbounded` are now unit variants.
+  `NumericalDifficulty`, `TimeLimitExceeded`, `IterationLimit` lost their `partial_solution` field.
+  All callers treat these as training termination (propagate as `SddpError::Solver`).
+- `try_extract_partial_solution` and `make_infeasible_error`/`make_unbounded_error` helper methods
+  in `HighsSolver` are removed. Ray/direction certificate extraction is still done for
+  `UNBOUNDED_OR_INFEASIBLE` classification, but the ray values are discarded (only classification matters).
+- `basis_col_i32` and `basis_row_i32` are pre-allocated internal buffers in `HighsSolver` for
+  zero-copy basis injection in `solve_with_basis`. Resized in `load_model`/`add_rows`.
+- `get_basis` takes `&mut Basis` (out-param). Resizes `out.col_status` and `out.row_status` to match
+  current LP dimensions before calling `cobre_highs_get_basis`.
+- `solve_with_basis` has a hard assert (not debug_assert) on `basis.col_status.len() == self.num_cols`.
+  Row mismatch is handled silently: extra rows filled with `HIGHS_BASIS_STATUS_BASIC` (1).
+- `cobre_highs_get_solution` return is silently discarded in `extract_solution_view`. Called after
+  OPTIMAL is confirmed.
 - `restore_default_settings` is private and called unconditionally after retry loop.
 - The retry loop (5 levels: clear solver, enable presolve, primal simplex, relax tolerances, IPM)
   only activates on `SOLVE_ERROR` or `UNKNOWN` model status. No test exercises it directly.
 - `test-support` feature re-exports raw FFI option-setters for integration tests that need
   time/iteration limits (e.g., `test_solver_highs_solve_time_limit`).
 - SAFETY comment in `reset()` says "model is still loaded" (true for HiGHS) but code sets
-  `has_model = false`. This is correct behavior but the comment is misleading.
+  `has_model = false`. This is correct behavior but the comment is potentially misleading.
 
 ### Phase 4 cobre-comm key facts
 
@@ -127,11 +142,20 @@
   `resolve.rs:178` produce rustdoc warnings. Fix: escape brackets in cholesky.rs, use
   `Self::apply_correlation` in resolve.rs.
 
-### Phase 6 cobre-sddp key facts
+### Phase 6 cobre-sddp key facts (post solver-hot-path-refactor)
 
+- `train()` in `training.rs` allocates `basis_cache: Vec<Option<Basis>>` (length = num_stages) and
+  passes `&mut basis_cache` to both `run_forward_pass` and `run_backward_pass` each iteration.
+  The cache is NOT reset between forward and backward passes — both share it within an iteration.
+- `run_forward_pass` and `run_backward_pass` warm-start by calling `solve_with_basis(cache[t])` if
+  `Some`, else `solve()`. After each successful solve, `get_basis(&mut cache[t])` is called to
+  update the cache. On solver error, `cache[t] = None` (invalidation).
+- `run_backward_pass` has `config: &TrainingConfig` and `comm: &C` as unused Phase 7 pre-declarations.
+  These are suppressed via `#[allow(unused_variables)]` at function level (line 103 of backward.rs).
+  The correct idiom for unused pre-declared params is underscore-prefix (`_config`, `_comm`).
 - `train()` in `training.rs` destructures `TrainingConfig` into `loop_config` with `event_sender: None`
-  to pass a config without the sender into forward/backward pass. `backward.rs` immediately suppresses
-  both `config` and `comm` via `let _ = config; let _ = comm;` — pre-declarations for Phase 7.
+  using struct update syntax (`..config`) after extracting `config_forward_passes`, `max_iterations`,
+  `event_sender`. The old explicit field-by-field reconstruction is replaced.
 - Backward pass inner opening loop allocates `Vec<f64>` per opening for `coefficients` despite the
   doc claiming "no allocations inside the inner opening loop." Also allocates `Vec<usize>` for
   `binding_slots` per opening when cuts are present. Both are confirmed hot-path allocations.

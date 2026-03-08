@@ -31,8 +31,8 @@ use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch,
+    forward::build_cut_row_batch, FutureCostFunction, PatchBuffer, RiskMeasure, SddpError,
+    StageIndexer,
 };
 use cobre_solver::StageTemplate;
 
@@ -131,7 +131,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 &patch_buf.upper[..n_patches],
             );
 
-            let view = solver.solve_view().map_err(|e| match e {
+            let view = solver.solve().map_err(|e| match e {
                 SolverError::Infeasible { .. } => SddpError::Infeasible {
                     stage: 0,
                     iteration: 0,
@@ -168,7 +168,7 @@ mod tests {
     use crate::{FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer};
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
-        RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+        Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::OpeningTree;
 
@@ -210,12 +210,12 @@ mod tests {
     fn simple_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -400,7 +400,7 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_call == Some(call) {
@@ -423,13 +423,13 @@ mod tests {
             self.call_count = 0;
         }
 
-        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+        fn get_basis(&mut self, _out: &mut Basis) {}
 
-        fn solve_with_raw_basis_view(
+        fn solve_with_basis(
             &mut self,
-            _basis: &RawBasis,
+            _basis: &Basis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve_view()
+            self.solve()
         }
 
         fn statistics(&self) -> SolverStatistics {

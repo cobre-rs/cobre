@@ -3,9 +3,7 @@
 //! This module defines the central abstraction through which optimization
 //! algorithms interact with LP solvers.
 
-use crate::types::{
-    RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
-};
+use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate};
 
 /// Backend-agnostic interface for LP solver instances.
 ///
@@ -31,13 +29,13 @@ use crate::types::{
 /// # Mutability Convention
 ///
 /// - Mutating methods (`load_model`, `add_rows`, `set_row_bounds`,
-///   `set_col_bounds`, `solve_view`, `solve_with_raw_basis_view`, `reset`) take `&mut self`.
-/// - Methods that write to internal scratch buffers (`get_raw_basis`) take `&mut self`.
+///   `set_col_bounds`, `solve`, `solve_with_basis`, `reset`) take `&mut self`.
+/// - Methods that write to internal scratch buffers (`get_basis`) take `&mut self`.
 /// - Read-only query methods (`statistics`, `name`) take `&self`.
 ///
 /// # Error Recovery Contract
 ///
-/// When `solve_view` or `solve_with_raw_basis_view` returns `Err`, the solver's
+/// When `solve` or `solve_with_basis` returns `Err`, the solver's
 /// internal state is unspecified. The **caller** is responsible for calling
 /// `reset()` before reusing the instance for another solve sequence. Failing to
 /// call `reset()` after an error may produce incorrect results or panics.
@@ -48,7 +46,7 @@ use crate::types::{
 /// use cobre_solver::{SolverInterface, SolutionView, SolverError};
 ///
 /// fn run_solve<S: SolverInterface>(solver: &mut S) -> Result<SolutionView<'_>, SolverError> {
-///     solver.solve_view()
+///     solver.solve()
 /// }
 /// ```
 ///
@@ -106,7 +104,7 @@ pub trait SolverInterface: Send {
     /// [`SolverError::IterationLimit`], or [`SolverError::InternalError`].
     ///
     /// See Solver Interface Trait SS2.4.
-    fn solve_view(&mut self) -> Result<SolutionView<'_>, SolverError>;
+    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError>;
 
     /// Clears internal solver state for error recovery or LP structure change.
     ///
@@ -116,9 +114,9 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.6.
     fn reset(&mut self);
 
-    /// Writes solver-native `i32` status codes into a caller-owned [`RawBasis`] buffer.
+    /// Writes solver-native `i32` status codes into a caller-owned [`Basis`] buffer.
     ///
-    /// The caller pre-allocates a [`RawBasis`] with [`RawBasis::new`] and reuses it
+    /// The caller pre-allocates a [`Basis`] with [`Basis::new`] and reuses it
     /// across iterations, eliminating per-element enum translation overhead.
     ///
     /// The buffer is not resized by this method. The implementation writes into
@@ -126,9 +124,9 @@ pub trait SolverInterface: Send {
     /// entries of `out.row_status`. Panics if no model is loaded.
     ///
     /// See Solver Interface Trait SS2.7.
-    fn get_raw_basis(&mut self, out: &mut RawBasis);
+    fn get_basis(&mut self, out: &mut Basis);
 
-    /// Injects a raw basis and solves, returning a zero-copy [`SolutionView`].
+    /// Injects a basis and solves, returning a zero-copy [`SolutionView`].
     ///
     /// Status codes in `basis` are injected directly without per-element enum
     /// translation. On success the returned view borrows solver-internal buffers
@@ -137,13 +135,10 @@ pub trait SolverInterface: Send {
     ///
     /// # Errors
     ///
-    /// Same error contract as [`solve_view`](Self::solve_view).
+    /// Same error contract as [`solve`](Self::solve).
     ///
     /// See Solver Interface Trait SS2.5.
-    fn solve_with_raw_basis_view(
-        &mut self,
-        basis: &RawBasis,
-    ) -> Result<SolutionView<'_>, SolverError>;
+    fn solve_with_basis(&mut self, basis: &Basis) -> Result<SolutionView<'_>, SolverError>;
 
     /// Returns accumulated solve metrics (snapshot of monotonically increasing counters).
     ///
@@ -179,9 +174,7 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve_view(
-            &mut self,
-        ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
+        fn solve(&mut self) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "noop".to_string(),
                 error_code: None,
@@ -190,11 +183,11 @@ mod tests {
 
         fn reset(&mut self) {}
 
-        fn get_raw_basis(&mut self, _out: &mut crate::types::RawBasis) {}
+        fn get_basis(&mut self, _out: &mut crate::types::Basis) {}
 
-        fn solve_with_raw_basis_view(
+        fn solve_with_basis(
             &mut self,
-            _basis: &crate::types::RawBasis,
+            _basis: &crate::types::Basis,
         ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "noop".to_string(),
@@ -242,25 +235,25 @@ mod tests {
     }
 
     #[test]
-    fn test_noop_solver_get_raw_basis_noop() {
-        use crate::types::RawBasis;
+    fn test_noop_solver_get_basis_noop() {
+        use crate::types::Basis;
 
         let mut solver = NoopSolver;
-        let mut raw = RawBasis::new(3, 2);
+        let mut raw = Basis::new(3, 2);
         raw.col_status.iter_mut().for_each(|v| *v = 99_i32);
         raw.row_status.iter_mut().for_each(|v| *v = 99_i32);
-        solver.get_raw_basis(&mut raw);
+        solver.get_basis(&mut raw);
         assert!(raw.col_status.iter().all(|&v| v == 99_i32));
         assert!(raw.row_status.iter().all(|&v| v == 99_i32));
     }
 
     #[test]
-    fn test_noop_solver_solve_with_raw_basis_view_returns_internal_error() {
-        use crate::types::{RawBasis, SolverError};
+    fn test_noop_solver_solve_with_basis_returns_internal_error() {
+        use crate::types::{Basis, SolverError};
 
         let mut solver = NoopSolver;
-        let raw = RawBasis::new(0, 0);
-        let result = solver.solve_with_raw_basis_view(&raw);
+        let raw = Basis::new(0, 0);
+        let result = solver.solve_with_basis(&raw);
         assert!(matches!(result, Err(SolverError::InternalError { .. })));
     }
 
@@ -302,7 +295,7 @@ mod tests {
         solver.set_row_bounds(&[], &[], &[]);
         solver.set_col_bounds(&[], &[], &[]);
 
-        let result = solver.solve_view();
+        let result = solver.solve();
         assert!(matches!(result, Err(SolverError::InternalError { .. })));
 
         solver.reset();

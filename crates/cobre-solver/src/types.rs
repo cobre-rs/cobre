@@ -8,7 +8,7 @@ use core::fmt;
 /// Simplex basis storing solver-native `i32` status codes for zero-copy round-trip
 /// basis management.
 ///
-/// `RawBasis` stores the raw solver `i32` status codes directly, enabling zero-copy
+/// `Basis` stores the raw solver `i32` status codes directly, enabling zero-copy
 /// round-trip warm-starting via `copy_from_slice` (memcpy). This avoids per-element
 /// translation overhead when the caller only needs to save and restore the basis
 /// without inspecting individual statuses.
@@ -19,7 +19,7 @@ use core::fmt;
 ///
 /// See Solver Abstraction SS9.
 #[derive(Debug, Clone)]
-pub struct RawBasis {
+pub struct Basis {
     /// Solver-native `i32` status codes for each column (length must equal `num_cols`).
     pub col_status: Vec<i32>,
 
@@ -27,12 +27,12 @@ pub struct RawBasis {
     pub row_status: Vec<i32>,
 }
 
-impl RawBasis {
-    /// Creates a new `RawBasis` with pre-allocated, zero-filled status code buffers.
+impl Basis {
+    /// Creates a new `Basis` with pre-allocated, zero-filled status code buffers.
     ///
     /// Both `col_status` and `row_status` are allocated to the requested lengths
     /// and filled with `0_i32`. The caller reuses this buffer across solves by
-    /// passing it to [`crate::SolverInterface::get_raw_basis`] on each iteration.
+    /// passing it to [`crate::SolverInterface::get_basis`] on each iteration.
     #[must_use]
     pub fn new(num_cols: usize, num_rows: usize) -> Self {
         Self {
@@ -446,12 +446,12 @@ impl std::error::Error for SolverError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        LpSolution, RawBasis, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
+        Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
     };
 
     #[test]
-    fn test_raw_basis_new_dimensions_and_zero_fill() {
-        let rb = RawBasis::new(3, 2);
+    fn test_basis_new_dimensions_and_zero_fill() {
+        let rb = Basis::new(3, 2);
         assert_eq!(rb.col_status.len(), 3);
         assert_eq!(rb.row_status.len(), 2);
         assert!(rb.col_status.iter().all(|&v| v == 0_i32));
@@ -459,15 +459,15 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_basis_new_empty() {
-        let rb = RawBasis::new(0, 0);
+    fn test_basis_new_empty() {
+        let rb = Basis::new(0, 0);
         assert!(rb.col_status.is_empty());
         assert!(rb.row_status.is_empty());
     }
 
     #[test]
-    fn test_raw_basis_debug_and_clone() {
-        let rb = RawBasis::new(2, 1);
+    fn test_basis_debug_and_clone() {
+        let rb = Basis::new(2, 1);
         let s = format!("{rb:?}");
         assert!(!s.is_empty());
         let cloned = rb.clone();

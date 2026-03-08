@@ -149,11 +149,11 @@ pub struct HighsSolver {
     /// Never shrunk -- only grows -- to prevent reallocation churn on the hot path.
     scratch_i32: Vec<i32>,
     /// Pre-allocated i32 buffer for column basis status codes.
-    /// Reused across `solve_with_raw_basis_view` and `get_raw_basis` calls to avoid per-call allocation.
+    /// Reused across `solve_with_basis` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_cols`; never shrunk.
     basis_col_i32: Vec<i32>,
     /// Pre-allocated i32 buffer for row basis status codes.
-    /// Reused across `solve_with_raw_basis_view` and `get_raw_basis` calls to avoid per-call allocation.
+    /// Reused across `solve_with_basis` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_rows` and grown in `add_rows`.
     basis_row_i32: Vec<i32>,
     /// Current number of LP columns (decision variables), updated by `load_model` and `add_rows`.
@@ -161,7 +161,7 @@ pub struct HighsSolver {
     /// Current number of LP rows (constraints), updated by `load_model` and `add_rows`.
     num_rows: usize,
     /// Whether a model is currently loaded. Set to `true` in `load_model`,
-    /// `false` in `reset` and `new`. Guards `solve`/`get_raw_basis` contract.
+    /// `false` in `reset` and `new`. Guards `solve`/`get_basis` contract.
     has_model: bool,
     /// Accumulated solver statistics. Counters grow monotonically from zero;
     /// not reset by `reset()`.
@@ -726,7 +726,7 @@ impl SolverInterface for HighsSolver {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn solve_view(&mut self) -> Result<SolutionView<'_>, SolverError> {
+    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve called without a loaded model — call load_model first"
@@ -879,10 +879,10 @@ impl SolverInterface for HighsSolver {
         // lifetime of the instance (per trait contract, SS4.3).
     }
 
-    fn get_raw_basis(&mut self, out: &mut crate::types::RawBasis) {
+    fn get_basis(&mut self, out: &mut crate::types::Basis) {
         assert!(
             self.has_model,
-            "get_raw_basis called without a loaded model — call load_model first"
+            "get_basis called without a loaded model — call load_model first"
         );
 
         out.col_status.resize(self.num_cols, 0);
@@ -908,26 +908,26 @@ impl SolverInterface for HighsSolver {
         );
     }
 
-    fn solve_with_raw_basis_view(
+    fn solve_with_basis(
         &mut self,
-        basis: &crate::types::RawBasis,
+        basis: &crate::types::Basis,
     ) -> Result<crate::types::SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
-            "solve_with_raw_basis called without a loaded model — call load_model first"
+            "solve_with_basis called without a loaded model — call load_model first"
         );
         assert!(
             basis.col_status.len() == self.num_cols,
-            "raw basis column count {} does not match LP column count {}",
+            "basis column count {} does not match LP column count {}",
             basis.col_status.len(),
             self.num_cols
         );
 
         // Copy raw i32 codes directly into the pre-allocated buffers — no enum
-        // translation. This is the zero-copy path compared to solve_with_basis_view.
+        // translation. Zero-copy warm-start path.
         self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
 
-        // Handle dimension mismatch for dynamic cuts (same policy as solve_with_basis_view):
+        // Handle dimension mismatch for dynamic cuts:
         // - Fewer rows than LP: extend with BASIC.
         // - More rows than LP: truncate (extra entries ignored).
         let basis_rows = basis.row_status.len();
@@ -958,8 +958,8 @@ impl SolverInterface for HighsSolver {
             debug_assert!(false, "raw basis rejected; falling back to cold-start");
         }
 
-        // Delegate to solve_view() which handles retry escalation and statistics updates.
-        self.solve_view()
+        // Delegate to solve() which handles retry escalation and statistics updates.
+        self.solve()
     }
 
     fn statistics(&self) -> SolverStatistics {
@@ -992,7 +992,7 @@ mod tests {
     use super::HighsSolver;
     use crate::{
         SolverInterface,
-        types::{RawBasis, RowBatch, StageTemplate},
+        types::{Basis, RowBatch, StageTemplate},
     };
 
     // Shared LP fixture from Solver Interface Testing SS1.1:
@@ -1163,8 +1163,8 @@ mod tests {
         solver.load_model(&template);
 
         let solution = solver
-            .solve_view()
-            .expect("solve_view() must succeed on a feasible LP");
+            .solve()
+            .expect("solve() must succeed on a feasible LP");
 
         assert!(
             (solution.objective - 100.0).abs() < 1e-8,
@@ -1201,8 +1201,8 @@ mod tests {
         solver.add_rows(&cuts);
 
         let solution = solver
-            .solve_view()
-            .expect("solve_view() must succeed on a feasible LP with cuts");
+            .solve()
+            .expect("solve() must succeed on a feasible LP with cuts");
 
         assert!(
             (solution.objective - 162.0).abs() < 1e-8,
@@ -1240,8 +1240,8 @@ mod tests {
         solver.set_row_bounds(&[0], &[4.0], &[4.0]);
 
         let solution = solver
-            .solve_view()
-            .expect("solve_view() must succeed after RHS patch");
+            .solve()
+            .expect("solve() must succeed after RHS patch");
 
         assert!(
             (solution.objective - 368.0).abs() < 1e-8,
@@ -1257,8 +1257,8 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        solver.solve_view().expect("first solve must succeed");
-        solver.solve_view().expect("second solve must succeed");
+        solver.solve().expect("first solve must succeed");
+        solver.solve().expect("second solve must succeed");
 
         let stats = solver.statistics();
         assert_eq!(stats.solve_count, 2, "solve_count must be 2");
@@ -1276,7 +1276,7 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve_view().expect("solve must succeed");
+        solver.solve().expect("solve must succeed");
 
         let stats_before = solver.statistics();
         assert_eq!(
@@ -1308,7 +1308,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        let solution = solver.solve_view().expect("solve must succeed");
+        let solution = solver.solve().expect("solve must succeed");
         assert!(
             solution.iterations > 0,
             "iterations must be positive, got {}",
@@ -1323,7 +1323,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        let solution = solver.solve_view().expect("solve must succeed");
+        let solution = solver.solve().expect("solve must succeed");
         assert!(
             solution.solve_time_seconds > 0.0,
             "solve_time_seconds must be positive, got {}",
@@ -1339,7 +1339,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        solver.solve_view().expect("solve must succeed");
+        solver.solve().expect("solve must succeed");
 
         let stats = solver.statistics();
         assert_eq!(stats.solve_count, 1, "solve_count must be 1");
@@ -1351,27 +1351,27 @@ mod tests {
         );
     }
 
-    /// After `load_model` + `solve_view()`, `get_raw_basis` must return i32 codes
+    /// After `load_model` + `solve()`, `get_basis` must return i32 codes
     /// that are all valid `HiGHS` basis status values (0..=4).
     #[test]
-    fn test_get_raw_basis_valid_status_codes() {
+    fn test_get_basis_valid_status_codes() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
         solver
-            .solve_view()
-            .expect("solve must succeed before get_raw_basis");
+            .solve()
+            .expect("solve must succeed before get_basis");
 
-        let mut raw_basis = RawBasis::new(0, 0);
-        solver.get_raw_basis(&mut raw_basis);
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
 
-        for &code in &raw_basis.col_status {
+        for &code in &basis.col_status {
             assert!(
                 (0..=4).contains(&code),
                 "col_status code {code} is outside valid HiGHS range 0..=4"
             );
         }
-        for &code in &raw_basis.row_status {
+        for &code in &basis.row_status {
             assert!(
                 (0..=4).contains(&code),
                 "row_status code {code} is outside valid HiGHS range 0..=4"
@@ -1379,59 +1379,59 @@ mod tests {
         }
     }
 
-    /// Starting from an empty `RawBasis`, `get_raw_basis` must resize the output
+    /// Starting from an empty `Basis`, `get_basis` must resize the output
     /// buffers to match the current LP dimensions (3 cols, 2 rows for SS1.1).
     #[test]
-    fn test_get_raw_basis_resizes_output() {
+    fn test_get_basis_resizes_output() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
         solver
-            .solve_view()
-            .expect("solve must succeed before get_raw_basis");
+            .solve()
+            .expect("solve must succeed before get_basis");
 
-        let mut raw_basis = RawBasis::new(0, 0);
+        let mut basis = Basis::new(0, 0);
         assert_eq!(
-            raw_basis.col_status.len(),
+            basis.col_status.len(),
             0,
             "initial col_status must be empty"
         );
         assert_eq!(
-            raw_basis.row_status.len(),
+            basis.row_status.len(),
             0,
             "initial row_status must be empty"
         );
 
-        solver.get_raw_basis(&mut raw_basis);
+        solver.get_basis(&mut basis);
 
         assert_eq!(
-            raw_basis.col_status.len(),
+            basis.col_status.len(),
             3,
             "col_status must be resized to 3 (num_cols of SS1.1)"
         );
         assert_eq!(
-            raw_basis.row_status.len(),
+            basis.row_status.len(),
             2,
             "row_status must be resized to 2 (num_rows of SS1.1)"
         );
     }
 
-    /// Warm-start via `solve_with_raw_basis_view` on the same LP must reproduce
+    /// Warm-start via `solve_with_basis` on the same LP must reproduce
     /// the optimal objective and complete in at most 1 simplex iteration.
     #[test]
-    fn test_solve_with_raw_basis_view_warm_start() {
+    fn test_solve_with_basis_warm_start() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve_view().expect("cold-start solve must succeed");
+        solver.solve().expect("cold-start solve must succeed");
 
-        let mut raw_basis = RawBasis::new(0, 0);
-        solver.get_raw_basis(&mut raw_basis);
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
 
         // Reload the same model to reset HiGHS internal state.
         solver.load_model(&template);
         let result = solver
-            .solve_with_raw_basis_view(&raw_basis)
+            .solve_with_basis(&basis)
             .expect("warm-start solve must succeed");
 
         assert!(
@@ -1453,22 +1453,22 @@ mod tests {
         );
     }
 
-    /// When the raw basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
-    /// `solve_with_raw_basis_view` must extend missing rows as Basic and solve correctly.
+    /// When the basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
+    /// `solve_with_basis` must extend missing rows as Basic and solve correctly.
     /// SS1.2 objective with both cuts active is 162.0.
     #[test]
-    fn test_solve_with_raw_basis_view_dimension_mismatch() {
+    fn test_solve_with_basis_dimension_mismatch() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         let cuts = make_fixture_row_batch();
 
-        // First solve on 2-row LP to capture a 2-row raw basis.
+        // First solve on 2-row LP to capture a 2-row basis.
         solver.load_model(&template);
-        solver.solve_view().expect("SS1.1 solve must succeed");
-        let mut raw_basis = RawBasis::new(0, 0);
-        solver.get_raw_basis(&mut raw_basis);
+        solver.solve().expect("SS1.1 solve must succeed");
+        let mut basis = Basis::new(0, 0);
+        solver.get_basis(&mut basis);
         assert_eq!(
-            raw_basis.row_status.len(),
+            basis.row_status.len(),
             2,
             "captured basis must have 2 row statuses"
         );
@@ -1480,8 +1480,8 @@ mod tests {
 
         // Warm-start with the 2-row basis; extra rows are extended as Basic.
         let result = solver
-            .solve_with_raw_basis_view(&raw_basis)
-            .expect("solve with dimension-mismatched raw basis must succeed");
+            .solve_with_basis(&basis)
+            .expect("solve with dimension-mismatched basis must succeed");
 
         assert!(
             (result.objective - 162.0).abs() < 1e-8,

@@ -26,20 +26,19 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
-use cobre_solver::RawBasis;
+use cobre_solver::Basis;
 use cobre_solver::SolverInterface;
 use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -50,6 +49,7 @@ use crate::{
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
+    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
     let max_cuts_per_rank = total_scenarios;
     let mut cut_sync_bufs = CutSyncBuffers::new(n_state, max_cuts_per_rank, num_ranks);
 
-    let mut basis_cache: Vec<Option<RawBasis>> = vec![None; templates.len()];
+    let mut basis_cache: Vec<Option<Basis>> = vec![None; templates.len()];
 
     let start_time = Instant::now();
 
@@ -529,25 +529,24 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
-        LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
-        StageTemplate,
+        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
+        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule,
-        StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
+        cut::fcf::FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -590,7 +589,7 @@ mod tests {
 
     /// Mock solver that returns fixed objective values in sequence.
     ///
-    /// Each call to `solve_view()` returns the next value from `objectives`,
+    /// Each call to `solve()` returns the next value from `objectives`,
     /// wrapping around. If `infeasible_on_first` is set, the first call
     /// returns `SolverError::Infeasible`.
     struct MockSolver {
@@ -623,7 +622,7 @@ mod tests {
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
         fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
 
-        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_first && call == 0 {
@@ -652,13 +651,13 @@ mod tests {
             self.call_count = 0;
         }
 
-        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+        fn get_basis(&mut self, _out: &mut Basis) {}
 
-        fn solve_with_raw_basis_view(
+        fn solve_with_basis(
             &mut self,
-            _basis: &RawBasis,
+            _basis: &Basis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve_view()
+            self.solve()
         }
 
         fn statistics(&self) -> SolverStatistics {
@@ -718,12 +717,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

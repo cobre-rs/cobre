@@ -48,13 +48,13 @@
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_solver::{RawBasis, SolverError, SolverInterface, StageTemplate};
+use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
-    state_exchange::ExchangeBuffers,
+    state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
+    StageIndexer, TrainingConfig,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -114,7 +114,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
     comm: &C,
-    basis_cache: &mut [Option<RawBasis>],
+    basis_cache: &mut [Option<Basis>],
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let total_scenarios = exchange.total_scenarios();
@@ -182,9 +182,9 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 );
 
                 let view = (if let Some(rb) = basis_cache[successor].as_ref() {
-                    solver.solve_with_raw_basis_view(rb)
+                    solver.solve_with_basis(rb)
                 } else {
-                    solver.solve_view()
+                    solver.solve()
                 })
                 .map_err(|e| {
                     basis_cache[successor] = None;
@@ -225,11 +225,11 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 }
 
                 if let Some(rb) = &mut basis_cache[successor] {
-                    solver.get_raw_basis(rb);
+                    solver.get_basis(rb);
                 } else {
                     let mut rb =
-                        RawBasis::new(templates[successor].num_cols, templates[successor].num_rows);
-                    solver.get_raw_basis(&mut rb);
+                        Basis::new(templates[successor].num_cols, templates[successor].num_rows);
+                    solver.get_basis(&mut rb);
                     basis_cache[successor] = Some(rb);
                 }
 
@@ -270,11 +270,10 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
 mod tests {
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
-        LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
-        StageTemplate,
+        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
         TrainingConfig, TrajectoryRecord,
@@ -324,14 +323,14 @@ mod tests {
     ///
     /// Buffer fields (`buf_primal`, `buf_dual`, `buf_reduced_costs`) store the
     /// solution data that [`SolutionView`] borrows from. They are filled in
-    /// `solve_view` before the borrow is established.
+    /// `solve` before the borrow is established.
     struct MockSolver {
         solution: LpSolution,
         infeasible_at: Option<usize>,
         call_count: usize,
         /// Tracks the current number of rows (template + appended cuts).
         current_num_rows: usize,
-        /// Number of times `solve_with_raw_basis_view` was called.
+        /// Number of times `solve_with_basis` was called.
         warm_start_calls: usize,
         buf_primal: Vec<f64>,
         buf_dual: Vec<f64>,
@@ -386,7 +385,7 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
@@ -410,14 +409,14 @@ mod tests {
 
         fn reset(&mut self) {}
 
-        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+        fn get_basis(&mut self, _out: &mut Basis) {}
 
-        fn solve_with_raw_basis_view(
+        fn solve_with_basis(
             &mut self,
-            _basis: &RawBasis,
+            _basis: &Basis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             self.warm_start_calls += 1;
-            self.solve_view()
+            self.solve()
         }
 
         fn statistics(&self) -> SolverStatistics {
@@ -489,7 +488,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -498,6 +496,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;
@@ -1268,12 +1267,12 @@ mod tests {
     // ── Unit tests: warm-start basis caching (backward pass) ──────────────────
 
     /// Warm-start from a pre-populated forward basis: when `basis_cache[successor]`
-    /// is pre-filled with `Some(RawBasis)` before the first backward call, the
-    /// first opening at the successor stage must call `solve_with_raw_basis_view`
-    /// rather than `solve_view`.
+    /// is pre-filled with `Some(Basis)` before the first backward call, the
+    /// first opening at the successor stage must call `solve_with_basis`
+    /// rather than `solve`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 1 opening, with
-    /// `basis_cache[1] = Some(RawBasis::new(...))` pre-populated,
+    /// `basis_cache[1] = Some(Basis::new(...))` pre-populated,
     /// then `solver.warm_start_calls == 1` after the backward pass.
     #[test]
     fn warm_start_uses_prepopulated_forward_basis() {
@@ -1307,9 +1306,9 @@ mod tests {
 
         // Pre-populate the basis cache at stage 1 (the successor in a 2-stage system).
         // This simulates a forward pass having already solved stage 1 and cached its basis.
-        let mut basis_cache: Vec<Option<RawBasis>> = vec![
+        let mut basis_cache: Vec<Option<Basis>> = vec![
             None,
-            Some(RawBasis::new(templates[1].num_cols, templates[1].num_rows)),
+            Some(Basis::new(templates[1].num_cols, templates[1].num_rows)),
         ];
 
         let _ = run_backward_pass(
@@ -1332,7 +1331,7 @@ mod tests {
 
         assert_eq!(
             solver.warm_start_calls, 1,
-            "first opening at successor stage must call solve_with_raw_basis_view \
+            "first opening at successor stage must call solve_with_basis \
              when basis_cache[1] is pre-populated (warm_start_calls == 1, got {})",
             solver.warm_start_calls
         );
@@ -1376,7 +1375,7 @@ mod tests {
         let comm = StubComm;
 
         // Start with an empty cache — opening 1 must cold-start.
-        let mut basis_cache: Vec<Option<RawBasis>> = vec![None; n_stages];
+        let mut basis_cache: Vec<Option<Basis>> = vec![None; n_stages];
 
         let _ = run_backward_pass(
             &mut solver,
@@ -1401,7 +1400,7 @@ mod tests {
         // Opening 3: warm-start (cache updated by opening 2).
         assert_eq!(
             solver.warm_start_calls, 2,
-            "openings 2 and 3 must call solve_with_raw_basis_view \
+            "openings 2 and 3 must call solve_with_basis \
              (warm_start_calls == 2, got {})",
             solver.warm_start_calls
         );
@@ -1444,9 +1443,9 @@ mod tests {
         let comm = StubComm;
 
         // Pre-populate the cache to verify it gets cleared on error.
-        let mut basis_cache: Vec<Option<RawBasis>> = vec![
+        let mut basis_cache: Vec<Option<Basis>> = vec![
             None,
-            Some(RawBasis::new(templates[1].num_cols, templates[1].num_rows)),
+            Some(Basis::new(templates[1].num_cols, templates[1].num_rows)),
         ];
 
         let result = run_backward_pass(

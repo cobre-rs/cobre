@@ -40,8 +40,8 @@
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
-use cobre_solver::{RawBasis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
+use cobre_stochastic::{sample_forward, StochasticContext};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -343,7 +343,7 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
     comm: &C,
-    basis_cache: &mut [Option<RawBasis>],
+    basis_cache: &mut [Option<Basis>],
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let forward_passes = config.forward_passes as usize;
@@ -436,9 +436,9 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
             );
 
             let view = (if let Some(rb) = basis_cache[t].as_ref() {
-                solver.solve_with_raw_basis_view(rb)
+                solver.solve_with_basis(rb)
             } else {
-                solver.solve_view()
+                solver.solve()
             })
             .map_err(|e| {
                 basis_cache[t] = None;
@@ -471,10 +471,10 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
             current_state.extend_from_slice(&view.primal[..indexer.n_state]);
 
             if let Some(rb) = &mut basis_cache[t] {
-                solver.get_raw_basis(rb);
+                solver.get_basis(rb);
             } else {
-                let mut rb = RawBasis::new(templates[t].num_cols, templates[t].num_rows);
-                solver.get_raw_basis(&mut rb);
+                let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
+                solver.get_basis(&mut rb);
                 basis_cache[t] = Some(rb);
             }
         }
@@ -510,15 +510,14 @@ mod tests {
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::{
-        LpSolution, RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics,
-        StageTemplate,
+        Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
-    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
+    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,
@@ -578,7 +577,7 @@ mod tests {
     /// stage-inner traversal order). `infeasible_at` counts global solve
     /// calls starting from 0.
     ///
-    /// `warm_start_calls` is incremented each time `solve_with_raw_basis_view`
+    /// `warm_start_calls` is incremented each time `solve_with_basis`
     /// is called, enabling warm-start invocation tests.
     struct MockSolver {
         solution: LpSolution,
@@ -586,7 +585,7 @@ mod tests {
         /// and warm-start calls) returns infeasible.
         infeasible_at: Option<usize>,
         call_count: usize,
-        /// Number of times `solve_with_raw_basis_view` has been called.
+        /// Number of times `solve_with_basis` has been called.
         warm_start_calls: usize,
         /// Internal buffers that `SolutionView` borrows from.
         buf_primal: Vec<f64>,
@@ -662,17 +661,17 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             self.do_solve()
         }
 
         fn reset(&mut self) {}
 
-        fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+        fn get_basis(&mut self, _out: &mut Basis) {}
 
-        fn solve_with_raw_basis_view(
+        fn solve_with_basis(
             &mut self,
-            _basis: &RawBasis,
+            _basis: &Basis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             self.warm_start_calls += 1;
             self.do_solve()
@@ -1449,7 +1448,7 @@ mod tests {
     /// solver.
     fn run_one_iteration(
         solver: &mut MockSolver,
-        basis_cache: &mut [Option<RawBasis>],
+        basis_cache: &mut [Option<Basis>],
     ) -> Result<(), crate::SddpError> {
         let indexer = StageIndexer::new(1, 0);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 100, 0);
@@ -1492,8 +1491,8 @@ mod tests {
         .map(|_| ())
     }
 
-    /// Warm-start invocation: the first iteration calls `solve_view` (cold start);
-    /// the second iteration calls `solve_with_raw_basis_view` (warm start).
+    /// Warm-start invocation: the first iteration calls `solve` (cold start);
+    /// the second iteration calls `solve_with_basis` (warm start).
     ///
     /// AC: `run_forward_pass` called twice with the same `basis_cache`.
     /// After iteration 1: `warm_start_calls` == 0 (3 cold-start solves for 3 stages).
@@ -1503,7 +1502,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
         let mut solver = MockSolver::always_ok(solution);
-        let mut basis_cache: Vec<Option<RawBasis>> = vec![None, None, None];
+        let mut basis_cache: Vec<Option<Basis>> = vec![None, None, None];
 
         // First iteration: no cached bases → all cold-start.
         run_one_iteration(&mut solver, &mut basis_cache).unwrap();
@@ -1543,7 +1542,7 @@ mod tests {
         // Call 4 = second iteration, stage 1 (calls 0-2 = first iteration
         // stages 0,1,2; calls 3,4,5 = second iteration stages 0,1,2).
         let mut solver = MockSolver::infeasible_on(solution, 4);
-        let mut basis_cache: Vec<Option<RawBasis>> = vec![None, None, None];
+        let mut basis_cache: Vec<Option<Basis>> = vec![None, None, None];
 
         // First iteration: all cold-start, all succeed, cache all 3 bases.
         run_one_iteration(&mut solver, &mut basis_cache).unwrap();

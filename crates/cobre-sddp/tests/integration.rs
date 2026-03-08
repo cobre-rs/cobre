@@ -23,31 +23,31 @@
 // External crate imports
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
-    RawBasis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
+    Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
 };
 
 use cobre_sddp::{
-    HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig, cut::fcf::FutureCostFunction, train,
+    cut::fcf::FutureCostFunction, train, HorizonMode, RiskMeasure, SddpError, StageIndexer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 
 // ===========================================================================
@@ -204,7 +204,7 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve_view(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
@@ -225,13 +225,13 @@ impl SolverInterface for MockSolver {
         self.call_count = 0;
     }
 
-    fn get_raw_basis(&mut self, _out: &mut RawBasis) {}
+    fn get_basis(&mut self, _out: &mut Basis) {}
 
-    fn solve_with_raw_basis_view(
+    fn solve_with_basis(
         &mut self,
-        _basis: &RawBasis,
+        _basis: &Basis,
     ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve_view()
+        self.solve()
     }
 
     fn statistics(&self) -> SolverStatistics {
@@ -297,9 +297,9 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),

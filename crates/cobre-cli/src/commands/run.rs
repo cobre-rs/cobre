@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator};
+use cobre_comm::{Communicator, create_communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_stage_templates,
+    build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -415,7 +415,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         system.buses().len(),
         n_blks_stage0,
     );
-    let initial_state = vec![0.0_f64; indexer.n_state];
+    let initial_state = build_initial_state(&system, &indexer);
 
     let seed = bcast_config.seed;
     let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
@@ -824,6 +824,31 @@ fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
             .map(|n| n.id.0)
             .collect(),
     }
+}
+
+/// Build the initial state vector from the system's initial conditions.
+///
+/// The state vector layout is `[storage(0..N), lags(N..N*(1+L))]` where N is
+/// the number of hydros and L is the maximum PAR order. Storage positions
+/// correspond to hydros in canonical ID order. Lag variables are initialised
+/// to zero (no historical inflow information at the start of the study).
+///
+/// Each `HydroStorage` entry in `initial_conditions.storage` is matched to
+/// its positional index among the system's hydros (both sorted by `hydro_id`).
+fn build_initial_state(system: &cobre_core::System, indexer: &StageIndexer) -> Vec<f64> {
+    let mut state = vec![0.0_f64; indexer.n_state];
+    let hydros = system.hydros();
+    let ic = system.initial_conditions();
+
+    for hs in &ic.storage {
+        // Both hydros() and ic.storage are sorted by hydro_id.
+        // Find the positional index for this hydro.
+        if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
+            state[idx] = hs.value_hm3;
+        }
+    }
+
+    state
 }
 
 #[cfg(test)]

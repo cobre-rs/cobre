@@ -14,15 +14,24 @@ use crate::error::CliError;
 #[allow(clippy::unnecessary_wraps)]
 pub fn execute() -> Result<(), CliError> {
     let version = env!("CARGO_PKG_VERSION");
-    let build = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-
     println!("cobre {version}");
     println!("solver: HiGHS");
-    println!("build:  {build}");
+    if cfg!(feature = "mpi") {
+        println!("comm:   mpi");
+    } else {
+        println!("comm:   local");
+    }
+    println!("zstd:   enabled");
+    println!(
+        "arch:   {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    );
+    if cfg!(debug_assertions) {
+        println!("build:  debug");
+    } else {
+        println!("build:  release (lto=thin)");
+    }
 
     Ok(())
 }

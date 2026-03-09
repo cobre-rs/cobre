@@ -251,7 +251,17 @@ pub fn build_stochastic_context(
     let dim = hydro_ids.len();
 
     let par_lp = PrecomputedParLp::build(system.inflow_models(), &study_stages, &hydro_ids)?;
-    let mut correlation = DecomposedCorrelation::build(system.correlation())?;
+
+    // When there are no hydro plants (dim == 0), the system is thermal-only.
+    // Skip correlation decomposition (no correlation model is needed) and
+    // build an empty opening tree with zero-length noise vectors. The forward
+    // and backward passes simply produce no inflow noise in this case.
+    let mut correlation = if dim == 0 {
+        DecomposedCorrelation::empty()
+    } else {
+        DecomposedCorrelation::build(system.correlation())?
+    };
+
     let opening_tree =
         generate_opening_tree(base_seed, &study_stages, dim, &mut correlation, &hydro_ids);
 

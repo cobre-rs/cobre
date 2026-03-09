@@ -435,6 +435,15 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
                 &patch_buf.upper[..patch_count],
             );
 
+            // For the terminal stage in finite horizon, the future cost is
+            // defined as zero (no successor stages). Fix theta to [0, 0] so
+            // that HiGHS does not see an unbounded LP when the cut pool is
+            // empty (iteration 1) or when the system has no cuts for this
+            // stage. The 1-based stage index matches the is_terminal API.
+            if horizon.is_terminal(t + 1) {
+                solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
+            }
+
             let view = (if let Some(rb) = basis_cache[t].as_ref() {
                 solver.solve_with_basis(rb)
             } else {

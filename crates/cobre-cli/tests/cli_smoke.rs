@@ -52,30 +52,49 @@ fn version_exits_0_and_contains_version_string() {
 }
 
 #[test]
-fn run_stub_exits_0_and_prints_not_implemented() {
+fn version_exits_0_and_stdout_contains_cobre_prefix() {
+    cobre()
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cobre "));
+}
+
+#[test]
+fn version_stdout_contains_solver_highs() {
+    cobre()
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("solver: HiGHS"));
+}
+
+#[test]
+fn run_nonexistent_path_exits_2_with_io_error() {
     cobre()
         .args(["run", "/nonexistent/path"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("I/O error"));
 }
 
 #[test]
-fn validate_stub_exits_0_and_prints_not_implemented() {
+fn validate_nonexistent_path_exits_2() {
     cobre()
         .args(["validate", "/nonexistent/path"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .failure()
+        .code(2);
 }
 
 #[test]
-fn report_stub_exits_0_and_prints_not_implemented() {
+fn report_nonexistent_path_exits_2() {
     cobre()
         .args(["report", "/nonexistent/path"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .failure()
+        .code(2);
 }
 
 #[test]

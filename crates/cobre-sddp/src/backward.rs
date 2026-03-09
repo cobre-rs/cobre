@@ -247,8 +247,13 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
             let (agg_intercept, agg_coefficients) =
                 risk_measures[t].aggregate_cut(&outcomes, &probabilities);
 
+            let global_index = fwd_offset + m;
+            debug_assert!(
+                u32::try_from(global_index).is_ok(),
+                "global scenario index overflows u32"
+            );
             #[allow(clippy::cast_possible_truncation)]
-            let forward_pass_index = (fwd_offset + m) as u32;
+            let forward_pass_index = global_index as u32;
 
             fcf.add_cut(
                 t,

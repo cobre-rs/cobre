@@ -265,17 +265,16 @@ where
     let is_root = comm.rank() == 0;
 
     // Serialize on root; non-root gets an empty placeholder.
-    // Root must always supply Some(value); a missing value is a caller contract
-    // violation surfaced as CliError::Internal rather than a panic.
+    // When root passes None, we broadcast length 0 as a sentinel so that all
+    // ranks participate in the collective before returning Err. This prevents
+    // MPI deadlocks when rank 0 encounters an error before the broadcast.
     let serialized: Vec<u8> = if is_root {
-        let Some(ref v) = value else {
-            return Err(CliError::Internal {
-                message: "broadcast_value: root rank must supply Some(value)".to_string(),
-            });
-        };
-        postcard::to_allocvec(v).map_err(|e| CliError::Internal {
-            message: format!("serialization error: {e}"),
-        })?
+        match value {
+            Some(ref v) => postcard::to_allocvec(v).map_err(|e| CliError::Internal {
+                message: format!("serialization error: {e}"),
+            })?,
+            None => Vec::new(),
+        }
     } else {
         Vec::new()
     };
@@ -320,6 +319,36 @@ where
             message: format!("deserialization error: {e}"),
         })
     }
+}
+
+/// Load the case directory and parse the config on rank 0.
+///
+/// Extracted into a separate function so that errors are captured as `Err`
+/// rather than causing an early return from `execute()`. This allows
+/// `execute()` to always reach the `broadcast_value` calls, ensuring all
+/// MPI ranks participate in the collectives even when rank 0 fails.
+fn load_case_and_config(
+    args: &RunArgs,
+    quiet: bool,
+    stderr: &Term,
+) -> Result<(cobre_core::System, BroadcastConfig, cobre_io::Config), CliError> {
+    if !args.case_dir.exists() {
+        return Err(CliError::Io {
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "case directory does not exist",
+            ),
+            context: args.case_dir.display().to_string(),
+        });
+    }
+    if !quiet {
+        let _ = stderr.write_line(&format!("Loading case: {}", args.case_dir.display()));
+    }
+    let system = cobre_io::load_case(&args.case_dir)?;
+    let config_path = args.case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path)?;
+    let bcast = BroadcastConfig::from_config(&config, args.skip_simulation);
+    Ok((system, bcast, config))
 }
 
 /// Execute the `run` subcommand.
@@ -376,30 +405,35 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // converts Config into a BroadcastConfig — a postcard-safe struct holding
     // only the fields every rank needs — and broadcasts that.
     // Rank 0 retains `root_config` for the output-writing paths.
-    let (raw_system, raw_bcast_config, root_config) = if is_root {
-        if !args.case_dir.exists() {
-            return Err(CliError::Io {
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "case directory does not exist",
-                ),
-                context: args.case_dir.display().to_string(),
-            });
+    // Rank 0 loads data inside a closure that returns Result so that any
+    // failure is captured rather than causing an early return from execute().
+    // This ensures rank 0 always reaches the broadcast_value calls below;
+    // on failure it passes None, which broadcast_value converts to a
+    // zero-length sentinel so all ranks terminate cleanly.
+    let (raw_system, raw_bcast_config, root_config, load_err) = if is_root {
+        match load_case_and_config(&args, quiet, &stderr) {
+            Ok((system, bcast, config)) => (Some(system), Some(bcast), Some(config), None),
+            Err(e) => (None, None, None, Some(e)),
         }
-        if !quiet {
-            let _ = stderr.write_line(&format!("Loading case: {}", args.case_dir.display()));
-        }
-        let system = cobre_io::load_case(&args.case_dir)?;
-        let config_path = args.case_dir.join("config.json");
-        let config = cobre_io::parse_config(&config_path)?;
-        let bcast = BroadcastConfig::from_config(&config, args.skip_simulation);
-        (Some(system), Some(bcast), Some(config))
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
 
-    let system = broadcast_value(raw_system, &comm)?;
-    let bcast_config = broadcast_value(raw_bcast_config, &comm)?;
+    // Broadcast system and config to all ranks. When root had a load error,
+    // these calls broadcast length-0 sentinels so all ranks participate in
+    // the collectives (preventing MPI deadlocks). The sentinel causes
+    // broadcast_value to return Err, which we suppress on root in favour of
+    // the original load error.
+    let system_result = broadcast_value(raw_system, &comm);
+    let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
+
+    // Propagate the original load error if present (preserves the correct
+    // exit code and error message). Otherwise propagate any broadcast error.
+    if let Some(e) = load_err {
+        return Err(e);
+    }
+    let system = system_result?;
+    let bcast_config = bcast_config_result?;
 
     let stage_templates = build_stage_templates(&system);
     if stage_templates.templates.is_empty() {
@@ -589,10 +623,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         // simulate() succeeded or failed.
         drop(result_tx);
 
-        // Join the drain thread to collect results. We always join (even on
-        // error) to avoid leaking the thread. The join result is only used on
-        // the success path; on error the collected Vec is discarded.
-        let local_results = drain_handle.join().unwrap_or_default();
+        // Join the drain thread to collect results. A panic in the drain
+        // thread is a programming error, not a recoverable condition.
+        #[allow(clippy::expect_used)]
+        let local_results = drain_handle.join().expect("drain thread panicked");
 
         sim_result?;
 

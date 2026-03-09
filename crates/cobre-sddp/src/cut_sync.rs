@@ -132,8 +132,8 @@ pub struct CutSyncBuffers {
     /// Per-rank expected cut counts for non-uniform work distribution.
     ///
     /// Entry `r` is the number of cuts rank `r` generates per stage per
-    /// iteration. Exposed for inspection in tests and diagnostics.
-    #[allow(dead_code)]
+    /// iteration. Used by [`sync_cuts`](Self::sync_cuts) to determine the
+    /// expected byte count from each remote rank during `allgatherv`.
     per_rank_cuts: Vec<usize>,
 }
 

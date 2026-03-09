@@ -13,10 +13,6 @@
 //! | 3 | [`CliError::Solver`] | LP infeasible or solver error during training/simulation |
 //! | 4 | [`CliError::Internal`] | Communication failure, unexpected state, channel crash |
 
-// CliError and its methods are used by later subcommand tickets. Suppress the
-// dead-code lint for this module so the declaration can land before the callers.
-#![allow(dead_code)]
-
 use console::Term;
 
 /// Errors that can occur during CLI command execution.

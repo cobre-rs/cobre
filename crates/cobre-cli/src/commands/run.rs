@@ -224,7 +224,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             (completed, 0_u32)
         });
 
-        simulate(
+        let sim_result = simulate(
             &mut solver,
             stage_templates_ref,
             base_rows,
@@ -238,13 +238,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &LocalBackend,
             &result_tx,
         )
-        .map_err(CliError::from)?;
+        .map_err(CliError::from);
 
         drop(result_tx);
 
         let (completed, failed) = io_thread.join().map_err(|_| CliError::Internal {
             message: "simulation I/O thread panicked".to_string(),
         })?;
+
+        sim_result?;
 
         Some(SimulationOutput {
             n_scenarios,

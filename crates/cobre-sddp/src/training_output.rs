@@ -78,6 +78,7 @@ struct PartialRecord {
 ///     iterations: 1,
 ///     reason: "iteration_limit".to_string(),
 ///     total_time_ms: 500,
+///     basis_cache: Vec::new(),
 /// };
 ///
 /// let events = vec![TrainingEvent::IterationSummary {
@@ -270,6 +271,7 @@ mod tests {
             iterations,
             reason: reason.to_string(),
             total_time_ms: 1_000,
+            basis_cache: Vec::new(),
         }
     }
 

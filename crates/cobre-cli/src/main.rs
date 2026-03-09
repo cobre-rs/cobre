@@ -20,7 +20,9 @@ mod banner;
 mod commands;
 mod error;
 mod logging;
+mod policy_io;
 mod progress;
+mod simulation_io;
 mod summary;
 
 use clap::{Parser, Subcommand};

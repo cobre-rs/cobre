@@ -25,3 +25,6 @@ book/output/
 
 # Implementation plans (local development only)
 plans/
+
+# Examples
+examples/**/output

@@ -1,0 +1,14 @@
+{
+    "buses": [
+        {
+            "id": 0,
+            "name": "SIN",
+            "deficit_segments": [
+                {
+                    "depth_mw": null,
+                    "cost": 1000.0
+                }
+            ]
+        }
+    ]
+}

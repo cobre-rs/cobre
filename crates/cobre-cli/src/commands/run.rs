@@ -18,11 +18,11 @@ use console::Term;
 
 use cobre_comm::LocalBackend;
 use cobre_core::TrainingEvent;
-use cobre_io::{SimulationOutput, write_results};
+use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_stage_templates,
-    build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -201,6 +201,21 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     };
     let training_output = build_training_output(&training_result, &events, &fcf);
 
+    let output_dir = args.output.unwrap_or_else(|| args.case_dir.join("output"));
+
+    // Write the policy checkpoint (cuts + basis as FlatBuffers).
+    let policy_dir = output_dir.join(&config.policy.path);
+    crate::policy_io::write_checkpoint(
+        &policy_dir,
+        &fcf,
+        &training_result,
+        &crate::policy_io::CheckpointParams {
+            max_iterations,
+            forward_passes,
+            seed,
+        },
+    )?;
+
     let should_simulate =
         !args.skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
@@ -216,13 +231,18 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let entity_counts = build_entity_counts(&system);
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
-        let io_thread = std::thread::spawn(move || {
-            let mut completed: u32 = 0;
-            while result_rx.recv().is_ok() {
-                completed += 1;
-            }
-            (completed, 0_u32)
-        });
+        // Create the Parquet writer on the main thread (needs &System), then
+        // move it into the I/O thread.
+        let parquet_config = cobre_io::ParquetWriterConfig::default();
+        let sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
+            &output_dir,
+            &system,
+            &parquet_config,
+        )
+        .map_err(CliError::from)?;
+
+        let io_thread =
+            std::thread::spawn(move || crate::simulation_io::drain_results(result_rx, sim_writer));
 
         let sim_result = simulate(
             &mut solver,
@@ -242,23 +262,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
         drop(result_tx);
 
-        let (completed, failed) = io_thread.join().map_err(|_| CliError::Internal {
+        let sim_output = io_thread.join().map_err(|_| CliError::Internal {
             message: "simulation I/O thread panicked".to_string(),
         })?;
 
         sim_result?;
 
-        Some(SimulationOutput {
-            n_scenarios,
-            completed,
-            failed,
-            partitions_written: vec![],
-        })
+        Some(sim_output)
     } else {
         None
     };
-
-    let output_dir = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     write_results(
         &output_dir,

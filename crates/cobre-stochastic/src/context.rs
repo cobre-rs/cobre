@@ -21,10 +21,10 @@
 use cobre_core::{EntityId, System};
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     par::{precompute::PrecomputedParLp, validation::validate_par_parameters},
     tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
+    StochasticError,
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -252,11 +252,12 @@ pub fn build_stochastic_context(
 
     let par_lp = PrecomputedParLp::build(system.inflow_models(), &study_stages, &hydro_ids)?;
 
-    // When there are no hydro plants (dim == 0), the system is thermal-only.
-    // Skip correlation decomposition (no correlation model is needed) and
-    // build an empty opening tree with zero-length noise vectors. The forward
-    // and backward passes simply produce no inflow noise in this case.
-    let mut correlation = if dim == 0 {
+    // When there are no hydro plants (dim == 0) or no correlation profiles
+    // were provided, use uncorrelated noise. The dim == 0 case means the
+    // system is thermal-only (no inflow noise at all). The empty-profiles
+    // case means hydros exist but the user did not supply a correlation
+    // file — inflows are treated as independent (identity correlation).
+    let mut correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()
     } else {
         DecomposedCorrelation::build(system.correlation())?
@@ -280,7 +281,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -289,6 +289,7 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use super::build_stochastic_context;
@@ -633,6 +634,37 @@ mod tests {
             ),
             "expected CholeskyDecompositionFailed, got: {result:?}"
         );
+    }
+
+    /// When hydro plants exist but no correlation file was provided (empty
+    /// profiles), the context should build successfully with uncorrelated
+    /// (independent) inflows rather than failing.
+    #[test]
+    fn build_succeeds_with_hydros_and_empty_correlation() {
+        let hydros = vec![make_hydro(1)];
+        let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
+        let inflow_models = vec![
+            make_inflow_model(1, 0, 30.0, vec![]),
+            make_inflow_model(1, 1, 30.0, vec![]),
+        ];
+
+        // Empty correlation — simulates absent correlation.json.
+        let empty_correlation = CorrelationModel::default();
+        assert!(empty_correlation.profiles.is_empty());
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(empty_correlation)
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(&system, 42).unwrap();
+
+        assert_eq!(ctx.dim(), 1);
+        assert_eq!(ctx.n_stages(), 2);
     }
 
     /// Pre-study stages (negative IDs) are excluded from the opening tree.

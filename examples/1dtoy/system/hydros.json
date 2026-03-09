@@ -1,0 +1,26 @@
+{
+    "hydros": [
+        {
+            "id": 0,
+            "name": "UHE1",
+            "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": {
+                "min_storage_hm3": 0.0,
+                "max_storage_hm3": 1000.0
+            },
+            "outflow": {
+                "min_outflow_m3s": 0.0,
+                "max_outflow_m3s": 50.0
+            },
+            "generation": {
+                "model": "constant_productivity",
+                "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0,
+                "max_turbined_m3s": 50.0,
+                "min_generation_mw": 0.0,
+                "max_generation_mw": 50.0
+            }
+        }
+    ]
+}

@@ -41,7 +41,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{sample_forward, StochasticContext};
+use cobre_stochastic::{StochasticContext, sample_forward};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -528,12 +528,12 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
-    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
+    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,

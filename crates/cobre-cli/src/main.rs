@@ -24,10 +24,12 @@ mod policy_io;
 mod progress;
 mod simulation_io;
 mod summary;
+mod templates;
 
 use clap::{Parser, Subcommand};
 
 use commands::{
+    init::{self, InitArgs},
     report::{self, ReportArgs},
     run::{self, RunArgs},
     validate::{self, ValidateArgs},
@@ -48,6 +50,8 @@ struct Cli {
 /// Top-level subcommands for the `cobre` binary.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Scaffold a new case directory from an embedded template.
+    Init(InitArgs),
     /// Load a case directory, train an SDDP policy, and run simulation.
     Run(RunArgs),
     /// Validate a case directory and print a structured diagnostic report.
@@ -64,6 +68,7 @@ fn main() {
     logging::init_logging(verbose);
 
     let result = match cli.command {
+        Command::Init(args) => init::execute(args),
         Command::Run(args) => run::execute(args),
         Command::Validate(args) => validate::execute(args),
         Command::Report(args) => report::execute(args),

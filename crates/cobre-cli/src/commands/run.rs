@@ -350,6 +350,14 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // write no files. This single flag controls all UI/banner/summary paths.
     let quiet = args.quiet || !is_root;
 
+    // Under MPI, mpiexec pipes rank 0's stderr through to the user's terminal
+    // without allocating a PTY. Force color and terminal rendering on rank 0
+    // so the banner and progress bars display correctly.
+    let mpi_active = comm.size() > 1;
+    if mpi_active && is_root && !args.quiet {
+        console::set_colors_enabled_stderr(true);
+    }
+
     let stderr = Term::stderr();
 
     if !quiet && !args.no_banner {

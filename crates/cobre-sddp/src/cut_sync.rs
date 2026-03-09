@@ -42,8 +42,8 @@
 use cobre_comm::Communicator;
 
 use crate::{
-    FutureCostFunction, SddpError,
     cut::wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
+    FutureCostFunction, SddpError,
 };
 
 /// Pre-allocated byte buffers for gathering cut wire records across all MPI
@@ -128,6 +128,13 @@ pub struct CutSyncBuffers {
 
     /// Cached wire record size: `cut_wire_size(n_state)`.
     record_size: usize,
+
+    /// Per-rank expected cut counts for non-uniform work distribution.
+    ///
+    /// Entry `r` is the number of cuts rank `r` generates per stage per
+    /// iteration. Exposed for inspection in tests and diagnostics.
+    #[allow(dead_code)]
+    per_rank_cuts: Vec<usize>,
 }
 
 impl CutSyncBuffers {
@@ -145,14 +152,53 @@ impl CutSyncBuffers {
     /// - `num_ranks` — total number of MPI ranks (`comm.size()`).
     #[must_use]
     pub fn new(n_state: usize, max_cuts_per_rank: usize, num_ranks: usize) -> Self {
+        // Uniform distribution: every rank produces max_cuts_per_rank cuts.
+        Self::with_distribution(
+            n_state,
+            max_cuts_per_rank,
+            num_ranks,
+            max_cuts_per_rank * num_ranks,
+        )
+    }
+
+    /// Construct buffers for non-uniform work distribution.
+    ///
+    /// When the total number of forward passes does not divide evenly among
+    /// ranks, the first `total_forward_passes % num_ranks` ranks each handle
+    /// one extra forward pass. This constructor sizes buffers for the maximum
+    /// per-rank count and records each rank's expected count for correct
+    /// `allgatherv` displacements.
+    ///
+    /// # Arguments
+    ///
+    /// - `n_state` — state dimension (number of cut coefficients per cut).
+    /// - `max_cuts_per_rank` — maximum cuts any rank generates per stage per
+    ///   iteration. Used to size the send buffer.
+    /// - `num_ranks` — total number of MPI ranks.
+    /// - `total_forward_passes` — total forward passes across all ranks. Used
+    ///   to compute per-rank expected cut counts.
+    #[must_use]
+    pub fn with_distribution(
+        n_state: usize,
+        max_cuts_per_rank: usize,
+        num_ranks: usize,
+        total_forward_passes: usize,
+    ) -> Self {
         let record_size = cut_wire_size(n_state);
         let send_cap = max_cuts_per_rank * record_size;
-        let recv_cap = max_cuts_per_rank * num_ranks * record_size;
 
-        // counts and displs are initialized to the maximum uniform values.
-        // They are recomputed per call to sync_cuts based on actual cut counts.
-        let counts = vec![send_cap; num_ranks];
-        let displs: Vec<usize> = (0..num_ranks).map(|r| r * send_cap).collect();
+        let base = total_forward_passes / num_ranks;
+        let remainder = total_forward_passes % num_ranks;
+        let per_rank_cuts: Vec<usize> = (0..num_ranks)
+            .map(|r| base + usize::from(r < remainder))
+            .collect();
+        let recv_cap: usize = per_rank_cuts.iter().sum::<usize>() * record_size;
+
+        let counts: Vec<usize> = per_rank_cuts.iter().map(|&c| c * record_size).collect();
+        let mut displs = vec![0usize; num_ranks];
+        for r in 1..num_ranks {
+            displs[r] = displs[r - 1] + counts[r - 1];
+        }
 
         Self {
             send_buf: vec![0u8; send_cap],
@@ -162,6 +208,7 @@ impl CutSyncBuffers {
             n_state,
             num_ranks,
             record_size,
+            per_rank_cuts,
         }
     }
 
@@ -233,13 +280,25 @@ impl CutSyncBuffers {
             );
         }
 
-        let per_rank_bytes = n_local * self.record_size;
+        // Each rank sends exactly n_local cuts. For multi-rank, other ranks
+        // send per_rank_cuts[r] cuts. Recompute counts based on the actual
+        // local count (which should match per_rank_cuts[my_rank]) and the
+        // pre-computed per-rank expectations for other ranks.
+        let my_rank = comm.rank();
         for r in 0..self.num_ranks {
-            self.counts[r] = per_rank_bytes;
-            self.displs[r] = r * per_rank_bytes;
+            let cuts_for_r = if r == my_rank {
+                n_local
+            } else {
+                self.per_rank_cuts[r]
+            };
+            self.counts[r] = cuts_for_r * self.record_size;
+        }
+        self.displs[0] = 0;
+        for r in 1..self.num_ranks {
+            self.displs[r] = self.displs[r - 1] + self.counts[r - 1];
         }
 
-        let recv_len = per_rank_bytes * self.num_ranks;
+        let recv_len: usize = self.counts.iter().sum();
         debug_assert!(
             recv_len <= self.recv_buf.len(),
             "recv_len {recv_len} exceeds recv_buf capacity {}",
@@ -306,11 +365,11 @@ mod tests {
 
     use super::CutSyncBuffers;
     use crate::{
-        SddpError,
         cut::{
             fcf::FutureCostFunction,
             wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
         },
+        SddpError,
     };
 
     // ── Unit tests ────────────────────────────────────────────────────────────

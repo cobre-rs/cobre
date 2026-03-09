@@ -14,13 +14,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int8Builder, Int32Builder, RecordBatch};
+use arrow::array::{Float64Builder, Int32Builder, Int8Builder, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use cobre_core::System;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
@@ -28,6 +27,7 @@ use crate::output::schemas::{
     generic_violations_schema, hydros_schema, inflow_lags_schema, iteration_timing_schema,
     non_controllables_schema, pumping_stations_schema, rank_timing_schema, thermals_schema,
 };
+use crate::Config;
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
 
@@ -569,7 +569,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("convergence", "time_forward_ms") => "Forward-pass wall-clock time",
         ("convergence", "time_backward_ms") => "Backward-pass wall-clock time",
         ("convergence", "time_total_ms") => "Total iteration wall-clock time",
-        ("convergence", "memory_peak_mb") => "Peak resident memory usage",
         ("convergence", "forward_passes") => "Number of forward-pass scenarios",
         ("convergence", "lp_solves") => "Total LP solves in iteration",
         // ── iteration_timing ──────────────────────────────────────────────
@@ -962,13 +961,13 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
-        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
         resolved::{
             ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds,
             ResolvedBounds, ThermalStageBounds,
         },
+        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
+        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+        StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
     };
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -1329,8 +1328,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 147,
-            "variables.csv must have exactly 147 data rows (one per column across all 13 schemas)"
+            row_count, 146,
+            "variables.csv must have exactly 146 data rows (one per column across all 13 schemas)"
         );
     }
 

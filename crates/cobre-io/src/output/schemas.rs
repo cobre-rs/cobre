@@ -202,7 +202,7 @@ pub(crate) fn generic_violations_schema() -> Schema {
 
 /// Schema for `training/convergence.parquet` — iteration-level convergence log.
 ///
-/// 14 fields. See output-schemas.md SS6.1.
+/// 13 fields. See output-schemas.md SS6.1.
 pub(crate) fn convergence_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
@@ -216,7 +216,6 @@ pub(crate) fn convergence_schema() -> Schema {
         Field::new("time_forward_ms", DataType::Int64, false),
         Field::new("time_backward_ms", DataType::Int64, false),
         Field::new("time_total_ms", DataType::Int64, false),
-        Field::new("memory_peak_mb", DataType::Int64, false),
         Field::new("forward_passes", DataType::Int32, false),
         Field::new("lp_solves", DataType::Int64, false),
     ])
@@ -570,8 +569,8 @@ mod tests {
         let schema = convergence_schema();
         assert_eq!(
             schema.fields().len(),
-            14,
-            "convergence schema must have 14 fields"
+            13,
+            "convergence schema must have 13 fields"
         );
         // spot-check types per spec SS6.1
         assert_eq!(field_type(&schema, "iteration"), DataType::Int32);
@@ -582,7 +581,6 @@ mod tests {
         assert_eq!(field_type(&schema, "time_forward_ms"), DataType::Int64);
         assert_eq!(field_type(&schema, "lp_solves"), DataType::Int64);
         assert_eq!(field_type(&schema, "forward_passes"), DataType::Int32);
-        assert_eq!(field_type(&schema, "memory_peak_mb"), DataType::Int64);
     }
 
     #[test]
@@ -602,7 +600,6 @@ mod tests {
             "time_forward_ms",
             "time_backward_ms",
             "time_total_ms",
-            "memory_peak_mb",
             "forward_passes",
             "lp_solves",
         ] {
@@ -698,7 +695,7 @@ mod tests {
             ("non_controllables", 10),
             ("inflow_lags", 4),
             ("generic_violations", 5),
-            ("convergence", 14),
+            ("convergence", 13),
             ("iteration_timing", 10),
             ("rank_timing", 8),
         ];

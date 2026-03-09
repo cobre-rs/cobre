@@ -1,12 +1,17 @@
 //! Backward pass execution for the SDDP training loop.
 //!
 //! [`run_backward_pass`] sweeps stages in reverse order (`T-2` down to `0`),
-//! evaluating the cost-to-go at each trial point collected by the preceding
-//! forward pass (via [`ExchangeBuffers`]) under every opening from the fixed
-//! opening tree, extracting LP duals to form Benders cut coefficients, and
-//! aggregating per-opening outcomes via [`RiskMeasure::aggregate_cut`] to
-//! produce one cut per trial point per stage. Each aggregated cut is inserted
-//! into the [`FutureCostFunction`].
+//! evaluating the cost-to-go at each trial point **assigned to this rank**
+//! during the forward pass. For each trial point, the backward pass iterates
+//! over every opening from the fixed opening tree, extracts LP duals to form
+//! Benders cut coefficients, and aggregates per-opening outcomes via
+//! [`RiskMeasure::aggregate_cut`] to produce one cut per trial point per
+//! stage. Each aggregated cut is inserted into the [`FutureCostFunction`].
+//!
+//! Although [`ExchangeBuffers`] contains trial points from all ranks (after
+//! `allgatherv`), each rank only processes its own forward pass assignments
+//! to avoid generating duplicate cuts. Cut synchronization (`allgatherv`)
+//! distributes the generated cuts to all ranks after the backward pass.
 //!
 //! ## Stage indexing convention
 //!
@@ -54,9 +59,9 @@ use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
-    state_exchange::ExchangeBuffers,
+    state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
+    StageIndexer, TrainingConfig,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -112,17 +117,19 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     fcf: &mut FutureCostFunction,
     exchange: &ExchangeBuffers,
     stochastic: &StochasticContext,
-    _config: &TrainingConfig, // Phase 7: cut synchronization
+    _config: &TrainingConfig,
     iteration: u64,
     horizon: &HorizonMode,
     risk_measures: &[RiskMeasure],
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
-    _comm: &C, // Phase 7: cut synchronization
+    comm: &C,
     basis_cache: &mut [Option<Basis>],
+    local_work: usize,
+    fwd_offset: usize,
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();
-    let total_scenarios = exchange.total_scenarios();
+    let my_rank = comm.rank();
 
     debug_assert_eq!(
         templates.len(),
@@ -167,8 +174,8 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
             outcomes.reserve(n_openings - outcomes.capacity());
         }
 
-        for m in 0..total_scenarios {
-            let x_hat = exchange.state_at(m / exchange.local_count(), m % exchange.local_count());
+        for m in 0..local_work {
+            let x_hat = exchange.state_at(my_rank, m);
 
             outcomes.clear();
 
@@ -196,9 +203,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                         SolverError::Infeasible => SddpError::Infeasible {
                             stage: t,
                             iteration,
-                            // m is the global trial point index — cast is safe
-                            // because total_scenarios <= usize::MAX.
-                            scenario: m,
+                            scenario: fwd_offset + m,
                         },
                         other => SddpError::Solver(other),
                     }
@@ -244,7 +249,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
                 risk_measures[t].aggregate_cut(&outcomes, &probabilities);
 
             #[allow(clippy::cast_possible_truncation)]
-            let forward_pass_index = m as u32;
+            let forward_pass_index = (fwd_offset + m) as u32;
 
             fcf.add_cut(
                 t,
@@ -276,7 +281,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
         TrainingConfig, TrajectoryRecord,
@@ -491,7 +496,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -500,6 +504,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;
@@ -722,6 +727,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -783,6 +790,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -844,6 +853,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -901,6 +912,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -957,6 +970,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1011,6 +1026,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         );
 
         assert!(
@@ -1110,6 +1127,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1178,6 +1197,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1256,6 +1277,8 @@ mod tests {
             &indexer,
             &comm,
             &mut vec![None; templates.len()],
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1331,6 +1354,8 @@ mod tests {
             &indexer,
             &comm,
             &mut basis_cache,
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1397,6 +1422,8 @@ mod tests {
             &indexer,
             &comm,
             &mut basis_cache,
+            exchange.local_count(),
+            0,
         )
         .unwrap();
 
@@ -1468,6 +1495,8 @@ mod tests {
             &indexer,
             &comm,
             &mut basis_cache,
+            exchange.local_count(),
+            0,
         );
 
         assert!(

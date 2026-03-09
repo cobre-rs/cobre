@@ -155,7 +155,6 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
     let mut time_forward_ms = Int64Builder::with_capacity(n);
     let mut time_backward_ms = Int64Builder::with_capacity(n);
     let mut time_total_ms = Int64Builder::with_capacity(n);
-    let mut memory_peak_mb = Int64Builder::with_capacity(n);
     let mut forward_passes = Int32Builder::with_capacity(n);
     let mut lp_solves = Int64Builder::with_capacity(n);
 
@@ -171,7 +170,6 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
         time_forward_ms.append_value(rec.time_forward_ms as i64);
         time_backward_ms.append_value(rec.time_backward_ms as i64);
         time_total_ms.append_value(rec.time_total_ms as i64);
-        memory_peak_mb.append_value(rec.memory_peak_mb as i64);
         forward_passes.append_value(rec.forward_passes as i32);
         lp_solves.append_value(i64::from(rec.lp_solves));
     }
@@ -190,7 +188,6 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
             Arc::new(time_forward_ms.finish()),
             Arc::new(time_backward_ms.finish()),
             Arc::new(time_total_ms.finish()),
-            Arc::new(memory_peak_mb.finish()),
             Arc::new(forward_passes.finish()),
             Arc::new(lp_solves.finish()),
         ],
@@ -200,10 +197,10 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
 
 /// Build a `RecordBatch` for `training/timing/iterations.parquet`.
 ///
-/// The `IterationRecord` type does not carry per-phase timing breakdown.
-/// All nine timing columns (`forward_solve_ms` through `overhead_ms`) are
-/// written as `0_i64` placeholders. Only the `iteration` column carries
-/// real data from the record.
+/// Reads per-phase timing fields from each [`IterationRecord`] and writes them
+/// as `i64` millisecond columns.  Fields without a data source
+/// (`forward_sample_ms`, `backward_cut_ms`, `io_write_ms`) remain zero until
+/// finer-grained instrumentation is added.
 #[allow(clippy::cast_possible_wrap)]
 fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(iteration_timing_schema());
@@ -222,15 +219,15 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
 
     for rec in records {
         iteration.append_value(rec.iteration as i32);
-        forward_solve_ms.append_value(0_i64);
-        forward_sample_ms.append_value(0_i64);
-        backward_solve_ms.append_value(0_i64);
-        backward_cut_ms.append_value(0_i64);
-        cut_selection_ms.append_value(0_i64);
-        mpi_allreduce_ms.append_value(0_i64);
-        mpi_broadcast_ms.append_value(0_i64);
-        io_write_ms.append_value(0_i64);
-        overhead_ms.append_value(0_i64);
+        forward_solve_ms.append_value(rec.time_forward_solve_ms as i64);
+        forward_sample_ms.append_value(rec.time_forward_sample_ms as i64);
+        backward_solve_ms.append_value(rec.time_backward_solve_ms as i64);
+        backward_cut_ms.append_value(rec.time_backward_cut_ms as i64);
+        cut_selection_ms.append_value(rec.time_cut_selection_ms as i64);
+        mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
+        mpi_broadcast_ms.append_value(rec.time_mpi_broadcast_ms as i64);
+        io_write_ms.append_value(rec.time_io_write_ms as i64);
+        overhead_ms.append_value(rec.time_overhead_ms as i64);
     }
 
     RecordBatch::try_new(
@@ -314,7 +311,15 @@ mod tests {
             time_forward_ms: 100,
             time_backward_ms: 200,
             time_total_ms: 300,
-            memory_peak_mb: 128.0,
+            time_forward_solve_ms: 100,
+            time_forward_sample_ms: 0,
+            time_backward_solve_ms: 200,
+            time_backward_cut_ms: 0,
+            time_cut_selection_ms: 0,
+            time_mpi_allreduce_ms: 0,
+            time_mpi_broadcast_ms: 0,
+            time_io_write_ms: 0,
+            time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
         }
@@ -346,7 +351,7 @@ mod tests {
     fn convergence_batch_from_empty_records() {
         let batch = build_convergence_batch(&[]).expect("empty batch must succeed");
         assert_eq!(batch.num_rows(), 0, "empty records yield 0 rows");
-        assert_eq!(batch.num_columns(), 14, "convergence schema has 14 columns");
+        assert_eq!(batch.num_columns(), 13, "convergence schema has 13 columns");
     }
 
     #[test]
@@ -354,7 +359,7 @@ mod tests {
         let records: Vec<IterationRecord> = (1..=3).map(|i| make_record(i, Some(5.0))).collect();
         let batch = build_convergence_batch(&records).expect("batch must be built");
         assert_eq!(batch.num_rows(), 3);
-        assert_eq!(batch.num_columns(), 14);
+        assert_eq!(batch.num_columns(), 13);
 
         let expected_schema = convergence_schema();
         assert_eq!(
@@ -580,7 +585,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 14);
+        assert_eq!(batch.num_columns(), 13);
 
         let timing_path = tmp.path().join("training/timing/iterations.parquet");
         let file = std::fs::File::open(&timing_path).expect("file must open");

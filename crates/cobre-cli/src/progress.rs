@@ -188,7 +188,6 @@ mod tests {
             forward_ms: 80,
             backward_ms: 100,
             lp_solves: 240,
-            memory_peak_mb: 512.0,
         }
     }
 

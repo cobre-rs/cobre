@@ -16,7 +16,8 @@
 //!
 //! ## Work distribution
 //!
-//! Each rank processes `config.forward_passes` scenarios. The global scenario
+//! Each rank processes `config.forward_passes` scenarios (the local count,
+//! already divided from the user's total by the caller). The global scenario
 //! index for rank `r`, local scenario `m` is `r * forward_passes + m`. This
 //! deterministic mapping drives the communication-free seed derivation used by
 //! [`sample_forward`].
@@ -41,7 +42,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{sample_forward, StochasticContext};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -528,12 +529,12 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
-    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
+    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,

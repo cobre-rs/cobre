@@ -25,7 +25,7 @@
 /// Corresponds to one row in the costs output schema
 /// (output-schemas.md SS5.1). Contains both aggregate totals and
 /// per-category breakdowns used for cost statistics (SS4.2).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationCostResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -75,7 +75,7 @@ pub struct SimulationCostResult {
 /// Corresponds to one row in the hydros output schema
 /// (output-schemas.md SS5.2). Derived columns (`generation_mwh`,
 /// `outflow_m3s`) are computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationHydroResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -141,7 +141,7 @@ pub struct SimulationHydroResult {
 /// Corresponds to one row in the thermals output schema
 /// (output-schemas.md SS5.3). The derived column `generation_mwh`
 /// is computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationThermalResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -171,7 +171,7 @@ pub struct SimulationThermalResult {
 /// (output-schemas.md SS5.4). Derived columns (`net_flow_mw`,
 /// `losses_mw`, and all `MWh` energy columns) are computed by the output
 /// writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationExchangeResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -194,7 +194,7 @@ pub struct SimulationExchangeResult {
 /// Corresponds to one row in the buses output schema
 /// (output-schemas.md SS5.5). Derived columns (`load_mwh`,
 /// `deficit_mwh`, `excess_mwh`) are computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationBusResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -217,7 +217,7 @@ pub struct SimulationBusResult {
 /// Corresponds to one row in the `pumping_stations` output schema
 /// (output-schemas.md SS5.6). Derived columns (`pumped_volume_hm3`,
 /// `energy_consumption_mwh`) are computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationPumpingResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -240,7 +240,7 @@ pub struct SimulationPumpingResult {
 /// Corresponds to one row in the contracts output schema
 /// (output-schemas.md SS5.7). The derived column `energy_mwh` is
 /// computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationContractResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -263,7 +263,7 @@ pub struct SimulationContractResult {
 /// Corresponds to one row in the `non_controllables` output schema
 /// (output-schemas.md SS5.8). Derived columns (`generation_mwh`,
 /// `curtailment_mwh`) are computed by the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationNonControllableResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -288,7 +288,7 @@ pub struct SimulationNonControllableResult {
 /// Corresponds to one row in the `inflow_lags` output schema
 /// (output-schemas.md SS5.10). Only populated for hydro plants whose
 /// PAR(p) model has AR order > 0.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationInflowLagResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -305,7 +305,7 @@ pub struct SimulationInflowLagResult {
 /// Corresponds to one row in the violations/generic output schema
 /// (output-schemas.md SS5.11). Only entries with non-zero slack values
 /// are included.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationGenericViolationResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -325,7 +325,7 @@ pub struct SimulationGenericViolationResult {
 /// scenario. Each per-entity-type [`Vec`] holds one entry per (block, entity)
 /// pair within the stage. Entity types that are absent from the system or that
 /// produce no violations result in empty [`Vec`]s.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationStageResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -361,7 +361,7 @@ pub struct SimulationStageResult {
 ///
 /// Matches the category breakdown in SS4.2 and is retained in the compact
 /// cost buffer even after per-stage detail is streamed to the output writer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ScenarioCategoryCosts {
     /// Sum of thermal and contract costs: `thermal_cost + contract_cost`.
     pub resource_cost: f64,
@@ -397,7 +397,7 @@ pub struct ScenarioCategoryCosts {
 /// consumed by the I/O thread for Parquet writing, and then dropped. At most
 /// `channel_capacity` instances exist simultaneously (bounded by channel
 /// backpressure). See SS3.3.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SimulationScenarioResult {
     /// 0-based scenario identifier, unique across all MPI ranks.
     /// Determines the Hive partition path:

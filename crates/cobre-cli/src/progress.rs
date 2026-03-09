@@ -151,7 +151,8 @@ pub fn run_progress_thread(
 }
 
 fn create_training_bar(max_iterations: u64) -> ProgressBar {
-    let bar = ProgressBar::with_draw_target(Some(max_iterations), ProgressDrawTarget::stderr());
+    let bar =
+        ProgressBar::with_draw_target(Some(max_iterations), ProgressDrawTarget::stderr_with_hz(8));
     let style = ProgressStyle::with_template(TRAINING_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     bar.set_style(style);
@@ -159,7 +160,8 @@ fn create_training_bar(max_iterations: u64) -> ProgressBar {
 }
 
 fn create_simulation_bar(scenarios_total: u64) -> ProgressBar {
-    let bar = ProgressBar::with_draw_target(Some(scenarios_total), ProgressDrawTarget::stderr());
+    let bar =
+        ProgressBar::with_draw_target(Some(scenarios_total), ProgressDrawTarget::stderr_with_hz(8));
     let style = ProgressStyle::with_template(SIMULATION_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     bar.set_style(style);

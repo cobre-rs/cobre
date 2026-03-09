@@ -352,7 +352,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     let stderr = Term::stderr();
 
-    if !quiet && !args.no_banner && stderr.is_term() {
+    if !quiet && !args.no_banner {
         crate::banner::print_banner(&stderr);
     }
 

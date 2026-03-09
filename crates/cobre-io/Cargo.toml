@@ -13,7 +13,7 @@ keywords = ["power-systems", "energy", "io", "validation"]
 categories = ["science", "parser-implementations"]
 
 [dependencies]
-cobre-core = { version = "0.0.1", path = "../cobre-core", features = ["serde"] }
+cobre-core = { version = "0.1.0", path = "../cobre-core", features = ["serde"] }
 arrow = { version = "58", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"

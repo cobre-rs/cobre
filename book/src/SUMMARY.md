@@ -4,6 +4,17 @@
 
 ---
 
+# Tutorial
+
+- [Installation](./tutorial/installation.md)
+- [Quickstart](./tutorial/quickstart.md)
+- [Anatomy of a Case](./tutorial/anatomy-of-a-case.md)
+- [Building a System](./tutorial/building-a-system.md)
+- [Understanding Results](./tutorial/understanding-results.md)
+- [Next Steps](./tutorial/next-steps.md)
+
+---
+
 # User Guide
 
 - [Getting Started](./guide/getting-started.md)

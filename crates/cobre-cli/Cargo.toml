@@ -25,8 +25,8 @@ cobre-solver = { version = "0.0.1", path = "../cobre-solver" }
 cobre-comm = { version = "0.0.1", path = "../cobre-comm" }
 cobre-stochastic = { version = "0.0.1", path = "../cobre-stochastic" }
 clap = { version = "4", features = ["derive"] }
-console = "0.15"
-indicatif = "0.17"
+console = "0.16"
+indicatif = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

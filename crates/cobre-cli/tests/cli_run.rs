@@ -25,13 +25,9 @@ use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-// ── binary helper ─────────────────────────────────────────────────────────────
-
 fn cobre() -> Command {
     Command::new(assert_cmd::cargo::cargo_bin!("cobre"))
 }
-
-// ── fixture constants ─────────────────────────────────────────────────────────
 
 /// Minimal `config.json` with `forward_passes` and `stopping_rules`.
 /// Uses a single iteration limit so tests run fast.
@@ -100,8 +96,6 @@ const LINES_JSON: &str = r#"{ "lines": [] }"#;
 const HYDROS_JSON: &str = r#"{ "hydros": [] }"#;
 const THERMALS_JSON: &str = r#"{ "thermals": [] }"#;
 
-// ── fixture helpers ───────────────────────────────────────────────────────────
-
 fn write_file(root: &Path, relative: &str, content: &str) {
     let full = root.join(relative);
     if let Some(parent) = full.parent() {
@@ -110,11 +104,6 @@ fn write_file(root: &Path, relative: &str, content: &str) {
     fs::write(&full, content).unwrap();
 }
 
-/// Build a minimal valid case directory: 1 bus, 0 hydros, 0 thermals, 1 stage.
-///
-/// This fixture is designed to run as fast as possible (1 forward pass, 2
-/// iterations, 1 stage). The SDDP training will converge trivially on a system
-/// with zero generation costs and 0 demand.
 fn make_valid_case(dir: &TempDir) {
     let root = dir.path();
     write_file(root, "config.json", CONFIG_JSON);
@@ -126,8 +115,6 @@ fn make_valid_case(dir: &TempDir) {
     write_file(root, "system/hydros.json", HYDROS_JSON);
     write_file(root, "system/thermals.json", THERMALS_JSON);
 }
-
-// ── AC-1: valid case → exit 0, expected output artifacts exist ────────────────
 
 #[test]
 fn valid_case_exits_0() {
@@ -166,10 +153,7 @@ fn valid_case_creates_training_manifest() {
         .assert()
         .success();
 
-    assert!(
-        out.path().join("training/_manifest.json").is_file(),
-        "training/_manifest.json must exist after a successful run"
-    );
+    assert!(out.path().join("training/_manifest.json").is_file());
 }
 
 #[test]
@@ -190,13 +174,8 @@ fn valid_case_creates_convergence_parquet() {
         .assert()
         .success();
 
-    assert!(
-        out.path().join("training/convergence.parquet").is_file(),
-        "training/convergence.parquet must exist after a successful run"
-    );
+    assert!(out.path().join("training/convergence.parquet").is_file());
 }
-
-// ── AC-2: --skip-simulation → no simulation manifest ─────────────────────────
 
 #[test]
 fn skip_simulation_does_not_produce_simulation_manifest() {
@@ -216,21 +195,14 @@ fn skip_simulation_does_not_produce_simulation_manifest() {
         .assert()
         .success();
 
-    assert!(
-        !out.path().join("simulation/_manifest.json").exists(),
-        "simulation/_manifest.json must NOT exist when --skip-simulation is passed"
-    );
+    assert!(!out.path().join("simulation/_manifest.json").exists());
 }
-
-// ── AC-3: --output <custom_dir> → output written to custom dir ───────────────
 
 #[test]
 fn custom_output_dir_receives_training_artifacts() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);
     let custom_out = TempDir::new().unwrap();
-
-    // Verify that the custom output dir is actually different from the case dir.
     assert_ne!(dir.path(), custom_out.path());
 
     cobre()
@@ -245,24 +217,14 @@ fn custom_output_dir_receives_training_artifacts() {
         .assert()
         .success();
 
-    // Artifacts go to the custom dir, not to case_dir/output.
-    assert!(
-        custom_out.path().join("training/_manifest.json").is_file(),
-        "training/_manifest.json must be written to --output dir"
-    );
-    assert!(
-        !dir.path().join("output").exists(),
-        "default output/ subdir must NOT be created when --output is specified"
-    );
+    assert!(custom_out.path().join("training/_manifest.json").is_file());
+    assert!(!dir.path().join("output").exists());
 }
-
-// ── AC-4: invalid case dir (missing required files) → exit 1 ─────────────────
 
 #[test]
 fn missing_required_file_exits_1() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);
-    // Remove a required file to trigger validation failure.
     fs::remove_file(dir.path().join("system/buses.json")).unwrap();
 
     cobre()
@@ -286,8 +248,6 @@ fn missing_required_file_stderr_contains_validation_error() {
         .stderr(predicate::str::contains("error"));
 }
 
-// ── AC-5: nonexistent case directory → exit 2 ────────────────────────────────
-
 #[test]
 fn nonexistent_path_exits_2() {
     cobre()
@@ -305,4 +265,44 @@ fn nonexistent_path_stderr_contains_io_error() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains("I/O error"));
+}
+
+#[test]
+fn test_run_quiet_no_banner_no_summary() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+    let out = TempDir::new().unwrap();
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+            "--skip-simulation",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("COBRE v").not())
+        .stderr(predicate::str::contains("Training complete in").not());
+}
+
+#[test]
+fn test_run_no_banner_flag_suppresses_banner() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+    let out = TempDir::new().unwrap();
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-banner",
+            "--skip-simulation",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("COBRE v").not())
+        .stderr(predicate::str::contains("Training complete in"));
 }

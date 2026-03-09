@@ -28,6 +28,7 @@ use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
 
 use crate::error::CliError;
+use crate::summary::{RunSummary, SimulationSummary, TrainingSummary};
 
 /// Default number of forward-pass trajectories when not specified in config.
 const DEFAULT_FORWARD_PASSES: u32 = 1;
@@ -78,10 +79,9 @@ pub struct RunArgs {
 #[allow(clippy::too_many_lines)]
 pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let stderr = Term::stderr();
-    let stdout = Term::stdout();
 
-    if !args.quiet && !args.no_banner && stdout.is_term() {
-        print_banner(&stdout);
+    if !args.quiet && !args.no_banner && stderr.is_term() {
+        crate::banner::print_banner(&stderr);
     }
 
     if !args.case_dir.exists() {
@@ -153,13 +153,19 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         event_sender: Some(event_tx),
     };
 
-    if !args.quiet {
-        let _ = stderr.write_line(&format!(
-            "Training: {n_stages} stages, {forward_passes} forward passes, max {max_iterations} iterations"
-        ));
-    }
+    let quiet_rx: Option<mpsc::Receiver<TrainingEvent>>;
+    let progress_handle = if args.quiet {
+        quiet_rx = Some(event_rx);
+        None
+    } else {
+        quiet_rx = None;
+        Some(crate::progress::run_progress_thread(
+            event_rx,
+            max_iterations,
+        ))
+    };
 
-    let training_result = train(
+    let training_result = match train(
         &mut solver,
         training_config,
         &mut fcf,
@@ -175,18 +181,25 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         None,
         None,
         &LocalBackend,
-    )
-    .map_err(CliError::from)?;
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            // event_tx was moved into TrainingConfig and is now dropped, which
+            // causes the progress thread to exit its recv loop. Join before
+            // returning to avoid orphaned threads.
+            if let Some(handle) = progress_handle {
+                let _ = handle.join();
+            }
+            return Err(CliError::from(e));
+        }
+    };
 
-    let events: Vec<TrainingEvent> = event_rx.try_iter().collect();
+    let events: Vec<TrainingEvent> = match (progress_handle, quiet_rx) {
+        (Some(handle), _) => handle.join(),
+        (None, Some(rx)) => rx.try_iter().collect(),
+        (None, None) => Vec::new(),
+    };
     let training_output = build_training_output(&training_result, &events, &fcf);
-
-    if !args.quiet {
-        let _ = stderr.write_line(&format!(
-            "Training complete: {} iterations (reason: {})",
-            training_result.iterations, training_result.reason,
-        ));
-    }
 
     let should_simulate =
         !args.skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
@@ -194,10 +207,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let simulation_output = if should_simulate {
         let n_scenarios = config.simulation.num_scenarios;
         let io_capacity = config.simulation.io_channel_capacity as usize;
-
-        if !args.quiet {
-            let _ = stderr.write_line(&format!("Simulation: {n_scenarios} scenarios"));
-        }
 
         let sim_config = SimulationConfig {
             n_scenarios,
@@ -237,10 +246,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: "simulation I/O thread panicked".to_string(),
         })?;
 
-        if !args.quiet {
-            let _ = stderr.write_line(&format!("Simulation complete: {completed} scenarios"));
-        }
-
         Some(SimulationOutput {
             n_scenarios,
             completed,
@@ -253,10 +258,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     let output_dir = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
-    if !args.quiet {
-        let _ = stderr.write_line(&format!("Writing output to: {}", output_dir.display()));
-    }
-
     write_results(
         &output_dir,
         &training_output,
@@ -267,33 +268,40 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     .map_err(CliError::from)?;
 
     if !args.quiet {
-        let _ = stderr.write_line("Done.");
+        let summary = RunSummary {
+            training: TrainingSummary {
+                iterations: training_result.iterations,
+                converged: training_output.converged,
+                converged_at: if training_output.converged {
+                    Some(training_result.iterations)
+                } else {
+                    None
+                },
+                reason: training_result.reason.clone(),
+                lower_bound: training_result.final_lb,
+                upper_bound: training_result.final_ub,
+                upper_bound_std: 0.0,
+                gap_percent: training_result.final_gap * 100.0,
+                total_cuts_active: training_output.cut_stats.total_active,
+                total_cuts_generated: training_output.cut_stats.total_generated,
+                total_lp_solves: training_output
+                    .convergence_records
+                    .iter()
+                    .map(|r| u64::from(r.lp_solves))
+                    .sum(),
+                total_time_ms: training_result.total_time_ms,
+            },
+            simulation: simulation_output.as_ref().map(|sim| SimulationSummary {
+                n_scenarios: sim.n_scenarios,
+                completed: sim.completed,
+                failed: sim.failed,
+            }),
+            output_dir: output_dir.clone(),
+        };
+        crate::summary::print_summary(&stderr, &summary);
     }
 
     Ok(())
-}
-
-/// Print the Cobre banner to stdout.
-///
-/// Uses Unicode box-drawing characters and copper-toned 256-color ANSI codes.
-/// Output is suppressed automatically when the terminal does not support color.
-fn print_banner(stdout: &Term) {
-    let version = env!("CARGO_PKG_VERSION");
-    // Copper busbars (ANSI 256-color code 172 ≈ #B87333)
-    let bar = "\x1b[38;5;172m\u{257a}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{257b}\x1b[0m";
-    // Bus dots (ANSI 256-color code 179 ≈ #D4956A)
-    let dot = "\x1b[38;5;179m\u{25cf}\x1b[0m";
-    // Spark amber (ANSI 256-color code 214 ≈ #F5A623)
-    let spark = "\x1b[38;5;214m\u{26a1}\x1b[0m";
-    // COBRE bold white
-    let cobre = format!("\x1b[1;38;5;253mCOBRE v{version}\x1b[0m");
-    // Tagline muted
-    let tagline = "\x1b[38;5;245mPower systems in Rust\x1b[0m";
-
-    let _ = stdout.write_line(&format!(" {bar}{dot}"));
-    let _ = stdout.write_line(&format!(" {bar}{dot}{spark}  {cobre}"));
-    let _ = stdout.write_line(&format!(" {bar}{dot}   {tagline}"));
-    let _ = stdout.write_line("");
 }
 
 /// Resolve the [`StoppingRuleSet`] from the IO training config.

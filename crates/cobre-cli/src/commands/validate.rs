@@ -26,8 +26,7 @@ fn format_constraint_description(term: &Term, description: &str, path: &Path) {
         path.display()
     ));
     for line in lines {
-        let label = style("error:").red().bold();
-        let _ = term.write_line(&format!("{label} {line}"));
+        let _ = term.write_line(&format!("{} {line}", style("error:").red().bold()));
     }
 }
 
@@ -94,12 +93,6 @@ mod tests {
 
     use cobre_io::{ReportEntry, ValidationReport};
 
-    /// Build a formatted report string from a [`ValidationReport`].
-    ///
-    /// Returns a multi-line string with a summary header and each error/warning
-    /// entry prefixed with `"error:"` or `"warning:"` labels.  Only used in
-    /// tests — production code uses the `ConstraintError::description` string
-    /// because `load_case` does not expose the `ValidationContext`.
     fn format_report_to_string(report: &ValidationReport, path: &Path) -> String {
         let mut out = String::new();
         let _ = writeln!(
@@ -118,8 +111,6 @@ mod tests {
         out
     }
 
-    /// Format a single [`ReportEntry`] as `<file>: <message>` or
-    /// `<file>: <message> (<entity>)`.
     fn format_entry(entry: &ReportEntry) -> String {
         if let Some(entity) = &entry.entity {
             format!("{}: {} ({})", entry.file, entry.message, entity)

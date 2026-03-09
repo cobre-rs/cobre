@@ -16,9 +16,12 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod banner;
 mod commands;
 mod error;
 mod logging;
+mod progress;
+mod summary;
 
 use clap::{Parser, Subcommand};
 
@@ -55,10 +58,6 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-
-    // Extract the verbose flag before dispatching so logging is initialized
-    // as early as possible. Only `run` exposes `--verbose`; all other
-    // subcommands default to non-verbose logging.
     let verbose = matches!(&cli.command, Command::Run(args) if args.verbose);
     logging::init_logging(verbose);
 

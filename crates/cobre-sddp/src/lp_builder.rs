@@ -549,45 +549,27 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
         let mut col_upper = vec![f64::INFINITY; num_cols];
         let mut objective = vec![0.0_f64; num_cols];
 
-        // Storage bounds: [min_storage, max_storage] per stage
         for (h_idx, hydro) in hydros.iter().enumerate() {
             let hb = bounds.hydro_bounds(h_idx, stage_idx);
-            // Outgoing storage [0, N)
             col_lower[h_idx] = hb.min_storage_hm3;
             col_upper[h_idx] = hb.max_storage_hm3;
-            // Incoming storage [N*(1+L), N*(2+L)) — free (fixed by row constraints)
             col_lower[idx.storage_in.start + h_idx] = f64::NEG_INFINITY;
             col_upper[idx.storage_in.start + h_idx] = f64::INFINITY;
-            // Objective: incoming storage = 0 (no cost)
-            let _ = hydro; // suppress unused warning
+            let _ = hydro;
         }
 
-        // AR lag bounds: [-inf, +inf] (fixed by lag-fixing constraints)
         for lag_col in idx.inflow_lags.clone() {
             col_lower[lag_col] = f64::NEG_INFINITY;
             col_upper[lag_col] = f64::INFINITY;
         }
 
-        // Theta: [0, +inf].
-        //
-        // The future cost function approximation (theta) is bounded below by
-        // zero because all penalty costs in the system are non-negative and
-        // the terminal stage value is fixed at zero. Initialising with
-        // col_lower = 0.0 ensures that LPs with an empty cut pool (iteration
-        // 1, non-terminal stages) are bounded and return theta = 0 as the
-        // trivial lower bound, rather than being declared unbounded by HiGHS.
-        //
-        // Once cuts are added via `add_rows`, the effective lower bound on
-        // theta is determined by the tightest cut. The template bound of 0.0
-        // is dominated by any positive intercept cut and is never binding
-        // after the first backward pass on a system with positive costs.
+        // Theta bounded below by zero: all penalties are non-negative, terminal
+        // stage value is zero. This ensures iteration 1 LPs with empty cut pools
+        // are bounded (return theta=0) rather than unbounded by HiGHS.
         col_lower[idx.theta] = 0.0;
         col_upper[idx.theta] = f64::INFINITY;
-        // Theta objective coefficient = 1.0
         objective[idx.theta] = 1.0;
 
-        // Hydro turbine bounds: [min_turbined, max_turbined] per block
-        // Objective: 0.0 (hydro generation has no direct cost, regularization via spillage)
         for (h_idx, hydro) in hydros.iter().enumerate() {
             let hb = bounds.hydro_bounds(h_idx, stage_idx);
             for blk in 0..n_blks {
@@ -599,30 +581,23 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
-        // Hydro spillage bounds: [0, +inf] per block
-        // Objective: small regularization cost (penalties.spillage_cost)
         for (h_idx, _hydro) in hydros.iter().enumerate() {
             let hp = penalties.hydro_penalties(h_idx, stage_idx);
             for blk in 0..n_blks {
                 let col = col_spillage_start + h_idx * n_blks + blk;
                 col_lower[col] = 0.0;
                 col_upper[col] = f64::INFINITY;
-                // Duration weight: spillage_cost in $/m³/s — multiply by block hours
                 let block_hours = stage.blocks[blk].duration_hours;
                 objective[col] = hp.spillage_cost * block_hours;
             }
         }
 
-        // Thermal generation bounds and costs
         for (t_idx, thermal) in thermals.iter().enumerate() {
             let tb = bounds.thermal_bounds(t_idx, stage_idx);
-            // Compute weighted marginal cost from cost_segments
-            let marginal_cost_per_mwh = if thermal.cost_segments.is_empty() {
-                0.0
-            } else {
-                // Use first segment's cost as the linearized cost for the single-variable model
-                thermal.cost_segments[0].cost_per_mwh
-            };
+            let marginal_cost_per_mwh = thermal
+                .cost_segments
+                .first()
+                .map_or(0.0, |seg| seg.cost_per_mwh);
             for blk in 0..n_blks {
                 let col = col_thermal_start + t_idx * n_blks + blk;
                 col_lower[col] = tb.min_generation_mw;
@@ -632,7 +607,6 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
-        // Line flow bounds and costs
         for (l_idx, line) in lines.iter().enumerate() {
             let lb = bounds.line_bounds(l_idx, stage_idx);
             let lp = penalties.line_penalties(l_idx, stage_idx);
@@ -650,10 +624,8 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
-        // Bus deficit / excess bounds and costs
         for (b_idx, bus) in buses.iter().enumerate() {
             let bp = penalties.bus_penalties(b_idx, stage_idx);
-            // Deficit cost: use the highest segment's cost_per_mwh (worst-case VOLL)
             let deficit_cost = bus
                 .deficit_segments
                 .last()
@@ -674,24 +646,8 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
         let mut row_lower = vec![0.0_f64; num_rows];
         let mut row_upper = vec![0.0_f64; num_rows];
 
-        // Fixing constraints are equality with RHS = 0.0 (patched at solve time)
-        // rows [0, n_dual_relevant) → lower = upper = 0.0 (already set)
-
-        // Water balance rows: equality constraints
-        // v_h = v_in_h - zeta*sum_k(tau_k*(q_hk + s_hk - upstream_hk))
-        // RHS = 0 (inflow noise is added as Category-3 patch)
-        // All water balance rows: lower = upper = 0.0 (already set, noise patched at solve time)
-
-        // Load balance rows: equality (demand = supply)
-        // The mean demand is embedded as the RHS of the load balance.
-        // For load balance: sum(gen_at_bus) + net_line_in - net_line_out + deficit - excess = demand
-        // RHS = demand (per bus per block) - mean inflow contribution
-        // For the structural template, we set RHS = 0.0; demand is set via bounds patching at solve time.
-        // NOTE: For stage-fixed demand (not stochastic), the RHS is constant and set here.
-        // We use the mean demand from the LoadModel if available; otherwise 0.0.
         for (b_idx, bus) in buses.iter().enumerate() {
             let load_models = system.load_models();
-            // Find load model for this bus at this stage
             let mean_mw = load_models
                 .iter()
                 .find(|lm| lm.bus_id == bus.id && lm.stage_id == stage.id)
@@ -705,24 +661,17 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_cols];
 
-        // Helper: add (row, value) entry for column col
         macro_rules! add_entry {
             ($col:expr, $row:expr, $val:expr) => {
                 col_entries[$col].push(($row, $val));
             };
         }
 
-        // 1. Storage-fixing rows [0, N): row h touches incoming-storage col h
-        //    constraint: storage_in_h - 0 = 0 (fixed by row bound patch to state value)
-        //    Coefficient: +1.0 on storage_in column h at row h
         for h in 0..n_h {
             let col = idx.storage_in.start + h;
-            let row = h; // storage_fixing row h
-            add_entry!(col, row, 1.0);
+            add_entry!(col, h, 1.0);
         }
 
-        // 2. Lag-fixing rows [N, N*(1+L)): row N+ℓ*N+h touches lag col N+ℓ*N+h
-        //    Coefficient: +1.0 on lag column at its own fixing row
         for lag in 0..lag_order {
             for h in 0..n_h {
                 let col = idx.inflow_lags.start + lag * n_h + h;
@@ -731,38 +680,17 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
-        // 3. Water balance rows [n_dual_relevant, n_dual_relevant + N):
-        //    row = row_water_balance_start + h
-        //    v_h - v_in_h - zeta*sum_k(tau_k*(q_hk + s_hk)) + zeta*upstream = 0
-        //    Coefficients:
-        //      outgoing storage col h: +1.0
-        //      incoming storage col h: -1.0
-        //      turbine col h*k+blk:   -zeta*tau_k
-        //      spillage col h*k+blk:  -zeta*tau_k
-        //      upstream turbine col:  +zeta*tau_k  (for each upstream hydro u at col_turbine_start+u*k+blk)
-        //      upstream spillage col: +zeta*tau_k
         for h_idx in 0..n_h {
             let hydro = &hydros[h_idx];
             let row = row_water_balance_start + h_idx;
-
-            // Outgoing storage: +1.0
-            add_entry!(h_idx, row, 1.0); // col h_idx = outgoing storage
-
-            // Incoming storage: -1.0
+            add_entry!(h_idx, row, 1.0);
             add_entry!(idx.storage_in.start + h_idx, row, -1.0);
-
             for blk in 0..n_blks {
-                let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3; // m³/s → hm³
-
-                // Turbine: -tau_k
+                let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
                 let col_turbine = col_turbine_start + h_idx * n_blks + blk;
                 add_entry!(col_turbine, row, -tau_h);
-
-                // Spillage: -tau_k
                 let col_spillage = col_spillage_start + h_idx * n_blks + blk;
                 add_entry!(col_spillage, row, -tau_h);
-
-                // Upstream inflows: for each upstream hydro u, turbine and spillage add to h
                 let upstream_ids = cascade.upstream(hydro.id);
                 for &up_id in upstream_ids {
                     if let Some(&u_idx) = hydro_pos.get(&up_id) {
@@ -774,21 +702,6 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
                 }
             }
         }
-
-        // 4. Load balance rows [row_load_balance_start, row_load_balance_start + B*K):
-        //    sum(generation_at_bus) + net_line_in - net_line_out + deficit - excess = demand
-        //    For each bus b_idx and block blk:
-        //      row = row_load_balance_start + b_idx*k + blk
-        //
-        //    Contributions:
-        //      hydro turbine h: +rho_h (MW per m³/s) at h's bus
-        //      thermal t: +1.0 at t's bus
-        //      line fwd flow f: +1.0 at target bus, -1.0 at source bus (direct flow src→tgt)
-        //      line rev flow r: +1.0 at source bus, -1.0 at target bus (reverse flow tgt→src)
-        //      deficit at b: +1.0
-        //      excess at b:  -1.0
-
-        // Hydro turbine contribution to load balance
         for (h_idx, hydro) in hydros.iter().enumerate() {
             let rho = match &hydro.generation_model {
                 HydroGenerationModel::ConstantProductivity {

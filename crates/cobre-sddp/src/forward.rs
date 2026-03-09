@@ -41,7 +41,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{sample_forward, StochasticContext};
 
 use crate::{
     FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
@@ -65,6 +65,9 @@ pub struct ForwardResult {
 
     /// Wall-clock time in milliseconds for this rank's forward pass.
     pub elapsed_ms: u64,
+
+    /// Number of LP solves performed during this forward pass.
+    pub lp_solves: u64,
 }
 
 /// Global upper bound statistics from forward synchronisation step (`allreduce`).
@@ -379,6 +382,7 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     );
 
     let start = Instant::now();
+    let solves_before = solver.statistics().solve_count;
 
     // Build one cut RowBatch per stage outside the scenario loop — batch
     // construction is O(num_cuts) and the cuts are the same for all scenarios
@@ -495,11 +499,14 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    let lp_solves = solver.statistics().solve_count - solves_before;
+
     Ok(ForwardResult {
         cost_sum,
         cost_sum_sq,
         scenario_count: f64::from(config.forward_passes),
         elapsed_ms,
+        lp_solves,
     })
 }
 
@@ -521,12 +528,12 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
-    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
+    use super::{build_cut_row_batch, run_forward_pass, sync_forward, ForwardResult, SyncResult};
     use crate::{
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,
@@ -894,6 +901,7 @@ mod tests {
             cost_sum_sq: 5000.0,
             scenario_count: 4.0,
             elapsed_ms: 123,
+            lp_solves: 0,
         };
         assert_eq!(r.cost_sum, 100.0);
         assert_eq!(r.cost_sum_sq, 5000.0);
@@ -908,6 +916,7 @@ mod tests {
             cost_sum_sq: 3.0,
             scenario_count: 4.0,
             elapsed_ms: 5,
+            lp_solves: 0,
         };
         let c = r.clone();
         assert_eq!(c.cost_sum, r.cost_sum);
@@ -1240,6 +1249,7 @@ mod tests {
             cost_sum_sq: 22700.0,
             scenario_count: 4.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1281,6 +1291,7 @@ mod tests {
             cost_sum_sq: 22700.0,
             scenario_count: 4.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1301,6 +1312,7 @@ mod tests {
             cost_sum_sq: 250_000.0,
             scenario_count: 1.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1334,6 +1346,7 @@ mod tests {
             cost_sum_sq: 2.0 * v * v - 1.0,
             scenario_count: 2.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1358,6 +1371,7 @@ mod tests {
             cost_sum_sq: 840.0_f64 * 840.0,
             scenario_count: 2.0,
             elapsed_ms: 5,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1378,6 +1392,7 @@ mod tests {
             cost_sum_sq: 5000.0,
             scenario_count: 2.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm).unwrap();
@@ -1440,6 +1455,7 @@ mod tests {
             cost_sum_sq: 5000.0,
             scenario_count: 1.0,
             elapsed_ms: 0,
+            lp_solves: 0,
         };
         let comm = FailingComm;
         let err = sync_forward(&local, &comm).unwrap_err();

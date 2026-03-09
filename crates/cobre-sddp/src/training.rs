@@ -26,9 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -39,7 +39,6 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -51,6 +50,7 @@ use crate::{
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
+    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -431,6 +431,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
                 );
             }
         }
+        let lb_solves_before = solver.statistics().solve_count;
         let lb = evaluate_lower_bound(
             solver,
             &templates[0],
@@ -443,6 +444,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
             &risk_measures[0],
             comm,
         )?;
+        let lb_lp_solves = solver.statistics().solve_count - lb_solves_before;
 
         let (should_stop, rule_results) = convergence_monitor.update(lb, &sync_result);
 
@@ -478,7 +480,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
                 iteration_time_ms,
                 forward_ms: forward_elapsed_ms,
                 backward_ms: backward_elapsed_ms,
-                lp_solves: 0,
+                lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
                 memory_peak_mb: 0.0,
             },
         );
@@ -539,24 +541,24 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
+        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule,
-        StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
+        cut::fcf::FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -727,12 +729,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

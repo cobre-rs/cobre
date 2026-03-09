@@ -54,9 +54,9 @@ use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
-    state_exchange::ExchangeBuffers,
+    state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
+    StageIndexer, TrainingConfig,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -68,6 +68,9 @@ pub struct BackwardResult {
 
     /// Wall-clock time in milliseconds for this rank's backward pass.
     pub elapsed_ms: u64,
+
+    /// Number of LP solves performed during this backward pass.
+    pub lp_solves: u64,
 }
 
 /// Execute the backward pass for one training iteration on this rank.
@@ -144,6 +147,7 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     );
 
     let start = Instant::now();
+    let solves_before = solver.statistics().solve_count;
     let mut cuts_generated: usize = 0;
     let tree_view = stochastic.tree_view();
     let mut outcomes: Vec<BackwardOutcome> = Vec::new();
@@ -256,9 +260,12 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    let lp_solves = solver.statistics().solve_count - solves_before;
+
     Ok(BackwardResult {
         cuts_generated,
         elapsed_ms,
+        lp_solves,
     })
 }
 
@@ -269,7 +276,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
         TrainingConfig, TrajectoryRecord,
@@ -484,7 +491,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -493,6 +499,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;
@@ -623,6 +630,7 @@ mod tests {
         let r = BackwardResult {
             cuts_generated: 6,
             elapsed_ms: 42,
+            lp_solves: 0,
         };
         assert_eq!(r.cuts_generated, 6);
         assert_eq!(r.elapsed_ms, 42);
@@ -633,6 +641,7 @@ mod tests {
         let r = BackwardResult {
             cuts_generated: 3,
             elapsed_ms: 100,
+            lp_solves: 0,
         };
         let c = r.clone();
         assert_eq!(c.cuts_generated, 3);

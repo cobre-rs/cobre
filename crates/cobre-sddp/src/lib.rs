@@ -65,7 +65,7 @@ pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
 pub use lower_bound::evaluate_lower_bound;
-pub use lp_builder::{PatchBuffer, ar_dynamics_row_offset};
+pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,

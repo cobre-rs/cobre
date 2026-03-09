@@ -52,6 +52,24 @@ pub struct DecomposedCorrelation {
 }
 
 impl DecomposedCorrelation {
+    /// Constructs an empty `DecomposedCorrelation` for use when there are no
+    /// stochastic entities (e.g., thermal-only systems with zero hydro plants).
+    ///
+    /// The empty instance has no profiles and no schedule. Calling
+    /// [`apply_correlation`] on it is a no-op; [`profile_for_stage`] returns
+    /// an empty string.
+    ///
+    /// [`apply_correlation`]: Self::apply_correlation
+    /// [`profile_for_stage`]: Self::profile_for_stage
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            factors: BTreeMap::new(),
+            schedule: HashMap::new(),
+            default_profile: String::new(),
+        }
+    }
+
     /// Builds a `DecomposedCorrelation` from a [`CorrelationModel`].
     ///
     /// Decomposes each profile's correlation groups into Cholesky factors and

@@ -37,11 +37,8 @@ cargo doc --workspace --no-deps --open
 
 ### Testing cobre-core
 
-The `serde` feature enables JSON serialization for core types. Use `--features serde` (or
-`--all-features`) to include those tests:
-
 ```bash
-# Run all cobre-core tests including serde round-trip tests
+# Run all tests including serde round-trip tests
 cargo test -p cobre-core --all-features
 
 # Run only the serde-gated tests
@@ -50,88 +47,83 @@ cargo test -p cobre-core --features serde
 
 ### Testing cobre-io
 
-cobre-io requires `--all-features` to run the full test suite, including integration tests
-that load case directories from `crates/cobre-io/tests/data/`:
-
 ```bash
-# Run all cobre-io tests (unit, integration, invariance, doc-tests)
+# Run all tests (requires --all-features)
 cargo test -p cobre-io --all-features
 
-# Run only the integration tests
+# Run only integration tests
 cargo test -p cobre-io --all-features --test '*'
 ```
 
-The `tests/data/` directory under `cobre-io` contains sample case directories used by
-integration tests. Each case directory follows the standard Cobre case layout: a
-`config.json` at the root and entity data files under subdirectories named after the
-entity type (e.g., `buses/`, `hydros/`, `thermals/`). When adding new parsers, add a
-corresponding sample input file to `tests/data/` and reference it from the integration test.
+Sample case directories are in `tests/data/`. Each follows the standard Cobre layout:
+`config.json` at the root, entity files under `buses/`, `hydros/`, `thermals/`, etc.
+When adding new parsers, add sample input files to `tests/data/` and reference them
+from the integration test.
 
 ### Testing cobre-solver
 
-cobre-solver builds HiGHS from source using cmake. Before running the tests for the first
-time, initialize the HiGHS git submodule:
+Initialize the HiGHS submodule first:
 
 ```bash
-# Initialize the HiGHS vendored source (required once after cloning)
 git submodule update --init --recursive
-
-# Run all cobre-solver tests
 cargo test -p cobre-solver --all-features
 ```
 
-The `highs` feature (enabled by default) triggers cmake-based compilation of HiGHS from
-source, which requires cmake >= 3.15 and a C/C++ compiler. The conformance test suite
-validates the `SolverInterface` contract against hand-computable LP fixtures, ensuring
-that every backend returns bit-for-bit consistent results for known inputs.
+The `highs` feature triggers cmake-based HiGHS compilation (requires cmake >= 3.15).
+The conformance suite validates the `SolverInterface` contract against hand-computed
+LP fixtures.
 
 ### Testing cobre-comm
 
-cobre-comm has two test configurations depending on whether MPI support is compiled in.
-
-**Without MPI** (default, no external dependencies required):
+**Without MPI** (default):
 
 ```bash
-# Run all cobre-comm tests (unit, integration, doc-tests) without MPI
 cargo test -p cobre-comm
 ```
 
-**With MPI** (requires an MPI runtime):
+**With MPI**:
 
 ```bash
-# Run all cobre-comm tests including the MPI backend
 cargo test -p cobre-comm --features mpi
 ```
 
-The `mpi` feature requires an MPI runtime to be installed:
-
-- Debian/Ubuntu: `sudo apt install libmpich-dev`
-- Fedora: `sudo dnf install mpich-devel`
-- macOS Homebrew: `brew install mpich`
-
-CI runs tests without the `mpi` feature by default. The `mpi` feature tests
-require a manual setup with an MPI installation. The conformance suite in
-`tests/conformance.rs` validates the `Communicator` contract against
-`LocalBackend` and is always run as part of `cargo test -p cobre-comm`.
+MPI installation required: Debian/Ubuntu: `sudo apt install libmpich-dev`; Fedora:
+`sudo dnf install mpich-devel`; macOS: `brew install mpich`. The conformance suite
+validates the `Communicator` contract and runs without the `mpi` feature.
 
 ### Testing cobre-stochastic
 
-cobre-stochastic has no external system dependencies and no feature flags. All
-dependencies (siphasher, rand, rand_pcg, rand_distr, thiserror) are Cargo-managed.
-
 ```bash
-# Run all cobre-stochastic tests (unit, integration, doc-tests)
 cargo test -p cobre-stochastic
 ```
 
-The `--all-features` flag is not needed. The integration tests live in
-`tests/conformance.rs` and `tests/reproducibility.rs`:
+No external dependencies or feature flags needed. Conformance tests verify PAR(p)
+preprocessing (tolerance 1e-10); reproducibility tests verify seed determinism and
+declaration-order invariance.
 
-- `tests/conformance.rs` — verifies PAR(p) coefficient preprocessing against
-  hand-computed AR(0) and AR(1) fixtures with tolerance 1e-10.
-- `tests/reproducibility.rs` — verifies seed determinism, opening tree seed
-  sensitivity, declaration-order invariance, and the infrastructure genericity
-  gate (`grep -riE 'sddp' crates/cobre-stochastic/src/` must return no matches).
+### Testing cobre-sddp
+
+Initialize the HiGHS submodule first:
+
+```bash
+git submodule update --init --recursive
+cargo test -p cobre-sddp --all-features
+```
+
+The test suite includes unit tests (forward/backward pass, cut management, simulation),
+conformance tests (algorithm contracts against hand-computed fixtures), and integration
+tests (end-to-end pipelines, Parquet output validation). The genericity gate asserts
+no algorithm-specific references in infrastructure crates.
+
+### Testing cobre-cli
+
+```bash
+cargo test -p cobre-cli --all-features
+```
+
+Integration tests exercise the binary via `assert_cmd`, organized by subcommand
+(`tests/cli_run.rs`, `tests/cli_validate.rs`, `tests/cli_report.rs`,
+`tests/cli_version.rs`). Each verifies exit codes, output, and file creation.
 
 ### Project Structure
 

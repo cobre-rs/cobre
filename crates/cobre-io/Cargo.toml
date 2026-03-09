@@ -13,11 +13,11 @@ keywords = ["power-systems", "energy", "io", "validation"]
 categories = ["science", "parser-implementations"]
 
 [dependencies]
-cobre-core = { version = "0.0.1", path = "../cobre-core", features = ["serde"] }
-arrow = { version = "55", default-features = false, features = ["prettyprint"] }
+cobre-core = { version = "0.1.0", path = "../cobre-core", features = ["serde"] }
+arrow = { version = "58", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
-parquet = { version = "55", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "zstd"] }
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,7 +25,7 @@ thiserror = "2"
 flatbuffers = "25"
 
 [dev-dependencies]
-parquet = { version = "55", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "zstd"] }
 tempfile = "3"
 
 [lints]

@@ -178,6 +178,31 @@ u32, f64, Vec<f64>)>` that is immediately re-mapped to `Vec<(u32, u32, u32, f64,
 - `HorizonMode::Finite` is the only implemented variant; `Cyclic` is deferred.
 - All 20 integration+conformance tests pass; 34 unit tests pass.
 
+### Phase 8 cobre-cli key facts
+
+- `cobre-cli` is the binary crate; it has `main.rs` as entry point. Subcommands in `src/commands/`.
+- `CliError` has 4 variants → exit codes 1-4. `format_error` writes to `Term::stderr()` with ANSI color.
+  `From` impls for `LoadError`, `OutputError`, `SddpError`, `SimulationError`.
+- Banner/progress/summary are all fire-and-forget: `write_line` errors are silently discarded via `let _ = ...`.
+- `run_progress_thread` spawns a background thread that consumes `TrainingEvent` via mpsc and drives
+  indicatif progress bars. Returns `ProgressHandle`; `join()` returns all collected events.
+  `ProgressHandle::join` uses `#[allow(clippy::expect_used)]` intentionally — thread panic = programming error.
+- `format_summary_string` is gated `#[cfg(test)]` but `print_summary` duplicates the format strings for
+  production use. This split was designed to enable pure-string unit tests but creates a maintenance burden.
+- `validate.rs` prints entity counts twice: once as a summary line, then 4 individual indented lines.
+  The individual lines are the grep-friendly output; the summary line is supplemental.
+- `#![allow(dead_code)]` on `error.rs` is stale as of Phase 8 — all variants are used.
+- Arrow/Parquet v55→v58 API change: `set_max_row_group_size` renamed to `set_max_row_group_row_count(Some(...))`.
+  Applied in 3 writer files: `dictionary.rs`, `simulation_writer.rs`, `training_writer.rs`.
+- `build_stage_templates` and `StageTemplates` newly re-exported from `cobre-sddp::lp_builder` in Phase 8.
+- `DecomposedCorrelation::empty()` added for thermal-only systems (dim == 0 → skip Cholesky).
+- Theta pinning fix in `forward.rs`: for terminal stages, `set_col_bounds(&[theta], &[0.0], &[0.0])` before
+  solve to prevent unbounded LP when cut pool is empty at iteration 1.
+- io_thread in `run.rs` simulate path: on `simulate()` error, the JoinHandle is dropped (thread detached).
+  The io_thread self-terminates when `result_rx` gets disconnected. No hard resource leak, but unjoined.
+- `config.simulation.io_channel_capacity` is `u32` in cobre-io; cast via `as usize` in run.rs (not via
+  `usize::try_from`) — safe on all 64-bit platforms, minor stylistic inconsistency.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

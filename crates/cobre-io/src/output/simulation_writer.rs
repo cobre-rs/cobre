@@ -1336,7 +1336,7 @@ fn write_parquet_atomic(
 
     let props = WriterProperties::builder()
         .set_compression(config.compression)
-        .set_max_row_group_size(config.row_group_size)
+        .set_max_row_group_row_count(Some(config.row_group_size))
         .set_dictionary_enabled(config.dictionary_encoding)
         .build();
 

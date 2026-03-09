@@ -24,6 +24,7 @@
   - [Hydro Plants](./guide/hydro-plants.md)
   - [Thermal Units](./guide/thermal-units.md)
   - [Network Topology](./guide/network-topology.md)
+  - [Stochastic Modeling](./guide/stochastic-modeling.md)
 - [Running Studies](./guide/running-studies.md)
   - [Configuration](./guide/configuration.md)
   - [CLI Reference](./guide/cli-reference.md)
@@ -41,9 +42,6 @@
 - [cobre-comm](./crates/comm.md)
 - [cobre-sddp](./crates/sddp.md)
 - [cobre-cli](./crates/cli.md)
-- [cobre-mcp](./crates/mcp.md)
-- [cobre-python](./crates/python.md)
-- [cobre-tui](./crates/tui.md)
 - [ferrompi](./crates/ferrompi.md)
 
 ---

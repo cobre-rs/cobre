@@ -60,6 +60,11 @@ training stopped:
   stopped early. This appears when you configure a `bound_stalling` or similar rule
   in `config.json`.
 
+> **Theory reference**: For the mathematical definition of lower and upper bounds,
+> optimality gap, and stopping criteria, see
+> [Convergence](https://cobre-rs.github.io/cobre-docs/theory/convergence.html)
+> in the methodology reference.
+
 ---
 
 ## Output Directory Structure

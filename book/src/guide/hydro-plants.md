@@ -25,6 +25,11 @@ For a step-by-step introduction to writing `hydros.json`, see
 [Anatomy of a Case](../tutorial/anatomy-of-a-case.md). This page provides the
 complete field reference with all optional fields documented.
 
+> **Theory reference**: For the mathematical formulation of hydro modeling and the
+> SDDP algorithm that drives dispatch decisions, see
+> [SDDP Theory](https://cobre-rs.github.io/cobre-docs/theory/sddp-theory.html)
+> in the methodology reference.
+
 ---
 
 ## JSON Schema

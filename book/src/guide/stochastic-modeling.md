@@ -182,8 +182,10 @@ In general:
 - Setting `ar_order > 0` with `std_m3s = 0` is a validation error — the
   model requires non-zero variance to be identifiable.
 
-For the theoretical derivation of the PAR(p) model, see the
-[Methodology Reference](https://cobre-rs.github.io/cobre-docs).
+For the theoretical derivation of the PAR(p) model, see
+[Stochastic Modeling](https://cobre-rs.github.io/cobre-docs/theory/stochastic-modeling.html)
+and [PAR(p) Autoregressive Models](https://cobre-rs.github.io/cobre-docs/theory/par-model.html)
+in the methodology reference.
 
 ---
 

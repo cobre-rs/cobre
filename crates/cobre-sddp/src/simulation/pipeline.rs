@@ -38,9 +38,10 @@ use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{sample_forward, StochasticContext};
+use cobre_stochastic::{StochasticContext, sample_forward};
 
 use crate::{
+    FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer,
     forward::build_cut_row_batch,
     simulation::{
         config::SimulationConfig,
@@ -49,7 +50,6 @@ use crate::{
         extraction::{accumulate_category_costs, assign_scenarios, extract_stage_result},
         types::{ScenarioCategoryCosts, SimulationScenarioResult},
     },
-    FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -323,8 +323,8 @@ mod tests {
 
     use super::simulate;
     use crate::{
-        simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         FutureCostFunction, HorizonMode, StageIndexer,
+        simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────

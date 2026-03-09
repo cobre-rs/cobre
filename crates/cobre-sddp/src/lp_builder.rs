@@ -93,8 +93,8 @@
 //!
 //! Total: 12 = 3*(2+2) patches.
 
-use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_core::System;
+use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_solver::StageTemplate;
 
 use crate::indexer::StageIndexer;
@@ -821,7 +821,7 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
 
 #[cfg(test)]
 mod tests {
-    use super::{ar_dynamics_row_offset, PatchBuffer};
+    use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

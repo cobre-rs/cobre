@@ -174,11 +174,11 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
-        EntityId, Stage,
     };
 
     use crate::correlation::resolve::DecomposedCorrelation;

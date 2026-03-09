@@ -93,8 +93,8 @@
 //!
 //! Total: 12 = 3*(2+2) patches.
 
-use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_core::System;
+use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_solver::StageTemplate;
 
 use crate::indexer::StageIndexer;
@@ -420,7 +420,7 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// Build one [`StageTemplate`] per study stage from a fully loaded [`System`].
 ///
 /// The templates encode the complete structural LP for each SDDP subproblem
-/// in CSC format, ready for bulk-loading via [`SolverInterface::load_model`].
+/// in CSC format, ready for bulk-loading via `SolverInterface::load_model`.
 /// They are constructed once at solver initialisation and shared read-only
 /// across all solver threads.
 ///
@@ -821,7 +821,7 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
 
 #[cfg(test)]
 mod tests {
-    use super::{ar_dynamics_row_offset, PatchBuffer};
+    use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

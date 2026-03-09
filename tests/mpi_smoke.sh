@@ -73,9 +73,16 @@ MPI_OUT="${WORK_DIR}/mpi"
 # ---------------------------------------------------------------------------
 # Run single-process baseline.
 # ---------------------------------------------------------------------------
-echo "INFO: Running single-process baseline ..."
-"${COBRE_BIN}" run "${CASE_DIR}" --output "${SINGLE_OUT}" --quiet
+TIMEOUT=120
+
+echo "INFO: Running single-process baseline (timeout=${TIMEOUT}s) ..."
+timeout "${TIMEOUT}" "${COBRE_BIN}" run "${CASE_DIR}" --output "${SINGLE_OUT}" --quiet
 SINGLE_EXIT=$?
+
+if [ "${SINGLE_EXIT}" -eq 124 ]; then
+    echo "FAIL: single-process run timed out after ${TIMEOUT}s"
+    exit 1
+fi
 
 if [ "${SINGLE_EXIT}" -ne 0 ]; then
     echo "FAIL: single-process run exited with code ${SINGLE_EXIT}"
@@ -86,11 +93,16 @@ fi
 # Run 2-rank MPI execution.
 # Using word-splitting intentionally for MPI_EXTRA_FLAGS (may be empty).
 # ---------------------------------------------------------------------------
-echo "INFO: Running MPI 2-rank execution ..."
+echo "INFO: Running MPI 2-rank execution (timeout=${TIMEOUT}s) ..."
 # shellcheck disable=SC2086
-mpiexec -np 2 ${MPI_EXTRA_FLAGS} \
+timeout "${TIMEOUT}" mpiexec -np 2 ${MPI_EXTRA_FLAGS} \
     "${COBRE_BIN}" run "${CASE_DIR}" --output "${MPI_OUT}" --quiet
 MPI_EXIT=$?
+
+if [ "${MPI_EXIT}" -eq 124 ]; then
+    echo "FAIL: MPI 2-rank run timed out after ${TIMEOUT}s"
+    exit 1
+fi
 
 if [ "${MPI_EXIT}" -ne 0 ]; then
     echo "FAIL: MPI 2-rank run exited with code ${MPI_EXIT}"

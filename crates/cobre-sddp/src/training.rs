@@ -277,16 +277,6 @@ pub fn train<S: SolverInterface, C: Communicator>(
         ..
     } = config;
 
-    // The forward pass function reads config.forward_passes as the per-rank
-    // loop count, so pass this rank's actual work. The original total is
-    // kept in config_forward_passes for event reporting.
-    #[allow(clippy::cast_possible_truncation)]
-    let loop_config = TrainingConfig {
-        forward_passes: my_actual_fwd as u32,
-        event_sender: None,
-        ..config
-    };
-
     #[allow(clippy::cast_possible_truncation)]
     emit(
         event_sender.as_ref(),
@@ -317,21 +307,22 @@ pub fn train<S: SolverInterface, C: Communicator>(
         }
 
         let iter_start = Instant::now();
+        let fwd_record_len = my_actual_fwd * num_stages;
         let forward_result = run_forward_pass(
             solver,
             templates,
             base_rows,
             fcf,
             stochastic,
-            &loop_config,
+            my_actual_fwd,
             iteration,
             horizon,
             initial_state,
-            &mut records,
+            &mut records[..fwd_record_len],
             &mut patch_buf,
             indexer,
-            comm,
             &mut basis_cache,
+            my_fwd_offset,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -342,7 +333,11 @@ pub fn train<S: SolverInterface, C: Communicator>(
                 iteration,
                 scenarios: config_forward_passes,
                 #[allow(clippy::cast_precision_loss)]
-                ub_mean: forward_result.cost_sum / forward_result.scenario_count,
+                ub_mean: if forward_result.scenario_count > 0.0 {
+                    forward_result.cost_sum / forward_result.scenario_count
+                } else {
+                    0.0
+                },
                 ub_std: 0.0,
                 elapsed_ms: forward_elapsed_ms,
             },
@@ -368,7 +363,6 @@ pub fn train<S: SolverInterface, C: Communicator>(
             fcf,
             &exchange_bufs,
             stochastic,
-            &loop_config,
             iteration,
             horizon,
             risk_measures,

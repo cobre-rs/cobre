@@ -61,7 +61,7 @@ use cobre_stochastic::StochasticContext;
 use crate::{
     forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, SddpError,
-    StageIndexer, TrainingConfig,
+    StageIndexer,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -117,7 +117,6 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     fcf: &mut FutureCostFunction,
     exchange: &ExchangeBuffers,
     stochastic: &StochasticContext,
-    _config: &TrainingConfig,
     iteration: u64,
     horizon: &HorizonMode,
     risk_measures: &[RiskMeasure],
@@ -284,7 +283,7 @@ mod tests {
     use super::{run_backward_pass, BackwardResult};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
-        TrainingConfig, TrajectoryRecord,
+        TrajectoryRecord,
     };
 
     /// Stub communicator for tests (single-rank).
@@ -698,13 +697,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(1, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let risk_measures = vec![RiskMeasure::Expectation];
 
@@ -719,7 +712,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -756,13 +748,7 @@ mod tests {
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -782,7 +768,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -822,13 +807,7 @@ mod tests {
         let exchange = exchange_with_states(n_state, vec![vec![5.0], vec![10.0], vec![15.0]]);
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 20,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -845,7 +824,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             2, // iteration=2
             &horizon,
             &risk_measures,
@@ -881,13 +859,7 @@ mod tests {
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -904,7 +876,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -939,13 +910,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -962,7 +927,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -994,13 +958,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1018,7 +976,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -1095,13 +1052,7 @@ mod tests {
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1119,7 +1070,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -1166,13 +1116,7 @@ mod tests {
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1189,7 +1133,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -1246,13 +1189,7 @@ mod tests {
         );
 
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 20,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1269,7 +1206,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             2, // iteration=2
             &horizon,
             &risk_measures,
@@ -1316,13 +1252,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1346,7 +1276,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -1388,13 +1317,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1414,7 +1337,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,
@@ -1457,13 +1379,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
         let mut patch_buf = PatchBuffer::new(1, 0);
-        let config = TrainingConfig {
-            forward_passes,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-        };
+
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1487,7 +1403,6 @@ mod tests {
             &mut fcf,
             &exchange,
             &stochastic,
-            &config,
             0,
             &horizon,
             &risk_measures,

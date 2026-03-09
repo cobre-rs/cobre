@@ -26,9 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -39,7 +39,6 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -51,6 +50,8 @@ use crate::{
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
+    workspace::{BasisStore, WorkspacePool},
+    HorizonMode, SddpError, StageIndexer, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -205,6 +206,7 @@ fn collect_local_cuts_for_stage(
 ///     &mut solver, config, &mut fcf, &templates, &base_rows,
 ///     &indexer, &initial_state, &opening_tree, &stochastic,
 ///     &horizon, &risk, stopping, None, None, &comm,
+///     1, || HiggsBackend::new(),
 /// )?;
 ///
 /// println!("converged in {} iterations, gap={:.4}", result.iterations, result.final_gap);
@@ -220,7 +222,7 @@ fn collect_local_cuts_for_stage(
     clippy::too_many_lines,
     clippy::similar_names
 )]
-pub fn train<S: SolverInterface, C: Communicator>(
+pub fn train<S: SolverInterface + Send, C: Communicator>(
     solver: &mut S,
     config: TrainingConfig,
     fcf: &mut FutureCostFunction,
@@ -236,6 +238,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
     cut_selection: Option<&CutSelectionStrategy>,
     shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
+    n_fwd_threads: usize,
+    solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
 ) -> Result<TrainingResult, SddpError> {
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
@@ -260,13 +264,33 @@ pub fn train<S: SolverInterface, C: Communicator>(
     };
     let mut records = vec![empty_record; max_local_fwd * num_stages];
 
+    // Workspace pool for forward-pass thread parallelism. Each workspace owns
+    // an independent solver, patch buffer, and current-state buffer. The pool
+    // is allocated once and reused across all iterations.
+    let n_threads = n_fwd_threads.max(1);
+    let mut fwd_pool = WorkspacePool::try_new(
+        n_threads,
+        indexer.hydro_count,
+        indexer.max_par_order,
+        n_state,
+        solver_factory,
+    )
+    .map_err(SddpError::Solver)?;
+
+    // Per-scenario, per-stage basis store. Sized for the maximum local forward
+    // passes so that scenario indices are stable across iterations. The store
+    // is allocated once and reused: the forward pass overwrites entries each
+    // iteration, and the backward pass reads from them read-only.
+    let mut basis_store = BasisStore::new(max_local_fwd, num_stages);
+
+    // Standalone patch buffer for the lower bound evaluation which uses the
+    // single `solver` argument directly. The backward pass uses the workspace
+    // pool's per-thread solvers and patch buffers instead.
     let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
     let mut convergence_monitor = ConvergenceMonitor::new(stopping_rules);
     let mut exchange_bufs = ExchangeBuffers::new(n_state, max_local_fwd, num_ranks);
     let mut cut_sync_bufs =
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
-
-    let mut basis_cache: Vec<Option<Basis>> = vec![None; templates.len()];
 
     let start_time = Instant::now();
 
@@ -286,7 +310,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
             hydros: indexer.hydro_count as u32,
             thermals: 0,
             ranks: num_ranks as u32,
-            threads_per_rank: 1,
+            #[allow(clippy::cast_possible_truncation)]
+            threads_per_rank: n_threads as u32,
             timestamp: String::new(),
         },
     );
@@ -309,7 +334,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
         let iter_start = Instant::now();
         let fwd_record_len = my_actual_fwd * num_stages;
         let forward_result = run_forward_pass(
-            solver,
+            &mut fwd_pool.workspaces,
+            &mut basis_store,
             templates,
             base_rows,
             fcf,
@@ -319,9 +345,7 @@ pub fn train<S: SolverInterface, C: Communicator>(
             horizon,
             initial_state,
             &mut records[..fwd_record_len],
-            &mut patch_buf,
             indexer,
-            &mut basis_cache,
             my_fwd_offset,
         )?;
 
@@ -357,7 +381,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
             exchange_bufs.exchange(&records, stage, num_stages, comm)?;
         }
         let backward_result = run_backward_pass(
-            solver,
+            &mut fwd_pool.workspaces,
+            &basis_store,
             templates,
             base_rows,
             fcf,
@@ -366,10 +391,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
             iteration,
             horizon,
             risk_measures,
-            &mut patch_buf,
             indexer,
             comm,
-            &mut basis_cache,
             my_actual_fwd,
             my_fwd_offset,
         )?;
@@ -522,6 +545,15 @@ pub fn train<S: SolverInterface, C: Communicator>(
         },
     );
 
+    // The TrainingResult basis_cache field (used for policy checkpoint) is
+    // populated from the last scenario's entries in the basis store. These
+    // are the bases left by the final forward pass — the most recently solved
+    // LP at each stage.
+    let last_scenario = my_actual_fwd.saturating_sub(1);
+    let basis_cache = (0..num_stages)
+        .map(|t| basis_store.get(last_scenario, t).cloned())
+        .collect();
+
     Ok(TrainingResult {
         final_lb,
         final_ub,
@@ -550,24 +582,24 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
+        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule,
-        StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
+        cut::fcf::FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -738,12 +770,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -996,6 +1028,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1050,6 +1084,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::infeasible()),
         );
 
         assert!(
@@ -1113,6 +1149,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1221,6 +1259,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1274,6 +1314,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         );
 
         assert!(result.is_ok(), "train with no event_sender must not panic");
@@ -1325,6 +1367,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1383,6 +1427,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1454,6 +1500,8 @@ mod tests {
             Some(&strategy),
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1544,6 +1592,8 @@ mod tests {
             Some(&strategy),
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
@@ -1623,6 +1673,8 @@ mod tests {
             None,
             None,
             &comm,
+            1,
+            || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 

@@ -19,6 +19,16 @@
 //! two-level distribution (fat/lean). Each rank processes its assigned range
 //! independently; MPI aggregation is performed by the caller.
 //!
+//! Within a rank, scenarios are further distributed across [`SolverWorkspace`]
+//! instances using the same static partitioning as the training forward pass.
+//! Each workspace owns its solver, patch buffer, and current-state buffer
+//! exclusively. A per-worker `Vec<Option<Basis>>` is used for warm-starting
+//! across consecutive scenarios within the same worker.
+//! Rayon's `par_iter_mut` drives the scenario loop; results are sorted by
+//! `scenario_id` after the parallel region to ensure deterministic MPI
+//! aggregation regardless of thread
+//! scheduling order.
+//!
 //! ## Seed domain separation
 //!
 //! To avoid seed collisions with training forward pass seeds (which use
@@ -30,19 +40,21 @@
 //! ## Hot-path allocation discipline
 //!
 //! No allocations occur per scenario or per stage during the inner loops.
-//! The [`PatchBuffer`], `current_state`, and `basis_cache` are pre-allocated
-//! before the scenario loop. The [`RowBatch`] per stage is built once before
-//! the scenario loop — not once per scenario.
+//! Each [`SolverWorkspace`] pre-allocates its [`PatchBuffer`] and
+//! `current_state`. The per-worker `basis_cache` (`Vec<Option<Basis>>`) is
+//! allocated once per parallel worker before the scenario loop. The
+//! [`RowBatch`] per stage is built once before the scenario loop — not once
+//! per scenario.
 
 use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{sample_forward, StochasticContext};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer,
-    forward::build_cut_row_batch,
+    forward::{build_cut_row_batch, partition},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
@@ -50,6 +62,8 @@ use crate::{
         extraction::{accumulate_category_costs, assign_scenarios, extract_stage_result},
         types::{ScenarioCategoryCosts, SimulationScenarioResult},
     },
+    workspace::SolverWorkspace,
+    FutureCostFunction, HorizonMode, StageIndexer,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -60,23 +74,29 @@ use crate::{
 /// Both fit in `u32`; the offset guarantees no overlap for practical scenario counts.
 const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 
+/// Per-worker scenario cost accumulation type.
+///
+/// Each parallel worker returns `Ok(WorkerCosts)` for its assigned scenarios.
+/// The outer function flattens and sorts the results.
+type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
+
 /// Evaluate the trained SDDP policy on this rank's assigned scenarios.
 ///
-/// Iterates over all scenarios assigned to this rank via [`assign_scenarios`].
-/// For each scenario, solves the LP at every stage of the horizon using the
-/// trained cut pools from `fcf`, extracts per-entity results via
-/// [`extract_stage_result`], accumulates per-category costs via
-/// [`accumulate_category_costs`], and sends the completed
-/// [`SimulationScenarioResult`] through `result_tx`.
+/// Distributes locally assigned scenarios across worker threads using the same
+/// static partitioning as the training forward pass. Each [`SolverWorkspace`]
+/// owns its solver, patch buffer, and current-state buffer exclusively — there
+/// is no shared mutable state between workers. A per-worker basis cache
+/// (`Vec<Option<Basis>>`) is created locally for warm-starting across scenarios.
+///
+/// `SyncSender::send()` is thread-safe; each worker sends its
+/// [`SimulationScenarioResult`] through `result_tx` as it completes each
+/// scenario. Channel send order may differ from scenario order, but the
+/// returned cost buffer is sorted by `scenario_id` for deterministic MPI
+/// aggregation.
 ///
 /// Returns a compact cost buffer — one `(scenario_id, total_cost, category_costs)`
-/// entry per locally solved scenario — for MPI aggregation by the caller.
-///
-/// ## Pre-allocation
-///
-/// All workspace buffers ([`PatchBuffer`], `current_state`, `basis_cache`) are
-/// allocated once before the scenario loop. No heap allocation occurs on the
-/// hot path.
+/// entry per locally solved scenario, sorted by `scenario_id` in ascending
+/// order — for MPI aggregation by the caller.
 ///
 /// ## Error handling
 ///
@@ -106,8 +126,8 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// - `initial_state.len() != indexer.n_state`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-pub fn simulate<S: SolverInterface, C: Communicator>(
-    solver: &mut S,
+pub fn simulate<S: SolverInterface + Send, C: Communicator>(
+    workspaces: &mut [SolverWorkspace<S>],
     templates: &[StageTemplate],
     base_rows: &[usize],
     fcf: &FutureCostFunction,
@@ -159,155 +179,185 @@ pub fn simulate<S: SolverInterface, C: Communicator>(
     let scenario_range = assign_scenarios(config.n_scenarios, rank, world_size);
     #[allow(clippy::cast_possible_truncation)]
     let local_count = (scenario_range.end - scenario_range.start) as usize;
+    let scenario_start = scenario_range.start as usize;
 
-    // Pre-allocate the output cost buffer.
-    let mut cost_buffer: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
+    let n_workers = workspaces.len().max(1);
 
-    // Pre-allocate workspace buffers — reused across all scenarios and stages.
-    let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
-    let mut current_state: Vec<f64> = Vec::with_capacity(indexer.n_state);
+    // Execute the scenario loop in parallel over workspaces using static
+    // partitioning. Each worker processes a contiguous sub-range of the
+    // locally assigned scenarios and accumulates its own cost buffer entries.
+    // Worker-local WorkerCosts are returned as Ok values; the first error from
+    // any worker short-circuits the collect.
+    let worker_results: Vec<Result<WorkerCosts, SimulationError>> = workspaces
+        .par_iter_mut()
+        .enumerate()
+        .map(|(w, ws)| {
+            let (start_local, end_local) = partition(local_count, n_workers, w);
 
-    // Per-stage basis cache: reused for warm-starting across scenarios.
-    // Initialized to None; populated after the first solve at each stage.
-    let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
+            // Per-worker, per-stage basis cache for warm-starting across scenarios.
+            // Simulation has no cross-scenario backward pass, so a simple
+            // local Vec suffices: basis[t] is reused from one scenario to the
+            // next within this worker.
+            let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
 
-    // Outer loop: one iteration per locally assigned scenario.
-    for scenario_id in scenario_range {
-        // Simulation seed domain separation from training: deterministic SipHash-1-3
-        // seeds ensure communication-free parallel noise. Use SIMULATION_SEED_OFFSET +
-        // scenario_id to place simulation seeds in a disjoint region of the seed space.
-        // Iteration is fixed at 0 for simulation (one-shot evaluation).
-        let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
+            let mut worker_costs: Vec<(u32, f64, ScenarioCategoryCosts)> =
+                Vec::with_capacity(end_local - start_local);
 
-        // Initialize current state for this scenario.
-        current_state.clear();
-        current_state.extend_from_slice(initial_state);
+            for local_idx in start_local..end_local {
+                #[allow(clippy::cast_possible_truncation)]
+                let scenario_id = (scenario_start + local_idx) as u32;
 
-        let mut total_cost = 0.0_f64;
-        let mut category_costs = ScenarioCategoryCosts {
-            resource_cost: 0.0,
-            recourse_cost: 0.0,
-            violation_cost: 0.0,
-            regularization_cost: 0.0,
-            imputed_cost: 0.0,
-        };
+                // Simulation seed domain separation: place simulation seeds in a
+                // disjoint region from training seeds (SipHash-1-3 domain).
+                let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
 
-        // Collect per-stage results for the scenario result payload.
-        let mut stage_results = Vec::with_capacity(num_stages);
+                // Initialize current state for this scenario.
+                ws.current_state.clear();
+                ws.current_state.extend_from_slice(initial_state);
 
-        // Inner loop: one LP solve per stage.
-        for t in 0..num_stages {
-            // Cast indices to u32 for the sampling API (SipHash-1-3 seed derivation uses u32 fields).
-            // Bounded by u32::MAX in practice; truncation is safe.
-            #[allow(clippy::cast_possible_truncation)]
-            let stage_id_u32 = t as u32;
+                let mut total_cost = 0.0_f64;
+                let mut category_costs = ScenarioCategoryCosts {
+                    resource_cost: 0.0,
+                    recourse_cost: 0.0,
+                    violation_cost: 0.0,
+                    regularization_cost: 0.0,
+                    imputed_cost: 0.0,
+                };
 
-            let (_opening_idx, noise) =
-                sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
+                // Collect per-stage results for the scenario result payload.
+                let mut stage_results = Vec::with_capacity(num_stages);
 
-            // LP rebuild sequence: template → cuts → scenario-specific row bounds.
-            solver.load_model(&templates[t]);
-            solver.add_rows(&cut_batches[t]);
+                // Inner loop: one LP solve per stage.
+                for t in 0..num_stages {
+                    // Cast indices to u32 for the sampling API (SipHash-1-3 seed
+                    // derivation uses u32 fields). Bounded by u32::MAX; truncation safe.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let stage_id_u32 = t as u32;
 
-            patch_buf.fill_forward_patches(indexer, &current_state, noise, base_rows[t]);
-            let patch_count = patch_buf.forward_patch_count();
-            solver.set_row_bounds(
-                &patch_buf.indices[..patch_count],
-                &patch_buf.lower[..patch_count],
-                &patch_buf.upper[..patch_count],
-            );
+                    let (_opening_idx, noise) =
+                        sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
 
-            let view = (if let Some(rb) = basis_cache[t].as_ref() {
-                solver.solve_with_basis(rb)
-            } else {
-                solver.solve()
-            })
-            .map_err(|e| {
-                // Invalidate the basis on error before returning.
-                basis_cache[t] = None;
-                match e {
-                    SolverError::Infeasible => SimulationError::LpInfeasible {
-                        scenario_id,
-                        stage_id: stage_id_u32,
-                        solver_message: "LP infeasible".to_string(),
-                    },
-                    other => SimulationError::SolverError {
-                        scenario_id,
-                        stage_id: stage_id_u32,
-                        solver_message: other.to_string(),
-                    },
+                    // LP rebuild sequence: template → cuts → scenario-specific row bounds.
+                    ws.solver.load_model(&templates[t]);
+                    ws.solver.add_rows(&cut_batches[t]);
+
+                    ws.patch_buf.fill_forward_patches(
+                        indexer,
+                        &ws.current_state,
+                        noise,
+                        base_rows[t],
+                    );
+                    let patch_count = ws.patch_buf.forward_patch_count();
+                    ws.solver.set_row_bounds(
+                        &ws.patch_buf.indices[..patch_count],
+                        &ws.patch_buf.lower[..patch_count],
+                        &ws.patch_buf.upper[..patch_count],
+                    );
+
+                    let solve_result = match basis_cache[t].as_ref() {
+                        Some(rb) => ws.solver.solve_with_basis(rb),
+                        None => ws.solver.solve(),
+                    };
+                    let view = solve_result.map_err(|e| {
+                        // Invalidate the basis on error before returning.
+                        basis_cache[t] = None;
+                        match e {
+                            SolverError::Infeasible => SimulationError::LpInfeasible {
+                                scenario_id,
+                                stage_id: stage_id_u32,
+                                solver_message: "LP infeasible".to_string(),
+                            },
+                            other => SimulationError::SolverError {
+                                scenario_id,
+                                stage_id: stage_id_u32,
+                                solver_message: other.to_string(),
+                            },
+                        }
+                    })?;
+
+                    // Stage cost = LP objective minus theta (future cost variable).
+                    let stage_cost = view.objective - view.primal[indexer.theta];
+                    total_cost += stage_cost;
+
+                    // Extract per-entity typed result for this stage.
+                    let stage_result = extract_stage_result(
+                        view.primal,
+                        view.dual,
+                        view.objective,
+                        &templates[t].objective,
+                        &templates[t].row_lower,
+                        indexer,
+                        stage_id_u32,
+                        entity_counts,
+                    );
+
+                    // Accumulate per-category costs for this stage.
+                    for cost_entry in &stage_result.costs {
+                        accumulate_category_costs(cost_entry, &mut category_costs);
+                    }
+
+                    stage_results.push(stage_result);
+
+                    // Advance state to the outgoing storage + lags from this stage.
+                    ws.current_state.clear();
+                    ws.current_state
+                        .extend_from_slice(&view.primal[..indexer.n_state]);
+
+                    // Update local basis cache for warm-starting the next scenario.
+                    if let Some(rb) = &mut basis_cache[t] {
+                        ws.solver.get_basis(rb);
+                    } else {
+                        let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
+                        ws.solver.get_basis(&mut rb);
+                        basis_cache[t] = Some(rb);
+                    }
                 }
-            })?;
 
-            // Stage cost = LP objective minus theta (future cost variable).
-            let stage_cost = view.objective - view.primal[indexer.theta];
-            total_cost += stage_cost;
+                // Build the scenario result and send through the bounded channel.
+                // SyncSender is thread-safe: all workers share the same sender.
+                let scenario_result = SimulationScenarioResult {
+                    scenario_id,
+                    total_cost,
+                    per_category_costs: ScenarioCategoryCosts {
+                        resource_cost: category_costs.resource_cost,
+                        recourse_cost: category_costs.recourse_cost,
+                        violation_cost: category_costs.violation_cost,
+                        regularization_cost: category_costs.regularization_cost,
+                        imputed_cost: category_costs.imputed_cost,
+                    },
+                    stages: stage_results,
+                };
 
-            // Extract per-entity typed result for this stage.
-            let stage_result = extract_stage_result(
-                view.primal,
-                view.dual,
-                view.objective,
-                &templates[t].objective,
-                &templates[t].row_lower,
-                indexer,
-                stage_id_u32,
-                entity_counts,
-            );
+                // Retain the compact entry for MPI aggregation before consuming
+                // `scenario_result` through the channel send.
+                let compact_category = ScenarioCategoryCosts {
+                    resource_cost: scenario_result.per_category_costs.resource_cost,
+                    recourse_cost: scenario_result.per_category_costs.recourse_cost,
+                    violation_cost: scenario_result.per_category_costs.violation_cost,
+                    regularization_cost: scenario_result.per_category_costs.regularization_cost,
+                    imputed_cost: scenario_result.per_category_costs.imputed_cost,
+                };
 
-            // Accumulate per-category costs for this stage.
-            for cost_entry in &stage_result.costs {
-                accumulate_category_costs(cost_entry, &mut category_costs);
+                result_tx
+                    .send(scenario_result)
+                    .map_err(|_| SimulationError::ChannelClosed)?;
+
+                worker_costs.push((scenario_id, total_cost, compact_category));
             }
 
-            stage_results.push(stage_result);
+            Ok(worker_costs)
+        })
+        .collect();
 
-            // Advance state to the outgoing storage + lags from this stage.
-            current_state.clear();
-            current_state.extend_from_slice(&view.primal[..indexer.n_state]);
-
-            // Update basis cache for warm-starting the next scenario.
-            if let Some(rb) = &mut basis_cache[t] {
-                solver.get_basis(rb);
-            } else {
-                let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
-                solver.get_basis(&mut rb);
-                basis_cache[t] = Some(rb);
-            }
-        }
-
-        // Build the scenario result and send through the bounded channel.
-        let scenario_result = SimulationScenarioResult {
-            scenario_id,
-            total_cost,
-            per_category_costs: ScenarioCategoryCosts {
-                resource_cost: category_costs.resource_cost,
-                recourse_cost: category_costs.recourse_cost,
-                violation_cost: category_costs.violation_cost,
-                regularization_cost: category_costs.regularization_cost,
-                imputed_cost: category_costs.imputed_cost,
-            },
-            stages: stage_results,
-        };
-
-        // Retain the compact (scenario_id, total_cost, category_costs) for MPI
-        // aggregation before consuming `scenario_result`.
-        let compact_category = ScenarioCategoryCosts {
-            resource_cost: scenario_result.per_category_costs.resource_cost,
-            recourse_cost: scenario_result.per_category_costs.recourse_cost,
-            violation_cost: scenario_result.per_category_costs.violation_cost,
-            regularization_cost: scenario_result.per_category_costs.regularization_cost,
-            imputed_cost: scenario_result.per_category_costs.imputed_cost,
-        };
-
-        result_tx
-            .send(scenario_result)
-            .map_err(|_| SimulationError::ChannelClosed)?;
-
-        cost_buffer.push((scenario_id, total_cost, compact_category));
+    // Flatten worker cost buffers and sort by scenario_id for deterministic
+    // MPI aggregation regardless of thread completion order.
+    let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
+    for result in worker_results {
+        all_costs.extend(result?);
     }
+    all_costs.sort_by_key(|&(id, _, _)| id);
 
-    Ok(cost_buffer)
+    Ok(all_costs)
 }
 
 #[cfg(test)]
@@ -323,8 +373,9 @@ mod tests {
 
     use super::simulate;
     use crate::{
-        FutureCostFunction, HorizonMode, StageIndexer,
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
+        workspace::SolverWorkspace,
+        FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -647,6 +698,20 @@ mod tests {
         build_stochastic_context(&system, 42).unwrap()
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// Wrap a `MockSolver` in a single-workspace slice for `simulate()` calls.
+    ///
+    /// All tests use a single workspace (serial execution) so that existing
+    /// assertions about scenario ordering and call counts remain valid.
+    fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
+        vec![SolverWorkspace {
+            solver,
+            patch_buf: PatchBuffer::new(1, 0), // N=1, L=0
+            current_state: Vec::with_capacity(1),
+        }]
+    }
+
     // ── Tests ────────────────────────────────────────────────────────────────
 
     /// Acceptance criterion: `n_scenarios=4`, single rank → exactly 4 results in
@@ -670,14 +735,15 @@ mod tests {
         let initial_state = vec![50.0_f64]; // n_state=1
 
         let solution = fixed_solution(100.0, 30.0); // objective=100, theta=30
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         let result = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -734,14 +800,15 @@ mod tests {
 
         let solution = fixed_solution(100.0, 30.0);
         // Call 5 = scenario_id=2 (0-indexed), stage=1 (0-indexed)
-        let mut solver = MockSolver::infeasible_on(solution, 5);
+        let solver = MockSolver::infeasible_on(solution, 5);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         let result = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -792,14 +859,15 @@ mod tests {
 
         let solution = fixed_solution(100.0, 30.0);
         // Call 11 = scenario 2 (0-based), stage 3 (0-based): 2*4 + 3 = 11.
-        let mut solver = MockSolver::infeasible_on(solution, 11);
+        let solver = MockSolver::infeasible_on(solution, 11);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         let result = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -846,7 +914,7 @@ mod tests {
         let initial_state = vec![50.0_f64];
 
         let solution = fixed_solution(100.0, 30.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
@@ -854,8 +922,9 @@ mod tests {
         // Drop the receiver immediately so send() will fail.
         drop(rx);
 
+        let mut workspaces = single_workspace(solver);
         let result = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -905,14 +974,15 @@ mod tests {
         let expected_total_cost = expected_stage_cost * n_stages as f64; // 210.0
 
         let solution = fixed_solution(objective, theta_val);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -959,15 +1029,16 @@ mod tests {
         let initial_state = vec![50.0_f64];
 
         let solution = fixed_solution(50.0, 10.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         // rank=0 of 2: assign_scenarios(6, 0, 2) = 0..3
         let comm = StubComm { rank: 0, size: 2 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -1011,14 +1082,15 @@ mod tests {
         let initial_state = vec![50.0_f64];
 
         let solution = fixed_solution(100.0, 20.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
         let (tx, rx) = mpsc::sync_channel(16);
 
+        let mut workspaces = single_workspace(solver);
         simulate(
-            &mut solver,
+            &mut workspaces,
             &templates,
             &base_rows,
             &fcf,
@@ -1035,5 +1107,108 @@ mod tests {
 
         let received: Vec<u32> = (0..3).map(|_| rx.recv().unwrap().scenario_id).collect();
         assert_eq!(received, vec![0, 1, 2]);
+    }
+
+    /// New acceptance criterion: cost buffer from 1 workspace equals cost buffer from 4 workspaces.
+    ///
+    /// Both runs must produce identical `(scenario_id, total_cost, category_costs)` tuples for all
+    /// 20 scenarios. The cost buffer must be sorted by `scenario_id` in both cases.
+    #[test]
+    fn test_simulation_parallel_cost_determinism() {
+        let n_stages = 2;
+        let n_scenarios = 20u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 64,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let objective = 100.0_f64;
+        let theta_val = 30.0_f64;
+        let solution = fixed_solution(objective, theta_val);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        // Run with 1 workspace.
+        let (tx1, _rx1) = mpsc::sync_channel(64);
+        let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
+        let costs_1 = simulate(
+            &mut workspaces_1,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &tx1,
+        )
+        .unwrap();
+
+        // Run with 4 workspaces.
+        let (tx4, _rx4) = mpsc::sync_channel(64);
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
+            .map(|_| SolverWorkspace {
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0),
+                current_state: Vec::with_capacity(1),
+            })
+            .collect();
+        let costs_4 = simulate(
+            &mut workspaces_4,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &tx4,
+        )
+        .unwrap();
+
+        // Both cost buffers must have exactly 20 entries sorted by scenario_id.
+        assert_eq!(
+            costs_1.len(),
+            n_scenarios as usize,
+            "1-workspace: 20 entries"
+        );
+        assert_eq!(
+            costs_4.len(),
+            n_scenarios as usize,
+            "4-workspace: 20 entries"
+        );
+
+        let ids_1: Vec<u32> = costs_1.iter().map(|(id, _, _)| *id).collect();
+        let ids_4: Vec<u32> = costs_4.iter().map(|(id, _, _)| *id).collect();
+        let expected_ids: Vec<u32> = (0..n_scenarios).collect();
+        assert_eq!(ids_1, expected_ids, "1-workspace: sorted scenario IDs");
+        assert_eq!(ids_4, expected_ids, "4-workspace: sorted scenario IDs");
+
+        // Cost values must be identical.
+        for i in 0..n_scenarios as usize {
+            let (id1, cost1, _) = &costs_1[i];
+            let (id4, cost4, _) = &costs_4[i];
+            assert_eq!(id1, id4, "scenario_id mismatch at index {i}");
+            assert!(
+                (cost1 - cost4).abs() < 1e-9,
+                "cost mismatch for scenario {id1}: 1-ws={cost1}, 4-ws={cost4}"
+            );
+        }
     }
 }

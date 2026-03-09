@@ -15,7 +15,7 @@ pub use aggregation::aggregate_simulation;
 pub use config::SimulationConfig;
 pub use error::SimulationError;
 pub use extraction::{
-    EntityCounts, accumulate_category_costs, assign_scenarios, extract_stage_result,
+    accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts,
 };
 pub use pipeline::simulate;
 pub use types::{

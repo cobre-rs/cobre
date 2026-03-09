@@ -20,29 +20,29 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
 };
 
 use cobre_io::{
-    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
-    write_policy_checkpoint, write_results,
+    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
+    SimulationOutput, StageCutsPayload,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_training_output, simulate,
-    train,
+    build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
+    PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 
 /// Single-rank communicator for testing.
@@ -591,6 +591,8 @@ fn train_simulate_write_cycle() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
     )
     .expect("train must succeed");
 
@@ -673,7 +675,7 @@ fn train_simulate_write_cycle() {
     write_policy_checkpoint(&policy_dir, &stage_cuts_payloads, &[], &policy_metadata)
         .expect("write_policy_checkpoint must succeed");
 
-    let mut sim_solver = MockSolver::with_fixed(100.0);
+    let sim_solver = MockSolver::with_fixed(100.0);
     let sim_comm = StubComm;
 
     let sim_config = SimulationConfig {
@@ -702,8 +704,14 @@ fn train_simulate_write_cycle() {
         collected
     });
 
+    let mut sim_workspaces = vec![SolverWorkspace {
+        solver: sim_solver,
+        patch_buf: PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+        current_state: Vec::with_capacity(fx.indexer.n_state),
+    }];
+
     simulate(
-        &mut sim_solver,
+        &mut sim_workspaces,
         &fx.templates,
         &fx.base_rows,
         &fcf,
@@ -759,11 +767,9 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(
-        output_dir
-            .join("training/timing/iterations.parquet")
-            .is_file()
-    );
+    assert!(output_dir
+        .join("training/timing/iterations.parquet")
+        .is_file());
 
     let manifest_path = output_dir.join("training/_manifest.json");
     assert!(manifest_path.is_file());

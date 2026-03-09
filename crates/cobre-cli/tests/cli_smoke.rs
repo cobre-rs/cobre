@@ -37,7 +37,37 @@ fn run_help_exits_0_and_lists_flags() {
         .stdout(predicate::str::contains("--quiet"))
         .stdout(predicate::str::contains("--no-banner"))
         .stdout(predicate::str::contains("--verbose"))
+        .stdout(predicate::str::contains("--threads"))
         .stdout(predicate::str::contains("CASE_DIR"));
+}
+
+/// `--threads 0` is rejected by clap before execution begins.
+///
+/// The `value_parser = clap::value_parser!(u32).range(1..)` constraint
+/// on `RunArgs::threads` means `0` triggers a clap validation error,
+/// producing exit code 2 and a message on stderr, without any I/O.
+#[test]
+fn run_threads_zero_exits_with_clap_error() {
+    cobre()
+        .args(["run", "--threads", "0", "/some/path"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+/// `--threads` with a positive value is accepted by clap (argument is valid).
+///
+/// Even though the case directory does not exist, the argument parsing itself
+/// succeeds: the error is an I/O error (exit code 2), not a clap parse error.
+/// This test verifies that `--threads 2` passes validation and execution
+/// proceeds past argument parsing.
+#[test]
+fn run_threads_positive_is_accepted_by_clap() {
+    cobre()
+        .args(["run", "--threads", "2", "/nonexistent/path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("I/O error"));
 }
 
 #[test]

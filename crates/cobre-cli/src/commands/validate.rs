@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use console::{style, Term};
+use console::{Term, style};
 
 use crate::error::CliError;
 

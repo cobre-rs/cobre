@@ -31,3 +31,9 @@ plans/
 
 # Examples
 examples/**/output
+
+# Terminal recording output (generated artifacts; scripts and tape files are tracked)
+recordings/*.gif
+recordings/*.svg
+recordings/*.cast
+recordings/demo/

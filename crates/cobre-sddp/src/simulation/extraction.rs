@@ -16,23 +16,23 @@
 //! [N, N*(1+L))       inflow_lags  — AR lag variables (hydro-major order)
 //! [N*(1+L), N*(2+L)) storage_in   — incoming storage volumes (fixed vars)
 //! N*(2+L)            theta        — future cost variable
+//! [theta+1, ...)     equipment    — turbine, spillage, thermal, lines, deficit, excess
 //! ```
 //!
-//! Equipment columns (thermals, buses, lines, pumping stations, contracts,
-//! non-controllables) appear after `theta` in the full LP but their column
-//! ranges are not yet exposed by [`StageIndexer`]. For the minimal viable
-//! solver, those fields are populated as zero stubs; they will be replaced
-//! when the LP builder exposes equipment column ranges.
+//! Equipment columns (thermals, buses, lines) are read when the indexer was
+//! constructed via [`StageIndexer::with_equipment`]. Stub entity types
+//! (pumping stations, contracts, non-controllables) that contribute zero LP
+//! variables remain as zero-valued placeholders.
 
 use std::ops::Range;
 
-use crate::StageIndexer;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
     SimulationThermalResult,
 };
+use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -59,6 +59,10 @@ pub struct EntityCounts {
     pub line_ids: Vec<i32>,
     /// Entity IDs for buses, in canonical ID-sorted order.
     pub bus_ids: Vec<i32>,
+    /// Productivity (MW per m³/s) for each hydro plant, same order as `hydro_ids`.
+    ///
+    /// Used to compute `generation_mw = turbined_m3s * productivity`.
+    pub hydro_productivities: Vec<f64>,
     /// Entity IDs for pumping stations (may be empty if none exist).
     pub pumping_station_ids: Vec<i32>,
     /// Entity IDs for contracts (may be empty if none exist).
@@ -131,10 +135,20 @@ pub fn assign_scenarios(n_scenarios: u32, rank: usize, world_size: usize) -> Ran
 
 /// Extract a [`SimulationStageResult`] from a raw LP solution at one stage.
 ///
-/// For the minimal viable solver, only hydro state variables (storage and
-/// inflow lags) have known column positions via [`StageIndexer`]. Equipment
-/// results (thermals, buses, lines) are populated as zero-valued stubs; they
-/// will be replaced when the LP builder exposes equipment column ranges.
+/// Reads equipment column values from `primal` using the ranges stored in
+/// `indexer`. When `indexer` was constructed via [`StageIndexer::with_equipment`]
+/// the equipment columns are read directly from the primal solution vector.
+/// When `indexer` was constructed via [`StageIndexer::new`] the equipment
+/// ranges are empty and results default to zero (backward-compatible behaviour
+/// for callers that do not need equipment columns).
+///
+/// `objective_coeffs` must be the template objective vector (`template.objective`)
+/// for the current stage. It is used to decompose equipment costs by multiplying
+/// each primal value by its objective coefficient.
+///
+/// `row_lower` must be the template row lower bounds (`template.row_lower`) for
+/// the current stage. It is used to read load (MW) from the load balance
+/// constraint RHS when the indexer has a non-empty `load_balance` range.
 ///
 /// The LP objective is split into `future_cost = primal[indexer.theta]` and
 /// `stage_cost = objective - future_cost`, following the same convention as the
@@ -144,15 +158,20 @@ pub fn assign_scenarios(n_scenarios: u32, rank: usize, world_size: usize) -> Ran
 ///
 /// - `primal.len() >= indexer.theta + 1`
 /// - `entity_counts.hydro_ids.len() == indexer.hydro_count`
+/// - `entity_counts.hydro_productivities.len() == indexer.hydro_count`
+/// - `objective_coeffs.len() >= primal.len()` when equipment ranges are non-empty
+/// - `row_lower.len() >= indexer.load_balance.end` when `load_balance` is non-empty
 /// - `stage_id` is 0-based
 ///
 /// Violations are caught by `debug_assert!` in debug builds.
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn extract_stage_result(
     primal: &[f64],
     _dual: &[f64],
     objective: f64,
+    objective_coeffs: &[f64],
+    row_lower: &[f64],
     indexer: &StageIndexer,
     stage_id: u32,
     entity_counts: &EntityCounts,
@@ -169,9 +188,87 @@ pub fn extract_stage_result(
         entity_counts.hydro_ids.len(),
         indexer.hydro_count,
     );
+    debug_assert!(
+        indexer.excess.is_empty() || objective_coeffs.len() >= indexer.excess.end,
+        "objective_coeffs too short: len={}, need >= excess.end={}",
+        objective_coeffs.len(),
+        indexer.excess.end,
+    );
+    debug_assert!(
+        entity_counts.hydro_productivities.len() == indexer.hydro_count,
+        "hydro_productivities length {} does not match indexer.hydro_count {}",
+        entity_counts.hydro_productivities.len(),
+        indexer.hydro_count,
+    );
+    debug_assert!(
+        indexer.load_balance.is_empty() || row_lower.len() >= indexer.load_balance.end,
+        "row_lower too short: len={}, need >= load_balance.end={}",
+        row_lower.len(),
+        indexer.load_balance.end,
+    );
 
     let future_cost = primal[indexer.theta];
     let immediate_cost = objective - future_cost;
+
+    // Decompose stage cost into per-category buckets using objective coefficients.
+    // For each equipment range: cost = sum(primal[col] * obj[col]) over the range.
+    let n_blks = indexer.n_blks;
+
+    // Thermal cost: sum over all thermal columns.
+    let thermal_cost: f64 = if indexer.thermal.is_empty() {
+        0.0
+    } else {
+        indexer
+            .thermal
+            .clone()
+            .map(|col| primal[col] * objective_coeffs[col])
+            .sum()
+    };
+
+    // Spillage cost: sum over all spillage columns (objective coeff is the spillage penalty).
+    let spillage_cost: f64 = if indexer.spillage.is_empty() {
+        0.0
+    } else {
+        indexer
+            .spillage
+            .clone()
+            .map(|col| primal[col] * objective_coeffs[col])
+            .sum()
+    };
+
+    // Exchange cost: sum over all line forward + reverse flow columns.
+    let exchange_cost: f64 = if indexer.line_fwd.is_empty() {
+        0.0
+    } else {
+        indexer
+            .line_fwd
+            .clone()
+            .chain(indexer.line_rev.clone())
+            .map(|col| primal[col] * objective_coeffs[col])
+            .sum()
+    };
+
+    // Deficit cost: sum over all deficit columns.
+    let deficit_cost: f64 = if indexer.deficit.is_empty() {
+        0.0
+    } else {
+        indexer
+            .deficit
+            .clone()
+            .map(|col| primal[col] * objective_coeffs[col])
+            .sum()
+    };
+
+    // Excess cost: sum over all excess columns.
+    let excess_cost: f64 = if indexer.excess.is_empty() {
+        0.0
+    } else {
+        indexer
+            .excess
+            .clone()
+            .map(|col| primal[col] * objective_coeffs[col])
+            .sum()
+    };
 
     let costs = vec![SimulationCostResult {
         stage_id,
@@ -180,75 +277,126 @@ pub fn extract_stage_result(
         immediate_cost,
         future_cost,
         discount_factor: 1.0,
-        thermal_cost: 0.0,
+        thermal_cost,
         contract_cost: 0.0,
-        deficit_cost: 0.0,
-        excess_cost: 0.0,
+        deficit_cost,
+        excess_cost,
         storage_violation_cost: 0.0,
         filling_target_cost: 0.0,
         hydro_violation_cost: 0.0,
         inflow_penalty_cost: 0.0,
         generic_violation_cost: 0.0,
-        spillage_cost: 0.0,
+        spillage_cost,
         fpha_turbined_cost: 0.0,
         curtailment_cost: 0.0,
-        exchange_cost: 0.0,
+        exchange_cost,
         pumping_cost: 0.0,
     }];
 
-    // Hydro results: storage and inflow lag columns are at known positions.
-    // Each hydro `h` has:
-    //   outgoing storage at column `indexer.storage.start + h`
-    //   lag `l` at column `indexer.inflow_lags.start + h * max_par_order + l`
-    let hydros: Vec<SimulationHydroResult> = entity_counts
-        .hydro_ids
-        .iter()
-        .enumerate()
-        .map(|(h, &hydro_id)| {
-            let storage_final = primal[indexer.storage.start + h];
+    // Hydro results: one entry per (hydro, block) pair when equipment ranges
+    // are populated, or one entry per hydro (block_id=None) as fallback.
+    //
+    // Storage and inflow are stage-level quantities (not per-block), so they
+    // are repeated identically across all block entries for a given hydro.
+    let hydros: Vec<SimulationHydroResult> = if indexer.turbine.is_empty() || n_blks == 0 {
+        // Fallback: no equipment ranges, one zero-valued entry per hydro.
+        entity_counts
+            .hydro_ids
+            .iter()
+            .enumerate()
+            .map(|(h, &hydro_id)| {
+                let incremental_inflow = if indexer.max_par_order > 0 {
+                    primal[indexer.inflow_lags.start + h * indexer.max_par_order]
+                } else {
+                    0.0
+                };
+                SimulationHydroResult {
+                    stage_id,
+                    block_id: None,
+                    hydro_id,
+                    turbined_m3s: 0.0,
+                    spillage_m3s: 0.0,
+                    evaporation_m3s: None,
+                    diverted_inflow_m3s: None,
+                    diverted_outflow_m3s: None,
+                    incremental_inflow_m3s: incremental_inflow,
+                    inflow_m3s: incremental_inflow,
+                    storage_initial_hm3: primal[indexer.storage_in.start + h],
+                    storage_final_hm3: primal[indexer.storage.start + h],
+                    generation_mw: 0.0,
+                    productivity_mw_per_m3s: None,
+                    spillage_cost: 0.0,
+                    water_value_per_hm3: 0.0,
+                    storage_binding_code: 0,
+                    operative_state_code: 1,
+                    turbined_slack_m3s: 0.0,
+                    outflow_slack_below_m3s: 0.0,
+                    outflow_slack_above_m3s: 0.0,
+                    generation_slack_mw: 0.0,
+                    storage_violation_below_hm3: 0.0,
+                    filling_target_violation_hm3: 0.0,
+                    evaporation_violation_m3s: 0.0,
+                    inflow_nonnegativity_slack_m3s: 0.0,
+                }
+            })
+            .collect()
+    } else {
+        // One entry per (hydro, block) pair.
+        entity_counts
+            .hydro_ids
+            .iter()
+            .enumerate()
+            .flat_map(|(h, &hydro_id)| {
+                let storage_final = primal[indexer.storage.start + h];
+                let storage_initial = primal[indexer.storage_in.start + h];
+                let incremental_inflow = if indexer.max_par_order > 0 {
+                    primal[indexer.inflow_lags.start + h * indexer.max_par_order]
+                } else {
+                    0.0
+                };
+                let productivity = entity_counts.hydro_productivities[h];
 
-            // The most-recent inflow lag (lag index 0) is the current period
-            // inflow. Only present when max_par_order > 0.
-            let incremental_inflow = if indexer.max_par_order > 0 {
-                primal[indexer.inflow_lags.start + h * indexer.max_par_order]
-            } else {
-                0.0
-            };
+                (0..n_blks).map(move |b| {
+                    let t_col = indexer.turbine.start + h * n_blks + b;
+                    let s_col = indexer.spillage.start + h * n_blks + b;
+                    let turbined = primal[t_col];
+                    let spillage = primal[s_col];
+                    let sp_cost = spillage * objective_coeffs[s_col];
+                    let gen_mw = turbined * productivity;
 
-            SimulationHydroResult {
-                stage_id,
-                block_id: None,
-                hydro_id,
-                // Equipment-column fields: stubs until LP builder exposes
-                // equipment column ranges.
-                turbined_m3s: 0.0,
-                spillage_m3s: 0.0,
-                evaporation_m3s: None,
-                diverted_inflow_m3s: None,
-                diverted_outflow_m3s: None,
-                incremental_inflow_m3s: incremental_inflow,
-                inflow_m3s: incremental_inflow,
-                // storage_in columns give the initial storage value for this
-                // stage (incoming from the previous stage).
-                storage_initial_hm3: primal[indexer.storage_in.start + h],
-                storage_final_hm3: storage_final,
-                generation_mw: 0.0,
-                productivity_mw_per_m3s: None,
-                spillage_cost: 0.0,
-                water_value_per_hm3: 0.0,
-                storage_binding_code: 0,
-                operative_state_code: 1,
-                turbined_slack_m3s: 0.0,
-                outflow_slack_below_m3s: 0.0,
-                outflow_slack_above_m3s: 0.0,
-                generation_slack_mw: 0.0,
-                storage_violation_below_hm3: 0.0,
-                filling_target_violation_hm3: 0.0,
-                evaporation_violation_m3s: 0.0,
-                inflow_nonnegativity_slack_m3s: 0.0,
-            }
-        })
-        .collect();
+                    SimulationHydroResult {
+                        stage_id,
+                        #[allow(clippy::cast_possible_truncation)]
+                        block_id: Some(b as u32),
+                        hydro_id,
+                        turbined_m3s: turbined,
+                        spillage_m3s: spillage,
+                        evaporation_m3s: None,
+                        diverted_inflow_m3s: None,
+                        diverted_outflow_m3s: None,
+                        incremental_inflow_m3s: incremental_inflow,
+                        inflow_m3s: incremental_inflow,
+                        storage_initial_hm3: storage_initial,
+                        storage_final_hm3: storage_final,
+                        generation_mw: gen_mw,
+                        productivity_mw_per_m3s: None,
+                        spillage_cost: sp_cost,
+                        water_value_per_hm3: 0.0,
+                        storage_binding_code: 0,
+                        operative_state_code: 1,
+                        turbined_slack_m3s: 0.0,
+                        outflow_slack_below_m3s: 0.0,
+                        outflow_slack_above_m3s: 0.0,
+                        generation_slack_mw: 0.0,
+                        storage_violation_below_hm3: 0.0,
+                        filling_target_violation_hm3: 0.0,
+                        evaporation_violation_m3s: 0.0,
+                        inflow_nonnegativity_slack_m3s: 0.0,
+                    }
+                })
+            })
+            .collect()
+    };
 
     // Inflow lag records: one entry per (hydro, lag) pair where lag > 0.
     // Lag index 0 is the current-period inflow captured above in hydros.
@@ -271,51 +419,133 @@ pub fn extract_stage_result(
         })
         .collect();
 
-    // Equipment result stubs: column mapping deferred until LP builder
-    // exposes equipment column ranges.
-    let thermals: Vec<SimulationThermalResult> = entity_counts
-        .thermal_ids
-        .iter()
-        .map(|&thermal_id| SimulationThermalResult {
-            stage_id,
-            block_id: None,
-            thermal_id,
-            generation_mw: 0.0,
-            generation_cost: 0.0,
-            is_gnl: false,
-            gnl_committed_mw: None,
-            gnl_decision_mw: None,
-            operative_state_code: 1,
-        })
-        .collect();
+    // Thermal results: one entry per (thermal, block) pair.
+    // When equipment ranges are empty (indexer built via `new`), produce one
+    // zero-valued entry per thermal to preserve entity ordering.
+    let thermals: Vec<SimulationThermalResult> = if indexer.thermal.is_empty() || n_blks == 0 {
+        entity_counts
+            .thermal_ids
+            .iter()
+            .map(|&thermal_id| SimulationThermalResult {
+                stage_id,
+                block_id: None,
+                thermal_id,
+                generation_mw: 0.0,
+                generation_cost: 0.0,
+                is_gnl: false,
+                gnl_committed_mw: None,
+                gnl_decision_mw: None,
+                operative_state_code: 1,
+            })
+            .collect()
+    } else {
+        entity_counts
+            .thermal_ids
+            .iter()
+            .enumerate()
+            .flat_map(|(t, &thermal_id)| {
+                (0..n_blks).map(move |b| {
+                    let col = indexer.thermal.start + t * n_blks + b;
+                    let gen_mw = primal[col];
+                    let gen_cost = gen_mw * objective_coeffs[col];
+                    SimulationThermalResult {
+                        stage_id,
+                        #[allow(clippy::cast_possible_truncation)]
+                        block_id: Some(b as u32),
+                        thermal_id,
+                        generation_mw: gen_mw,
+                        generation_cost: gen_cost,
+                        is_gnl: false,
+                        gnl_committed_mw: None,
+                        gnl_decision_mw: None,
+                        operative_state_code: 1,
+                    }
+                })
+            })
+            .collect()
+    };
 
-    let exchanges: Vec<SimulationExchangeResult> = entity_counts
-        .line_ids
-        .iter()
-        .map(|&line_id| SimulationExchangeResult {
-            stage_id,
-            block_id: None,
-            line_id,
-            direct_flow_mw: 0.0,
-            reverse_flow_mw: 0.0,
-            exchange_cost: 0.0,
-            operative_state_code: 1,
-        })
-        .collect();
+    // Exchange results: one entry per (line, block) pair.
+    let exchanges: Vec<SimulationExchangeResult> = if indexer.line_fwd.is_empty() || n_blks == 0 {
+        entity_counts
+            .line_ids
+            .iter()
+            .map(|&line_id| SimulationExchangeResult {
+                stage_id,
+                block_id: None,
+                line_id,
+                direct_flow_mw: 0.0,
+                reverse_flow_mw: 0.0,
+                exchange_cost: 0.0,
+                operative_state_code: 1,
+            })
+            .collect()
+    } else {
+        entity_counts
+            .line_ids
+            .iter()
+            .enumerate()
+            .flat_map(|(l, &line_id)| {
+                (0..n_blks).map(move |b| {
+                    let fwd_col = indexer.line_fwd.start + l * n_blks + b;
+                    let rev_col = indexer.line_rev.start + l * n_blks + b;
+                    let fwd = primal[fwd_col];
+                    let rev = primal[rev_col];
+                    let cost = fwd * objective_coeffs[fwd_col] + rev * objective_coeffs[rev_col];
+                    SimulationExchangeResult {
+                        stage_id,
+                        #[allow(clippy::cast_possible_truncation)]
+                        block_id: Some(b as u32),
+                        line_id,
+                        direct_flow_mw: fwd,
+                        reverse_flow_mw: rev,
+                        exchange_cost: cost,
+                        operative_state_code: 2,
+                    }
+                })
+            })
+            .collect()
+    };
 
-    let buses: Vec<SimulationBusResult> = entity_counts
-        .bus_ids
-        .iter()
-        .map(|&bus_id| SimulationBusResult {
-            stage_id,
-            block_id: None,
-            bus_id,
-            load_mw: 0.0,
-            deficit_mw: 0.0,
-            excess_mw: 0.0,
-            spot_price: 0.0,
-        })
-        .collect();
+    // Bus results: one entry per (bus, block) pair.
+    let buses: Vec<SimulationBusResult> = if indexer.deficit.is_empty() || n_blks == 0 {
+        entity_counts
+            .bus_ids
+            .iter()
+            .map(|&bus_id| SimulationBusResult {
+                stage_id,
+                block_id: None,
+                bus_id,
+                load_mw: 0.0,
+                deficit_mw: 0.0,
+                excess_mw: 0.0,
+                spot_price: 0.0,
+            })
+            .collect()
+    } else {
+        entity_counts
+            .bus_ids
+            .iter()
+            .enumerate()
+            .flat_map(|(bus_idx, &bus_id)| {
+                (0..n_blks).map(move |b| {
+                    let deficit_col = indexer.deficit.start + bus_idx * n_blks + b;
+                    let excess_col = indexer.excess.start + bus_idx * n_blks + b;
+                    let load_row = indexer.load_balance.start + bus_idx * n_blks + b;
+                    SimulationBusResult {
+                        stage_id,
+                        #[allow(clippy::cast_possible_truncation)]
+                        block_id: Some(b as u32),
+                        bus_id,
+                        load_mw: row_lower[load_row],
+                        deficit_mw: primal[deficit_col],
+                        excess_mw: primal[excess_col],
+                        spot_price: 0.0, // Dual of the load balance row — deferred.
+                    }
+                })
+            })
+            .collect()
+    };
 
     let pumping_stations: Vec<SimulationPumpingResult> = entity_counts
         .pumping_station_ids
@@ -450,9 +680,9 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{EntityCounts, accumulate_category_costs, assign_scenarios, extract_stage_result};
-    use crate::StageIndexer;
+    use super::{accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts};
     use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
+    use crate::StageIndexer;
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -534,6 +764,7 @@ mod tests {
     fn make_entity_counts_2_hydros() -> EntityCounts {
         EntityCounts {
             hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
             thermal_ids: vec![1],
             line_ids: vec![5],
             bus_ids: vec![100],
@@ -575,6 +806,8 @@ mod tests {
             &primal,
             &dual,
             1500.0,
+            &[],
+            &[],
             &indexer,
             3,
             &make_entity_counts_2_hydros(),
@@ -598,6 +831,8 @@ mod tests {
             &primal,
             &dual,
             objective,
+            &[],
+            &[],
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
@@ -621,6 +856,8 @@ mod tests {
             &primal,
             &dual,
             1500.0,
+            &[],
+            &[],
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
@@ -647,13 +884,15 @@ mod tests {
             &primal,
             &dual,
             1500.0,
+            &[],
+            &[],
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-        // Hydro 10, lag 0 → primal[2] = 50.0
+                                                 // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);
@@ -672,6 +911,7 @@ mod tests {
         let dual = vec![];
         let counts = EntityCounts {
             hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
             thermal_ids: vec![],
             line_ids: vec![],
             bus_ids: vec![],
@@ -680,7 +920,7 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result = extract_stage_result(&primal, &dual, 600.0, &indexer, 2, &counts);
+        let result = extract_stage_result(&primal, &dual, 600.0, &[], &[], &indexer, 2, &counts);
 
         assert!(result.inflow_lags.is_empty());
         assert_eq!(result.hydros[0].incremental_inflow_m3s, 0.0);
@@ -697,6 +937,8 @@ mod tests {
             &primal,
             &dual,
             110.0,
+            &[],
+            &[],
             &indexer,
             stage_id,
             &make_entity_counts_2_hydros(),
@@ -712,8 +954,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_equipment_stubs_are_zero() {
-        // Thermal, exchange, bus results are zero-valued stubs.
+    fn extract_equipment_zero_when_indexer_has_no_equipment_ranges() {
+        // When StageIndexer is built via `new`, equipment ranges are empty and
+        // all equipment result fields default to zero — backward-compatible behaviour.
         let indexer = StageIndexer::new(2, 1);
         let primal = make_primal_2_1([0.0; 2], [0.0; 2], [0.0; 2], 0.0);
         let dual = vec![0.0; 4];
@@ -722,24 +965,155 @@ mod tests {
             &primal,
             &dual,
             0.0,
+            &[],
+            &[],
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
         );
 
-        // Thermal stubs
+        // Thermal — one entry per thermal entity, all zero.
         assert_eq!(result.thermals.len(), 1);
         assert_eq!(result.thermals[0].generation_mw, 0.0);
         assert_eq!(result.thermals[0].generation_cost, 0.0);
+        assert_eq!(result.thermals[0].block_id, None);
 
-        // Exchange stubs
+        // Exchange — one entry per line entity, all zero.
         assert_eq!(result.exchanges.len(), 1);
         assert_eq!(result.exchanges[0].direct_flow_mw, 0.0);
+        assert_eq!(result.exchanges[0].block_id, None);
 
-        // Bus stubs
+        // Bus — one entry per bus entity, all zero.
         assert_eq!(result.buses.len(), 1);
         assert_eq!(result.buses[0].deficit_mw, 0.0);
         assert_eq!(result.buses[0].spot_price, 0.0);
+        assert_eq!(result.buses[0].block_id, None);
+    }
+
+    /// Verify that equipment columns are read from the primal vector when the
+    /// indexer was built via `with_equipment`.
+    ///
+    /// Column layout for N=2 hydros, L=1 lag, T=1 thermal, Ln=1 line, B=1 bus, K=1 block:
+    ///
+    /// ```text
+    /// theta = N*(2+L) = 2*(2+1) = 6
+    /// turbine:  [7, 9)    h0→7, h1→8
+    /// spillage: [9, 11)   h0→9, h1→10
+    /// thermal: [11, 12)   t0→11
+    /// line_fwd:[12, 13)   l0→12
+    /// line_rev:[13, 14)   l0→13
+    /// deficit: [14, 15)   b0→14
+    /// excess:  [15, 16)   b0→15
+    /// ```
+    #[test]
+    fn extract_equipment_reads_primal_when_with_equipment() {
+        // N=2, L=1, T=1, Ln=1, B=1, K=1
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1);
+        // theta = 6, equipment starts at 7
+        assert_eq!(indexer.theta, 6);
+        assert_eq!(indexer.turbine, 7..9);
+        assert_eq!(indexer.spillage, 9..11);
+        assert_eq!(indexer.thermal, 11..12);
+        assert_eq!(indexer.line_fwd, 12..13);
+        assert_eq!(indexer.line_rev, 13..14);
+        assert_eq!(indexer.deficit, 14..15);
+        assert_eq!(indexer.excess, 15..16);
+
+        // Build a primal vector of 16 elements.
+        // storage[0..2]=100,200  inflow_lags[2..4]=50,60  storage_in[4..6]=90,180  theta[6]=500
+        // turbine[7..9]=30.0,40.0   spillage[9..11]=5.0,0.0
+        // thermal[11]=80.0   line_fwd[12]=15.0   line_rev[13]=0.0
+        // deficit[14]=10.0   excess[15]=2.0
+        let mut primal = vec![0.0_f64; 16];
+        primal[0] = 100.0; // storage h0
+        primal[1] = 200.0; // storage h1
+        primal[2] = 50.0; // lag h0
+        primal[3] = 60.0; // lag h1
+        primal[4] = 90.0; // storage_in h0
+        primal[5] = 180.0; // storage_in h1
+        primal[6] = 500.0; // theta
+        primal[7] = 30.0; // turbine h0 b0
+        primal[8] = 40.0; // turbine h1 b0
+        primal[9] = 5.0; // spillage h0 b0
+        primal[10] = 0.0; // spillage h1 b0
+        primal[11] = 80.0; // thermal t0 b0
+        primal[12] = 15.0; // line_fwd l0 b0
+        primal[13] = 0.0; // line_rev l0 b0
+        primal[14] = 10.0; // deficit b0 b0
+        primal[15] = 2.0; // excess b0 b0
+
+        // Objective coefficients: thermal cost=50/MWh, spillage cost=0.1, deficit=1000, excess=50
+        let mut obj = vec![0.0_f64; 16];
+        obj[6] = 1.0; // theta (objective = 1)
+        obj[9] = 0.1; // spillage h0 penalty
+        obj[11] = 50.0; // thermal cost per MW
+        obj[12] = 5.0; // line_fwd cost per MW
+        obj[14] = 1000.0; // deficit cost per MW
+        obj[15] = 50.0; // excess cost per MW
+
+        let counts = EntityCounts {
+            hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
+            thermal_ids: vec![1],
+            line_ids: vec![5],
+            bus_ids: vec![100],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+        let dual = vec![0.0; 6];
+
+        // Build row_lower for the load balance row. N=2, L=1 → n_state=4, water_bal_start=4,
+        // load_bal_start=4+2=6. K=1, B=1 → one load balance row at index 6.
+        let mut row_lower = vec![0.0_f64; 7]; // must be >= load_balance.end = 7
+        row_lower[6] = 75.0; // load = 75 MW for bus 100
+        let result = extract_stage_result(
+            &primal, &dual, 600.0, &obj, &row_lower, &indexer, 0, &counts,
+        );
+
+        // Hydro: one entry per (hydro, block), block_id = Some(0)
+        assert_eq!(result.hydros.len(), 2); // 2 hydros × 1 block
+        assert_eq!(result.hydros[0].block_id, Some(0));
+        assert_eq!(result.hydros[0].turbined_m3s, 30.0);
+        assert_eq!(result.hydros[0].spillage_m3s, 5.0);
+        assert!((result.hydros[0].spillage_cost - 0.5).abs() < 1e-12); // 5.0 * 0.1
+
+        // Hydro generation = turbined * productivity (1.0)
+        assert_eq!(result.hydros[0].generation_mw, 30.0); // 30 * 1.0
+        assert_eq!(result.hydros[1].generation_mw, 40.0); // 40 * 1.0
+
+        // Hydro h=1 (no spillage)
+        assert_eq!(result.hydros[1].block_id, Some(0));
+        assert_eq!(result.hydros[1].turbined_m3s, 40.0);
+        assert_eq!(result.hydros[1].spillage_m3s, 0.0);
+
+        // Thermal: one entry per (thermal, block), block_id = Some(0)
+        assert_eq!(result.thermals.len(), 1);
+        assert_eq!(result.thermals[0].generation_mw, 80.0);
+        assert!((result.thermals[0].generation_cost - 4000.0).abs() < 1e-12); // 80 * 50
+        assert_eq!(result.thermals[0].block_id, Some(0));
+
+        // Exchange: one entry per (line, block)
+        assert_eq!(result.exchanges.len(), 1);
+        assert_eq!(result.exchanges[0].direct_flow_mw, 15.0);
+        assert_eq!(result.exchanges[0].reverse_flow_mw, 0.0);
+        assert!((result.exchanges[0].exchange_cost - 75.0).abs() < 1e-12); // 15 * 5
+        assert_eq!(result.exchanges[0].block_id, Some(0));
+
+        // Bus: one entry per (bus, block)
+        assert_eq!(result.buses.len(), 1);
+        assert_eq!(result.buses[0].load_mw, 75.0); // from row_lower
+        assert_eq!(result.buses[0].deficit_mw, 10.0);
+        assert_eq!(result.buses[0].excess_mw, 2.0);
+        assert_eq!(result.buses[0].block_id, Some(0));
+
+        // Cost breakdown
+        let cost = &result.costs[0];
+        assert!((cost.thermal_cost - 4000.0).abs() < 1e-12); // 80 * 50
+        assert!((cost.spillage_cost - 0.5).abs() < 1e-12); // 5 * 0.1
+        assert!((cost.deficit_cost - 10_000.0).abs() < 1e-12); // 10 * 1000
+        assert!((cost.excess_cost - 100.0).abs() < 1e-12); // 2 * 50
+        assert!((cost.exchange_cost - 75.0).abs() < 1e-12); // 15 * 5
     }
 
     #[test]
@@ -749,6 +1123,7 @@ mod tests {
         let dual = vec![];
         let counts = EntityCounts {
             hydro_ids: vec![1],
+            hydro_productivities: vec![1.0],
             thermal_ids: vec![],
             line_ids: vec![],
             bus_ids: vec![],
@@ -757,7 +1132,7 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result = extract_stage_result(&primal, &dual, 250.0, &indexer, 0, &counts);
+        let result = extract_stage_result(&primal, &dual, 250.0, &[], &[], &indexer, 0, &counts);
 
         assert!(result.pumping_stations.is_empty());
         assert!(result.contracts.is_empty());

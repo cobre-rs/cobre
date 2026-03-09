@@ -110,7 +110,19 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let stage_templates_ref = &stage_templates.templates;
     let base_rows = &stage_templates.base_rows;
 
-    let indexer = StageIndexer::from_stage_template(&stage_templates_ref[0]);
+    // Build the full indexer with equipment column ranges.
+    // Assumption: all stages have the same block count (uniform horizon).
+    // The 1dtoy example has 1 block per stage; heterogeneous block counts
+    // would require a per-stage indexer (deferred).
+    let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
+    let indexer = StageIndexer::with_equipment(
+        stage_templates_ref[0].n_hydro,
+        stage_templates_ref[0].max_par_order,
+        system.thermals().len(),
+        system.lines().len(),
+        system.buses().len(),
+        n_blks_stage0,
+    );
     let initial_state = vec![0.0_f64; indexer.n_state];
 
     let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
@@ -390,8 +402,23 @@ fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
 /// Entity IDs are extracted from [`cobre_core::EntityId`], which stores
 /// an `i32` in its inner field.
 fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
+    use cobre_core::entities::hydro::HydroGenerationModel;
+
     EntityCounts {
         hydro_ids: system.hydros().iter().map(|h| h.id.0).collect(),
+        hydro_productivities: system
+            .hydros()
+            .iter()
+            .map(|h| match &h.generation_model {
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s,
+                }
+                | HydroGenerationModel::LinearizedHead {
+                    productivity_mw_per_m3s,
+                } => *productivity_mw_per_m3s,
+                HydroGenerationModel::Fpha => 0.0,
+            })
+            .collect(),
         thermal_ids: system.thermals().iter().map(|t| t.id.0).collect(),
         line_ids: system.lines().iter().map(|l| l.id.0).collect(),
         bus_ids: system.buses().iter().map(|b| b.id.0).collect(),

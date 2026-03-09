@@ -13,6 +13,20 @@
 //! N*(2+L)         theta        — future cost variable (scalar)
 //! ```
 //!
+//! When built with [`StageIndexer::with_equipment`], the following equipment
+//! columns follow immediately after `theta`:
+//!
+//! ```text
+//! [theta+1,                          theta+1+H*K)        turbine     — turbined flow (m³/s)
+//! [theta+1+H*K,                      theta+1+2*H*K)      spillage    — spilled flow (m³/s)
+//! [theta+1+2*H*K,                    theta+1+2*H*K+T*K)  thermal     — thermal generation (MW)
+//! [theta+1+2*H*K+T*K,                theta+1+2*H*K+T*K+2*L_n*K) line_fwd/rev — line flows
+//! [theta+1+2*H*K+T*K+2*L_n*K,       theta+1+2*H*K+T*K+2*L_n*K+B*K) deficit
+//! [theta+1+2*H*K+T*K+2*L_n*K+B*K,   theta+1+2*H*K+T*K+2*L_n*K+2*B*K) excess
+//! ```
+//!
+//! where H = `hydro_count`, K = `n_blks`, T = `n_thermals`, Ln = `n_lines`, B = `n_buses`.
+//!
 //! ## Row layout (Solver Abstraction SS2.2)
 //!
 //! ```text
@@ -44,6 +58,12 @@ use cobre_solver::StageTemplate;
 ///
 /// See the [module-level documentation](self) for the full column and row
 /// layout, and [`StageIndexer::new`] for the construction formulas.
+///
+/// Equipment column ranges (`turbine`, `spillage`, `thermal`, `line_fwd`,
+/// `line_rev`, `deficit`, `excess`) are populated only when constructed via
+/// [`StageIndexer::with_equipment`]. When constructed via [`StageIndexer::new`]
+/// or [`StageIndexer::from_stage_template`], those ranges are all empty (`0..0`)
+/// and `n_blks`, `n_thermals`, `n_lines`, `n_buses` are zero.
 #[derive(Debug, Clone)]
 pub struct StageIndexer {
     /// Column range `[0, N)` for outgoing storage volumes.
@@ -100,6 +120,77 @@ pub struct StageIndexer {
     /// All hydros use a uniform lag stride of `max_par_order`, enabling
     /// contiguous memory access and SIMD vectorisation over the lag dimension.
     pub max_par_order: usize,
+
+    // ── Equipment column ranges ────────────────────────────────────────────
+    // Populated only by `with_equipment`; empty (`0..0`) when built via `new`.
+    /// Column range for turbined flow variables, one per (hydro, block) pair.
+    ///
+    /// Index for hydro `h`, block `b`: `turbine.start + h * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub turbine: Range<usize>,
+
+    /// Column range for spillage variables, one per (hydro, block) pair.
+    ///
+    /// Index for hydro `h`, block `b`: `spillage.start + h * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub spillage: Range<usize>,
+
+    /// Column range for thermal generation variables, one per (thermal, block) pair.
+    ///
+    /// Index for thermal `t`, block `b`: `thermal.start + t * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub thermal: Range<usize>,
+
+    /// Column range for forward line flow variables, one per (line, block) pair.
+    ///
+    /// Index for line `l`, block `b`: `line_fwd.start + l * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub line_fwd: Range<usize>,
+
+    /// Column range for reverse line flow variables, one per (line, block) pair.
+    ///
+    /// Index for line `l`, block `b`: `line_rev.start + l * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub line_rev: Range<usize>,
+
+    /// Column range for bus deficit variables, one per (bus, block) pair.
+    ///
+    /// Index for bus `b_idx`, block `blk`: `deficit.start + b_idx * n_blks + blk`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub deficit: Range<usize>,
+
+    /// Column range for bus excess variables, one per (bus, block) pair.
+    ///
+    /// Index for bus `b_idx`, block `blk`: `excess.start + b_idx * n_blks + blk`.
+    /// Empty when built via [`StageIndexer::new`].
+    pub excess: Range<usize>,
+
+    /// Number of operating blocks per stage (K).
+    ///
+    /// Zero when built via [`StageIndexer::new`].
+    pub n_blks: usize,
+
+    /// Number of thermal units (T).
+    ///
+    /// Zero when built via [`StageIndexer::new`].
+    pub n_thermals: usize,
+
+    /// Number of transmission lines (`L_n`).
+    ///
+    /// Zero when built via [`StageIndexer::new`].
+    pub n_lines: usize,
+
+    /// Number of buses (B).
+    ///
+    /// Zero when built via [`StageIndexer::new`].
+    pub n_buses: usize,
+
+    /// Row range for load balance constraints, one per (bus, block) pair.
+    ///
+    /// Index for bus `b_idx`, block `blk`: `load_balance.start + b_idx * n_blks + blk`.
+    /// The RHS of these rows contains the load (MW) for each bus in each block.
+    /// Empty when built via [`StageIndexer::new`].
+    pub load_balance: Range<usize>,
 }
 
 impl StageIndexer {
@@ -108,6 +199,11 @@ impl StageIndexer {
     /// All index ranges are computed from N and L using the formulas in
     /// Solver Abstraction SS2.1–SS2.2. The constructor is infallible;
     /// validation of N and L is the caller's responsibility.
+    ///
+    /// Equipment column ranges (`turbine`, `spillage`, `thermal`, `line_fwd`,
+    /// `line_rev`, `deficit`, `excess`) are all empty (`0..0`) and equipment
+    /// counts (`n_blks`, `n_thermals`, `n_lines`, `n_buses`) are zero. Use
+    /// [`StageIndexer::with_equipment`] to populate them.
     ///
     /// # Examples
     ///
@@ -123,6 +219,9 @@ impl StageIndexer {
     /// assert_eq!(idx.n_state,  9);
     /// assert_eq!(idx.storage_fixing, 0..3);
     /// assert_eq!(idx.lag_fixing, 3..9);
+    /// // Equipment ranges are empty when built via `new`.
+    /// assert!(idx.turbine.is_empty());
+    /// assert_eq!(idx.n_blks, 0);
     /// ```
     #[must_use]
     pub fn new(hydro_count: usize, max_par_order: usize) -> Self {
@@ -149,6 +248,116 @@ impl StageIndexer {
             lag_fixing,
             hydro_count,
             max_par_order,
+            // Equipment ranges are empty until `with_equipment` is called.
+            turbine: 0..0,
+            spillage: 0..0,
+            thermal: 0..0,
+            line_fwd: 0..0,
+            line_rev: 0..0,
+            deficit: 0..0,
+            excess: 0..0,
+            n_blks: 0,
+            n_thermals: 0,
+            n_lines: 0,
+            n_buses: 0,
+            load_balance: 0..0,
+        }
+    }
+
+    /// Construct a [`StageIndexer`] with full equipment column ranges.
+    ///
+    /// Computes both the state-variable ranges (identical to [`StageIndexer::new`])
+    /// and the equipment decision-variable ranges that follow `theta` in the LP.
+    ///
+    /// The equipment column layout matches `lp_builder.rs` exactly:
+    ///
+    /// ```text
+    /// decision_start      = theta + 1
+    /// turbine_start       = decision_start
+    /// spillage_start      = turbine_start  + n_hydros * n_blks
+    /// thermal_start       = spillage_start + n_hydros * n_blks
+    /// line_fwd_start      = thermal_start  + n_thermals * n_blks
+    /// line_rev_start      = line_fwd_start + n_lines * n_blks
+    /// deficit_start       = line_rev_start + n_lines * n_blks
+    /// excess_start        = deficit_start  + n_buses * n_blks
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// This constructor assumes a **uniform block count across all stages**
+    /// (i.e., all stages have the same `n_blks`). For the minimal viable
+    /// solver this assumption holds; stages with heterogeneous block counts
+    /// would require a per-stage indexer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cobre_sddp::StageIndexer;
+    ///
+    /// // N=1 hydro, L=0 lags, T=2 thermals, L_n=1 line, B=2 buses, K=1 block
+    /// // theta = N*(2+L) = 1*(2+0) = 2
+    /// // decision_start = 3
+    /// // turbine:   3..4   (1 hydro * 1 block)
+    /// // spillage:  4..5   (1 hydro * 1 block)
+    /// // thermal:   5..7   (2 thermals * 1 block)
+    /// // line_fwd:  7..8   (1 line * 1 block)
+    /// // line_rev:  8..9   (1 line * 1 block)
+    /// // deficit:   9..11  (2 buses * 1 block)
+    /// // excess:   11..13  (2 buses * 1 block)
+    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1);
+    /// assert_eq!(idx.turbine,   3..4);
+    /// assert_eq!(idx.spillage,  4..5);
+    /// assert_eq!(idx.thermal,   5..7);
+    /// assert_eq!(idx.line_fwd,  7..8);
+    /// assert_eq!(idx.line_rev,  8..9);
+    /// assert_eq!(idx.deficit,   9..11);
+    /// assert_eq!(idx.excess,   11..13);
+    /// assert_eq!(idx.n_blks, 1);
+    /// assert_eq!(idx.n_thermals, 2);
+    /// assert_eq!(idx.n_lines, 1);
+    /// assert_eq!(idx.n_buses, 2);
+    /// ```
+    #[must_use]
+    pub fn with_equipment(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_thermals: usize,
+        n_lines: usize,
+        n_buses: usize,
+        n_blks: usize,
+    ) -> Self {
+        let base = Self::new(hydro_count, max_par_order);
+        let decision_start = base.theta + 1;
+
+        let turbine_start = decision_start;
+        let spillage_start = turbine_start + hydro_count * n_blks;
+        let thermal_start = spillage_start + hydro_count * n_blks;
+        let line_fwd_start = thermal_start + n_thermals * n_blks;
+        let line_rev_start = line_fwd_start + n_lines * n_blks;
+        let deficit_start = line_rev_start + n_lines * n_blks;
+        let excess_start = deficit_start + n_buses * n_blks;
+        let excess_end = excess_start + n_buses * n_blks;
+
+        // Row layout: [storage_fixing | lag_fixing | water_balance | load_balance]
+        // water_balance_start = n_state (= n_dual_relevant)
+        // load_balance_start = water_balance_start + hydro_count
+        let load_balance_start = base.n_state + hydro_count;
+        let load_balance_end = load_balance_start + n_buses * n_blks;
+
+        Self {
+            turbine: turbine_start..spillage_start,
+            spillage: spillage_start..thermal_start,
+            thermal: thermal_start..line_fwd_start,
+            line_fwd: line_fwd_start..line_rev_start,
+            line_rev: line_rev_start..deficit_start,
+            deficit: deficit_start..excess_start,
+            excess: excess_start..excess_end,
+            n_blks,
+            n_thermals,
+            n_lines,
+            n_buses,
+            load_balance: load_balance_start..load_balance_end,
+            ..base
         }
     }
 
@@ -412,5 +621,142 @@ mod tests {
 
         let debug_str = format!("{idx:?}");
         assert!(debug_str.contains("StageIndexer"));
+    }
+
+    // new() produces empty equipment ranges
+    #[test]
+    fn new_equipment_ranges_are_empty() {
+        let idx = StageIndexer::new(3, 2);
+        assert!(idx.turbine.is_empty());
+        assert!(idx.spillage.is_empty());
+        assert!(idx.thermal.is_empty());
+        assert!(idx.line_fwd.is_empty());
+        assert!(idx.line_rev.is_empty());
+        assert!(idx.deficit.is_empty());
+        assert!(idx.excess.is_empty());
+        assert_eq!(idx.n_blks, 0);
+        assert_eq!(idx.n_thermals, 0);
+        assert_eq!(idx.n_lines, 0);
+        assert_eq!(idx.n_buses, 0);
+    }
+
+    // with_equipment: worked example from doc comment (N=1, L=0, T=2, Ln=1, B=2, K=1)
+    //
+    // theta = N*(2+L) = 1*(2+0) = 2
+    // decision_start = 3
+    // turbine:   [3, 3+1*1)  = 3..4
+    // spillage:  [4, 4+1*1)  = 4..5
+    // thermal:   [5, 5+2*1)  = 5..7
+    // line_fwd:  [7, 7+1*1)  = 7..8
+    // line_rev:  [8, 8+1*1)  = 8..9
+    // deficit:   [9, 9+2*1)  = 9..11
+    // excess:   [11, 11+2*1) = 11..13
+    #[test]
+    fn with_equipment_doctest_n1_l0_t2_l1_b2_k1() {
+        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1);
+
+        // State ranges are identical to new(1, 0)
+        assert_eq!(idx.storage, 0..1);
+        assert_eq!(idx.inflow_lags, 1..1);
+        assert_eq!(idx.storage_in, 1..2);
+        assert_eq!(idx.theta, 2);
+        assert_eq!(idx.n_state, 1);
+
+        // Equipment ranges
+        assert_eq!(idx.turbine, 3..4);
+        assert_eq!(idx.spillage, 4..5);
+        assert_eq!(idx.thermal, 5..7);
+        assert_eq!(idx.line_fwd, 7..8);
+        assert_eq!(idx.line_rev, 8..9);
+        assert_eq!(idx.deficit, 9..11);
+        assert_eq!(idx.excess, 11..13);
+
+        // Equipment counts
+        assert_eq!(idx.n_blks, 1);
+        assert_eq!(idx.n_thermals, 2);
+        assert_eq!(idx.n_lines, 1);
+        assert_eq!(idx.n_buses, 2);
+    }
+
+    // with_equipment: N=2, L=1, T=3, Ln=2, B=4, K=2
+    //
+    // theta = N*(2+L) = 2*(2+1) = 6
+    // decision_start = 7
+    // turbine:   [7,  7+2*2)  = 7..11
+    // spillage: [11, 11+2*2)  = 11..15
+    // thermal:  [15, 15+3*2)  = 15..21
+    // line_fwd: [21, 21+2*2)  = 21..25
+    // line_rev: [25, 25+2*2)  = 25..29
+    // deficit:  [29, 29+4*2)  = 29..37
+    // excess:   [37, 37+4*2)  = 37..45
+    #[test]
+    fn with_equipment_n2_l1_t3_l2_b4_k2() {
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2);
+
+        // State ranges identical to new(2, 1)
+        assert_eq!(idx.theta, 6);
+        assert_eq!(idx.n_state, 4); // N*(1+L) = 2*2 = 4
+
+        // Equipment ranges
+        assert_eq!(idx.turbine, 7..11);
+        assert_eq!(idx.spillage, 11..15);
+        assert_eq!(idx.thermal, 15..21);
+        assert_eq!(idx.line_fwd, 21..25);
+        assert_eq!(idx.line_rev, 25..29);
+        assert_eq!(idx.deficit, 29..37);
+        assert_eq!(idx.excess, 37..45);
+    }
+
+    // with_equipment: no equipment (all counts zero), matches new() state layout
+    #[test]
+    fn with_equipment_all_counts_zero_matches_new() {
+        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0);
+        let base = StageIndexer::new(3, 2);
+
+        assert_eq!(with_eq.storage, base.storage);
+        assert_eq!(with_eq.inflow_lags, base.inflow_lags);
+        assert_eq!(with_eq.storage_in, base.storage_in);
+        assert_eq!(with_eq.theta, base.theta);
+        assert_eq!(with_eq.n_state, base.n_state);
+        // All equipment ranges empty
+        assert!(with_eq.turbine.is_empty());
+        assert!(with_eq.spillage.is_empty());
+        assert!(with_eq.thermal.is_empty());
+        assert!(with_eq.line_fwd.is_empty());
+        assert!(with_eq.line_rev.is_empty());
+        assert!(with_eq.deficit.is_empty());
+        assert!(with_eq.excess.is_empty());
+    }
+
+    // with_equipment: adjacency invariant — ranges must be contiguous and non-overlapping
+    #[test]
+    fn with_equipment_ranges_are_contiguous() {
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2);
+
+        // turbine immediately follows theta
+        assert_eq!(idx.turbine.start, idx.theta + 1);
+        // each range starts where the previous ends
+        assert_eq!(idx.spillage.start, idx.turbine.end);
+        assert_eq!(idx.thermal.start, idx.spillage.end);
+        assert_eq!(idx.line_fwd.start, idx.thermal.end);
+        assert_eq!(idx.line_rev.start, idx.line_fwd.end);
+        assert_eq!(idx.deficit.start, idx.line_rev.end);
+        assert_eq!(idx.excess.start, idx.deficit.end);
+    }
+
+    // Column index formula: turbine[h, b] = turbine.start + h * n_blks + b
+    #[test]
+    fn with_equipment_column_index_formulas() {
+        let n_blks = 3_usize;
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks);
+
+        // turbine[h=0, b=0] = turbine.start (no offset for h=0, b=0)
+        assert_eq!(idx.turbine.start, idx.turbine.start);
+        // turbine[h=1, b=2] = turbine.start + 1*3 + 2 = turbine.start + 5
+        assert_eq!(idx.turbine.start + n_blks + 2, idx.turbine.start + 5);
+        // deficit[b_idx=0, blk=1] = deficit.start + 1
+        assert_eq!(idx.deficit.start + 1, idx.deficit.start + 1);
+        // turbine[h=1, b=0] = turbine.start + n_blks
+        assert_eq!(idx.turbine.start + n_blks, idx.turbine.start + 3);
     }
 }

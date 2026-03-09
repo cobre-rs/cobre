@@ -10,13 +10,13 @@
 
 use std::sync::mpsc::Receiver;
 
+use cobre_io::SimulationOutput;
 use cobre_io::output::simulation_writer::{
     BusWriteRecord, ContractWriteRecord, CostWriteRecord, ExchangeWriteRecord,
     GenericViolationWriteRecord, HydroWriteRecord, InflowLagWriteRecord,
     NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
     StageWritePayload, ThermalWriteRecord,
 };
-use cobre_io::SimulationOutput;
 use cobre_sddp::{
     SimulationBusResult, SimulationContractResult, SimulationCostResult, SimulationExchangeResult,
     SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,

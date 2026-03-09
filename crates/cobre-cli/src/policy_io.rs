@@ -9,8 +9,8 @@
 use std::path::Path;
 
 use cobre_io::output::policy::{
-    write_policy_checkpoint, PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord,
-    StageCutsPayload,
+    PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    write_policy_checkpoint,
 };
 use cobre_sddp::{FutureCostFunction, TrainingResult};
 

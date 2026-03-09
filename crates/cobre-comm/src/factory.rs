@@ -16,7 +16,7 @@
 ///
 /// Used by `cobre-python` (`PyO3` bindings) and `cobre-mcp` (MCP server) to
 /// select a backend explicitly without relying on environment variables.
-/// The factory function [`create_communicator`] (ticket-011) accepts a
+/// The factory function [`create_communicator`] accepts a
 /// `BackendKind` argument when called from library code.
 ///
 /// # Variants
@@ -63,12 +63,12 @@ pub enum BackendKind {
 
 /// Enum-dispatched communicator that wraps any available concrete backend.
 ///
-/// # Design rationale (DEC-001)
+/// # Design rationale
 ///
 /// [`crate::Communicator`] carries generic methods (`allgatherv<T>`, `allreduce<T>`,
 /// `broadcast<T>`) that make the trait intentionally not object-safe — writing
-/// `Box<dyn Communicator>` does not compile. Enum dispatch is the mandated
-/// pattern for closed variant sets in Cobre (DEC-001): a `match` arm delegates
+/// `Box<dyn Communicator>` does not compile. Enum dispatch is used for closed
+/// variant sets (avoids `Box<dyn>`; see docs/adr/002-enum-dispatch.md): a `match` arm delegates
 /// each method call to the inner concrete type. The dispatch overhead is a
 /// single branch predictor–friendly integer comparison (spec SS4.3), negligible
 /// compared to the cost of the MPI collective or LP solve it wraps.

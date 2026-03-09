@@ -2,8 +2,8 @@
 //!
 //! [`HorizonMode`] is a flat enum that controls how the training loop traverses
 //! stages, determines terminal conditions, and computes discount factors for
-//! future cost variables. For Phase 6 MVP only `Finite` horizon is implemented;
-//! `Cyclic` horizon is deferred to a future phase.
+//! future cost variables. Only `Finite` horizon is implemented;
+//! `Cyclic` horizon is deferred to a future release.
 //!
 //! ## Stage indexing convention
 //!
@@ -38,12 +38,13 @@ use crate::SddpError;
 ///
 /// A single `HorizonMode` value governs the structural topology of the entire
 /// training run. The enum is matched at each forward and backward pass stage to
-/// select the correct traversal behaviour (enum dispatch, DEC-001).
+/// select the correct traversal behaviour (enum dispatch for closed variant sets,
+/// avoids `Box<dyn>`; see docs/adr/002-enum-dispatch.md).
 ///
 /// ## Variants
 ///
 /// - [`HorizonMode::Finite`]: linear chain `1 → 2 → ··· → T` with terminal
-///   value `V_{T+1} = 0`. The only variant implemented in Phase 6 MVP.
+///   value `V_{T+1} = 0`. The only variant currently implemented.
 ///
 /// ## Stage indexing
 ///
@@ -139,7 +140,7 @@ impl HorizonMode {
     /// For `Finite` horizon without discounting, the discount factor is
     /// always `1.0`. Discounting via `annual_discount_rate` is handled
     /// at a higher level when `stages.json` specifies a non-zero rate;
-    /// this method returns the undiscounted factor for the Phase 6 MVP.
+    /// this method returns the undiscounted factor.
     ///
     /// The returned value is always in `(0, 1]`.
     ///

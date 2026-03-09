@@ -62,14 +62,14 @@ pub enum ValidationError {
     },
     /// A bus has no connections (no lines, generators, or loads).
     ///
-    /// Not emitted in Phase 1. Reserved for Phase 2 (`cobre-io` validation).
+    /// Emitted by `cobre-io` validation.
     DisconnectedBus {
         /// The ID of the disconnected bus.
         bus_id: EntityId,
     },
     /// Entity-level penalty value is invalid (e.g., negative cost).
     ///
-    /// Not emitted in Phase 1. Reserved for Phase 2 (`cobre-io` validation).
+    /// Emitted by `cobre-io` validation.
     InvalidPenalty {
         /// The entity type with the invalid penalty.
         entity_type: &'static str,

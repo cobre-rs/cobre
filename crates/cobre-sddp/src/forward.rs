@@ -405,9 +405,10 @@ pub fn run_forward_pass<S: SolverInterface>(
     let mut current_state: Vec<f64> = Vec::with_capacity(indexer.n_state);
 
     for m in 0..forward_passes {
-        // Global scenario index for deterministic seed derivation (DEC-017).
-        // Uses the pre-computed offset rather than rank * forward_passes,
-        // because forward_passes may differ across ranks (non-uniform distribution).
+        // Global scenario index for deterministic seed derivation (SipHash-1-3
+        // seeds for communication-free parallel noise). Uses the pre-computed
+        // offset rather than rank * forward_passes, because forward_passes may
+        // differ across ranks (non-uniform distribution).
         let global_scenario = fwd_offset + m;
 
         // Initialise current state for this scenario.
@@ -417,7 +418,7 @@ pub fn run_forward_pass<S: SolverInterface>(
         let mut trajectory_cost = 0.0_f64;
 
         for t in 0..num_stages {
-            // Cast to u32 for the sampling API (DEC-017 domain ID derivation).
+            // Cast to u32 for the sampling API (SipHash-1-3 domain ID derivation uses u32 fields).
             // Indices bounded by u32::MAX in practice; truncation is safe.
             #[allow(clippy::cast_possible_truncation)]
             let (iter_u32, scenario_u32, stage_id_u32) =

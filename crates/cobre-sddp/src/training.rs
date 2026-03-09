@@ -16,7 +16,7 @@
 //!    5a. Cut selection — optional periodic pool pruning via `CutSelectionStrategy`.
 //!    5b. LB evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
 //! 6. Convergence check — stopping rules evaluated.
-//! 7. (checkpoint — deferred to Phase 7)
+//! 7. (checkpoint — not yet implemented)
 //! 8. Event emission — `IterationSummary` and per-step events via channel.
 //!
 //! ## Pre-allocation discipline

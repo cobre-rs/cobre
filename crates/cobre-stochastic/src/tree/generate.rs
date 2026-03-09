@@ -7,7 +7,8 @@
 //!
 //! Deterministic seeds are derived via SipHash-1-3, enabling communication-free
 //! parallel generation where each compute node independently generates its
-//! assigned subset of openings without synchronisation (DEC-017).
+//! assigned subset of openings without synchronisation (deterministic SipHash-1-3
+//! seeds for communication-free parallel noise generation).
 
 use cobre_core::{EntityId, Stage};
 use rand::RngExt;
@@ -151,7 +152,7 @@ pub fn generate_opening_tree(
             let noise_slice = &mut data[offset..offset + dim];
 
             // Derive seed using stage.id (stable identifier, not array position).
-            // u32 casts: opening_idx is << 2^32; stage.id is reinterpreted per DEC-017.
+            // u32 casts: opening_idx is << 2^32; stage.id is reinterpreted as domain ID by SipHash-1-3.
             // Pre-study stages (negative id) are excluded by the caller.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
@@ -173,11 +174,11 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
     use crate::correlation::resolve::DecomposedCorrelation;

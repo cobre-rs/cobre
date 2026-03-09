@@ -1,7 +1,7 @@
 //! Energy contract entity — import/export agreements with external systems.
 //!
 //! An `EnergyContract` represents a bilateral energy agreement with an entity
-//! outside the modeled system. This entity is a NO-OP stub in Phase 1:
+//! outside the modeled system. This entity is a NO-OP stub:
 //! the type exists in the registry but contributes zero LP variables or constraints.
 
 use crate::EntityId;

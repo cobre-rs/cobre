@@ -1,7 +1,7 @@
 //! Pumping station entity — water transfer consuming electrical power.
 //!
 //! A `PumpingStation` transfers water between hydro reservoirs while consuming
-//! electrical power from the network. This entity is a NO-OP stub in Phase 1:
+//! electrical power from the network. This entity is a NO-OP stub:
 //! the type exists in the registry but contributes zero LP variables or constraints.
 
 use crate::EntityId;

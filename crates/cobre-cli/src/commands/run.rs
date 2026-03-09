@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, create_communicator};
+use cobre_comm::{create_communicator, Communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_stage_templates,
-    build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -356,7 +356,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         crate::banner::print_banner(&stderr);
     }
 
-    // --- Phase 1: rank 0 loads from disk, all ranks receive via broadcast ---
+    // Rank 0 loads from disk; all ranks receive via broadcast.
     //
     // Only rank 0 accesses the filesystem. Non-root ranks may not have the
     // case directory mounted (e.g., on cluster nodes without NFS access to the

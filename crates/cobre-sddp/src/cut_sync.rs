@@ -15,7 +15,7 @@
 //!
 //! ## Local vs remote cuts
 //!
-//! The backward pass (ticket-013) already inserts the local rank's own cuts
+//! The backward pass already inserts the local rank's own cuts
 //! into the FCF before this function is called. `sync_cuts` therefore only
 //! inserts **remote** cuts — i.e., cuts originating from other ranks. The
 //! local rank's segment in the receive buffer is skipped during deserialization.

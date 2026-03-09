@@ -93,8 +93,8 @@
 //!
 //! Total: 12 = 3*(2+2) patches.
 
-use cobre_core::System;
 use cobre_core::entities::hydro::HydroGenerationModel;
+use cobre_core::System;
 use cobre_solver::StageTemplate;
 
 use crate::indexer::StageIndexer;
@@ -821,7 +821,7 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
 
 #[cfg(test)]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn fill_forward_patches_category1_indices() {
-        // Spec AC: first 3 patches correspond to storage fixing rows 0, 1, 2
+        // First 3 patches correspond to storage fixing rows 0, 1, 2
         let mut buf = PatchBuffer::new(3, 2);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
@@ -908,7 +908,7 @@ mod tests {
 
     #[test]
     fn fill_forward_patches_category2_indices() {
-        // Spec AC: patches 3-8 correspond to AR lag fixing rows 3..=8
+        // Patches 3-8 correspond to AR lag fixing rows 3..=8
         // Row index formula: N + ℓ·N + h
         // ℓ=0: 3+0=3, 3+1=4, 3+2=5
         // ℓ=1: 6+0=6, 6+1=7, 6+2=8
@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn fill_forward_patches_category3_indices() {
-        // Spec AC: last 3 patches correspond to AR dynamics rows
+        // Last 3 patches correspond to AR dynamics rows
         // base_row = 50 → rows 50, 51, 52
         let mut buf = PatchBuffer::new(3, 2);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];

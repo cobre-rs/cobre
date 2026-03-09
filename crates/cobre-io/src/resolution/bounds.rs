@@ -5,8 +5,7 @@
 //! 1. Deriving base `*StageBounds` values from each entity's fields (loaded from
 //!    entity JSON files in epic-03).
 //! 2. Filling the [`ResolvedBounds`] table with these base values for all stages.
-//! 3. Applying sparse stage-varying overrides from the parsed Parquet rows
-//!    (ticket-024).
+//! 3. Applying sparse stage-varying overrides from the parsed Parquet rows.
 //!
 //! The result is a [`ResolvedBounds`] container ready for O(1) lookup by
 //! `(entity_index, stage_index)` during LP construction.
@@ -14,12 +13,12 @@
 use std::collections::HashMap;
 
 use cobre_core::{
-    EntityId,
     entities::{EnergyContract, Hydro, Line, PumpingStation, Thermal},
     resolved::{
         ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds, ResolvedBounds,
         ThermalStageBounds,
     },
+    EntityId,
 };
 
 use crate::constraints::{

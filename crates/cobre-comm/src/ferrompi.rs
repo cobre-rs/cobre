@@ -65,7 +65,7 @@ pub struct FerrompiBackend {
     ///
     /// `Some` when this is the top-level backend created by [`FerrompiBackend::new`].
     /// `None` is reserved for sub-communicator instances returned by a future
-    /// `split_local` implementation (ticket-009), which represent intra-node
+    /// `split_local` implementation, which represent intra-node
     /// ranks and do not own a shared split.
     shared: Option<ferrompi::Communicator>,
 
@@ -156,14 +156,14 @@ impl FerrompiBackend {
     }
 
     /// Returns a reference to the world communicator.
-    // Used by the SharedMemoryProvider trait implementation in ticket-009.
+    // Reserved for use by the `SharedMemoryProvider` trait implementation.
     #[allow(dead_code)]
     pub(crate) fn world(&self) -> &ferrompi::Communicator {
         &self.world
     }
 
     /// Returns a reference to the intra-node shared communicator, if present.
-    // Used by the SharedMemoryProvider trait implementation in ticket-009.
+    // Reserved for use by the `SharedMemoryProvider` trait implementation.
     #[allow(dead_code)]
     pub(crate) fn shared(&self) -> Option<&ferrompi::Communicator> {
         self.shared.as_ref()

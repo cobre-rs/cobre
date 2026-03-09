@@ -33,7 +33,7 @@
 //!    - costs must be monotonically increasing across segments.
 //!
 //! Penalty resolution uses `resolve_bus_deficit_segments` and
-//! `resolve_bus_excess_cost` for the global → entity cascade (DEC-006).
+//! `resolve_bus_excess_cost` for the global → entity penalty cascade.
 //! The bus-level `excess_cost` has no entity-level override in the JSON schema
 //! (SS1 spec): it always comes from the global default.
 //!
@@ -41,9 +41,9 @@
 //! thermals, lines, hydros) is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    EntityId,
     entities::{Bus, DeficitSegment},
-    penalty::{GlobalPenaltyDefaults, resolve_bus_deficit_segments, resolve_bus_excess_cost},
+    penalty::{resolve_bus_deficit_segments, resolve_bus_excess_cost, GlobalPenaltyDefaults},
+    EntityId,
 };
 use serde::Deserialize;
 use std::collections::HashSet;

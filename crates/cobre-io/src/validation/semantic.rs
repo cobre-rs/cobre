@@ -45,7 +45,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
@@ -840,7 +840,7 @@ fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
     // Rule 13: residual_std_ratio consistency across lag rows (V-AR-4).
     // For each (hydro_id, stage_id) group, all lag rows must share the same
     // residual_std_ratio value. Range validation is already done by the parser
-    // (ticket-004); this rule only checks cross-row consistency within a group.
+    // range validation is done by the parser; this rule only checks cross-row consistency within a group.
     {
         let mut ratio_by_group: HashMap<(i32, i32), f64> = HashMap::new();
         for row in &data.inflow_ar_coefficients {
@@ -963,7 +963,6 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -974,13 +973,14 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+        validation::{schema::ParsedData, ErrorKind, ValidationContext},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1649,7 +1649,7 @@ mod tests {
     fn test_fpha_negative_gamma_v() {
         let mut row = make_fpha_row(1, None, 0);
         row.gamma_v = -0.5; // invalid: must be > 0
-        // Add two more valid planes so rule 11 (count) doesn't trigger.
+                            // Add two more valid planes so rule 11 (count) doesn't trigger.
         let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
         let data = make_data(
             vec![make_hydro(1, None)],

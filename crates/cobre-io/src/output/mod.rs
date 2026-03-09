@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(stats.peak_active, 250);
     }
 
-    // ── New tests: ticket-013 acceptance criteria ─────────────────────────────
+    // ── Output writer acceptance tests ────────────────────────────────────────
 
     #[test]
     fn write_results_creates_success_marker() {

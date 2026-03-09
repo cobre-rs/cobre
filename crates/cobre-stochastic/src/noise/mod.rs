@@ -3,8 +3,9 @@
 //! This module produces reproducible, communication-free noise sequences
 //! using a combination of deterministic seed derivation and a fast PRNG.
 //! Each scenario and stage receives a unique seed derived from a global
-//! base seed via SipHash-1-3 (DEC-017), ensuring that any subset of
-//! scenarios can be generated independently on any compute node.
+//! base seed via SipHash-1-3, enabling communication-free parallel noise
+//! generation: any subset of scenarios can be generated independently on
+//! any compute node without inter-process coordination.
 //!
 //! ## Submodules
 //!

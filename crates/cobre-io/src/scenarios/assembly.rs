@@ -16,12 +16,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cobre_core::{
-    EntityId,
     scenario::{InflowModel, LoadModel},
+    EntityId,
 };
 
-use crate::LoadError;
 use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
+use crate::LoadError;
 
 /// Assemble `Vec<InflowModel>` by joining seasonal stats with AR coefficients.
 ///
@@ -138,8 +138,8 @@ pub fn assemble_inflow_models(
 /// Assemble `Vec<LoadModel>` by mapping [`LoadSeasonalStatsRow`] 1:1 to [`LoadModel`].
 ///
 /// This is a direct field mapping with no join logic. The input is expected to be
-/// pre-sorted by `(bus_id, stage_id)` ascending (as produced by the parser in
-/// ticket-021). That order is preserved in the output.
+/// pre-sorted by `(bus_id, stage_id)` ascending (as produced by the parser).
+/// That order is preserved in the output.
 ///
 /// # Examples
 ///

@@ -159,9 +159,10 @@ pub enum StoppingRule {
     /// Terminate when both the lower bound and simulated policy costs
     /// have stabilized. Evaluated only every `period` iterations.
     ///
-    /// Phase 1: bound stability check (cheap). Phase 2: comparison of
-    /// per-stage mean simulation costs between consecutive evaluations
-    /// (computed by the convergence monitor before `evaluate` is called).
+    /// Evaluation is two-stage: a bound stability check (cheap pre-filter),
+    /// followed by comparison of per-stage mean simulation costs between
+    /// consecutive evaluations (computed by the convergence monitor before
+    /// `evaluate` is called).
     SimulationBased {
         /// Evaluate this rule every `period` iterations.
         period: u64,
@@ -170,8 +171,8 @@ pub enum StoppingRule {
         /// comparison between consecutive evaluations.
         distance_tolerance: f64,
 
-        /// Number of Monte Carlo forward simulations to run when Phase 1
-        /// passes (executed by the convergence monitor).
+        /// Number of Monte Carlo forward simulations to run when the bound
+        /// stability pre-filter passes (executed by the convergence monitor).
         replications: u32,
 
         /// Number of past iterations for the bound stability pre-check.
@@ -286,12 +287,12 @@ impl StoppingRule {
 
                 // Simulation costs must be available from the current evaluation.
                 // The convergence monitor populates `simulation_costs` if and only if
-                // Phase 1 (bound stability) passed and simulations were run.
+                // the bound stability pre-filter passed and simulations were run.
                 let Some(ref current_costs) = state.simulation_costs else {
                     return StoppingRuleResult {
                         rule_name: RULE_SIMULATION_BASED.to_string(),
                         triggered: false,
-                        detail: "no simulation results available (Phase 1 failed or first check)"
+                        detail: "no simulation results available (bound stability check failed or first check)"
                             .to_string(),
                     };
                 };
@@ -302,8 +303,8 @@ impl StoppingRule {
                 // Full two-snapshot comparison is wired in Epic 05.
                 // For now: if costs are available, compute distance against a zero
                 // baseline (conservative: never triggers on first evaluation).
-                // This stub is correct: Phase 2 requires two consecutive snapshots and
-                // the convergence monitor is responsible for managing them.
+                // This stub is correct: the simulation cost comparison requires two
+                // consecutive snapshots; the convergence monitor is responsible for managing them.
                 let distance: f64 = current_costs
                     .iter()
                     .map(|&c| {

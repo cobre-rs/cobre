@@ -19,7 +19,8 @@ use crate::tree::opening_tree::OpeningTreeView;
 /// slice so the caller can log which opening was chosen.
 ///
 /// The `stage` parameter is the domain identifier (`stage.id`) used for seed derivation
-/// per DEC-017. The `stage_idx` parameter is the array-position index used to address
+/// (deterministic SipHash-1-3 seeds for communication-free parallel noise). The `stage_idx`
+/// parameter is the array-position index used to address
 /// the opening tree.
 ///
 /// # Panics

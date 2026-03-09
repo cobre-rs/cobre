@@ -569,7 +569,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("convergence", "time_forward_ms") => "Forward-pass wall-clock time",
         ("convergence", "time_backward_ms") => "Backward-pass wall-clock time",
         ("convergence", "time_total_ms") => "Total iteration wall-clock time",
-        ("convergence", "memory_peak_mb") => "Peak resident memory usage",
         ("convergence", "forward_passes") => "Number of forward-pass scenarios",
         ("convergence", "lp_solves") => "Total LP solves in iteration",
         // ── iteration_timing ──────────────────────────────────────────────
@@ -1329,8 +1328,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 147,
-            "variables.csv must have exactly 147 data rows (one per column across all 13 schemas)"
+            row_count, 146,
+            "variables.csv must have exactly 146 data rows (one per column across all 13 schemas)"
         );
     }
 

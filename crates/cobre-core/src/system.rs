@@ -441,8 +441,8 @@ impl Default for SystemBuilder {
 impl SystemBuilder {
     /// Create a new empty builder. All entity collections start empty.
     ///
-    /// New fields introduced in Phase 2 default to empty/default values so that
-    /// all Phase 1 tests continue to work without modification.
+    /// New fields default to empty/default values so that
+    /// pre-existing tests continue to work without modification.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -1411,7 +1411,7 @@ mod tests {
         assert_eq!(system.n_buses(), 0);
     }
 
-    // ---- Cross-reference validation tests (ticket-009) -------------------------
+    // ---- Cross-reference validation tests -----------------------------------
 
     #[test]
     fn test_invalid_bus_reference_hydro() {
@@ -1598,7 +1598,7 @@ mod tests {
         assert_eq!(system.n_non_controllable_sources(), 1);
     }
 
-    // ---- Cascade cycle detection tests (ticket-010) ----------------------------
+    // ---- Cascade cycle detection tests --------------------------------------
 
     #[test]
     fn test_cascade_cycle_detected() {
@@ -1688,7 +1688,7 @@ mod tests {
         );
     }
 
-    // ---- Filling config validation tests (ticket-010) ---------------------------
+    // ---- Filling config validation tests ------------------------------------
 
     #[test]
     fn test_filling_without_entry_stage() {
@@ -1870,7 +1870,7 @@ mod tests {
         );
     }
 
-    // ---- Extended System tests (ticket-008) ------------------------------------
+    // ---- Extended System tests ----------------------------------------------
 
     fn make_stage(id: i32) -> Stage {
         use crate::temporal::{
@@ -1901,8 +1901,8 @@ mod tests {
         }
     }
 
-    /// Verify that `SystemBuilder::new().build()` still works with all Phase 1
-    /// patterns unchanged. New fields must default to empty/default values.
+    /// Verify that `SystemBuilder::new().build()` still works correctly.
+    /// New fields must default to empty/default values.
     #[test]
     fn test_system_backward_compat() {
         let system = SystemBuilder::new().build().expect("empty system is valid");

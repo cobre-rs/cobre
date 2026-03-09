@@ -51,7 +51,7 @@ pub struct FillingConfig {
 /// All penalties are pre-resolved from the three-tier cascade (global → entity → stage).
 /// A `HydroPenalties` instance always contains final, ready-to-use values.
 ///
-/// See DEC-006 for the three-tier penalty resolution design.
+/// Penalties are resolved via the three-tier cascade (global → entity → stage).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HydroPenalties {

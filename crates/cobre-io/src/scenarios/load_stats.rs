@@ -41,8 +41,8 @@ use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 /// A single row from `scenarios/load_seasonal_stats.parquet`.
 ///
 /// Carries the seasonal load statistics for a (bus, stage) pair. These rows
-/// are later assembled by ticket-023 to produce [`cobre_core::scenario::LoadModel`]
-/// entries.
+/// are later assembled by [`crate::scenarios::assembly::assemble_load_models`] to produce
+/// [`cobre_core::scenario::LoadModel`] entries.
 ///
 /// # Examples
 ///

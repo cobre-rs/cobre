@@ -1402,7 +1402,7 @@ mod tests {
     }
 }
 
-// ─── Research verification tests for ticket-023 ──────────────────────────
+// ─── Research verification tests for non-optimal HiGHS model statuses ────
 //
 // These tests verify LP formulations that reliably trigger non-optimal
 // HiGHS model statuses. They use the raw FFI layer to set options not
@@ -1791,7 +1791,7 @@ mod research_tests_ticket_023 {
     /// Verify iteration_limit=1 also triggers ITERATION_LIMIT for SS1.1 LP.
     ///
     /// This verifies that limiting to a small but non-zero number of iterations
-    /// also works, providing an alternative formulation for ticket-025.
+    /// also works, providing an alternative formulation for triggering the same status.
     #[test]
     fn test_research_iteration_limit_one_triggers_iteration_limit_status() {
         use crate::ffi;

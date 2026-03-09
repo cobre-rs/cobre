@@ -4,6 +4,17 @@
 
 ---
 
+# Tutorial
+
+- [Installation](./tutorial/installation.md)
+- [Quickstart](./tutorial/quickstart.md)
+- [Anatomy of a Case](./tutorial/anatomy-of-a-case.md)
+- [Building a System](./tutorial/building-a-system.md)
+- [Understanding Results](./tutorial/understanding-results.md)
+- [Next Steps](./tutorial/next-steps.md)
+
+---
+
 # User Guide
 
 - [Getting Started](./guide/getting-started.md)
@@ -13,6 +24,7 @@
   - [Hydro Plants](./guide/hydro-plants.md)
   - [Thermal Units](./guide/thermal-units.md)
   - [Network Topology](./guide/network-topology.md)
+  - [Stochastic Modeling](./guide/stochastic-modeling.md)
 - [Running Studies](./guide/running-studies.md)
   - [Configuration](./guide/configuration.md)
   - [CLI Reference](./guide/cli-reference.md)
@@ -30,9 +42,6 @@
 - [cobre-comm](./crates/comm.md)
 - [cobre-sddp](./crates/sddp.md)
 - [cobre-cli](./crates/cli.md)
-- [cobre-mcp](./crates/mcp.md)
-- [cobre-python](./crates/python.md)
-- [cobre-tui](./crates/tui.md)
 - [ferrompi](./crates/ferrompi.md)
 
 ---

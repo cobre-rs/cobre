@@ -3,7 +3,7 @@
 //! Derives unique `u64` seeds from a global base seed combined with a context
 //! tuple using SipHash-1-3. The derivation is fully deterministic and requires
 //! no inter-process communication, enabling each compute node to independently
-//! generate its assigned subset of scenarios (DEC-017).
+//! generate its assigned subset of scenarios without inter-process coordination.
 //!
 //! [`derive_forward_seed`] uses a 20-byte wire format (base seed + iteration +
 //! scenario + stage), while [`derive_opening_seed`] uses 16 bytes (base seed +
@@ -16,7 +16,7 @@ use std::hash::Hasher;
 ///
 /// The derived seed is identical for the same `(base_seed, iteration,
 /// scenario, stage)` tuple regardless of MPI rank, thread ID, or
-/// process restart. Uses SipHash-1-3 per DEC-017.
+/// process restart. Uses SipHash-1-3 for deterministic, communication-free seed derivation.
 ///
 /// # Wire format
 ///
@@ -56,7 +56,7 @@ pub fn derive_forward_seed(base_seed: u64, iteration: u32, scenario: u32, stage:
 /// Derive a deterministic 64-bit seed for opening tree generation.
 ///
 /// The derived seed is identical for the same `(base_seed,
-/// opening_index, stage)` tuple. Uses SipHash-1-3 per DEC-017.
+/// opening_index, stage)` tuple. Uses SipHash-1-3 for deterministic, communication-free seed derivation.
 ///
 /// # Wire format
 ///

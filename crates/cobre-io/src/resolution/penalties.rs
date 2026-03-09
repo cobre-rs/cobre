@@ -1,7 +1,7 @@
 //! Three-tier penalty cascade resolution.
 //!
 //! [`resolve_penalties`] pre-computes per-(entity, stage) penalty values by applying
-//! the three-tier cascade (DEC-006):
+//! the three-tier cascade (global → entity → stage):
 //!
 //! 1. **Tier-1 (global defaults)** — already merged into entity fields during loading.
 //! 2. **Tier-2 (entity overrides)** — already merged into entity fields during loading.

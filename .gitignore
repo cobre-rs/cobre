@@ -26,5 +26,14 @@ book/output/
 # Implementation plans (local development only)
 plans/
 
+# Python virtual environments (test infrastructure)
+.venv-mpi-smoke/
+
 # Examples
 examples/**/output
+
+# Terminal recording output (generated artifacts; scripts and tape files are tracked)
+recordings/*.gif
+recordings/*.svg
+recordings/*.cast
+recordings/demo/

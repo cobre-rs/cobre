@@ -16,8 +16,7 @@
 //!
 //! `TrajectoryRecord`s are owned by the forward pass workspace. They are
 //! **not** stored inside the [`FutureCostFunction`]. Serialization support
-//! will be added in a later phase (Phase 7) when checkpoint/restart is
-//! implemented.
+//! will be added when checkpoint/restart is implemented.
 //!
 //! [`FutureCostFunction`]: crate::cut::fcf::FutureCostFunction
 

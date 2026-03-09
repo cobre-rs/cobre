@@ -206,8 +206,7 @@ pub enum TrainingEvent {
     /// Step 7: Full iteration summary with aggregated timings.
     ///
     /// Emitted at the end of every iteration as the final per-iteration event.
-    /// Contains all timing breakdowns and resource usage for the completed
-    /// iteration.
+    /// Contains all timing breakdowns for the completed iteration.
     IterationSummary {
         /// Iteration number (1-based).
         iteration: u64,
@@ -227,8 +226,6 @@ pub enum TrainingEvent {
         backward_ms: u64,
         /// Total number of LP solves in this iteration (forward + backward stages).
         lp_solves: u64,
-        /// Peak resident memory in megabytes (from platform allocator stats).
-        memory_peak_mb: f64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -366,7 +363,6 @@ mod tests {
                 forward_ms: 80,
                 backward_ms: 100,
                 lp_solves: 240,
-                memory_peak_mb: 512.0,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),

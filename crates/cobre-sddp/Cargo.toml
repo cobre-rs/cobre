@@ -18,6 +18,7 @@ cobre-solver = { version = "0.1.0", path = "../cobre-solver" }
 cobre-comm = { version = "0.1.0", path = "../cobre-comm" }
 cobre-stochastic = { version = "0.1.0", path = "../cobre-stochastic" }
 cobre-io = { version = "0.1.0", path = "../cobre-io" }
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]

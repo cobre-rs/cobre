@@ -18,13 +18,14 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-cobre-core = { version = "0.1.0", path = "../cobre-core" }
+cobre-core = { version = "0.1.0", path = "../cobre-core", features = ["serde"] }
 cobre-io = { version = "0.1.0", path = "../cobre-io" }
 cobre-sddp = { version = "0.1.0", path = "../cobre-sddp" }
 cobre-solver = { version = "0.1.0", path = "../cobre-solver" }
 cobre-comm = { version = "0.1.0", path = "../cobre-comm" }
 cobre-stochastic = { version = "0.1.0", path = "../cobre-stochastic" }
 clap = { version = "4", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
 console = "0.16"
 indicatif = "0.18"
 serde = { version = "1", features = ["derive"] }

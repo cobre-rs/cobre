@@ -33,7 +33,7 @@
 //!    - costs must be monotonically increasing across segments.
 //!
 //! Penalty resolution uses `resolve_bus_deficit_segments` and
-//! `resolve_bus_excess_cost` for the global → entity cascade (DEC-006).
+//! `resolve_bus_excess_cost` for the global → entity penalty cascade.
 //! The bus-level `excess_cost` has no entity-level override in the JSON schema
 //! (SS1 spec): it always comes from the global default.
 //!

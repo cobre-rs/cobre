@@ -16,7 +16,7 @@
 //!    5a. Cut selection — optional periodic pool pruning via `CutSelectionStrategy`.
 //!    5b. LB evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
 //! 6. Convergence check — stopping rules evaluated.
-//! 7. (checkpoint — deferred to Phase 7)
+//! 7. (checkpoint — not yet implemented)
 //! 8. Event emission — `IterationSummary` and per-step events via channel.
 //!
 //! ## Pre-allocation discipline
@@ -239,9 +239,18 @@ pub fn train<S: SolverInterface, C: Communicator>(
 ) -> Result<TrainingResult, SddpError> {
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
-    let forward_passes = config.forward_passes as usize;
+    let my_rank = comm.rank();
+    let total_forward_passes = config.forward_passes as usize;
     let n_state = indexer.n_state;
-    let total_scenarios = forward_passes * num_ranks;
+
+    // forward_passes is the TOTAL across all ranks. Distribute with
+    // base/remainder: first `remainder` ranks get `base + 1`, rest get `base`.
+    let base_fwd = total_forward_passes / num_ranks;
+    let remainder_fwd = total_forward_passes % num_ranks;
+    let my_actual_fwd = base_fwd + usize::from(my_rank < remainder_fwd);
+    let my_fwd_offset = base_fwd * my_rank + my_rank.min(remainder_fwd);
+    // ExchangeBuffers requires uniform local_count — use the max across ranks.
+    let max_local_fwd = base_fwd + usize::from(remainder_fwd > 0);
 
     let empty_record = TrajectoryRecord {
         primal: vec![],
@@ -249,13 +258,13 @@ pub fn train<S: SolverInterface, C: Communicator>(
         stage_cost: 0.0,
         state: vec![0.0; n_state],
     };
-    let mut records = vec![empty_record; forward_passes * num_stages];
+    let mut records = vec![empty_record; max_local_fwd * num_stages];
 
     let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
     let mut convergence_monitor = ConvergenceMonitor::new(stopping_rules);
-    let mut exchange_bufs = ExchangeBuffers::new(n_state, forward_passes, num_ranks);
-    let max_cuts_per_rank = total_scenarios;
-    let mut cut_sync_bufs = CutSyncBuffers::new(n_state, max_cuts_per_rank, num_ranks);
+    let mut exchange_bufs = ExchangeBuffers::new(n_state, max_local_fwd, num_ranks);
+    let mut cut_sync_bufs =
+        CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
     let mut basis_cache: Vec<Option<Basis>> = vec![None; templates.len()];
 
@@ -267,11 +276,6 @@ pub fn train<S: SolverInterface, C: Communicator>(
         event_sender,
         ..
     } = config;
-
-    let loop_config = TrainingConfig {
-        event_sender: None,
-        ..config
-    };
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -303,21 +307,22 @@ pub fn train<S: SolverInterface, C: Communicator>(
         }
 
         let iter_start = Instant::now();
+        let fwd_record_len = my_actual_fwd * num_stages;
         let forward_result = run_forward_pass(
             solver,
             templates,
             base_rows,
             fcf,
             stochastic,
-            &loop_config,
+            my_actual_fwd,
             iteration,
             horizon,
             initial_state,
-            &mut records,
+            &mut records[..fwd_record_len],
             &mut patch_buf,
             indexer,
-            comm,
             &mut basis_cache,
+            my_fwd_offset,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -328,7 +333,11 @@ pub fn train<S: SolverInterface, C: Communicator>(
                 iteration,
                 scenarios: config_forward_passes,
                 #[allow(clippy::cast_precision_loss)]
-                ub_mean: forward_result.cost_sum / forward_result.scenario_count,
+                ub_mean: if forward_result.scenario_count > 0.0 {
+                    forward_result.cost_sum / forward_result.scenario_count
+                } else {
+                    0.0
+                },
                 ub_std: 0.0,
                 elapsed_ms: forward_elapsed_ms,
             },
@@ -354,7 +363,6 @@ pub fn train<S: SolverInterface, C: Communicator>(
             fcf,
             &exchange_bufs,
             stochastic,
-            &loop_config,
             iteration,
             horizon,
             risk_measures,
@@ -362,6 +370,8 @@ pub fn train<S: SolverInterface, C: Communicator>(
             indexer,
             comm,
             &mut basis_cache,
+            my_actual_fwd,
+            my_fwd_offset,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
@@ -481,7 +491,6 @@ pub fn train<S: SolverInterface, C: Communicator>(
                 forward_ms: forward_elapsed_ms,
                 backward_ms: backward_elapsed_ms,
                 lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
-                memory_peak_mb: 0.0,
             },
         );
 

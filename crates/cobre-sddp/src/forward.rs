@@ -16,10 +16,13 @@
 //!
 //! ## Work distribution
 //!
-//! Each rank processes `config.forward_passes` scenarios. The global scenario
-//! index for rank `r`, local scenario `m` is `r * forward_passes + m`. This
-//! deterministic mapping drives the communication-free seed derivation used by
-//! [`sample_forward`].
+//! The user's total forward passes are split across MPI ranks by the caller
+//! (`train()`), which passes each rank's local share as the
+//! `local_forward_passes` parameter. The global scenario index for local
+//! scenario `m` is
+//! `fwd_offset + m`, where `fwd_offset` is the pre-computed global index of
+//! this rank's first forward pass. This deterministic mapping drives the
+//! communication-free seed derivation used by [`sample_forward`].
 //!
 //! ## LP rebuild sequence
 //!
@@ -44,8 +47,7 @@ use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate}
 use cobre_stochastic::{StochasticContext, sample_forward};
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrainingConfig,
-    TrajectoryRecord,
+    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -280,9 +282,9 @@ pub fn build_cut_row_batch(
 
 /// Execute the forward pass for one training iteration on this rank.
 ///
-/// Simulates `config.forward_passes` scenarios through the full stage horizon,
-/// solving the stage LP at each `(scenario, stage)` pair. Pre-allocated
-/// [`TrajectoryRecord`]s in `records` are populated in-place.
+/// Simulates this rank's share of forward-pass scenarios through the full
+/// stage horizon, solving the stage LP at each `(scenario, stage)` pair.
+/// Pre-allocated [`TrajectoryRecord`]s in `records` are populated in-place.
 ///
 /// ## Argument layout
 ///
@@ -292,17 +294,19 @@ pub fn build_cut_row_batch(
 ///   `templates`.
 /// - `fcf` — Future Cost Function carrying the current Benders cut pools.
 /// - `stochastic` — pre-built stochastic pipeline (tree, seed, dim).
-/// - `config` — training configuration (`forward_passes`, etc.).
+/// - `local_forward_passes` — number of forward-pass scenarios assigned to this
+///   rank (the caller splits the user's total across MPI ranks).
 /// - `iteration` — current training iteration (0-based counter used for seed
 ///   derivation).
 /// - `horizon` — horizon mode determining the stage count.
 /// - `initial_state` — starting state for every scenario (length `n_state`).
 /// - `records` — pre-allocated output slice of length
-///   `config.forward_passes * num_stages`.
+///   `local_forward_passes * num_stages`.
 /// - `patch_buf` — reusable row-bound patch buffer (pre-allocated, length
 ///   `N*(2+L)`).
 /// - `indexer` — LP column/row layout map for this stage.
-/// - `comm` — communicator for rank/size queries (work distribution).
+/// - `fwd_offset` — global index of this rank's first forward pass. Used for
+///   deterministic seed derivation (`global_scenario = fwd_offset + m`).
 ///
 /// ## Record layout
 ///
@@ -326,31 +330,30 @@ pub fn build_cut_row_batch(
 ///
 /// Panics if any of the following debug preconditions are violated:
 ///
-/// - `records.len() != forward_passes * num_stages`
+/// - `records.len() != local_forward_passes * num_stages`
 /// - `initial_state.len() != indexer.n_state`
 /// - `templates.len() != num_stages`
 /// - `base_rows.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
+pub fn run_forward_pass<S: SolverInterface>(
     solver: &mut S,
     templates: &[StageTemplate],
     base_rows: &[usize],
     fcf: &FutureCostFunction,
     stochastic: &StochasticContext,
-    config: &TrainingConfig,
+    local_forward_passes: usize,
     iteration: u64,
     horizon: &HorizonMode,
     initial_state: &[f64],
     records: &mut [TrajectoryRecord],
     patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
-    comm: &C,
     basis_cache: &mut [Option<Basis>],
+    fwd_offset: usize,
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
-    let forward_passes = config.forward_passes as usize;
-    let rank = comm.rank();
+    let forward_passes = local_forward_passes;
 
     debug_assert_eq!(
         records.len(),
@@ -402,8 +405,11 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     let mut current_state: Vec<f64> = Vec::with_capacity(indexer.n_state);
 
     for m in 0..forward_passes {
-        // Global scenario index for deterministic seed derivation (DEC-017).
-        let global_scenario = rank * forward_passes + m;
+        // Global scenario index for deterministic seed derivation (SipHash-1-3
+        // seeds for communication-free parallel noise). Uses the pre-computed
+        // offset rather than rank * forward_passes, because forward_passes may
+        // differ across ranks (non-uniform distribution).
+        let global_scenario = fwd_offset + m;
 
         // Initialise current state for this scenario.
         current_state.clear();
@@ -412,7 +418,7 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
         let mut trajectory_cost = 0.0_f64;
 
         for t in 0..num_stages {
-            // Cast to u32 for the sampling API (DEC-017 domain ID derivation).
+            // Cast to u32 for the sampling API (SipHash-1-3 domain ID derivation uses u32 fields).
             // Indices bounded by u32::MAX in practice; truncation is safe.
             #[allow(clippy::cast_possible_truncation)]
             let (iter_u32, scenario_u32, stage_id_u32) =
@@ -448,11 +454,10 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
                 solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
             }
 
-            let view = (if let Some(rb) = basis_cache[t].as_ref() {
-                solver.solve_with_basis(rb)
-            } else {
-                solver.solve()
-            })
+            let view = match basis_cache[t].as_ref() {
+                Some(rb) => solver.solve_with_basis(rb),
+                None => solver.solve(),
+            }
             .map_err(|e| {
                 basis_cache[t] = None;
                 match e {
@@ -504,7 +509,8 @@ pub fn run_forward_pass<S: SolverInterface, C: Communicator>(
     Ok(ForwardResult {
         cost_sum,
         cost_sum_sq,
-        scenario_count: f64::from(config.forward_passes),
+        #[allow(clippy::cast_precision_loss)]
+        scenario_count: local_forward_passes as f64,
         elapsed_ms,
         lp_solves,
     })
@@ -515,7 +521,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use chrono::NaiveDate;
-    use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+    use cobre_comm::{CommData, Communicator, ReduceOp};
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -538,51 +544,6 @@ mod tests {
         FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
         TrajectoryRecord,
     };
-
-    // ── Stub communicator ────────────────────────────────────────────────────
-
-    /// Single-rank stub communicator used in unit and integration tests.
-    struct StubComm {
-        rank: usize,
-        size: usize,
-    }
-
-    impl Communicator for StubComm {
-        fn allgatherv<T: CommData>(
-            &self,
-            _send: &[T],
-            _recv: &mut [T],
-            _counts: &[usize],
-            _displs: &[usize],
-        ) -> Result<(), CommError> {
-            unreachable!("StubComm allgatherv not used in forward pass tests")
-        }
-
-        fn allreduce<T: CommData>(
-            &self,
-            _send: &[T],
-            _recv: &mut [T],
-            _op: ReduceOp,
-        ) -> Result<(), CommError> {
-            unreachable!("StubComm allreduce not used in forward pass tests")
-        }
-
-        fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
-            unreachable!("StubComm broadcast not used in forward pass tests")
-        }
-
-        fn barrier(&self) -> Result<(), CommError> {
-            Ok(())
-        }
-
-        fn rank(&self) -> usize {
-            self.rank
-        }
-
-        fn size(&self) -> usize {
-            self.size
-        }
-    }
 
     // ── Mock solver ──────────────────────────────────────────────────────────
 
@@ -1033,7 +994,7 @@ mod tests {
             event_sender: None,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
-        let comm = StubComm { rank: 0, size: 1 };
+
         let templates = vec![
             minimal_template_1_0(),
             minimal_template_1_0(),
@@ -1051,15 +1012,15 @@ mod tests {
             &base_rows,
             &fcf,
             &stochastic,
-            &config,
+            config.forward_passes as usize,
             0,
             &horizon,
             &initial_state,
             &mut records,
             &mut patch_buf,
             &indexer,
-            &comm,
             &mut vec![None; templates.len()],
+            0,
         )
         .unwrap();
 
@@ -1094,7 +1055,7 @@ mod tests {
             event_sender: None,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
-        let comm = StubComm { rank: 0, size: 1 };
+
         let templates = vec![
             minimal_template_1_0(),
             minimal_template_1_0(),
@@ -1112,15 +1073,15 @@ mod tests {
             &base_rows,
             &fcf,
             &stochastic,
-            &config,
+            config.forward_passes as usize,
             0,
             &horizon,
             &initial_state,
             &mut records,
             &mut patch_buf,
             &indexer,
-            &comm,
             &mut vec![None; templates.len()],
+            0,
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1166,7 +1127,7 @@ mod tests {
             event_sender: None,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
-        let comm = StubComm { rank: 0, size: 1 };
+
         let templates = vec![
             minimal_template_1_0(),
             minimal_template_1_0(),
@@ -1184,15 +1145,15 @@ mod tests {
             &base_rows,
             &fcf,
             &stochastic,
-            &config,
+            config.forward_passes as usize,
             0,
             &horizon,
             &initial_state,
             &mut records,
             &mut patch_buf,
             &indexer,
-            &comm,
             &mut vec![None; templates.len()],
+            0,
         )
         .unwrap();
 
@@ -1485,7 +1446,7 @@ mod tests {
             event_sender: None,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
-        let comm = StubComm { rank: 0, size: 1 };
+
         let templates = vec![
             minimal_template_1_0(),
             minimal_template_1_0(),
@@ -1503,15 +1464,15 @@ mod tests {
             &base_rows,
             &fcf,
             &stochastic,
-            &config,
+            config.forward_passes as usize,
             0,
             &horizon,
             &initial_state,
             &mut records,
             &mut patch_buf,
             &indexer,
-            &comm,
             basis_cache,
+            0,
         )
         .map(|_| ())
     }

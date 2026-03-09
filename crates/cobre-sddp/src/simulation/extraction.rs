@@ -1,7 +1,7 @@
 //! Scenario distribution and result extraction for the SDDP simulation phase.
 //!
 //! This module provides three pure functions consumed by the simulation forward
-//! pass (ticket-007):
+//! pass:
 //!
 //! - [`assign_scenarios`] — static scenario-to-rank distribution.
 //! - [`extract_stage_result`] — LP solution → typed [`SimulationStageResult`].

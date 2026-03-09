@@ -32,6 +32,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use cobre_core::TrainingEvent;
+use console::Term;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 const TRAINING_TEMPLATE: &str = "Training {bar:40} {pos}/{len} iter  {msg}";
@@ -151,7 +152,8 @@ pub fn run_progress_thread(
 }
 
 fn create_training_bar(max_iterations: u64) -> ProgressBar {
-    let bar = ProgressBar::with_draw_target(Some(max_iterations), ProgressDrawTarget::stderr());
+    let target = ProgressDrawTarget::term_like_with_hz(Box::new(Term::stderr()), 8);
+    let bar = ProgressBar::with_draw_target(Some(max_iterations), target);
     let style = ProgressStyle::with_template(TRAINING_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     bar.set_style(style);
@@ -159,7 +161,8 @@ fn create_training_bar(max_iterations: u64) -> ProgressBar {
 }
 
 fn create_simulation_bar(scenarios_total: u64) -> ProgressBar {
-    let bar = ProgressBar::with_draw_target(Some(scenarios_total), ProgressDrawTarget::stderr());
+    let target = ProgressDrawTarget::term_like_with_hz(Box::new(Term::stderr()), 8);
+    let bar = ProgressBar::with_draw_target(Some(scenarios_total), target);
     let style = ProgressStyle::with_template(SIMULATION_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     bar.set_style(style);
@@ -188,7 +191,6 @@ mod tests {
             forward_ms: 80,
             backward_ms: 100,
             lp_solves: 240,
-            memory_peak_mb: 512.0,
         }
     }
 

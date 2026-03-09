@@ -1,12 +1,12 @@
 //! Penalty resolution and pre-resolved penalty structures.
 //!
 //! The penalty system uses a three-tier resolution cascade: global defaults,
-//! entity-level overrides, and stage-level overrides (DEC-006). After resolution,
+//! entity-level overrides, and stage-level overrides. After resolution,
 //! penalties are stored as pre-computed per-(entity, stage) values so solvers
 //! do not need to re-evaluate the cascade during execution.
 //!
 //! This module implements the first two tiers (global → entity). Stage-varying
-//! overrides are a Phase 2 concern and are not implemented here.
+//! overrides are handled by `cobre-io` and are not implemented here.
 
 use crate::entities::{DeficitSegment, HydroPenalties};
 

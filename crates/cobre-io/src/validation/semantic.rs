@@ -840,7 +840,7 @@ fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
     // Rule 13: residual_std_ratio consistency across lag rows (V-AR-4).
     // For each (hydro_id, stage_id) group, all lag rows must share the same
     // residual_std_ratio value. Range validation is already done by the parser
-    // (ticket-004); this rule only checks cross-row consistency within a group.
+    // range validation is done by the parser; this rule only checks cross-row consistency within a group.
     {
         let mut ratio_by_group: HashMap<(i32, i32), f64> = HashMap::new();
         for row in &data.inflow_ar_coefficients {

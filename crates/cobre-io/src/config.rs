@@ -24,7 +24,7 @@
 //! ```
 
 use crate::LoadError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 // ── Top-level Config ─────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ use std::path::Path;
 ///
 /// All sections except `training` are optional; their defaults are applied by
 /// serde when the section is absent from the JSON.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     /// JSON schema URI — informational, not validated.
     #[serde(rename = "$schema")]
@@ -69,7 +69,7 @@ pub struct Config {
 // ── Modeling Configuration ───────────────────────────────────────────────────
 
 /// Modeling options (`config.json → modeling`).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ModelingConfig {
     /// Strategy for handling non-negative inflow constraints.
     #[serde(default)]
@@ -77,7 +77,7 @@ pub struct ModelingConfig {
 }
 
 /// Inflow non-negativity treatment settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct InflowNonNegativityConfig {
     /// Method: `"none"`, `"penalty"`, `"truncation"`, or `"truncation_with_penalty"`.
@@ -103,7 +103,7 @@ impl Default for InflowNonNegativityConfig {
 ///
 /// `forward_passes` and `stopping_rules` are mandatory — the loader returns
 /// [`LoadError::SchemaError`] if either is absent.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TrainingConfig {
     /// Enable the training phase. When `false`, skip directly to simulation.
     #[serde(default = "TrainingConfig::default_enabled")]
@@ -158,7 +158,7 @@ impl TrainingConfig {
 }
 
 /// Forward pass mode configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ForwardPassConfig {
     /// Forward pass type: `"default"` or other variants.
     #[serde(rename = "type")]
@@ -166,7 +166,7 @@ pub struct ForwardPassConfig {
 }
 
 /// Cut selection settings (`config.json → training.cut_selection`).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CutSelectionConfig {
     /// Enable cut pruning.
     #[serde(default)]
@@ -190,7 +190,7 @@ pub struct CutSelectionConfig {
 }
 
 /// LP solver retry settings (`config.json → training.solver`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TrainingSolverConfig {
     /// Maximum solver retry attempts before propagating a hard error.
@@ -228,7 +228,7 @@ impl Default for TrainingSolverConfig {
 /// let rule: StoppingRuleConfig = serde_json::from_str(json).unwrap();
 /// assert!(matches!(rule, StoppingRuleConfig::IterationLimit { limit: 100 }));
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoppingRuleConfig {
     /// Stop after a fixed number of iterations. **Mandatory** — every rule set must
@@ -267,7 +267,7 @@ pub enum StoppingRuleConfig {
 // ── Upper-Bound Evaluation ───────────────────────────────────────────────────
 
 /// Upper-bound evaluation settings (`config.json → upper_bound_evaluation`).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct UpperBoundEvaluationConfig {
     /// Enable vertex-based inner approximation for upper bound computation.
     #[serde(default)]
@@ -287,7 +287,7 @@ pub struct UpperBoundEvaluationConfig {
 }
 
 /// Lipschitz constant settings for inner approximation.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LipschitzConfig {
     /// Computation mode: `"auto"`.
     #[serde(default)]
@@ -305,7 +305,7 @@ pub struct LipschitzConfig {
 // ── Policy Configuration ─────────────────────────────────────────────────────
 
 /// Policy directory settings (`config.json → policy`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PolicyConfig {
     /// Directory for policy data (cuts, states, vertices, basis).
@@ -333,7 +333,7 @@ impl Default for PolicyConfig {
 }
 
 /// Checkpoint settings (`config.json → policy.checkpointing`).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CheckpointingConfig {
     /// Enable periodic checkpointing.
     #[serde(default)]
@@ -359,7 +359,7 @@ pub struct CheckpointingConfig {
 // ── Simulation Configuration ─────────────────────────────────────────────────
 
 /// Post-training simulation settings (`config.json → simulation`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SimulationConfig {
     /// Enable post-training simulation.
@@ -399,7 +399,7 @@ impl Default for SimulationConfig {
 }
 
 /// Sampling scheme for the post-training simulation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SimulationSamplingConfig {
     /// Scheme type: `"in_sample"`, `"out_of_sample"`, or `"external"`.
@@ -424,7 +424,7 @@ impl Default for SimulationSamplingConfig {
 /// JSON field name in the `exports` section of `config.json`. A state machine
 /// would not improve clarity for a flat set of independent output toggles.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ExportsConfig {
     /// Export training summary metrics.

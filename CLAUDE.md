@@ -145,6 +145,14 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 **Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 1851 tests.
 
+### Critical gap: intra-rank thread parallelism
+
+**BLOCKING for v0.1.0 release.** The solver currently runs single-threaded per MPI
+rank. The second level of the two-level parallelism model (thread-based
+work-stealing within each rank for forward passes, backward trial points, and
+simulation scenarios) is not implemented. See `docs/PROJECT-STATUS.md` for full
+details and required work.
+
 ### Parallelizable phases
 
 All 8 phases are complete. The minimal viable SDDP solver is fully implemented. Post-MVP candidates are `cobre-mcp`, `cobre-python`, and `cobre-tui`.

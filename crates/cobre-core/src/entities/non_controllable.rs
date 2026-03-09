@@ -2,7 +2,7 @@
 //!
 //! A `NonControllableSource` represents intermittent generation (wind, solar, run-of-river)
 //! that cannot be dispatched. Curtailment may be optionally allowed. This entity is a
-//! NO-OP stub in Phase 1: the type exists in the registry but contributes zero LP
+//! NO-OP stub: the type exists in the registry but contributes zero LP
 //! variables or constraints.
 
 use crate::EntityId;

@@ -3,8 +3,7 @@
 //! [`simulate`] evaluates the trained SDDP policy on a set of scenarios by
 //! running a forward-only pass through all stages, extracting per-entity
 //! results at each stage, streaming completed scenario results through a
-//! bounded channel, and returning a compact cost buffer for MPI aggregation
-//! (ticket-008).
+//! bounded channel, and returning a compact cost buffer for MPI aggregation.
 //!
 //! ## LP rebuild sequence
 //!
@@ -18,7 +17,7 @@
 //!
 //! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using a
 //! two-level distribution (fat/lean). Each rank processes its assigned range
-//! independently; MPI aggregation is deferred to ticket-008.
+//! independently; MPI aggregation is performed by the caller.
 //!
 //! ## Seed domain separation
 //!
@@ -26,7 +25,7 @@
 //! `global_scenario = rank * forward_passes + m`), the simulation domain adds
 //! an offset of `u32::MAX / 2` to the scenario ID before passing it to
 //! [`sample_forward`]. This places simulation seeds in a disjoint region of
-//! the SipHash-1-3 seed space (DEC-017).
+//! the SipHash-1-3 seed space (deterministic SipHash-1-3 seeds for communication-free parallel noise).
 //!
 //! ## Hot-path allocation discipline
 //!
@@ -71,7 +70,7 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// [`SimulationScenarioResult`] through `result_tx`.
 ///
 /// Returns a compact cost buffer — one `(scenario_id, total_cost, category_costs)`
-/// entry per locally solved scenario — for MPI aggregation in ticket-008.
+/// entry per locally solved scenario — for MPI aggregation by the caller.
 ///
 /// ## Pre-allocation
 ///
@@ -174,9 +173,9 @@ pub fn simulate<S: SolverInterface, C: Communicator>(
 
     // Outer loop: one iteration per locally assigned scenario.
     for scenario_id in scenario_range {
-        // Simulation seed domain separation from training (DEC-017):
-        // Use SIMULATION_SEED_OFFSET + scenario_id to place simulation seeds
-        // in a disjoint region of the SipHash-1-3 seed space.
+        // Simulation seed domain separation from training: deterministic SipHash-1-3
+        // seeds ensure communication-free parallel noise. Use SIMULATION_SEED_OFFSET +
+        // scenario_id to place simulation seeds in a disjoint region of the seed space.
         // Iteration is fixed at 0 for simulation (one-shot evaluation).
         let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
 
@@ -198,7 +197,7 @@ pub fn simulate<S: SolverInterface, C: Communicator>(
 
         // Inner loop: one LP solve per stage.
         for t in 0..num_stages {
-            // Cast indices to u32 for the sampling API (DEC-017).
+            // Cast indices to u32 for the sampling API (SipHash-1-3 seed derivation uses u32 fields).
             // Bounded by u32::MAX in practice; truncation is safe.
             #[allow(clippy::cast_possible_truncation)]
             let stage_id_u32 = t as u32;
@@ -292,7 +291,7 @@ pub fn simulate<S: SolverInterface, C: Communicator>(
         };
 
         // Retain the compact (scenario_id, total_cost, category_costs) for MPI
-        // aggregation in ticket-008 before consuming `scenario_result`.
+        // aggregation before consuming `scenario_result`.
         let compact_category = ScenarioCategoryCosts {
             resource_cost: scenario_result.per_category_costs.resource_cost,
             recourse_cost: scenario_result.per_category_costs.recourse_cost,

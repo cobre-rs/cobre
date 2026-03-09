@@ -29,7 +29,11 @@ use cobre_sddp::{
 /// thread, where `&System` is available) and moved in.
 ///
 /// The `Receiver` is consumed by value because it is moved into the thread.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Under MPI, result gathering uses the allgatherv path in `run.rs` rather
+/// than this function. This function remains for single-process mode and
+/// potential future use.
+#[allow(clippy::needless_pass_by_value, dead_code)]
 pub fn drain_results(
     rx: Receiver<SimulationScenarioResult>,
     mut writer: SimulationParquetWriter,
@@ -46,6 +50,16 @@ pub fn drain_results(
     let mut output = writer.finalize();
     output.failed = failed;
     output
+}
+
+/// Convert a [`SimulationScenarioResult`] into a [`ScenarioWritePayload`]
+/// for use with [`SimulationParquetWriter::write_scenario`].
+///
+/// Exposed for the MPI result-gathering path in `run.rs`, where rank 0
+/// accumulates gathered results from all ranks and feeds them directly to
+/// the writer without going through a channel.
+pub fn convert_scenario_for_writer(src: SimulationScenarioResult) -> ScenarioWritePayload {
+    convert_scenario(src)
 }
 
 // ---------------------------------------------------------------------------

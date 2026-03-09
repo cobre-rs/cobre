@@ -151,6 +151,46 @@ cobre-core
 
 ---
 
+## Critical Gaps for v0.1.0
+
+### Intra-rank thread parallelism (BLOCKING for release)
+
+The SDDP solver uses a two-level parallelism model:
+
+1. **Inter-rank (MPI)**: forward passes and simulation scenarios are distributed
+   across MPI ranks via base/remainder assignment. This is implemented.
+2. **Intra-rank (threads)**: within each MPI rank, the assigned forward passes
+   (training) or scenarios (simulation) should be processed in parallel using a
+   thread pool with work-stealing (e.g., rayon). **This is NOT implemented.**
+
+Currently, both the training loop (`training.rs`) and the simulation pipeline
+(`simulation/pipeline.rs`) process their assigned work sequentially on a single
+thread per rank. The `threads_per_rank` field in `TrainingEvent::TrainingStarted`
+is hardcoded to `1`.
+
+**Impact**: On a machine with 16 cores and 4 MPI ranks, only 4 cores are
+utilized. A single-node run with no MPI uses 1 core out of all available. This
+makes the solver uncompetitive for any real-world workload.
+
+**Required work**:
+
+- Add rayon (or similar work-stealing pool) as a dependency to `cobre-sddp`
+- Parallelize the forward pass scenario loop (`for m in 0..local_work`)
+- Parallelize the backward pass trial-point loop (`for m in 0..local_work`)
+- Parallelize the simulation scenario loop (`for s in scenario_range`)
+- Each thread needs its own `SolverInterface` instance (HiGHS is not thread-safe)
+  and its own `PatchBuffer` workspace
+- The FCF (shared across threads) needs either per-thread local storage with
+  post-loop merging, or fine-grained locking (the former is preferred for
+  performance)
+- The `threads_per_rank` reporting must reflect actual thread count
+
+**Spec references**: `cobre-docs/src/specs/hpc/parallelism-model.md`,
+`cobre-docs/src/specs/architecture/training-loop.md` (SS4.3 thread-level
+parallelism).
+
+---
+
 ## Links
 
 - Specification corpus: [cobre-docs](https://github.com/cobre-rs/cobre-docs) / [deployed](https://cobre-rs.github.io/cobre-docs/)

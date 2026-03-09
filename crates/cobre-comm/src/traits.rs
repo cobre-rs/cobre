@@ -446,7 +446,7 @@ pub trait LocalCommunicator: Send + Sync {
 ///
 /// The region follows a strict **three-phase lifecycle**:
 ///
-/// ## Phase 1: Allocation
+/// ## Step 1: Allocation
 ///
 /// Created via [`SharedMemoryProvider::create_shared_region`] during the
 /// solver startup phase. The leader rank (local rank 0 in the intra-node
@@ -456,13 +456,13 @@ pub trait LocalCommunicator: Send + Sync {
 /// For `HeapFallback` backends, every rank allocates its own `Vec<T>` of
 /// `count` elements — no memory is shared, but the API is identical.
 ///
-/// ## Phase 2: Population (write + fence)
+/// ## Step 2: Population (write + fence)
 ///
 /// The leader writes data via [`as_mut_slice`](SharedRegion::as_mut_slice),
 /// then all ranks call [`fence`](SharedRegion::fence) to publish writes and
 /// acquire visibility. Followers must not read until `fence()` returns `Ok`.
 ///
-/// ## Phase 3: Read-only access
+/// ## Step 3: Read-only access
 ///
 /// After the fence, all ranks read via [`as_slice`](SharedRegion::as_slice).
 /// No further writes occur during the training loop.
@@ -570,14 +570,14 @@ pub trait SharedRegion<T: CommData>: Send + Sync {
 /// }
 /// ```
 ///
-/// # Minimal viable simplification (Phase 5)
+/// # Minimal viable simplification
 ///
 /// For the minimal viable implementation, the training entry point uses
 /// `C: Communicator` only — the `SharedMemoryProvider` bound is **not**
-/// part of the `train()` constraint. Per spec (communicator-trait.md §4.7),
-/// `HeapFallback` semantics apply uniformly: each rank holds its own
-/// per-process `Vec<T>` copy. The shared memory path is activated post-profiling
-/// when memory pressure warrants it (triggers T1–T3 in §4.7).
+/// part of the `train()` constraint. `HeapFallback` semantics apply
+/// uniformly: each rank holds its own per-process `Vec<T>` copy. The
+/// shared memory path is activated post-profiling when memory pressure
+/// warrants it.
 ///
 /// # Separate trait rationale
 ///
@@ -622,7 +622,7 @@ pub trait SharedMemoryProvider: Send + Sync {
     ///
     /// | Condition | Description |
     /// |-----------|-------------|
-    /// | Ready for population | The returned region is in Phase 1 (allocation); the leader may call `as_mut_slice()` |
+    /// | Ready for population | The returned region is in the allocation step; the leader may call `as_mut_slice()` |
     /// | RAII | Dropping the returned region releases the backing resource |
     ///
     /// # Errors

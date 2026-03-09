@@ -20,7 +20,8 @@
 
 The name comes from the Portuguese word for **copper** — the metal that conducts electricity.
 
-> **Documentation:** [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/)
+> **Software Book:** [cobre-rs.github.io/cobre](https://cobre-rs.github.io/cobre/) |
+> **Methodology:** [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/)
 
 ## Why Cobre?
 
@@ -42,17 +43,14 @@ Power system computation today is split between closed-source commercial tools a
 | [`cobre-solver`](crates/cobre-solver/)         | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management |
 | [`cobre-comm`](crates/cobre-comm/)             | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends               |
 | [`cobre-sddp`](crates/cobre-sddp/)             | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management      |
-| [`cobre-cli`](crates/cobre-cli/)               | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Command-line interface: `run`, `validate`, `report`, `compare`, `serve`, `version`              |
-| [`cobre-mcp`](crates/cobre-mcp/)               | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | MCP server exposing Cobre as tools and resources for AI coding assistants                       |
-| [`cobre-python`](crates/cobre-python/)         | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | PyO3 Python bindings — `import cobre` from scripts and Jupyter notebooks                        |
-| [`cobre-tui`](crates/cobre-tui/)               | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Terminal UI for real-time training monitoring, convergence plots, and cut inspection            |
+| [`cobre-cli`](crates/cobre-cli/)               | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Command-line interface: `init`, `run`, `validate`, `report`, `version`                          |
 
 **Related:**
 
 | Repository                                             | Description                                                    |
 | ------------------------------------------------------ | -------------------------------------------------------------- |
 | [`ferrompi`](https://github.com/cobre-rs/ferrompi)     | MPI 4.x safe Rust bindings — optional backend for `cobre-comm` |
-| [`cobre-docs`](https://github.com/cobre-rs/cobre-docs) | Full specification corpus and user guide (mdBook)              |
+| [`cobre-docs`](https://github.com/cobre-rs/cobre-docs) | Methodology reference and full specification corpus (mdBook)   |
 
 > Status badges use the [Cobre brand palette](docs/BRAND-GUIDELINES.md): ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square) ![beta](https://img.shields.io/badge/status-beta-4A90B8?style=flat-square) ![stable](https://img.shields.io/badge/status-stable-4A8B6F?style=flat-square)
 
@@ -63,15 +61,15 @@ The ecosystem is organized in five layers. `cobre-core` is the shared foundation
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                     Application Layer                            │
-│  ┌───────────┐  ┌───────────────┐  ┌───────────┐  ┌──────────┐   │
-│  │ cobre-cli │  │  cobre-python │  │ cobre-mcp │  │cobre-tui │   │
-│  └─────┬─────┘  └───────┬───────┘  └─────┬─────┘  └────┬─────┘   │
-├────────┼────────────────┼────────────────┼─────────────┼─────────┤
-│        │        Solver  │ Vertical       │             │         │
-│  ┌─────┴────────────────┴────────────────┴─────────────┘         │
-│  │                      cobre-sddp                               │
-│  │     Training loop · Simulation · Cut management · CVaR        │
-│  └────┬────────────────────────────────┬──────────────┘          │
+│  ┌───────────┐                                                   │
+│  │ cobre-cli │                                                   │
+│  └─────┬─────┘                                                   │
+├────────┼─────────────────────────────────────────────────────────┤
+│        │        Solver Vertical                                  │
+│  ┌─────┴────────────────────────────────────────────┐            │
+│  │                      cobre-sddp                  │            │
+│  │     Training loop · Simulation · Cut management  │            │
+│  └────┬────────────────────────────────┬────────────┘            │
 ├───────┼────────────────────────────────┼─────────────────────────┤
 │       │        Infrastructure          │                         │
 │  ┌────┴──────┐  ┌───────────┐  ┌───────┴──────┐  ┌──────────┐    │
@@ -97,35 +95,23 @@ Key design decisions:
 - **`cobre-core` has zero solver dependencies** — a pure data and validation crate
 - **Static dispatch** — generics over solver and communicator traits eliminate vtable overhead
 - **Declaration-order invariance** — entity collections are sorted by ID; results are reproducible regardless of input file ordering
-- **`cobre-mcp` and `cobre-python` are single-process only** — MPI/GIL incompatibility means distributed execution always goes through the CLI
 
 ## Quick Start
 
-> ⚠️ Cobre is under active development. The API is not stable yet.
+> **Warning:** Cobre v0.1 is experimental. The API and case format are not stable yet.
 
 ```bash
-# Clone the workspace
-git clone https://github.com/cobre-rs/cobre.git
-cd cobre
+# Install (requires Rust 1.85+ and HiGHS)
+cargo install cobre-cli
 
-# Build all crates
-cargo build --workspace
-
-# Run tests
-cargo test --workspace
-```
-
-Once implemented, studies are run from a case directory:
-
-```bash
-# Validate a case
-cobre validate path/to/case/
+# Scaffold the 1dtoy example
+cobre init --template 1dtoy my-study/
 
 # Run training + simulation
-cobre run path/to/case/ --output path/to/results/
+cobre run my-study/
 
-# Query results without re-running
-cobre report path/to/results/ --format json
+# Inspect results
+cobre report my-study/output/
 ```
 
 A case directory follows a JSON + Parquet layout:
@@ -139,7 +125,7 @@ case/
 └── constraints/         # Initial conditions and generic constraints (JSON)
 ```
 
-See the [full documentation](https://cobre-rs.github.io/cobre-docs/) for the complete input/output specification.
+See the [software book](https://cobre-rs.github.io/cobre/) for the complete input/output specification and user guide.
 
 ## Context
 
@@ -168,11 +154,11 @@ The minimal viable solver is built through an [8-phase implementation sequence](
 - [x] `cobre-solver` — LP abstraction, HiGHS backend, warm-start basis management
 - [x] `cobre-comm` — communicator trait, MPI backend, local backend
 - [x] `cobre-sddp` — training loop, forward/backward pass, cut management, convergence monitoring
-- [ ] `cobre-sddp` — simulation pipeline, policy output
-- [ ] `cobre-io` — FlatBuffers policy output, Parquet result writing
-- [ ] `cobre-cli` — run/validate/report/compare/serve subcommands
+- [x] `cobre-sddp` — simulation pipeline, policy output
+- [x] `cobre-io` — FlatBuffers policy output, Parquet result writing
+- [x] `cobre-cli` — `init`, `run`, `validate`, `report`, `version` subcommands
 
-> 1490 tests pass across the workspace (6 crates implemented, Phases 1–6 of 8 complete).
+> 1,851 tests pass across the workspace (8 crates implemented, all 8 phases complete).
 
 ### v0.2 — Ecosystem Hardening
 

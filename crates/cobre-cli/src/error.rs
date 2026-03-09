@@ -182,6 +182,14 @@ impl From<cobre_io::OutputError> for CliError {
     }
 }
 
+impl From<cobre_comm::BackendError> for CliError {
+    fn from(err: cobre_comm::BackendError) -> Self {
+        Self::Internal {
+            message: format!("communication backend error: {err}"),
+        }
+    }
+}
+
 impl From<cobre_sddp::SddpError> for CliError {
     fn from(err: cobre_sddp::SddpError) -> Self {
         match err {
@@ -536,6 +544,17 @@ mod tests {
             matches!(cli_err, CliError::Internal { .. }),
             "SimulationError::ChannelClosed must map to CliError::Internal, got: {cli_err:?}"
         );
+        assert_eq!(cli_err.exit_code(), 4);
+    }
+
+    #[test]
+    fn from_backend_error_maps_to_internal() {
+        let err = cobre_comm::BackendError::InvalidBackend {
+            requested: "foobar".to_string(),
+            available: vec!["local".to_string()],
+        };
+        let cli_err = CliError::from(err);
+        assert!(matches!(cli_err, CliError::Internal { .. }));
         assert_eq!(cli_err.exit_code(), 4);
     }
 }

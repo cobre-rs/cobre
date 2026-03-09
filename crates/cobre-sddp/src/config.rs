@@ -66,11 +66,11 @@ use cobre_core::TrainingEvent;
 /// ```
 #[derive(Debug)]
 pub struct TrainingConfig {
-    /// Number of forward scenarios evaluated per iteration.
+    /// Total number of forward scenarios evaluated per iteration across all ranks.
     ///
-    /// Each rank evaluates `forward_passes` scenarios in parallel during the
-    /// forward pass. The total number of trajectories per iteration is
-    /// `forward_passes * num_ranks`. Must be at least 1.
+    /// The work is divided among MPI ranks: each rank evaluates
+    /// `forward_passes / num_ranks` scenarios (with remainder distributed to
+    /// the first ranks). Must be at least 1.
     pub forward_passes: u32,
 
     /// Maximum number of training iterations before forced termination.

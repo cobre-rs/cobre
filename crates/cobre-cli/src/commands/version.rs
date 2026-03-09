@@ -14,7 +14,7 @@ use crate::error::CliError;
 #[allow(clippy::unnecessary_wraps)]
 pub fn execute() -> Result<(), CliError> {
     let version = env!("CARGO_PKG_VERSION");
-    println!("cobre {version}");
+    println!("cobre   v{version}");
     println!("solver: HiGHS");
     if cfg!(feature = "mpi") {
         println!("comm:   mpi");

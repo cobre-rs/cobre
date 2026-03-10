@@ -1,0 +1,330 @@
+{
+  "plan": "v0.1.0-release-blockers",
+  "last_updated": "2026-03-10T04:15:00Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-create-solver-workspace.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.85,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-002-parallelize-forward-pass.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.90,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.85
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-003-parallelize-backward-pass.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.93,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-004-parallelize-simulation-pipeline.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.88,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.50,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-005-add-threads-cli-flag.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-006-add-determinism-tests.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.80,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-007-add-penalty-method-lp-builder.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.00,
+        "quality_breakdown": {
+          "conformance": 1.00,
+          "scope_adherence": 1.00,
+          "lint_cleanliness": 1.00,
+          "type_safety": 1.00,
+          "test_delta": 1.00
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-008-wire-inflow-config.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.93,
+        "quality_breakdown": {
+          "conformance": 1.00,
+          "scope_adherence": 1.00,
+          "lint_cleanliness": 1.00,
+          "type_safety": 1.00,
+          "test_delta": 0.50
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.80
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-009-implement-truncation-method.md": {
+      "status": "skipped",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "skip_reason": "Truncation requires external AR model evaluation — deferred to post-v0.1.0. See docs/deferred-truncation-design.md"
+    },
+    "ticket-010-inflow-integration-tests.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.97,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.85
+        },
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.80,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-011-translate-4ree-case.md": {
+      "status": "skipped",
+      "detail_level": "outline",
+      "skip_reason": "4ree example deferred — user will prepare manually post-v0.1.0"
+    },
+    "ticket-012-embed-4ree-template.md": {
+      "status": "skipped",
+      "detail_level": "outline",
+      "skip_reason": "Depends on ticket-011 (deferred)"
+    },
+    "ticket-013-promote-theory-pages.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-014-demote-specs-navigation.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-015-fix-metadata-add-admonish.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-016-fix-software-book-stubs.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-017-add-examples-section.md": {
+      "status": "skipped",
+      "detail_level": "outline",
+      "skip_reason": "Depends on Epic 03 (deferred)"
+    },
+    "ticket-018-generate-vhs-recordings.md": {
+      "status": "skipped",
+      "detail_level": "outline",
+      "skip_reason": "Depends on Epic 03 (deferred)"
+    },
+    "ticket-019-create-broken-case-tape.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-020-embed-recordings.md": {
+      "status": "skipped",
+      "detail_level": "outline",
+      "skip_reason": "Depends on ticket-018 (deferred)"
+    },
+    "ticket-021-add-mermaid-update-ci.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-022-update-project-status.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-023-final-review-pass.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-024-fix-banner-color-under-mpiexec.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-025-document-deferred-hpc-optimizations-roadmap.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    },
+    "ticket-026-document-deferred-truncation-and-stats.md": {
+      "status": "pending",
+      "detail_level": "outline"
+    }
+  },
+  "epics": {
+    "epic-01-rayon-thread-parallelism": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-02-inflow-non-negativity": {
+      "phase": "completed",
+      "learning_extracted": false
+    },
+    "epic-03-4ree-example-case": {
+      "phase": "skipped",
+      "learning_extracted": false
+    },
+    "epic-04-documentation-completion": {
+      "phase": "outline",
+      "learning_extracted": false
+    },
+    "epic-05-polish-recordings": {
+      "phase": "outline",
+      "learning_extracted": false
+    }
+  }
+}

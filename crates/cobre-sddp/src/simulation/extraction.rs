@@ -168,7 +168,7 @@ pub fn assign_scenarios(n_scenarios: u32, rank: usize, world_size: usize) -> Ran
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn extract_stage_result(
     primal: &[f64],
-    _dual: &[f64],
+    dual: &[f64],
     objective: f64,
     objective_coeffs: &[f64],
     row_lower: &[f64],
@@ -320,6 +320,8 @@ pub fn extract_stage_result(
                 } else {
                     0.0
                 };
+                let water_row = indexer.n_state + h;
+                let water_value = dual.get(water_row).copied().unwrap_or(0.0);
                 SimulationHydroResult {
                     stage_id,
                     block_id: None,
@@ -336,7 +338,7 @@ pub fn extract_stage_result(
                     generation_mw: 0.0,
                     productivity_mw_per_m3s: Some(entity_counts.hydro_productivities[h]),
                     spillage_cost: 0.0,
-                    water_value_per_hm3: 0.0,
+                    water_value_per_hm3: water_value,
                     storage_binding_code: 0,
                     operative_state_code: 1,
                     turbined_slack_m3s: 0.0,
@@ -376,6 +378,8 @@ pub fn extract_stage_result(
                 } else {
                     0.0
                 };
+                let water_row = indexer.n_state + h;
+                let water_value = dual.get(water_row).copied().unwrap_or(0.0);
 
                 (0..n_blks).map(move |b| {
                     let t_col = indexer.turbine.start + h * n_blks + b;
@@ -402,7 +406,7 @@ pub fn extract_stage_result(
                         generation_mw: gen_mw,
                         productivity_mw_per_m3s: Some(productivity),
                         spillage_cost: sp_cost,
-                        water_value_per_hm3: 0.0,
+                        water_value_per_hm3: water_value,
                         storage_binding_code: 0,
                         operative_state_code: 1,
                         turbined_slack_m3s: 0.0,
@@ -561,7 +565,7 @@ pub fn extract_stage_result(
                         load_mw: row_lower[load_row],
                         deficit_mw: primal[deficit_col],
                         excess_mw: primal[excess_col],
-                        spot_price: 0.0, // Dual of the load balance row — deferred.
+                        spot_price: dual.get(load_row).copied().unwrap_or(0.0),
                     }
                 })
             })
@@ -1089,7 +1093,12 @@ mod tests {
             contract_ids: vec![],
             non_controllable_ids: vec![],
         };
-        let dual = vec![0.0; 6];
+        // Dual vector: indices 0..4 = storage/lag fixing, 4..6 = water balance, 6 = load balance.
+        // water_value for h0 = dual[4], h1 = dual[5]; spot_price for b0 = dual[6].
+        let mut dual = vec![0.0_f64; 7];
+        dual[4] = -120.0; // water value h0 ($/hm³)
+        dual[5] = -95.0; // water value h1 ($/hm³)
+        dual[6] = 150.0; // spot price b0 ($/MWh)
 
         // Build row_lower for the load balance row. N=2, L=1 → n_state=4, water_bal_start=4,
         // load_bal_start=4+2=6. K=1, B=1 → one load balance row at index 6.
@@ -1142,6 +1151,11 @@ mod tests {
         assert_eq!(result.buses[0].deficit_mw, 10.0);
         assert_eq!(result.buses[0].excess_mw, 2.0);
         assert_eq!(result.buses[0].block_id, Some(0));
+        assert!((result.buses[0].spot_price - 150.0).abs() < 1e-12);
+
+        // Water value from dual of water balance rows
+        assert!((result.hydros[0].water_value_per_hm3 - (-120.0)).abs() < 1e-12);
+        assert!((result.hydros[1].water_value_per_hm3 - (-95.0)).abs() < 1e-12);
 
         // Cost breakdown
         let cost = &result.costs[0];

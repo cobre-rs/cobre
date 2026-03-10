@@ -17,7 +17,7 @@ Complete the remaining feature gaps and documentation work required for a credib
 | 02 | Inflow Non-Negativity | 3 | Detailed |
 | 03 | ~~4ree Example Case~~ (deferred) | 2 | Outline |
 | 04 | Documentation Completion | 6 | Refined |
-| 05 | Polish & Recordings | 8 | Outline |
+| 05 | Polish & Recordings | 8 | Refined |
 
 ## Progress
 
@@ -35,20 +35,20 @@ Complete the remaining feature gaps and documentation work required for a credib
 | ticket-010 | Add inflow non-negativity integration tests | epic-02 | completed | Detailed | 0.96 | 0.97 | EXCELLENT |
 | ticket-011 | ~~Translate 4ree case data to Cobre format~~ (deferred) | epic-03 | skipped | Outline | -- | -- | -- |
 | ticket-012 | ~~Embed 4ree template and validate end-to-end~~ (deferred) | epic-03 | skipped | Outline | -- | -- | -- |
-| ticket-013 | Promote specs/math content into theory pages | epic-04 | pending | Refined | 0.93 | -- | -- |
-| ticket-014 | Demote specs section in cobre-docs navigation | epic-04 | pending | Refined | 0.94 | -- | -- |
-| ticket-015 | Fix cobre-docs metadata and add mdbook-admonish | epic-04 | pending | Refined | 0.96 | -- | -- |
-| ticket-016 | Fix software book stubs | epic-04 | pending | Refined | 0.98 | -- | -- |
+| ticket-013 | Promote specs/math content into theory pages | epic-04 | completed | Refined | 0.93 | 0.95 | EXCELLENT |
+| ticket-014 | Demote specs section in cobre-docs navigation | epic-04 | completed | Refined | 0.94 | 0.95 | EXCELLENT |
+| ticket-015 | Fix cobre-docs metadata and add mdbook-admonish | epic-04 | completed | Refined | 0.96 | 0.85 | ACCEPTABLE |
+| ticket-016 | Fix software book stubs | epic-04 | completed | Refined | 0.98 | 0.95 | EXCELLENT |
 | ticket-017 | ~~Add examples section to software book~~ (deferred — depends on Epic 03) | epic-04 | skipped | Outline | -- | -- | -- |
-| ticket-026 | Document deferred truncation and statistics invariance | epic-04 | pending | Refined | 0.98 | -- | -- |
+| ticket-026 | Document deferred truncation and statistics invariance | epic-04 | completed | Refined | 0.98 | 0.95 | EXCELLENT |
 | ticket-018 | ~~Generate and calibrate VHS recordings~~ (deferred — depends on Epic 03) | epic-05 | skipped | Outline | -- | -- | -- |
-| ticket-019 | Create broken-case validation tape | epic-05 | pending | Outline | -- | -- | -- |
+| ticket-019 | Create broken-case validation tape | epic-05 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
 | ticket-020 | ~~Embed recordings in README and book~~ (deferred — depends on ticket-018) | epic-05 | skipped | Outline | -- | -- | -- |
-| ticket-021 | Add mdbook-mermaid and update CI | epic-05 | pending | Outline | -- | -- | -- |
-| ticket-022 | Update PROJECT-STATUS.md | epic-05 | pending | Outline | -- | -- | -- |
-| ticket-023 | Final review pass | epic-05 | pending | Outline | -- | -- | -- |
-| ticket-024 | Fix banner color/style loss under mpiexec | epic-05 | pending | Outline | -- | -- | -- |
-| ticket-025 | Document deferred HPC optimizations in roadmap | epic-05 | pending | Outline | -- | -- | -- |
+| ticket-021 | Add mdbook-mermaid and update CI | epic-05 | completed | Refined | 1.00 | 1.00 | EXCELLENT |
+| ticket-022 | Update PROJECT-STATUS.md | epic-05 | completed | Refined | 1.00 | 0.93 | EXCELLENT |
+| ticket-023 | Final review pass | epic-05 | completed | Refined | 0.91 | 0.93 | EXCELLENT |
+| ticket-024 | Fix banner color/style loss under mpiexec | epic-05 | completed | Refined | 1.00 | 0.75 | ACCEPTABLE |
+| ticket-025 | Document deferred HPC optimizations in roadmap | epic-05 | completed | Refined | 1.00 | 0.93 | EXCELLENT |
 
 ## Dependency Graph
 
@@ -67,8 +67,10 @@ ticket-018, ticket-020 (SKIPPED — depends on Epic 03)
 ticket-013 ──> ticket-014
 ticket-026 (depends on Epic 02)
 ticket-019 (independent — broken-case validation tape)
-ticket-022 (depends on Epics 01-02) ──> ticket-023
-ticket-019 ────────────────────────────┘
+ticket-021 (independent — mdbook-mermaid)
 ticket-024 (independent — fix banner color under mpiexec)
-ticket-025 (depends on ticket-005, ticket-022 — roadmap HPC optimizations)
+ticket-022 (depends on Epics 01-02) ──> ticket-025 ──> ticket-023
+ticket-019 ─────────────────────────────────────────────┘
+ticket-021 ─────────────────────────────────────────────┘
+ticket-024 ─────────────────────────────────────────────┘
 ```

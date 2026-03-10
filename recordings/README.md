@@ -65,10 +65,25 @@ Run the tape files from the repository root. VHS writes output next to the tape 
 vhs recordings/quickstart.tape
 # Output: recordings/quickstart.gif
 
-# Validate demo (init → validate)
+# Validate demo (init → validate on a valid case)
 vhs recordings/validation.tape
 # Output: recordings/validation.gif
+
+# Validation error demo (init → corrupt JSON with jq → validate showing errors)
+vhs recordings/validation-error.tape
+# Output: recordings/validation-error.gif
 ```
+
+The `validation-error.tape` uses `jq` to corrupt the 1dtoy case on the fly (no
+pre-built broken directory is committed). It injects two distinct error categories:
+
+- A schema error: the `reservoir` object is deleted from `hydros.json`, causing a
+  missing required field error in the structural validation layer.
+- A semantic constraint violation: `max_turbined_m3s` is set to a negative value,
+  triggering a constraint check in the semantic validation layer.
+
+Both errors appear in the `cobre validate` output with red `error:` labels and the
+command exits with a non-zero exit code.
 
 ## asciinema Recordings
 

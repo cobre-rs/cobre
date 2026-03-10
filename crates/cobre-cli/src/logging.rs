@@ -5,7 +5,7 @@
 //! Passing `verbose = true` raises library crates to `info` and `cobre_cli`
 //! to `debug`. The `RUST_LOG` environment variable overrides both presets.
 
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 /// Initialize the tracing subscriber for the process.
 ///

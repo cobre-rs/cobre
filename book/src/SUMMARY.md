@@ -51,6 +51,7 @@
 - [Case Directory Format](./reference/case-format.md)
 - [Output Format](./reference/output-format.md)
 - [Error Codes](./reference/error-codes.md)
+- [Roadmap](./reference/roadmap.md)
 
 ---
 

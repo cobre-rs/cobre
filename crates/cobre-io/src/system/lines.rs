@@ -55,7 +55,8 @@ use crate::LoadError;
 
 /// Top-level intermediate type for `lines.json` (serde only, not re-exported).
 #[derive(Deserialize)]
-struct RawLineFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawLineFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -65,7 +66,8 @@ struct RawLineFile {
 
 /// Intermediate type for a single line entry.
 #[derive(Deserialize)]
-struct RawLine {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawLine {
     /// Line identifier. Must be unique within the file.
     id: i32,
     /// Human-readable line name.
@@ -93,7 +95,8 @@ struct RawLine {
 
 /// Intermediate type for the nested capacity sub-object.
 #[derive(Deserialize)]
-struct RawLineCapacity {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawLineCapacity {
     /// Maximum flow from source to target [MW].
     direct_mw: f64,
     /// Maximum flow from target to source [MW].

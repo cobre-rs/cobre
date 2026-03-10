@@ -1,12 +1,12 @@
 # Cobre — Project Status
 
-Implementation progress across all crates (updated: v0.1.0 release, 2026-03-10).
+Implementation progress across all crates (updated: v0.1.0 pre-release additions, 2026-03-10).
 
 ---
 
 ## Overall Status
 
-**All 8 phases complete. v0.1.0 release blockers resolved.** Workspace total: 1955 tests.
+**All 8 phases complete. v0.1.0 pre-release additions implemented.** Workspace total: 1938 tests (with `--all-features`).
 
 ### Phase Progress
 
@@ -25,35 +25,35 @@ Implementation progress across all crates (updated: v0.1.0 release, 2026-03-10).
 
 ## Per-Crate Implementation Status
 
-| Crate              | Phase | Status   | Notes                                                                                         |
-| ------------------ | ----- | -------- | --------------------------------------------------------------------------------------------- |
-| `cobre-core`       | 1     | complete | Entity model, registries, topology, penalty resolution                                        |
-| `cobre-io`         | 2     | complete | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading                          |
-| `cobre-solver`     | 3     | complete | LP solver abstraction, HiGHS backend, FFI bindings, warm-start                                |
-| `ferrompi`         | 3     | external | MPI 4.x bindings -- transferred from rjmalves/ferrompi, v0.2.0                                |
-| `cobre-comm`       | 4     | complete | Communicator trait, LocalBackend, FerrompiBackend, factory function                           |
-| `cobre-stochastic` | 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample   |
-| `cobre-sddp`       | 6+7   | complete | SDDP training loop, simulation pipeline, rayon thread parallelism, Parquet/FlatBuffers output |
-| `cobre-cli`        | 8     | complete | run/validate/report/version subcommands, --threads flag, progress bars, terminal banner       |
-| `cobre-mcp`        | post  | stub     | MCP server for AI agent integration -- not yet implemented                                    |
-| `cobre-python`     | post  | stub     | PyO3 Python bindings (cdylib) -- not yet implemented                                          |
-| `cobre-tui`        | post  | stub     | ratatui terminal UI -- not yet implemented                                                    |
+| Crate              | Phase | Status   | Notes                                                                                                                                 |
+| ------------------ | ----- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `cobre-core`       | 1     | complete | Entity model, registries, topology, penalty resolution                                                                                |
+| `cobre-io`         | 2     | complete | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading                                                                  |
+| `cobre-solver`     | 3     | complete | LP solver abstraction, HiGHS backend, FFI bindings, warm-start                                                                        |
+| `ferrompi`         | 3     | external | MPI 4.x bindings -- transferred from rjmalves/ferrompi, v0.2.0                                                                        |
+| `cobre-comm`       | 4     | complete | Communicator trait, LocalBackend, FerrompiBackend, factory function                                                                   |
+| `cobre-stochastic` | 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample                                           |
+| `cobre-sddp`       | 6+7   | complete | SDDP training loop, simulation pipeline, rayon thread parallelism, Parquet/FlatBuffers output                                         |
+| `cobre-cli`        | 8     | complete | run/validate/report/version/init/schema export subcommands, --threads flag, progress bars with simulation statistics, terminal banner |
+| `cobre-mcp`        | post  | stub     | MCP server for AI agent integration -- not yet implemented                                                                            |
+| `cobre-python`     | post  | stub     | PyO3 Python bindings (cdylib) -- not yet implemented                                                                                  |
+| `cobre-tui`        | post  | stub     | ratatui terminal UI -- not yet implemented                                                                                            |
 
 ---
 
 ## Test Coverage Summary
 
-| Crate              | Unit | Integration    | Other | Doc-tests | Total | Notes                                                                                                       |
-| ------------------ | ---- | -------------- | ----- | --------- | ----- | ----------------------------------------------------------------------------------------------------------- |
-| `cobre-core`       | 147  | 7              | --    | 34        | 188   | Includes serde round-trip tests under `--features serde`                                                    |
-| `cobre-io`         | 631  | 10             | --    | 108       | 749   | 2 doc-tests ignored (require testdata not in CI path)                                                       |
-| `cobre-solver`     | 47   | 39             | --    | 2         | 88    | 39 HiGHS conformance tests; mpi feature tests excluded                                                      |
-| `cobre-comm`       | 74   | 18+11          | --    | 9         | 112   | 18 local conformance + 11 factory tests; no-feature build                                                   |
-| `cobre-stochastic` | 106  | 5+4            | --    | 11        | 126   | 5 conformance + 4 reproducibility (declaration-order gate)                                                  |
-| `cobre-sddp`       | 470  | 13+7+2+3+1     | --    | 49        | 545   | 13 conformance + 7 integration + 2 determinism + 3 inflow_nonnegativity + 1 simulation; 2 doc-tests ignored |
-| `cobre-cli`        | 93   | 6+12+11+11+8+6 | --    | 0         | 147   | color/report/run/smoke/validate/init integration via assert_cmd                                             |
+| Crate              | Unit | Integration | Other | Doc-tests | Total | Notes                                                                                                       |
+| ------------------ | ---- | ----------- | ----- | --------- | ----- | ----------------------------------------------------------------------------------------------------------- |
+| `cobre-core`       | 133  | 7           | --    | 34        | 174   | Includes serde round-trip tests under `--features serde`                                                    |
+| `cobre-io`         | 641  | 10          | --    | 110       | 761   | With `--all-features` (includes schema generation tests); 2 doc-tests ignored                               |
+| `cobre-solver`     | 47   | 34          | --    | 2         | 83    | HiGHS conformance tests; mpi feature tests excluded                                                         |
+| `cobre-comm`       | 54   | 18+10       | --    | 8         | 90    | 18 local conformance + 10 factory tests; no-feature build                                                   |
+| `cobre-stochastic` | 106  | 5+4         | --    | 11        | 126   | 5 conformance + 4 reproducibility (declaration-order gate)                                                  |
+| `cobre-sddp`       | 475  | 13+7+2+3+1  | --    | 49        | 550   | 13 conformance + 7 integration + 2 determinism + 3 inflow_nonnegativity + 1 simulation; 2 doc-tests ignored |
+| `cobre-cli`        | 96   | 58          | --    | 0         | 154   | color/report/run/smoke/validate/init/schema integration via assert_cmd                                      |
 
-**Workspace total (phases 1–8 + v0.1.0 blockers): 1955 tests passing.**
+**Workspace total (phases 1–8 + v0.1.0 pre-release additions): 1938 tests passing (with `--all-features`).**
 
 Run the full suite with:
 
@@ -117,11 +117,11 @@ cargo test --workspace --all-features
 
 ### Phase 8 — cobre-cli
 
-- `run`, `validate`, `report`, `version` subcommands
-- Progress bars; terminal banner; post-run summary table
+- `run`, `validate`, `report`, `version`, `init`, `schema export` subcommands
+- Progress bars with simulation statistics (mean cost, std dev, 95% CI); terminal banner; post-run summary table
 - Config resolution via env vars, defaults, and CLI flags
 - Exit codes: 0 (success), 1 (validation), 2 (I/O), 3 (solver), 4 (internal)
-- 147 tests
+- 154 tests
 
 ### v0.1.0 Release Blockers
 
@@ -141,6 +141,26 @@ Work completed after Phase 8 to reach the v0.1.0 release tag:
 - **Epic 04 — Documentation**: Software book chapters, ADR entries, and API reference
   updated to reflect the v0.1.0 feature set, including the two-level parallelism model,
   the inflow non-negativity configuration, and the `--color` / `--threads` CLI flags.
+
+### v0.1.0 Pre-Release Additions
+
+Features added after the release blockers were resolved, before tagging v0.1.0:
+
+- **Simulation progress statistics**: `SimulationProgress` events now carry `mean_cost`,
+  `std_cost`, and `ci_95_half_width` computed via Welford's online algorithm. The CLI
+  progress bar displays live statistics (mean, std, 95% CI) during simulation.
+
+- **JSON Schema generation**: `schemars` v1 derives on all `cobre-io` input types behind
+  the `schema` feature flag. `cobre schema export --output-dir DIR` writes `.schema.json`
+  files for all 10 input file types.
+
+- **Schema hosting**: Generated `.schema.json` files committed to `book/src/schemas/` and
+  referenced from the book's Schemas reference page. Input JSON files include `$schema`
+  URLs pointing to `https://cobre-rs.github.io/cobre/schemas/`.
+
+- **Input format cleanup**: Removed the `version` field from `config.json`; schema
+  versioning via `$schema` URL replaces it. All input file types accept an optional
+  `$schema` property for editor autocompletion.
 
 ---
 

@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -551,6 +551,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     })?;
 
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+    // Clone the sender before moving it into TrainingConfig so that simulation
+    // progress events flow through the same channel as training events.
+    let sim_event_tx = event_tx.clone();
     let training_config = TrainingConfig {
         forward_passes,
         max_iterations,
@@ -714,6 +717,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             n_hydros_lp,
             zeta_per_stage,
             block_hours_per_stage,
+            Some(&sim_event_tx),
         )
         .map_err(CliError::from);
 

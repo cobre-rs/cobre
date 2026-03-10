@@ -60,7 +60,8 @@ use crate::LoadError;
 
 /// Top-level intermediate type for `thermals.json` (serde only, not re-exported).
 #[derive(Deserialize)]
-struct RawThermalFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawThermalFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -70,7 +71,8 @@ struct RawThermalFile {
 
 /// Intermediate type for a single thermal plant entry.
 #[derive(Deserialize)]
-struct RawThermal {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawThermal {
     /// Thermal plant identifier. Must be unique within the file.
     id: i32,
     /// Human-readable plant name.
@@ -94,7 +96,8 @@ struct RawThermal {
 
 /// Intermediate type for a single cost segment.
 #[derive(Deserialize)]
-struct RawThermalCostSegment {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawThermalCostSegment {
     /// Generation capacity of this segment [MW].
     capacity_mw: f64,
     /// Marginal cost in this segment [$/`MWh`].
@@ -103,7 +106,8 @@ struct RawThermalCostSegment {
 
 /// Intermediate type for the generation bounds sub-object.
 #[derive(Deserialize)]
-struct RawThermalGeneration {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawThermalGeneration {
     /// Minimum generation (minimum stable load) [MW].
     min_mw: f64,
     /// Maximum generation (installed capacity) [MW].
@@ -112,7 +116,8 @@ struct RawThermalGeneration {
 
 /// Intermediate type for GNL configuration.
 #[derive(Deserialize)]
-struct RawGnlConfig {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawGnlConfig {
     /// Number of stages of dispatch anticipation.
     lag_stages: i32,
 }

@@ -496,7 +496,6 @@ mod tests {
 
         let config = Config {
             schema: None,
-            version: None,
             modeling: ModelingConfig::default(),
             training: TrainingConfig {
                 enabled: true,

@@ -54,7 +54,8 @@ use crate::LoadError;
 
 /// Top-level intermediate type for `non_controllable_sources.json` (serde only, not re-exported).
 #[derive(Deserialize)]
-struct RawNcsFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawNcsFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -64,7 +65,8 @@ struct RawNcsFile {
 
 /// Intermediate type for a single non-controllable source entry.
 #[derive(Deserialize)]
-struct RawNcs {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawNcs {
     /// Source identifier. Must be unique within the file.
     id: i32,
     /// Human-readable source name.

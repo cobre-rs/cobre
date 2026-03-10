@@ -78,7 +78,8 @@ use crate::LoadError;
 ///
 /// Private — only used during deserialization. Not re-exported.
 #[derive(Deserialize)]
-struct RawStagesFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawStagesFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -104,7 +105,8 @@ struct RawStagesFile {
 
 /// Intermediate type for the `season_definitions` sub-object.
 #[derive(Deserialize)]
-struct RawSeasonDefinitions {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawSeasonDefinitions {
     /// Cycle type: `"monthly"`, `"weekly"`, or `"custom"`.
     cycle_type: String,
     /// List of season entries.
@@ -113,7 +115,8 @@ struct RawSeasonDefinitions {
 
 /// Intermediate type for one season entry.
 #[derive(Deserialize)]
-struct RawSeasonEntry {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawSeasonEntry {
     /// Season index (0-based).
     id: usize,
     /// Human-readable label.
@@ -133,7 +136,8 @@ struct RawSeasonEntry {
 
 /// Intermediate type for the `policy_graph` sub-object.
 #[derive(Deserialize)]
-struct RawPolicyGraph {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPolicyGraph {
     /// Horizon type: `"finite_horizon"` or `"cyclic"`.
     #[serde(rename = "type")]
     graph_type: String,
@@ -146,7 +150,8 @@ struct RawPolicyGraph {
 
 /// Intermediate type for one policy graph transition.
 #[derive(Deserialize)]
-struct RawTransition {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawTransition {
     /// Source stage ID.
     source_id: i32,
     /// Target stage ID.
@@ -160,7 +165,8 @@ struct RawTransition {
 
 /// Intermediate type for the `scenario_source` sub-object.
 #[derive(Deserialize)]
-struct RawScenarioSource {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawScenarioSource {
     /// Noise source: `"in_sample"`, `"external"`, or `"historical"`.
     sampling_scheme: String,
     /// Optional random seed.
@@ -173,7 +179,8 @@ struct RawScenarioSource {
 
 /// Intermediate type for a study stage entry.
 #[derive(Deserialize)]
-struct RawStage {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawStage {
     /// Stage identifier (non-negative for study stages).
     id: i32,
     /// Start date as ISO 8601 string.
@@ -203,7 +210,8 @@ struct RawStage {
 
 /// Intermediate type for a pre-study stage entry (negative IDs).
 #[derive(Deserialize)]
-struct RawPreStudyStage {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPreStudyStage {
     /// Stage identifier (negative for pre-study stages).
     id: i32,
     /// Start date as ISO 8601 string.
@@ -217,7 +225,8 @@ struct RawPreStudyStage {
 
 /// Intermediate type for one load block.
 #[derive(Deserialize)]
-struct RawBlock {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawBlock {
     /// Block index (0-based within the stage). Must be contiguous.
     id: usize,
     /// Human-readable block label.
@@ -228,7 +237,8 @@ struct RawBlock {
 
 /// Intermediate type for the `state_variables` sub-object.
 #[derive(Deserialize)]
-struct RawStateVariables {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawStateVariables {
     /// Whether storage is a state variable. Default: true.
     #[serde(default = "default_true")]
     storage: bool,
@@ -251,7 +261,8 @@ struct RawStateVariables {
 /// presence of the variant alone signals `StageRiskConfig::Expectation`.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum RawRiskMeasure {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawRiskMeasure {
     /// String variant: any string (canonically `"expectation"`).
     ///
     /// The inner `String` is only used by serde during deserialization;
@@ -267,7 +278,8 @@ enum RawRiskMeasure {
 
 /// `CVaR` parameters nested inside the `cvar` key.
 #[derive(Deserialize)]
-struct RawCVarParams {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawCVarParams {
     /// Confidence level alpha in (0, 1].
     alpha: f64,
     /// Risk aversion weight lambda in [0, 1].

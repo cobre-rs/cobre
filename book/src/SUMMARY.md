@@ -52,6 +52,7 @@
 - [Output Format](./reference/output-format.md)
 - [Error Codes](./reference/error-codes.md)
 - [Roadmap](./reference/roadmap.md)
+- [Schemas](./reference/schemas.md)
 
 ---
 

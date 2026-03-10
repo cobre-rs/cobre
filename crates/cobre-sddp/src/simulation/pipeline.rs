@@ -46,9 +46,11 @@
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Sender, SyncSender};
+use std::time::Instant;
 
 use cobre_comm::Communicator;
+use cobre_core::TrainingEvent;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::{StochasticContext, sample_forward};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -79,6 +81,105 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// Each parallel worker returns `Ok(WorkerCosts)` for its assigned scenarios.
 /// The outer function flattens and sorts the results.
 type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
+
+// ---------------------------------------------------------------------------
+// Welford online accumulator for running mean and variance
+// ---------------------------------------------------------------------------
+
+/// Online accumulator for mean and variance using Welford's algorithm.
+///
+/// Accumulates one value at a time with O(1) updates and O(1) statistics
+/// queries, with no re-scanning of previous data. Safe for use on the main
+/// thread after the parallel region completes — not intended for concurrent
+/// access.
+struct WelfordAccumulator {
+    count: u64,
+    mean: f64,
+    /// Sum of squared deviations from the running mean.
+    m2: f64,
+}
+
+impl WelfordAccumulator {
+    /// Create a new accumulator with no observations.
+    fn new() -> Self {
+        Self {
+            count: 0,
+            mean: 0.0,
+            m2: 0.0,
+        }
+    }
+
+    /// Incorporate a new observation into the running statistics.
+    fn update(&mut self, value: f64) {
+        self.count += 1;
+        let delta = value - self.mean;
+        #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
+        let count_f64 = self.count as f64;
+        self.mean += delta / count_f64;
+        let delta2 = value - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    /// Running mean of all observed values, or `0.0` if no observations.
+    fn mean(&self) -> f64 {
+        self.mean
+    }
+
+    /// Population variance (`m2 / n`), or `0.0` if fewer than 2 observations.
+    ///
+    /// Returns `0.0` for zero or one observation since variance is undefined
+    /// with insufficient data.
+    fn variance(&self) -> f64 {
+        if self.count < 2 {
+            0.0
+        } else {
+            #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
+            let count_f64 = self.count as f64;
+            self.m2 / count_f64
+        }
+    }
+
+    /// Population standard deviation, or `0.0` if fewer than 2 observations.
+    fn std_dev(&self) -> f64 {
+        self.variance().sqrt()
+    }
+
+    /// Half-width of the 95% confidence interval (`1.96 * std / sqrt(n)`).
+    ///
+    /// Returns `0.0` when fewer than 2 observations are available.
+    fn ci_95_half_width(&self) -> f64 {
+        if self.count < 2 {
+            0.0
+        } else {
+            #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
+            let count_f64 = self.count as f64;
+            1.96 * self.std_dev() / count_f64.sqrt()
+        }
+    }
+}
+
+/// Emit a [`TrainingEvent::SimulationProgress`] event if a sender is present.
+///
+/// Channel send failures are silently ignored: progress reporting is
+/// best-effort and must never interfere with the simulation result.
+fn emit_simulation_progress(
+    sender: Option<&Sender<TrainingEvent>>,
+    scenarios_complete: u32,
+    scenarios_total: u32,
+    elapsed_ms: u64,
+    acc: &WelfordAccumulator,
+) {
+    if let Some(s) = sender {
+        let _ = s.send(TrainingEvent::SimulationProgress {
+            scenarios_complete,
+            scenarios_total,
+            elapsed_ms,
+            mean_cost: acc.mean(),
+            std_cost: acc.std_dev(),
+            ci_95_half_width: acc.ci_95_half_width(),
+        });
+    }
+}
 
 /// Evaluate the trained SDDP policy on this rank's assigned scenarios.
 ///
@@ -144,6 +245,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     n_hydros: usize,
     zeta_per_stage: &[f64],
     block_hours_per_stage: &[Vec<f64>],
+    event_sender: Option<&Sender<TrainingEvent>>,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -187,6 +289,11 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     let scenario_start = scenario_range.start as usize;
 
     let n_workers = workspaces.len().max(1);
+
+    // Start the wall-clock timer for simulation progress events.
+    // Only instantiated here; the Instant is cheaply created regardless of
+    // whether event_sender is Some or None.
+    let sim_start = Instant::now();
 
     // Execute the scenario loop in parallel over workspaces using static
     // partitioning. Each worker processes a contiguous sub-range of the
@@ -382,9 +489,39 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
 
     // Flatten worker cost buffers and sort by scenario_id for deterministic
     // MPI aggregation regardless of thread completion order.
+    //
+    // While flattening, accumulate per-scenario total costs into the Welford
+    // accumulator. The parallel region is already complete at this point, so
+    // there is no shared-state concern: the accumulator runs single-threaded
+    // on the main thread after `collect()` returns.
+    //
+    // One `SimulationProgress` event is emitted per worker batch completion
+    // (i.e., once per worker after that worker's entire sub-range is done),
+    // not once per scenario. This matches the "emit after each parallel batch"
+    // requirement in the ticket and avoids flooding the channel.
     let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
+    let mut acc = WelfordAccumulator::new();
     for result in worker_results {
-        all_costs.extend(result?);
+        let batch = result?;
+        for &(_, total_cost, _) in &batch {
+            acc.update(total_cost);
+        }
+        all_costs.extend(batch);
+
+        // Emit a progress event after each worker batch.
+        // `scenarios_complete` reflects this rank's locally accumulated count.
+        #[allow(clippy::cast_possible_truncation)]
+        let scenarios_complete = acc.count as u32;
+        let elapsed_ms = sim_start.elapsed().as_millis();
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed_ms_u64 = elapsed_ms as u64;
+        emit_simulation_progress(
+            event_sender,
+            scenarios_complete,
+            config.n_scenarios,
+            elapsed_ms_u64,
+            &acc,
+        );
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
 
@@ -793,6 +930,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -863,6 +1001,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         );
 
         match result {
@@ -927,6 +1066,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         );
 
         match result {
@@ -989,6 +1129,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         );
 
         assert!(
@@ -1052,6 +1193,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1113,6 +1255,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1170,6 +1313,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1227,6 +1371,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1259,6 +1404,7 @@ mod tests {
             0,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1290,5 +1436,222 @@ mod tests {
                 "cost mismatch for scenario {id1}: 1-ws={cost1}, 4-ws={cost4}"
             );
         }
+    }
+
+    // ── Welford accumulator unit tests ───────────────────────────────────────
+
+    /// Known dataset: `[2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]`
+    /// Expected: mean=5.0, variance=4.0, std_dev=2.0.
+    #[test]
+    fn welford_known_dataset_mean_variance_std() {
+        let values = [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let mut acc = super::WelfordAccumulator::new();
+        for &v in &values {
+            acc.update(v);
+        }
+        assert!(
+            (acc.mean() - 5.0).abs() < 1e-10,
+            "mean: expected 5.0, got {}",
+            acc.mean()
+        );
+        assert!(
+            (acc.variance() - 4.0).abs() < 1e-10,
+            "variance: expected 4.0, got {}",
+            acc.variance()
+        );
+        assert!(
+            (acc.std_dev() - 2.0).abs() < 1e-10,
+            "std_dev: expected 2.0, got {}",
+            acc.std_dev()
+        );
+    }
+
+    /// Single value: mean equals that value, std_dev=0.0, CI half-width=0.0.
+    #[test]
+    fn welford_single_value_no_variance() {
+        let mut acc = super::WelfordAccumulator::new();
+        acc.update(42.0);
+        assert!(
+            (acc.mean() - 42.0).abs() < 1e-10,
+            "mean: expected 42.0, got {}",
+            acc.mean()
+        );
+        assert_eq!(
+            acc.std_dev(),
+            0.0,
+            "std_dev must be 0.0 with one observation"
+        );
+        assert_eq!(
+            acc.ci_95_half_width(),
+            0.0,
+            "ci_95_half_width must be 0.0 with one observation"
+        );
+    }
+
+    /// Zero updates: mean=0.0, std_dev=0.0.
+    #[test]
+    fn welford_zero_updates() {
+        let acc = super::WelfordAccumulator::new();
+        assert_eq!(acc.mean(), 0.0, "mean must be 0.0 with no observations");
+        assert_eq!(
+            acc.std_dev(),
+            0.0,
+            "std_dev must be 0.0 with no observations"
+        );
+    }
+
+    // ── Integration tests for event emission ─────────────────────────────────
+
+    /// Acceptance criterion: with `event_sender: Some(&tx)` and 10 scenarios,
+    /// at least 1 `SimulationProgress` event is received with `scenarios_complete > 0`,
+    /// finite non-NaN `mean_cost`, and `ci_95_half_width >= 0.0`.
+    #[test]
+    fn simulate_emits_progress_events() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 2;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios: 10,
+            io_channel_capacity: 32,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(32);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        let result = simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
+            &[],
+            Some(&event_tx),
+        );
+        assert!(result.is_ok(), "simulate returned error: {result:?}");
+
+        // Drop the sender so the channel drains cleanly.
+        drop(event_tx);
+
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+
+        let progress_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .collect();
+
+        assert!(
+            !progress_events.is_empty(),
+            "at least 1 SimulationProgress event expected"
+        );
+
+        for event in &progress_events {
+            let TrainingEvent::SimulationProgress {
+                scenarios_complete,
+                mean_cost,
+                ci_95_half_width,
+                ..
+            } = event
+            else {
+                continue;
+            };
+
+            assert!(
+                *scenarios_complete > 0,
+                "scenarios_complete must be > 0, got {scenarios_complete}"
+            );
+            assert!(
+                mean_cost.is_finite() && !mean_cost.is_nan(),
+                "mean_cost must be finite and non-NaN, got {mean_cost}"
+            );
+            assert!(
+                *ci_95_half_width >= 0.0,
+                "ci_95_half_width must be >= 0.0, got {ci_95_half_width}"
+            );
+        }
+    }
+
+    /// Acceptance criterion: with `event_sender: None`, no events are sent and
+    /// the function returns the same cost buffer as before.
+    #[test]
+    fn simulate_no_events_when_sender_is_none() {
+        let n_stages = 2;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios: 4,
+            io_channel_capacity: 16,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(16);
+
+        let mut workspaces = single_workspace(solver);
+        let result = simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
+            &[],
+            None,
+        );
+
+        assert!(result.is_ok(), "simulate returned error: {result:?}");
+        let cost_buffer = result.unwrap();
+        assert_eq!(
+            cost_buffer.len(),
+            4,
+            "cost buffer must have 4 entries when event_sender is None"
+        );
     }
 }

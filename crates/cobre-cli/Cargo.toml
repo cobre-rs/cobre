@@ -19,7 +19,7 @@ doc = false
 
 [dependencies]
 cobre-core = { version = "0.1.0", path = "../cobre-core", features = ["serde"] }
-cobre-io = { version = "0.1.0", path = "../cobre-io" }
+cobre-io = { version = "0.1.0", path = "../cobre-io", features = ["schema"] }
 cobre-sddp = { version = "0.1.0", path = "../cobre-sddp" }
 cobre-solver = { version = "0.1.0", path = "../cobre-solver" }
 cobre-comm = { version = "0.1.0", path = "../cobre-comm" }

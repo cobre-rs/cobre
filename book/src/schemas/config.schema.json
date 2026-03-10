@@ -1,0 +1,683 @@
+{
+  "$defs": {
+    "CheckpointingConfig": {
+      "description": "Checkpoint settings (`config.json → policy.checkpointing`).",
+      "properties": {
+        "compress": {
+          "default": null,
+          "description": "Compress checkpoint files.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": null,
+          "description": "Enable periodic checkpointing.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "initial_iteration": {
+          "default": null,
+          "description": "First iteration to write a checkpoint.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "interval_iterations": {
+          "default": null,
+          "description": "Iterations between checkpoints.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "store_basis": {
+          "default": null,
+          "description": "Include LP basis in checkpoints for warm-start.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CutSelectionConfig": {
+      "description": "Cut selection settings (`config.json → training.cut_selection`).",
+      "properties": {
+        "check_frequency": {
+          "default": null,
+          "description": "Iterations between pruning checks.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cut_activity_tolerance": {
+          "default": null,
+          "description": "Minimum dual multiplier for a cut to count as binding.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": null,
+          "description": "Enable cut pruning.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "method": {
+          "default": null,
+          "description": "Method: `\"level1\"`, `\"lml1\"`, or `\"domination\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threshold": {
+          "default": null,
+          "description": "Minimum iterations before first pruning pass.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExportsConfig": {
+      "description": "Export flags controlling which outputs are written to disk\n(`config.json → exports`).\n\nThe struct uses multiple `bool` fields because each flag maps directly to a\nJSON field name in the `exports` section of `config.json`. A state machine\nwould not improve clarity for a flat set of independent output toggles.",
+      "properties": {
+        "backward_detail": {
+          "default": false,
+          "description": "Export per-scenario backward-pass detail.",
+          "type": "boolean"
+        },
+        "compression": {
+          "default": null,
+          "description": "Compression algorithm for output files: `\"zstd\"`, `\"lz4\"`, or `\"none\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cuts": {
+          "default": true,
+          "description": "Export cut pool (outer approximation).",
+          "type": "boolean"
+        },
+        "forward_detail": {
+          "default": false,
+          "description": "Export per-scenario forward-pass detail.",
+          "type": "boolean"
+        },
+        "simulation": {
+          "default": true,
+          "description": "Export simulation results.",
+          "type": "boolean"
+        },
+        "states": {
+          "default": true,
+          "description": "Export visited states.",
+          "type": "boolean"
+        },
+        "training": {
+          "default": true,
+          "description": "Export training summary metrics.",
+          "type": "boolean"
+        },
+        "vertices": {
+          "default": true,
+          "description": "Export inner approximation vertices.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ForwardPassConfig": {
+      "description": "Forward pass mode configuration.",
+      "properties": {
+        "type": {
+          "description": "Forward pass type: `\"default\"` or other variants.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "InflowNonNegativityConfig": {
+      "description": "Inflow non-negativity treatment settings.",
+      "properties": {
+        "method": {
+          "default": "penalty",
+          "description": "Method: `\"none\"` or `\"penalty\"`.",
+          "type": "string"
+        },
+        "penalty_cost": {
+          "default": 1000.0,
+          "description": "Penalty coefficient $c^{inf}$ applied when `method` is `\"penalty\"`.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "LipschitzConfig": {
+      "description": "Lipschitz constant settings for inner approximation.",
+      "properties": {
+        "fallback_value": {
+          "default": null,
+          "description": "Fallback value when automatic computation fails.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mode": {
+          "default": null,
+          "description": "Computation mode: `\"auto\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scale_factor": {
+          "default": null,
+          "description": "Multiplicative safety margin applied to computed Lipschitz constants.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelingConfig": {
+      "description": "Modeling options (`config.json → modeling`).",
+      "properties": {
+        "inflow_non_negativity": {
+          "$ref": "#/$defs/InflowNonNegativityConfig",
+          "default": {
+            "method": "penalty",
+            "penalty_cost": 1000.0
+          },
+          "description": "Strategy for handling non-negative inflow constraints."
+        }
+      },
+      "type": "object"
+    },
+    "PolicyConfig": {
+      "description": "Policy directory settings (`config.json → policy`).",
+      "properties": {
+        "checkpointing": {
+          "$ref": "#/$defs/CheckpointingConfig",
+          "default": {
+            "compress": null,
+            "enabled": null,
+            "initial_iteration": null,
+            "interval_iterations": null,
+            "store_basis": null
+          },
+          "description": "Checkpoint settings."
+        },
+        "mode": {
+          "default": "fresh",
+          "description": "Initialization mode: `\"fresh\"`, `\"warm_start\"`, or `\"resume\"`.",
+          "type": "string"
+        },
+        "path": {
+          "default": "./policy",
+          "description": "Directory for policy data (cuts, states, vertices, basis).",
+          "type": "string"
+        },
+        "validate_compatibility": {
+          "default": true,
+          "description": "Verify state dimension and entity compatibility when loading.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SimulationConfig": {
+      "description": "Post-training simulation settings (`config.json → simulation`).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable post-training simulation.",
+          "type": "boolean"
+        },
+        "io_channel_capacity": {
+          "default": 64,
+          "description": "Bounded channel capacity between simulation threads and the I/O writer thread.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "num_scenarios": {
+          "default": 2000,
+          "description": "Number of simulation scenarios.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_mode": {
+          "default": null,
+          "description": "Output mode: `\"streaming\"` or `\"batched\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_path": {
+          "default": null,
+          "description": "Directory for simulation output files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_type": {
+          "default": "outer",
+          "description": "Policy representation: `\"outer\"` (cuts) or `\"inner\"` (vertices).",
+          "type": "string"
+        },
+        "sampling_scheme": {
+          "$ref": "#/$defs/SimulationSamplingConfig",
+          "default": {
+            "type": "in_sample"
+          },
+          "description": "Sampling scheme for simulation scenarios."
+        }
+      },
+      "type": "object"
+    },
+    "SimulationSamplingConfig": {
+      "description": "Sampling scheme for the post-training simulation.",
+      "properties": {
+        "type": {
+          "default": "in_sample",
+          "description": "Scheme type: `\"in_sample\"`, `\"out_of_sample\"`, or `\"external\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StoppingRuleConfig": {
+      "description": "Deserialized configuration for one entry in `training.stopping_rules[]`.\n\nUses a `\"type\"` discriminator field (internally tagged) with `snake_case`\nvariant names matching the JSON schema.\n\nThe `GracefulShutdown` rule has no JSON representation — it is injected at\nruntime by `StoppingRuleSet` construction and is never deserialized.\n\n# Examples\n\n```\nuse cobre_io::config::StoppingRuleConfig;\n\nlet json = r#\"{\"type\": \"iteration_limit\", \"limit\": 100}\"#;\nlet rule: StoppingRuleConfig = serde_json::from_str(json).unwrap();\nassert!(matches!(rule, StoppingRuleConfig::IterationLimit { limit: 100 }));\n```",
+      "oneOf": [
+        {
+          "description": "Stop after a fixed number of iterations. **Mandatory** — every rule set must\ncontain at least one `iteration_limit` rule.",
+          "properties": {
+            "limit": {
+              "description": "Maximum iteration count $k_{max}$.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "iteration_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "limit"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop after a wall-clock time limit.",
+          "properties": {
+            "seconds": {
+              "description": "Time limit in seconds.",
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "time_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "seconds"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop when the lower bound stalls (relative improvement falls below tolerance).",
+          "properties": {
+            "iterations": {
+              "description": "Window size $\\tau$ (number of past iterations to compare).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tolerance": {
+              "description": "Relative improvement threshold.",
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "bound_stalling",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "iterations",
+            "tolerance"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop when both the bound and simulated policy costs have stabilized.",
+          "properties": {
+            "bound_tol": {
+              "description": "Relative tolerance for bound stability.",
+              "format": "double",
+              "type": "number"
+            },
+            "bound_window": {
+              "description": "Number of past iterations for bound stability check.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "distance_tol": {
+              "description": "Normalized distance threshold between consecutive simulation results.",
+              "format": "double",
+              "type": "number"
+            },
+            "period": {
+              "description": "Iterations between checks.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "replications": {
+              "description": "Number of Monte Carlo forward simulations per check.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "simulation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "replications",
+            "period",
+            "bound_window",
+            "distance_tol",
+            "bound_tol"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TrainingConfig": {
+      "description": "Training parameters (`config.json → training`).\n\n`forward_passes` and `stopping_rules` are mandatory — the loader returns\n[`LoadError::SchemaError`] if either is absent.",
+      "properties": {
+        "cut_formulation": {
+          "default": null,
+          "description": "Cut formulation: `\"single\"` or `\"multi\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cut_selection": {
+          "$ref": "#/$defs/CutSelectionConfig",
+          "default": {
+            "check_frequency": null,
+            "cut_activity_tolerance": null,
+            "enabled": null,
+            "method": null,
+            "threshold": null
+          },
+          "description": "Cut selection settings."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable the training phase. When `false`, skip directly to simulation.",
+          "type": "boolean"
+        },
+        "forward_pass": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForwardPassConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Forward pass configuration."
+        },
+        "forward_passes": {
+          "description": "Number of forward-pass scenario trajectories $M$ per iteration.\n\n**Mandatory** — no default. The loader rejects any config that omits this field.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seed": {
+          "default": null,
+          "description": "Random seed for reproducible scenario generation.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "solver": {
+          "$ref": "#/$defs/TrainingSolverConfig",
+          "default": {
+            "retry_max_attempts": 5,
+            "retry_time_budget_seconds": 30.0
+          },
+          "description": "LP solver retry settings."
+        },
+        "stopping_mode": {
+          "default": "any",
+          "description": "How multiple stopping rules combine: `\"any\"` (OR) or `\"all\"` (AND).",
+          "type": "string"
+        },
+        "stopping_rules": {
+          "description": "List of stopping rule configurations.\n\n**Mandatory** — no default. Must contain at least one `iteration_limit` rule.",
+          "items": {
+            "$ref": "#/$defs/StoppingRuleConfig"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TrainingSolverConfig": {
+      "description": "LP solver retry settings (`config.json → training.solver`).",
+      "properties": {
+        "retry_max_attempts": {
+          "default": 5,
+          "description": "Maximum solver retry attempts before propagating a hard error.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_time_budget_seconds": {
+          "default": 30.0,
+          "description": "Total time budget in seconds across all retry attempts for one solve.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "UpperBoundEvaluationConfig": {
+      "description": "Upper-bound evaluation settings (`config.json → upper_bound_evaluation`).",
+      "properties": {
+        "enabled": {
+          "default": null,
+          "description": "Enable vertex-based inner approximation for upper bound computation.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "initial_iteration": {
+          "default": null,
+          "description": "First iteration to compute the upper bound.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "interval_iterations": {
+          "default": null,
+          "description": "Iterations between upper-bound evaluations.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lipschitz": {
+          "$ref": "#/$defs/LipschitzConfig",
+          "default": {
+            "fallback_value": null,
+            "mode": null,
+            "scale_factor": null
+          },
+          "description": "Lipschitz constant settings."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level deserialized representation of `config.json`.\n\nAll sections except `training` are optional; their defaults are applied by\nserde when the section is absent from the JSON.",
+  "properties": {
+    "$schema": {
+      "description": "JSON schema URI — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exports": {
+      "$ref": "#/$defs/ExportsConfig",
+      "default": {
+        "backward_detail": false,
+        "compression": null,
+        "cuts": true,
+        "forward_detail": false,
+        "simulation": true,
+        "states": true,
+        "training": true,
+        "vertices": true
+      },
+      "description": "Export flags controlling which outputs are written to disk."
+    },
+    "modeling": {
+      "$ref": "#/$defs/ModelingConfig",
+      "default": {
+        "inflow_non_negativity": {
+          "method": "penalty",
+          "penalty_cost": 1000.0
+        }
+      },
+      "description": "Modeling options (inflow non-negativity treatment)."
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyConfig",
+      "default": {
+        "checkpointing": {
+          "compress": null,
+          "enabled": null,
+          "initial_iteration": null,
+          "interval_iterations": null,
+          "store_basis": null
+        },
+        "mode": "fresh",
+        "path": "./policy",
+        "validate_compatibility": true
+      },
+      "description": "Policy directory settings (warm-start / resume)."
+    },
+    "simulation": {
+      "$ref": "#/$defs/SimulationConfig",
+      "default": {
+        "enabled": false,
+        "io_channel_capacity": 64,
+        "num_scenarios": 2000,
+        "output_mode": null,
+        "output_path": null,
+        "policy_type": "outer",
+        "sampling_scheme": {
+          "type": "in_sample"
+        }
+      },
+      "description": "Post-training simulation settings."
+    },
+    "training": {
+      "$ref": "#/$defs/TrainingConfig",
+      "description": "Training parameters — contains mandatory fields."
+    },
+    "upper_bound_evaluation": {
+      "$ref": "#/$defs/UpperBoundEvaluationConfig",
+      "default": {
+        "enabled": null,
+        "initial_iteration": null,
+        "interval_iterations": null,
+        "lipschitz": {
+          "fallback_value": null,
+          "mode": null,
+          "scale_factor": null
+        }
+      },
+      "description": "Upper-bound evaluation via inner approximation."
+    },
+    "version": {
+      "description": "Config format version (e.g. `\"2.0.0\"`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "training"
+  ],
+  "title": "Config",
+  "type": "object"
+}

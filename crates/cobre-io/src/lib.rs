@@ -34,6 +34,9 @@
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
 
+#[cfg(feature = "schema")]
+pub mod schema;
+
 pub mod broadcast;
 pub mod config;
 pub mod constraints;

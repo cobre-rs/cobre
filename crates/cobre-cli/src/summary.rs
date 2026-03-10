@@ -281,8 +281,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
-        print_summary,
+        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
+        TrainingSummary,
     };
 
     fn make_training_summary() -> TrainingSummary {

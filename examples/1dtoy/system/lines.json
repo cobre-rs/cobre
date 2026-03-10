@@ -1,3 +1,4 @@
 {
-    "lines": []
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/lines.schema.json",
+  "lines": []
 }

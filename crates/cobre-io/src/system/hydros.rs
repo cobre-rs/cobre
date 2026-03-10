@@ -65,7 +65,8 @@ use crate::LoadError;
 ///
 /// Private — only used during deserialization. Not re-exported.
 #[derive(Deserialize)]
-struct RawHydroFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawHydroFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -76,7 +77,8 @@ struct RawHydroFile {
 
 /// Intermediate type for a single hydro plant entry.
 #[derive(Deserialize)]
-struct RawHydro {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawHydro {
     /// Hydro plant identifier. Must be unique within the file.
     id: i32,
     /// Human-readable plant name.
@@ -122,7 +124,8 @@ struct RawHydro {
 
 /// Intermediate type for the `reservoir` sub-object.
 #[derive(Deserialize)]
-struct RawReservoir {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawReservoir {
     /// Minimum operational storage (dead volume) [hm³].
     min_storage_hm3: f64,
     /// Maximum operational storage [hm³].
@@ -131,7 +134,8 @@ struct RawReservoir {
 
 /// Intermediate type for the `outflow` sub-object.
 #[derive(Deserialize)]
-struct RawOutflow {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawOutflow {
     /// Minimum total outflow [m³/s].
     min_outflow_m3s: f64,
     /// Maximum total outflow [m³/s]. `null` = no upper bound.
@@ -145,7 +149,8 @@ struct RawOutflow {
 /// that model — notably, `Fpha` does NOT have `productivity_mw_per_m3s`.
 #[derive(Deserialize)]
 #[serde(tag = "model", rename_all = "snake_case")]
-enum RawGeneration {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawGeneration {
     /// Constant productivity: `power = productivity * turbined_m3s`.
     ConstantProductivity {
         /// Power output per unit of turbined flow [MW/(m³/s)].
@@ -226,7 +231,8 @@ impl RawGeneration {
 /// Uses `#[serde(tag = "type")]` internally-tagged on the `"type"` field.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RawTailrace {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawTailrace {
     /// Polynomial tailrace curve.
     Polynomial {
         /// Polynomial coefficients in ascending power order.
@@ -241,7 +247,8 @@ enum RawTailrace {
 
 /// Intermediate type for a single piecewise tailrace breakpoint.
 #[derive(Deserialize)]
-struct RawTailracePoint {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawTailracePoint {
     /// Total outflow at this point [m³/s].
     outflow_m3s: f64,
     /// Downstream water level (tailrace height) at this outflow [m].
@@ -251,7 +258,8 @@ struct RawTailracePoint {
 /// Tagged-union intermediate type for the `hydraulic_losses` sub-object.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RawHydraulicLosses {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawHydraulicLosses {
     /// Losses as a fraction of net head.
     Factor {
         /// Dimensionless loss factor.
@@ -267,7 +275,8 @@ enum RawHydraulicLosses {
 /// Tagged-union intermediate type for the `efficiency` sub-object.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RawEfficiency {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawEfficiency {
     /// Constant efficiency across all operating points.
     Constant {
         /// Turbine efficiency as a fraction in (0, 1].
@@ -277,7 +286,8 @@ enum RawEfficiency {
 
 /// Intermediate type for the `evaporation` sub-object.
 #[derive(Deserialize)]
-struct RawEvaporation {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawEvaporation {
     /// Monthly evaporation coefficients [mm/month], one per calendar month.
     /// Index 0 = January, index 11 = December.
     coefficients_mm: Vec<f64>,
@@ -285,7 +295,8 @@ struct RawEvaporation {
 
 /// Intermediate type for the `diversion` sub-object.
 #[derive(Deserialize)]
-struct RawDiversionChannel {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawDiversionChannel {
     /// Identifier of the downstream hydro plant receiving diverted water.
     downstream_id: i32,
     /// Maximum diversion flow capacity [m³/s].
@@ -294,7 +305,8 @@ struct RawDiversionChannel {
 
 /// Intermediate type for the `filling` sub-object.
 #[derive(Deserialize)]
-struct RawFillingConfig {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawFillingConfig {
     /// Stage index at which filling begins (inclusive).
     start_stage_id: i32,
     /// Constant inflow applied during filling [m³/s].
@@ -311,7 +323,8 @@ struct RawFillingConfig {
 /// JSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.
 #[allow(clippy::struct_field_names)]
 #[derive(Deserialize, Default)]
-struct RawHydroPenaltyOverrides {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawHydroPenaltyOverrides {
     #[serde(default)]
     spillage_cost: Option<f64>,
     #[serde(default)]

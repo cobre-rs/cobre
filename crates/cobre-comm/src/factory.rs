@@ -453,6 +453,8 @@ mod tests {
     /// tests in this crate, the risk is negligible.
     #[test]
     fn test_mpi_launch_detected_false_by_default() {
+        // Hold ENV_LOCK to prevent races with tests that set/remove MPI vars.
+        let _guard = ENV_LOCK.lock().unwrap();
         // Ensure none of the MPI vars are set before asserting.
         const MPI_VARS: [&str; 6] = [
             "PMI_RANK",

@@ -16,7 +16,7 @@ Complete the remaining feature gaps and documentation work required for a credib
 | 01 | Rayon Thread Parallelism | 6 | Detailed |
 | 02 | Inflow Non-Negativity | 3 | Detailed |
 | 03 | ~~4ree Example Case~~ (deferred) | 2 | Outline |
-| 04 | Documentation Completion | 6 | Outline |
+| 04 | Documentation Completion | 6 | Refined |
 | 05 | Polish & Recordings | 8 | Outline |
 
 ## Progress
@@ -35,12 +35,12 @@ Complete the remaining feature gaps and documentation work required for a credib
 | ticket-010 | Add inflow non-negativity integration tests | epic-02 | completed | Detailed | 0.96 | 0.97 | EXCELLENT |
 | ticket-011 | ~~Translate 4ree case data to Cobre format~~ (deferred) | epic-03 | skipped | Outline | -- | -- | -- |
 | ticket-012 | ~~Embed 4ree template and validate end-to-end~~ (deferred) | epic-03 | skipped | Outline | -- | -- | -- |
-| ticket-013 | Promote specs/math content into theory pages | epic-04 | pending | Outline | -- | -- | -- |
-| ticket-014 | Demote specs section in cobre-docs navigation | epic-04 | pending | Outline | -- | -- | -- |
-| ticket-015 | Fix cobre-docs metadata and add mdbook-admonish | epic-04 | pending | Outline | -- | -- | -- |
-| ticket-016 | Fix software book stubs | epic-04 | pending | Outline | -- | -- | -- |
+| ticket-013 | Promote specs/math content into theory pages | epic-04 | pending | Refined | 0.93 | -- | -- |
+| ticket-014 | Demote specs section in cobre-docs navigation | epic-04 | pending | Refined | 0.94 | -- | -- |
+| ticket-015 | Fix cobre-docs metadata and add mdbook-admonish | epic-04 | pending | Refined | 0.96 | -- | -- |
+| ticket-016 | Fix software book stubs | epic-04 | pending | Refined | 0.98 | -- | -- |
 | ticket-017 | ~~Add examples section to software book~~ (deferred — depends on Epic 03) | epic-04 | skipped | Outline | -- | -- | -- |
-| ticket-026 | Document deferred truncation and statistics invariance | epic-04 | pending | Outline | -- | -- | -- |
+| ticket-026 | Document deferred truncation and statistics invariance | epic-04 | pending | Refined | 0.98 | -- | -- |
 | ticket-018 | ~~Generate and calibrate VHS recordings~~ (deferred — depends on Epic 03) | epic-05 | skipped | Outline | -- | -- | -- |
 | ticket-019 | Create broken-case validation tape | epic-05 | pending | Outline | -- | -- | -- |
 | ticket-020 | ~~Embed recordings in README and book~~ (deferred — depends on ticket-018) | epic-05 | skipped | Outline | -- | -- | -- |

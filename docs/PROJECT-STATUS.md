@@ -189,6 +189,26 @@ makes the solver uncompetitive for any real-world workload.
 `cobre-docs/src/specs/architecture/training-loop.md` (SS4.3 thread-level
 parallelism).
 
+### Inflow non-negativity: penalty method only
+
+PAR(p) models can produce negative inflow realisations. The SDDP literature
+describes three methods for handling this: penalty (slack variable with high
+cost), truncation (external AR evaluation with modified LP bounds), and
+truncation-with-penalty (bounded slack combined with modified bounds).
+
+**v0.1.0 implements only the penalty method.** The `InflowNonNegativityMethod`
+enum has `Penalty { cost }` and `None` variants; the `Truncation` and
+`TruncationWithPenalty` variants are deferred.
+
+**Why truncation is deferred**: Cobre's LP formulation encodes AR dynamics
+implicitly in the water balance row bounds. Truncation requires evaluating
+the full inflow value `a_h` as a scalar before LP patching, which means
+threading AR coefficients from `StochasticContext` through to the forward
+pass — a non-trivial architectural change. The penalty method gives correct
+results at the cost of allowing virtual inflow at the penalty rate.
+
+**Full analysis**: `docs/deferred-truncation-design.md`
+
 ---
 
 ## Links

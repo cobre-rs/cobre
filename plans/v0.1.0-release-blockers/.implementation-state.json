@@ -1,6 +1,6 @@
 {
   "plan": "v0.1.0-release-blockers",
-  "last_updated": "2026-03-10T04:15:00Z",
+  "last_updated": "2026-03-10T09:50:09Z",
   "progressive": true,
   "tickets": {
     "ticket-001-create-solver-workspace.md": {
@@ -246,20 +246,100 @@
       "skip_reason": "Depends on ticket-011 (deferred)"
     },
     "ticket-013-promote-theory-pages.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.93,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.90,
+          "boundary": 0.90,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.80
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 0.85,
+          "type_safety": 1.0,
+          "test_delta": 0.9
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
     },
     "ticket-014-demote-specs-navigation.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 0.875,
+          "boundary": 0.90,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.75
+        }
+      },
+      "agent": "open-source-documentation-writer",
+      "workflow_step": null
     },
     "ticket-015-fix-metadata-add-admonish.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.60
+        },
+        "quality": 0.85,
+        "quality_breakdown": {
+          "conformance": 0.60,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.65
+        }
+      },
+      "agent": "open-source-documentation-writer",
+      "workflow_step": null
     },
     "ticket-016-fix-software-book-stubs.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.90,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.75
+        }
+      },
+      "agent": "open-source-documentation-writer",
+      "workflow_step": null
     },
     "ticket-017-add-examples-section.md": {
       "status": "skipped",
@@ -301,8 +381,28 @@
       "detail_level": "outline"
     },
     "ticket-026-document-deferred-truncation-and-stats.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.90,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.75
+        }
+      },
+      "agent": "open-source-documentation-writer",
+      "workflow_step": null
     }
   },
   "epics": {
@@ -319,7 +419,7 @@
       "learning_extracted": false
     },
     "epic-04-documentation-completion": {
-      "phase": "outline",
+      "phase": "executing",
       "learning_extracted": false
     },
     "epic-05-polish-recordings": {

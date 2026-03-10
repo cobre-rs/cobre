@@ -289,6 +289,42 @@ OS entropy at startup.
 
 ---
 
+## Inflow Non-Negativity
+
+Normal distributions used in PAR(p) models have unbounded support: even with
+a positive mean, there is a non-zero probability of drawing a negative noise
+realisation that, after applying the AR dynamics, produces a negative inflow
+value. Negative inflow has no physical meaning and, if uncorrected, would
+violate water balance constraints in the LP.
+
+### Method in v0.1.0: penalty
+
+Cobre v0.1.0 uses the **penalty method** to handle negative inflow
+realisations. A high-cost slack variable is added to each water balance
+row. When the LP solver encounters a scenario where the inflow would
+be negative, it draws on this virtual inflow at the penalty cost rather
+than violating the balance constraint. The penalty cost is configurable
+via the `inflow_non_negativity` field in the case configuration; the
+default keeps it high enough that the slack is used only when necessary.
+
+In practice, the penalty is rarely activated in well-specified studies.
+It acts as a backstop for low-probability tail realisations.
+
+### Truncation methods: planned for a future release
+
+Two additional methods from the literature — **truncation** (modifying LP
+row bounds based on external AR evaluation) and **truncation with penalty**
+(combining bounded slack with modified bounds) — are planned for a future
+release. These require evaluating the full inflow value `a_h` as a scalar
+before LP patching, which is a non-trivial architectural change in v0.1.0.
+
+For the mathematical theory behind all three methods, see the
+[Inflow Non-Negativity](https://cobre-rs.github.io/cobre-docs/theory/inflow-non-negativity.html)
+page in the methodology reference, or Oliveira et al. (2022), _Energies_
+15(3):1115.
+
+---
+
 ## Related Pages
 
 - [Anatomy of a Case](../tutorial/anatomy-of-a-case.md) — introductory walkthrough of the `scenarios/` directory and Parquet schemas

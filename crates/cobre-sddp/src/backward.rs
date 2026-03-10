@@ -246,9 +246,10 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // Parallel trial-point evaluation.
         //
         // Each workspace processes a static partition of `0..local_work`.
-        // Workers return `Vec<StagedCut>` on success, or `SddpError` on the
-        // first LP failure in their partition. The outer `collect::<Result<_,_>>()`
-        // short-circuits on the first error across all workers.
+        // Each worker returns Ok(cuts) or Err(SddpError) from its partition.
+        // All workers complete their partition (inner `?` exits early on LP
+        // failure within each worker). The merge loop below propagates the
+        // first Err encountered.
         let worker_staged: Vec<Result<Vec<StagedCut>, SddpError>> = workspaces
             .par_iter_mut()
             .enumerate()

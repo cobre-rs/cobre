@@ -408,6 +408,24 @@ impl PrecomputedParLp {
     }
 }
 
+impl Default for PrecomputedParLp {
+    /// Returns an empty [`PrecomputedParLp`] with zero stages and zero hydros.
+    ///
+    /// Useful as a sentinel value for callers that do not use PAR inflow models
+    /// (e.g., test fixtures for systems with no hydro plants).
+    fn default() -> Self {
+        Self {
+            deterministic_base: Box::new([]),
+            sigma: Box::new([]),
+            psi: Box::new([]),
+            orders: Box::new([]),
+            n_stages: 0,
+            n_hydros: 0,
+            max_order: 0,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

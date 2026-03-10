@@ -31,8 +31,8 @@ use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch,
+    forward::build_cut_row_batch, FutureCostFunction, PatchBuffer, RiskMeasure, SddpError,
+    StageIndexer,
 };
 use cobre_solver::StageTemplate;
 
@@ -53,7 +53,11 @@ use cobre_solver::StageTemplate;
 ///   [`PatchBuffer::fill_forward_patches`].
 /// - `indexer` — LP layout map for stage 0.
 /// - `patch_buf` — Reusable patch buffer (must be sized for this stage).
-/// - `opening_tree` — Scenario tree providing per-opening noise vectors.
+/// - `opening_tree` — Scenario tree providing per-opening raw noise vectors (η).
+/// - `noise_scale` — Pre-computed `ζ*σ` per hydro at stage 0, used to transform
+///   raw η into the water-balance RHS: `ζ*base + ζ*σ*η`.
+/// - `n_hydros` — Number of hydro plants (determines how many noise elements to
+///   transform from each opening).
 /// - `risk_measure` — Risk measure for stage 0 (determines probability weighting).
 /// - `comm` — Communicator for rank/size queries and broadcast.
 ///
@@ -84,7 +88,8 @@ use cobre_solver::StageTemplate;
 /// let lb = evaluate_lower_bound(
 ///     &mut solver, &template, &fcf, &initial_state,
 ///     base_row, &indexer, &mut patch_buf,
-///     &opening_tree, &risk_measure, &comm,
+///     &opening_tree, &noise_scale, n_hydros,
+///     &risk_measure, &comm,
 /// )?;
 /// ```
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +102,8 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     indexer: &StageIndexer,
     patch_buf: &mut PatchBuffer,
     opening_tree: &OpeningTree,
+    noise_scale: &[f64],
+    n_hydros: usize,
     risk_measure: &RiskMeasure,
     comm: &C,
 ) -> Result<f64, SddpError> {
@@ -113,6 +120,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         let cut_batch = build_cut_row_batch(fcf, 0, indexer);
 
         let mut objectives = Vec::with_capacity(n_openings);
+        let mut noise_buf = Vec::with_capacity(n_hydros);
 
         for opening_idx in 0..n_openings {
             solver.load_model(template);
@@ -121,8 +129,16 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 solver.add_rows(&cut_batch);
             }
 
-            let noise = opening_tree.opening(0, opening_idx);
-            patch_buf.fill_forward_patches(indexer, initial_state, noise, base_row);
+            // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+            // RHS patch (same transformation as the forward pass).
+            let raw_noise = opening_tree.opening(0, opening_idx);
+            noise_buf.clear();
+            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                let base_rhs = template.row_lower[base_row + h];
+                noise_buf.push(base_rhs + noise_scale[h] * eta);
+            }
+
+            patch_buf.fill_forward_patches(indexer, initial_state, &noise_buf, base_row);
 
             let n_patches = patch_buf.forward_patch_count();
             solver.set_row_bounds(
@@ -207,12 +223,12 @@ mod tests {
     fn simple_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -470,6 +486,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -505,6 +523,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -547,6 +567,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -586,6 +608,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -621,6 +645,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         );
@@ -654,6 +680,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         );
@@ -694,6 +722,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -733,6 +763,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -749,6 +781,8 @@ mod tests {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )

@@ -12,5 +12,10 @@
     "simulation": {
         "enabled": true,
         "num_scenarios": 100
+    },
+    "modeling": {
+        "inflow_non_negativity": {
+            "method": "none"
+        }
     }
 }

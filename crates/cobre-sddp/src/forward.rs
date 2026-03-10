@@ -402,6 +402,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     indexer: &StageIndexer,
     fwd_offset: usize,
     _inflow_method: &InflowNonNegativityMethod,
+    noise_scale: &[f64],
+    n_hydros: usize,
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let forward_passes = local_forward_passes;
@@ -508,7 +510,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     let (iter_u32, scenario_u32, stage_id_u32) =
                         (iteration as u32, global_scenario as u32, t as u32);
 
-                    let (_opening_idx, noise) = sample_forward(
+                    let (_opening_idx, raw_noise) = sample_forward(
                         &tree_view,
                         base_seed,
                         iter_u32,
@@ -517,6 +519,19 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         t,
                     );
 
+                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+                    // RHS patch. The static ζ*base part is already encoded in
+                    // the template row bounds; the patch value overwrites the
+                    // complete RHS, so the transformed value must include both
+                    // the deterministic base and the stochastic noise term.
+                    ws.noise_buf.clear();
+                    let stage_offset = t * n_hydros;
+                    for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                        let base_rhs = templates[t].row_lower[base_rows[t] + h];
+                        ws.noise_buf
+                            .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                    }
+
                     // Rebuild LP: template → cuts → scenario-specific row bounds.
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
@@ -524,7 +539,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     ws.patch_buf.fill_forward_patches(
                         indexer,
                         &ws.current_state,
-                        noise,
+                        &ws.noise_buf,
                         base_rows[t],
                     );
                     let patch_count = ws.patch_buf.forward_patch_count();
@@ -1111,6 +1126,8 @@ mod tests {
                 indexer.max_par_order,
             ),
             current_state: Vec::with_capacity(indexer.n_state),
+            noise_buf: Vec::with_capacity(indexer.hydro_count),
+            inflow_m3s_buf: Vec::with_capacity(indexer.hydro_count),
         }
     }
 
@@ -1161,6 +1178,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1223,6 +1242,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1296,6 +1317,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1614,6 +1637,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .map(|_| ())
     }
@@ -1747,6 +1772,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1771,6 +1798,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1838,6 +1867,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1941,6 +1972,8 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         );
 
         // Worker 1's partition: partition(10, 4, 1) → start_m=3.

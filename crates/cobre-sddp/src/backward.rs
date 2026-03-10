@@ -180,6 +180,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     local_work: usize,
     fwd_offset: usize,
+    noise_scale: &[f64],
+    n_hydros: usize,
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let my_rank = comm.rank();
@@ -272,14 +274,24 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                     let mut working_basis: Option<Basis> = None;
 
                     for omega in 0..n_openings {
-                        let noise = tree_view.opening(successor, omega);
+                        let raw_noise = tree_view.opening(successor, omega);
                         ws.solver.load_model(&templates[successor]);
                         ws.solver.add_rows(&cut_batch);
+
+                        // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+                        // RHS patch (same transformation as the forward pass).
+                        ws.noise_buf.clear();
+                        let stage_offset = successor * n_hydros;
+                        for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                            let base_rhs = templates[successor].row_lower[base_rows[successor] + h];
+                            ws.noise_buf
+                                .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                        }
 
                         ws.patch_buf.fill_forward_patches(
                             indexer,
                             x_hat,
-                            noise,
+                            &ws.noise_buf,
                             base_rows[successor],
                         );
                         let patch_count = ws.patch_buf.forward_patch_count();
@@ -315,8 +327,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                         })?;
 
                         let objective = view.objective;
-                        let coefficients: Vec<f64> =
-                            view.dual[..indexer.n_state].iter().map(|&d| -d).collect();
+                        let coefficients: Vec<f64> = view.dual[..indexer.n_state].to_vec();
                         let pi_dot_x: f64 =
                             coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
                         let intercept = objective - pi_dot_x;
@@ -630,6 +641,8 @@ mod tests {
             solver,
             patch_buf: PatchBuffer::new(1, 0),
             current_state: Vec::with_capacity(n_state),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
         }]
     }
 
@@ -910,6 +923,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -964,6 +979,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1020,6 +1037,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1070,6 +1089,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1122,6 +1143,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1170,6 +1193,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         );
 
@@ -1222,10 +1247,10 @@ mod tests {
         //   objective = 80.0
         //   x_hat = [10.0]
         //
-        // Expected:
-        //   pi[0] = -dual[0] = 3.0
-        //   intercept = 80.0 - 3.0 * 10.0 = 50.0
-        //   coefficients = [3.0]
+        // Expected (coefficients = dual, not -dual):
+        //   pi[0] = dual[0] = -3.0
+        //   intercept = 80.0 - (-3.0) * 10.0 = 110.0
+        //   coefficients = [-3.0]
         let n_stages = 2_usize;
         let stochastic = make_stochastic_context(n_stages, 1);
         let indexer = StageIndexer::new(1, 0);
@@ -1264,6 +1289,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1272,13 +1299,165 @@ mod tests {
         let (_, intercept, coefficients) = &cuts[0];
 
         assert!(
-            (intercept - 50.0).abs() < 1e-10,
-            "expected intercept=50.0, got {intercept}"
+            (intercept - 110.0).abs() < 1e-10,
+            "expected intercept=110.0, got {intercept}"
         );
         assert_eq!(coefficients.len(), 1);
         assert!(
-            (coefficients[0] - 3.0).abs() < 1e-10,
-            "expected coefficient=3.0, got {}",
+            (coefficients[0] - (-3.0)).abs() < 1e-10,
+            "expected coefficient=-3.0, got {}",
+            coefficients[0]
+        );
+    }
+
+    #[test]
+    fn cut_gradient_sign_physically_correct() {
+        // Regression test for the Benders cut sign bug.
+        //
+        // Physical invariant: more initial storage → lower future cost.
+        // The storage-fixing dual π is negative (shadow price of relaxing
+        // the fixing constraint increases cost when storage decreases).
+        //
+        // Correct: coefficient = π < 0, so the cut slope is negative
+        //   (more storage → lower cut value → lower theta → lower total cost).
+        //
+        // Old bug: coefficient = -π > 0, so the cut slope was positive
+        //   (more storage → higher cut value → wrong incentive).
+        let n_stages = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let exchange = exchange_with_states(n_state, vec![vec![50.0]]);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        // dual[0] = -2.0 (negative: more storage → less cost)
+        // objective = 100.0, x_hat = 50.0
+        let solution = solution_1_0(100.0, -2.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        let cuts: Vec<_> = fcf.active_cuts(0).collect();
+        assert_eq!(cuts.len(), 1, "expected exactly one cut");
+        let (_, _intercept, coefficients) = &cuts[0];
+
+        // The coefficient must be negative (same sign as the dual).
+        // The old bug would produce +2.0 here instead of -2.0.
+        assert!(
+            coefficients[0] < 0.0,
+            "cut coefficient must be negative (more storage → less future cost), \
+             got {} — likely the Benders cut sign bug has been reintroduced",
+            coefficients[0]
+        );
+        assert!(
+            (coefficients[0] - (-2.0)).abs() < 1e-10,
+            "expected coefficient=-2.0, got {}",
+            coefficients[0]
+        );
+    }
+
+    #[test]
+    fn cut_is_tight_at_trial_point() {
+        // Regression test: a Benders cut must be tight (exact) at the trial
+        // point x̂ where it was generated. That is:
+        //   intercept + coefficient * x̂ = Q(x̂)
+        // where Q(x̂) = objective value of the subproblem at x̂.
+        //
+        // The cut equation is: θ ≥ intercept + coefficient * x
+        // At x = x̂: θ ≥ Q(x̂) + π'(x̂ - x̂) = Q(x̂)
+        //
+        // If the sign is wrong (coefficient = -π instead of π), then:
+        //   intercept + (-π) * x̂ ≠ Q(x̂) in general
+        //
+        // This test verifies the tightness property.
+        let n_stages = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let x_hat = 30.0_f64;
+        let exchange = exchange_with_states(n_state, vec![vec![x_hat]]);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let q_xhat = 200.0_f64; // subproblem objective at x̂
+        let dual_storage = -4.0_f64;
+        let solution = solution_1_0(q_xhat, dual_storage);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        let cuts: Vec<_> = fcf.active_cuts(0).collect();
+        assert_eq!(cuts.len(), 1);
+        let (_, intercept, coefficients) = &cuts[0];
+
+        // Evaluate the cut at x̂: cut_value = intercept + coeff * x̂
+        let cut_at_xhat = intercept + coefficients[0] * x_hat;
+
+        // Must equal Q(x̂) (tightness property)
+        assert!(
+            (cut_at_xhat - q_xhat).abs() < 1e-10,
+            "cut must be tight at trial point: \
+             cut_value={cut_at_xhat}, Q(x̂)={q_xhat}, \
+             intercept={intercept}, coeff={}, x̂={x_hat}",
             coefficients[0]
         );
     }
@@ -1325,6 +1504,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1398,6 +1579,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1465,6 +1648,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1524,6 +1709,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1593,6 +1780,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         );
 
         assert!(
@@ -1653,6 +1842,8 @@ mod tests {
             solver: solver_1,
             patch_buf: PatchBuffer::new(1, 0),
             current_state: Vec::with_capacity(n_state),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let _ = run_backward_pass(
@@ -1670,6 +1861,8 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1680,6 +1873,8 @@ mod tests {
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0),
                 current_state: Vec::with_capacity(n_state),
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -1697,6 +1892,8 @@ mod tests {
             &indexer,
             &comm,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();

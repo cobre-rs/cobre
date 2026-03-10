@@ -534,6 +534,8 @@ fn train_converges_with_mock_solver() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -597,6 +599,8 @@ fn train_deterministic_with_same_seed() {
         1,
         || Ok(MockSolver::with_fixed(50.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -630,6 +634,8 @@ fn train_deterministic_with_same_seed() {
         1,
         || Ok(MockSolver::with_fixed(50.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -692,6 +698,8 @@ fn train_lb_monotonically_nondecreasing() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -761,6 +769,8 @@ fn train_emits_correct_event_sequence() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -843,6 +853,8 @@ fn train_stops_at_iteration_limit() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -902,6 +914,8 @@ fn train_stops_on_graceful_shutdown() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -951,6 +965,8 @@ fn train_propagates_infeasible_error() {
         1,
         || Ok(MockSolver::infeasible_on_first()),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     );
 
     assert!(

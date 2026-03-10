@@ -556,6 +556,8 @@ fn run_training(
                 n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
                 &InflowNonNegativityMethod::None,
+                &[],
+                0,
             )
         })
         .unwrap();
@@ -593,10 +595,13 @@ fn run_simulation(
 
     // Build a workspace pool of `n_workspaces` independently allocated workspaces.
     let mut workspaces: Vec<SolverWorkspace<MockSolver3H>> = (0..n_workspaces)
-        .map(|_| SolverWorkspace {
-            solver: MockSolver3H::new(100.0),
-            patch_buf: PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
-            current_state: Vec::with_capacity(fx.indexer.n_state),
+        .map(|_| {
+            SolverWorkspace::new(
+                MockSolver3H::new(100.0),
+                PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+                fx.indexer.n_state,
+                fx.indexer.hydro_count,
+            )
         })
         .collect();
 
@@ -633,6 +638,9 @@ fn run_simulation(
                 &comm,
                 &result_tx,
                 &InflowNonNegativityMethod::None,
+                &[],
+                0,
+                &[],
             )
         })
         .unwrap();

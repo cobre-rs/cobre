@@ -483,10 +483,17 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let system = system_result?;
     let bcast_config = bcast_config_result?;
 
-    // Use the inflow method broadcast from rank 0 to build LP templates on all
-    // ranks. All ranks must build templates with identical column counts so that
-    // the MPI communication patterns remain consistent.
-    let stage_templates = build_stage_templates(&system, &bcast_config.inflow_method);
+    // Build stochastic context first so par_lp is available for LP template construction.
+    let seed = bcast_config.seed;
+    let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
+        message: format!("stochastic context error: {e}"),
+    })?;
+
+    // Build LP templates on all ranks. The par_lp from the stochastic context
+    // supplies PAR coefficients that are embedded in the static LP row bounds
+    // and in the noise_scale pre-computation.
+    let stage_templates =
+        build_stage_templates(&system, &bcast_config.inflow_method, stochastic.par_lp());
     if stage_templates.templates.is_empty() {
         return Err(CliError::Validation {
             report: "system has no study stages — cannot train".to_string(),
@@ -494,6 +501,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
     let stage_templates_ref = &stage_templates.templates;
     let base_rows = &stage_templates.base_rows;
+    let noise_scale = &stage_templates.noise_scale;
+    let zeta_per_stage = &stage_templates.zeta_per_stage;
+    let n_hydros_lp = stage_templates.n_hydros;
 
     // Build the full indexer with equipment column ranges.
     // Assumption: all stages have the same block count (uniform horizon).
@@ -512,11 +522,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         has_inflow_penalty,
     );
     let initial_state = build_initial_state(&system, &indexer);
-
-    let seed = bcast_config.seed;
-    let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
-        message: format!("stochastic context error: {e}"),
-    })?;
 
     let forward_passes = bcast_config.forward_passes;
     let stopping_rules = stopping_rules_from_broadcast(&bcast_config);
@@ -587,6 +592,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         n_threads,
         HighsSolver::new,
         &bcast_config.inflow_method,
+        noise_scale,
+        n_hydros_lp,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -702,6 +709,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &comm,
             &result_tx,
             &bcast_config.inflow_method,
+            noise_scale,
+            n_hydros_lp,
+            zeta_per_stage,
         )
         .map_err(CliError::from);
 

@@ -26,13 +26,13 @@
 
 use std::ops::Range;
 
-use crate::StageIndexer;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
     SimulationThermalResult,
 };
+use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -175,6 +175,7 @@ pub fn extract_stage_result(
     indexer: &StageIndexer,
     stage_id: u32,
     entity_counts: &EntityCounts,
+    inflow_m3s_per_hydro: &[f64],
 ) -> SimulationStageResult {
     debug_assert!(
         primal.len() > indexer.theta,
@@ -305,7 +306,9 @@ pub fn extract_stage_result(
             .iter()
             .enumerate()
             .map(|(h, &hydro_id)| {
-                let incremental_inflow = if indexer.max_par_order > 0 {
+                let incremental_inflow = if h < inflow_m3s_per_hydro.len() {
+                    inflow_m3s_per_hydro[h]
+                } else if indexer.max_par_order > 0 {
                     primal[indexer.inflow_lags.start + h * indexer.max_par_order]
                 } else {
                     0.0
@@ -356,7 +359,9 @@ pub fn extract_stage_result(
             .flat_map(|(h, &hydro_id)| {
                 let storage_final = primal[indexer.storage.start + h];
                 let storage_initial = primal[indexer.storage_in.start + h];
-                let incremental_inflow = if indexer.max_par_order > 0 {
+                let incremental_inflow = if h < inflow_m3s_per_hydro.len() {
+                    inflow_m3s_per_hydro[h]
+                } else if indexer.max_par_order > 0 {
                     primal[indexer.inflow_lags.start + h * indexer.max_par_order]
                 } else {
                     0.0
@@ -696,9 +701,9 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{EntityCounts, accumulate_category_costs, assign_scenarios, extract_stage_result};
-    use crate::StageIndexer;
+    use super::{accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts};
     use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
+    use crate::StageIndexer;
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -827,6 +832,7 @@ mod tests {
             &indexer,
             3,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         assert_eq!(result.costs.len(), 1);
@@ -852,6 +858,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         let cost = &result.costs[0];
@@ -877,6 +884,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         assert_eq!(result.hydros.len(), 2);
@@ -905,10 +913,11 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-        // Hydro 10, lag 0 → primal[2] = 50.0
+                                                 // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);
@@ -936,7 +945,8 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result = extract_stage_result(&primal, &dual, 600.0, &[], &[], &indexer, 2, &counts);
+        let result =
+            extract_stage_result(&primal, &dual, 600.0, &[], &[], &indexer, 2, &counts, &[]);
 
         assert!(result.inflow_lags.is_empty());
         assert_eq!(result.hydros[0].incremental_inflow_m3s, 0.0);
@@ -958,6 +968,7 @@ mod tests {
             &indexer,
             stage_id,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         assert_eq!(result.stage_id, stage_id);
@@ -986,6 +997,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
         );
 
         // Thermal — one entry per thermal entity, all zero.
@@ -1084,7 +1096,15 @@ mod tests {
         let mut row_lower = vec![0.0_f64; 7]; // must be >= load_balance.end = 7
         row_lower[6] = 75.0; // load = 75 MW for bus 100
         let result = extract_stage_result(
-            &primal, &dual, 600.0, &obj, &row_lower, &indexer, 0, &counts,
+            &primal,
+            &dual,
+            600.0,
+            &obj,
+            &row_lower,
+            &indexer,
+            0,
+            &counts,
+            &[],
         );
 
         // Hydro: one entry per (hydro, block), block_id = Some(0)
@@ -1148,7 +1168,8 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result = extract_stage_result(&primal, &dual, 250.0, &[], &[], &indexer, 0, &counts);
+        let result =
+            extract_stage_result(&primal, &dual, 250.0, &[], &[], &indexer, 0, &counts, &[]);
 
         assert!(result.pumping_stations.is_empty());
         assert!(result.contracts.is_empty());
@@ -1366,7 +1387,15 @@ mod tests {
         };
 
         let result = extract_stage_result(
-            &primal, &dual, 500.0, &obj, &row_lower, &indexer, 0, &counts,
+            &primal,
+            &dual,
+            500.0,
+            &obj,
+            &row_lower,
+            &indexer,
+            0,
+            &counts,
+            &[],
         );
 
         // turbine is non-empty → per-(hydro, block) results, so 2 hydros × 1 block = 2 entries
@@ -1414,8 +1443,17 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result =
-            extract_stage_result(&primal, &dual, 1.0, &obj, &row_lower, &indexer, 0, &counts);
+        let result = extract_stage_result(
+            &primal,
+            &dual,
+            1.0,
+            &obj,
+            &row_lower,
+            &indexer,
+            0,
+            &counts,
+            &[],
+        );
 
         for (h, hr) in result.hydros.iter().enumerate() {
             assert_eq!(
@@ -1473,8 +1511,17 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result =
-            extract_stage_result(&primal, &dual, 0.0, &obj, &row_lower, &indexer, 0, &counts);
+        let result = extract_stage_result(
+            &primal,
+            &dual,
+            0.0,
+            &obj,
+            &row_lower,
+            &indexer,
+            0,
+            &counts,
+            &[],
+        );
 
         // Fallback: one entry per hydro (block_id = None)
         assert_eq!(result.hydros.len(), 2);

@@ -140,6 +140,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     result_tx: &SyncSender<SimulationScenarioResult>,
     _inflow_method: &InflowNonNegativityMethod,
+    noise_scale: &[f64],
+    n_hydros: usize,
+    zeta_per_stage: &[f64],
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -235,8 +238,18 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     #[allow(clippy::cast_possible_truncation)]
                     let stage_id_u32 = t as u32;
 
-                    let (_opening_idx, noise) =
+                    let (_opening_idx, raw_noise) =
                         sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
+
+                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+                    // RHS patch (same transformation as the training forward pass).
+                    ws.noise_buf.clear();
+                    let stage_offset = t * n_hydros;
+                    for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                        let base_rhs = templates[t].row_lower[base_rows[t] + h];
+                        ws.noise_buf
+                            .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                    }
 
                     // LP rebuild sequence: template → cuts → scenario-specific row bounds.
                     ws.solver.load_model(&templates[t]);
@@ -245,7 +258,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     ws.patch_buf.fill_forward_patches(
                         indexer,
                         &ws.current_state,
-                        noise,
+                        &ws.noise_buf,
                         base_rows[t],
                     );
                     let patch_count = ws.patch_buf.forward_patch_count();
@@ -280,6 +293,17 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     let stage_cost = view.objective - view.primal[indexer.theta];
                     total_cost += stage_cost;
 
+                    // Convert water-balance RHS (hm³) back to inflow (m³/s)
+                    // for output reporting.
+                    ws.inflow_m3s_buf.clear();
+                    if let Some(&zeta) = zeta_per_stage.get(t) {
+                        if zeta > 0.0 {
+                            for &rhs_hm3 in &ws.noise_buf {
+                                ws.inflow_m3s_buf.push(rhs_hm3 / zeta);
+                            }
+                        }
+                    }
+
                     // Extract per-entity typed result for this stage.
                     let stage_result = extract_stage_result(
                         view.primal,
@@ -290,6 +314,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         indexer,
                         stage_id_u32,
                         entity_counts,
+                        &ws.inflow_m3s_buf,
                     );
 
                     // Accumulate per-category costs for this stage.
@@ -710,6 +735,8 @@ mod tests {
             solver,
             patch_buf: PatchBuffer::new(1, 0), // N=1, L=0
             current_state: Vec::with_capacity(1),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
         }]
     }
 
@@ -757,6 +784,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -823,6 +853,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         );
 
         match result {
@@ -883,6 +916,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         );
 
         match result {
@@ -941,6 +977,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         );
 
         assert!(
@@ -1000,6 +1039,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         )
         .unwrap();
 
@@ -1057,6 +1099,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         )
         .unwrap();
 
@@ -1110,6 +1155,9 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         )
         .unwrap();
 
@@ -1163,6 +1211,9 @@ mod tests {
             &comm,
             &tx1,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         )
         .unwrap();
 
@@ -1173,6 +1224,8 @@ mod tests {
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0),
                 current_state: Vec::with_capacity(1),
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
             })
             .collect();
         let costs_4 = simulate(
@@ -1189,6 +1242,9 @@ mod tests {
             &comm,
             &tx4,
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
         )
         .unwrap();
 

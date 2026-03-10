@@ -594,6 +594,8 @@ fn train_simulate_write_cycle() {
         1,
         || Ok(MockSolver::with_fixed(100.0)),
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .expect("train must succeed");
 
@@ -705,11 +707,12 @@ fn train_simulate_write_cycle() {
         collected
     });
 
-    let mut sim_workspaces = vec![SolverWorkspace {
-        solver: sim_solver,
-        patch_buf: PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
-        current_state: Vec::with_capacity(fx.indexer.n_state),
-    }];
+    let mut sim_workspaces = vec![SolverWorkspace::new(
+        sim_solver,
+        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+        fx.indexer.n_state,
+        fx.indexer.hydro_count,
+    )];
 
     simulate(
         &mut sim_workspaces,
@@ -725,6 +728,9 @@ fn train_simulate_write_cycle() {
         &sim_comm,
         &result_tx,
         &InflowNonNegativityMethod::None,
+        &[],
+        0,
+        &[],
     )
     .expect("simulate must succeed");
 

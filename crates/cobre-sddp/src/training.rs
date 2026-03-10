@@ -26,9 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -39,8 +39,6 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer, StoppingRuleSet,
-    TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -53,6 +51,8 @@ use crate::{
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool},
+    HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer, StoppingRuleSet,
+    TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -242,6 +242,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     n_fwd_threads: usize,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
     inflow_method: &InflowNonNegativityMethod,
+    noise_scale: &[f64],
+    n_hydros: usize,
 ) -> Result<TrainingResult, SddpError> {
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
@@ -350,6 +352,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             indexer,
             my_fwd_offset,
             inflow_method,
+            noise_scale,
+            n_hydros,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -398,6 +402,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             comm,
             my_actual_fwd,
             my_fwd_offset,
+            noise_scale,
+            n_hydros,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
@@ -477,6 +483,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             indexer,
             &mut patch_buf,
             opening_tree,
+            noise_scale,
+            n_hydros,
             &risk_measures[0],
             comm,
         )?;
@@ -585,24 +593,24 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
+        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
+        cut::fcf::FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -773,12 +781,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -1034,6 +1042,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1091,6 +1101,8 @@ mod tests {
             1,
             || Ok(MockSolver::infeasible()),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         );
 
         assert!(
@@ -1157,6 +1169,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1268,6 +1282,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1324,6 +1340,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         );
 
         assert!(result.is_ok(), "train with no event_sender must not panic");
@@ -1378,6 +1396,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1439,6 +1459,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1513,6 +1535,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1606,6 +1630,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 
@@ -1688,6 +1714,8 @@ mod tests {
             1,
             || Ok(MockSolver::with_fixed(100.0)),
             &InflowNonNegativityMethod::None,
+            &[],
+            0,
         )
         .unwrap();
 

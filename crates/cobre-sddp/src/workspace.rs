@@ -96,6 +96,10 @@ use crate::lp_builder::PatchBuffer;
 ///   solves in the thread to avoid per-solve allocation on the hot path.
 /// - `current_state`: scratch buffer for the current state vector. Pre-allocated
 ///   to avoid hot-path allocation.
+/// - `noise_buf`: scratch buffer for transformed noise values `ζ*base + ζ*σ*η`.
+///   Pre-allocated to hydro count; cleared and refilled at each stage solve.
+/// - `inflow_m3s_buf`: scratch buffer for inflow in m³/s (`noise_buf` / ζ).
+///   Used by the simulation pipeline to pass inflow values to result extraction.
 pub struct SolverWorkspace<S: SolverInterface> {
     /// LP solver instance owned exclusively by this workspace.
     pub solver: S,
@@ -103,6 +107,60 @@ pub struct SolverWorkspace<S: SolverInterface> {
     pub patch_buf: PatchBuffer,
     /// Scratch buffer for the current state vector. Capacity equals `n_state`.
     pub current_state: Vec<f64>,
+    /// Scratch buffer for transformed noise: `ζ*base + ζ*σ*η` per hydro.
+    /// Capacity equals `hydro_count`.
+    pub(crate) noise_buf: Vec<f64>,
+    /// Scratch buffer for inflow in m³/s, derived from `noise_buf / ζ`.
+    /// Used by the simulation pipeline for output reporting.
+    pub(crate) inflow_m3s_buf: Vec<f64>,
+}
+
+impl<S: SolverInterface> SolverWorkspace<S> {
+    /// Construct a workspace with the given solver, patch buffer, and state capacity.
+    ///
+    /// `hydro_count` determines the pre-allocated capacity of the internal
+    /// noise scratch buffer. Set to the number of hydro plants in the LP model.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cobre_sddp::workspace::SolverWorkspace;
+    /// use cobre_sddp::lp_builder::PatchBuffer;
+    /// use cobre_solver::{Basis, SolverInterface, SolutionView, SolverError, SolverStatistics};
+    /// use cobre_solver::types::{RowBatch, StageTemplate};
+    ///
+    /// struct NullSolver;
+    ///
+    /// impl SolverInterface for NullSolver {
+    ///     fn load_model(&mut self, _t: &StageTemplate) {}
+    ///     fn add_rows(&mut self, _r: &RowBatch) {}
+    ///     fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
+    ///     fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
+    ///     fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
+    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
+    ///     }
+    ///     fn reset(&mut self) {}
+    ///     fn get_basis(&mut self, _out: &mut Basis) {}
+    ///     fn solve_with_basis(&mut self, _b: &Basis) -> Result<SolutionView<'_>, SolverError> {
+    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
+    ///     }
+    ///     fn statistics(&self) -> SolverStatistics { SolverStatistics::default() }
+    ///     fn name(&self) -> &'static str { "Null" }
+    /// }
+    ///
+    /// let ws = SolverWorkspace::new(NullSolver, PatchBuffer::new(3, 2), 9, 3);
+    /// assert_eq!(ws.current_state.capacity(), 9);
+    /// ```
+    #[must_use]
+    pub fn new(solver: S, patch_buf: PatchBuffer, n_state: usize, hydro_count: usize) -> Self {
+        Self {
+            solver,
+            patch_buf,
+            current_state: Vec::with_capacity(n_state),
+            noise_buf: Vec::with_capacity(hydro_count),
+            inflow_m3s_buf: Vec::with_capacity(hydro_count),
+        }
+    }
 }
 
 /// A pool of [`SolverWorkspace`] instances, one per worker thread.
@@ -178,6 +236,8 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory(),
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order),
                 current_state: Vec::with_capacity(n_state),
+                noise_buf: Vec::with_capacity(hydro_count),
+                inflow_m3s_buf: Vec::with_capacity(hydro_count),
             })
             .collect();
         Self { workspaces }
@@ -214,6 +274,8 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory()?,
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order),
                 current_state: Vec::with_capacity(n_state),
+                noise_buf: Vec::with_capacity(hydro_count),
+                inflow_m3s_buf: Vec::with_capacity(hydro_count),
             });
         }
         Ok(Self { workspaces })

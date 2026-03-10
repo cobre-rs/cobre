@@ -20,29 +20,29 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
+    OpeningTree, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 use cobre_io::{
-    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
-    SimulationOutput, StageCutsPayload,
+    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
+    write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
-    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, build_training_output, simulate, train,
 };
 
 /// Single-rank communicator for testing.
@@ -776,9 +776,11 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(output_dir
-        .join("training/timing/iterations.parquet")
-        .is_file());
+    assert!(
+        output_dir
+            .join("training/timing/iterations.parquet")
+            .is_file()
+    );
 
     let manifest_path = output_dir.join("training/_manifest.json");
     assert!(manifest_path.is_file());

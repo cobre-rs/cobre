@@ -26,13 +26,13 @@
 
 use std::ops::Range;
 
+use crate::StageIndexer;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
     SimulationThermalResult,
 };
-use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -569,11 +569,7 @@ pub fn extract_stage_result(
                         spot_price: {
                             let raw = dual.get(load_row).copied().unwrap_or(0.0);
                             let hrs = block_hours.get(b).copied().unwrap_or(0.0);
-                            if hrs > 0.0 {
-                                raw / hrs
-                            } else {
-                                0.0
-                            }
+                            if hrs > 0.0 { raw / hrs } else { 0.0 }
                         },
                     }
                 })
@@ -714,9 +710,9 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts};
-    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
+    use super::{EntityCounts, accumulate_category_costs, assign_scenarios, extract_stage_result};
     use crate::StageIndexer;
+    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -934,7 +930,7 @@ mod tests {
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-                                                 // Hydro 10, lag 0 → primal[2] = 50.0
+        // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);

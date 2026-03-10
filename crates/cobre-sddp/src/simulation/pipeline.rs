@@ -40,7 +40,7 @@
 //! ## Hot-path allocation discipline
 //!
 //! No allocations occur per scenario or per stage during the inner loops.
-//! Each [`SolverWorkspace`] pre-allocates its [`PatchBuffer`] and
+//! Each [`SolverWorkspace`] pre-allocates its [`crate::PatchBuffer`] and
 //! `current_state`. The per-worker `basis_cache` (`Vec<Option<Basis>>`) is
 //! allocated once per parallel worker before the scenario loop. The
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
@@ -50,10 +50,11 @@ use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{sample_forward, StochasticContext};
+use cobre_stochastic::{StochasticContext, sample_forward};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
     forward::{build_cut_row_batch, partition},
     simulation::{
         config::SimulationConfig,
@@ -63,7 +64,6 @@ use crate::{
         types::{ScenarioCategoryCosts, SimulationScenarioResult},
     },
     workspace::SolverWorkspace,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -404,9 +404,9 @@ mod tests {
 
     use super::simulate;
     use crate::{
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::SolverWorkspace,
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────

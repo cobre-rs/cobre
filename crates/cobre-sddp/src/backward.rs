@@ -46,7 +46,7 @@
 //! `par_iter_mut`. Trial points are statically partitioned across workspaces
 //! (not rayon default work-stealing) to ensure deterministic assignment.
 //!
-//! Each worker thread generates cuts into a thread-local [`StagedCut`] buffer
+//! Each worker thread generates cuts into a thread-local `StagedCut` buffer
 //! rather than directly into the FCF. After the parallel region completes for
 //! a stage, the staged cuts are sorted by `trial_point_idx` and inserted into
 //! the FCF in that deterministic order. This ensures bit-for-bit identical
@@ -64,7 +64,7 @@
 //! - One `Vec<StagedCut>` per stage for the merge phase (bounded by
 //!   `local_work` entries, each holding one cut and its binding slot list).
 //!
-//! The `binding_slots` vector inside each [`StagedCut`] is allocated per
+//! The `binding_slots` vector inside each `StagedCut` is allocated per
 //! trial point — a flat buffer optimization is deferred to profiling.
 
 use std::time::Instant;
@@ -75,12 +75,12 @@ use cobre_stochastic::StochasticContext;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
     forward::{build_cut_row_batch, partition},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
-    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -136,7 +136,7 @@ struct StagedCut {
 /// no successor stage and therefore produces no cuts). For each stage, the
 /// trial-point loop is parallelised across the provided [`SolverWorkspace`]
 /// instances using static work partitioning. Each worker generates cut data
-/// into a thread-local [`StagedCut`] buffer. After the parallel region, staged
+/// into a thread-local `StagedCut` buffer. After the parallel region, staged
 /// cuts are sorted by trial-point index and inserted into the FCF in
 /// deterministic order.
 ///
@@ -443,11 +443,11 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{run_backward_pass, BackwardResult};
+    use super::{BackwardResult, run_backward_pass};
     use crate::{
-        workspace::{BasisStore, SolverWorkspace},
         ExchangeBuffers, FutureCostFunction, HorizonMode, RiskMeasure, StageIndexer,
         TrajectoryRecord,
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Stub communicator for tests (single-rank).
@@ -695,6 +695,7 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -703,7 +704,6 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;

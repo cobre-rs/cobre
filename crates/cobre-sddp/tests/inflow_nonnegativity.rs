@@ -38,24 +38,24 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
+    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
-    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
-    lp_builder::build_stage_templates, simulate, train, EntityCounts, FutureCostFunction,
-    HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig,
-    SolverWorkspace, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, PrecomputedParLp, StochasticContext,
+    OpeningTree, PrecomputedParLp, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 // ===========================================================================

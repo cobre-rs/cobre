@@ -418,9 +418,7 @@ impl BasisStoreSliceMut<'_> {
     /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
     #[must_use]
     pub fn get(&self, scenario: usize, stage: usize) -> Option<&Basis> {
-        let local = scenario
-            .checked_sub(self.scenario_offset)
-            .expect("scenario must be >= scenario_offset");
+        let local = scenario - self.scenario_offset;
         self.bases[local * self.num_stages + stage].as_ref()
     }
 
@@ -431,9 +429,7 @@ impl BasisStoreSliceMut<'_> {
     ///
     /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
     pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<Basis> {
-        let local = scenario
-            .checked_sub(self.scenario_offset)
-            .expect("scenario must be >= scenario_offset");
+        let local = scenario - self.scenario_offset;
         &mut self.bases[local * self.num_stages + stage]
     }
 }
@@ -442,8 +438,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        types::{RowBatch, StageTemplate},
         Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
+        types::{RowBatch, StageTemplate},
     };
 
     /// Minimal no-op solver for workspace tests.

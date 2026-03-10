@@ -80,11 +80,10 @@ pub struct ModelingConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct InflowNonNegativityConfig {
-    /// Method: `"none"`, `"penalty"`, `"truncation"`, or `"truncation_with_penalty"`.
+    /// Method: `"none"` or `"penalty"`.
     pub method: String,
 
-    /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"` or
-    /// `"truncation_with_penalty"`.
+    /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"`.
     pub penalty_cost: f64,
 }
 
@@ -673,7 +672,7 @@ mod tests {
           "version": "2.0.0",
           "modeling": {
             "inflow_non_negativity": {
-              "method": "truncation",
+              "method": "penalty",
               "penalty_cost": 500.0
             }
           },
@@ -734,7 +733,7 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
 
         // Modeling
-        assert_eq!(cfg.modeling.inflow_non_negativity.method, "truncation");
+        assert_eq!(cfg.modeling.inflow_non_negativity.method, "penalty");
         assert!((cfg.modeling.inflow_non_negativity.penalty_cost - 500.0).abs() < f64::EPSILON);
 
         // Training

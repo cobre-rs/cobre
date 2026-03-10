@@ -46,8 +46,8 @@ use cobre_stochastic::{
 };
 
 use cobre_sddp::{
-    HorizonMode, RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig, cut::fcf::FutureCostFunction, train,
+    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -531,6 +531,11 @@ fn train_converges_with_mock_solver() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -591,6 +596,11 @@ fn train_deterministic_with_same_seed() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(50.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -621,6 +631,11 @@ fn train_deterministic_with_same_seed() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(50.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -680,6 +695,11 @@ fn train_lb_monotonically_nondecreasing() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -746,6 +766,11 @@ fn train_emits_correct_event_sequence() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -825,6 +850,11 @@ fn train_stops_at_iteration_limit() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -881,6 +911,11 @@ fn train_stops_on_graceful_shutdown() {
         None,
         Some(&shutdown_flag),
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .unwrap();
 
@@ -927,6 +962,11 @@ fn train_propagates_infeasible_error() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::infeasible_on_first()),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     );
 
     assert!(

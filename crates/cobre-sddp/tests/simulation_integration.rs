@@ -40,9 +40,9 @@ use cobre_io::{
     write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_training_output, simulate,
-    train,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, build_training_output, simulate, train,
 };
 
 /// Single-rank communicator for testing.
@@ -591,6 +591,11 @@ fn train_simulate_write_cycle() {
         None,
         None,
         &comm,
+        1,
+        || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
     )
     .expect("train must succeed");
 
@@ -673,7 +678,7 @@ fn train_simulate_write_cycle() {
     write_policy_checkpoint(&policy_dir, &stage_cuts_payloads, &[], &policy_metadata)
         .expect("write_policy_checkpoint must succeed");
 
-    let mut sim_solver = MockSolver::with_fixed(100.0);
+    let sim_solver = MockSolver::with_fixed(100.0);
     let sim_comm = StubComm;
 
     let sim_config = SimulationConfig {
@@ -702,8 +707,15 @@ fn train_simulate_write_cycle() {
         collected
     });
 
+    let mut sim_workspaces = vec![SolverWorkspace::new(
+        sim_solver,
+        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+        fx.indexer.n_state,
+        fx.indexer.hydro_count,
+    )];
+
     simulate(
-        &mut sim_solver,
+        &mut sim_workspaces,
         &fx.templates,
         &fx.base_rows,
         &fcf,
@@ -715,6 +727,11 @@ fn train_simulate_write_cycle() {
         &entity_counts,
         &sim_comm,
         &result_tx,
+        &InflowNonNegativityMethod::None,
+        &[],
+        0,
+        &[],
+        &[],
     )
     .expect("simulate must succeed");
 

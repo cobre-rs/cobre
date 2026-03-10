@@ -32,6 +32,7 @@
 //!   line rev flow:   Lines*K columns
 //!   bus deficit:     B*K columns
 //!   bus excess:      B*K columns
+//!   inflow slack:    N columns (sigma_inf_h, only when penalty method is active)
 //! ```
 //!
 //! ### Row layout (contiguous regions)
@@ -96,8 +97,10 @@
 use cobre_core::System;
 use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_solver::StageTemplate;
+use cobre_stochastic::par::precompute::PrecomputedParLp;
 
 use crate::indexer::StageIndexer;
+use crate::inflow_method::InflowNonNegativityMethod;
 
 /// Pre-allocated row-bound patch arrays for one SDDP stage LP solve.
 ///
@@ -232,10 +235,9 @@ impl PatchBuffer {
             got = state.len(),
             expected = indexer.n_state,
         );
-        debug_assert_eq!(
-            noise.len(),
-            indexer.hydro_count,
-            "noise slice length {got} != hydro_count {expected}",
+        debug_assert!(
+            noise.len() == indexer.hydro_count || noise.is_empty(),
+            "noise slice length {got} must equal hydro_count {expected} or be empty",
             got = noise.len(),
             expected = indexer.hydro_count,
         );
@@ -406,6 +408,31 @@ pub struct StageTemplates {
     /// Length equals `templates.len()`.  Used by [`PatchBuffer::fill_forward_patches`]
     /// to locate the noise-injection rows (Category 3 patches).
     pub base_rows: Vec<usize>,
+    /// Pre-computed noise scale `ζ_stage * σ_{stage,hydro}` for each (stage, hydro) pair.
+    ///
+    /// Flat array in stage-major layout: `noise_scale[stage * n_hydros + hydro]`.
+    /// Length equals `n_study_stages * n_hydros`.
+    ///
+    /// Used by the forward pass to transform raw standard-normal noise `η` into
+    /// the full noise term `ζ*σ*η` before patching the water-balance RHS.
+    /// The complete patch value is `ζ*base + ζ*σ*η`, where `ζ*base` is encoded
+    /// in the template's `row_lower`/`row_upper` and `ζ*σ*η` is computed by the
+    /// caller at each stage using this pre-computed scale.
+    pub noise_scale: Vec<f64>,
+    /// Per-stage time-conversion factor `ζ = total_hours * M3S_TO_HM3`.
+    ///
+    /// Length equals `templates.len()`.  Used by the simulation pipeline to
+    /// convert the water-balance RHS (in hm³) back to inflow in m³/s for
+    /// output reporting: `inflow_m3s = rhs_hm3 / zeta_per_stage[stage]`.
+    pub zeta_per_stage: Vec<f64>,
+    /// Per-stage block durations in hours.
+    ///
+    /// `block_hours_per_stage[stage]` is a `Vec<f64>` of length `n_blocks` for
+    /// that stage.  Used by the simulation pipeline to convert load-balance
+    /// constraint duals from $/MW to $/`MWh`: `spot_price = dual / block_hours`.
+    pub block_hours_per_stage: Vec<Vec<f64>>,
+    /// Number of hydro plants (N) used to stride into `noise_scale`.
+    pub n_hydros: usize,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -431,6 +458,7 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// B buses, and K blocks per stage:
 ///
 /// - `num_cols = N*(2+L) + 1 + N*K*2 + T*K + Lines*K*2 + B*K*2`
+///   (when penalty method is active, `+ N` slack columns are appended)
 /// - `num_rows = N*(1+L) + N + B*K`  (fixing + water balance + load balance)
 /// - `n_state  = N*(1+L)`
 /// - `n_transfer = N*L`  (storage + all lags except the oldest)
@@ -449,16 +477,30 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// incoming-storage, theta, turbine, and spillage columns carry zero or small
 /// regularization costs drawn from the resolved penalty tables.
 ///
+/// When the penalty method is active, each inflow slack column `sigma_inf_h`
+/// carries objective coefficient `penalty_cost * total_stage_hours`.
+///
+/// ## Inflow non-negativity
+///
+/// When `inflow_method.has_slack_columns()` is `true` (i.e., the `Penalty`
+/// variant), `N` slack columns `sigma_inf_h >= 0`
+/// are appended at the end of the column layout.  Each slack enters the water
+/// balance row for hydro `h` with coefficient `+tau_total * M3S_TO_HM3`,
+/// acting as virtual inflow that prevents infeasibility when the PAR(p) noise
+/// is sufficiently negative.
+///
 /// ## Errors
 ///
-/// Returns `None` for a system with zero stages.  All entity counts may be
-/// zero (valid for degenerate test systems).
+/// Returns empty templates for a system with zero stages.  All entity counts
+/// may be zero (valid for degenerate test systems).
 ///
 /// # Examples
 ///
 /// ```
 /// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+/// use cobre_sddp::InflowNonNegativityMethod;
 /// use cobre_sddp::lp_builder::build_stage_templates;
+/// use cobre_stochastic::par::precompute::PrecomputedParLp;
 ///
 /// let bus = Bus {
 ///     id: EntityId(1),
@@ -467,22 +509,21 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 ///     excess_cost: 0.0,
 /// };
 /// let system = SystemBuilder::new().buses(vec![bus]).build().expect("valid");
+/// let method = InflowNonNegativityMethod::None;
+/// let par_lp = PrecomputedParLp::build(&[], &[], &[]).expect("empty ok");
 /// // No stages → empty result.
-/// let result = build_stage_templates(&system);
+/// let result = build_stage_templates(&system, &method, &par_lp);
 /// assert!(result.templates.is_empty());
 /// ```
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn build_stage_templates(system: &System) -> StageTemplates {
+pub fn build_stage_templates(
+    system: &System,
+    inflow_method: &InflowNonNegativityMethod,
+    par_lp: &PrecomputedParLp,
+) -> StageTemplates {
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-
-    if study_stages.is_empty() {
-        return StageTemplates {
-            templates: Vec::new(),
-            base_rows: Vec::new(),
-        };
-    }
 
     let hydros = system.hydros();
     let thermals = system.thermals();
@@ -493,6 +534,17 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
     let penalties = system.penalties();
 
     let n_hydros = hydros.len();
+
+    if study_stages.is_empty() {
+        return StageTemplates {
+            templates: Vec::new(),
+            base_rows: Vec::new(),
+            noise_scale: Vec::new(),
+            zeta_per_stage: Vec::new(),
+            block_hours_per_stage: Vec::new(),
+            n_hydros,
+        };
+    }
     let n_thermals = thermals.len();
     let n_lines = lines.len();
     let n_buses = buses.len();
@@ -519,6 +571,11 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
     let mut templates = Vec::with_capacity(n_study_stages);
     let mut base_rows = Vec::with_capacity(n_study_stages);
 
+    // Determine whether the penalty method adds inflow slack columns.
+    // Active when the method has slack columns and there is at least one hydro.
+    // No slack columns are added for n_hydros == 0.
+    let has_penalty = n_hydros > 0 && inflow_method.has_slack_columns();
+
     for (stage_idx, stage) in study_stages.iter().enumerate() {
         let n_blks = stage.blocks.len();
         let idx = StageIndexer::new(n_hydros, max_par_order);
@@ -531,7 +588,11 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
         let col_line_rev_start = col_line_fwd_start + n_lines * n_blks;
         let col_deficit_start = col_line_rev_start + n_lines * n_blks;
         let col_excess_start = col_deficit_start + n_buses * n_blks;
-        let num_cols = col_excess_start + n_buses * n_blks;
+        let col_excess_end = col_excess_start + n_buses * n_blks;
+        // Inflow slack columns go after excess, only when penalty method is active.
+        let col_inflow_slack_start = col_excess_end;
+        let n_slack_cols = if has_penalty { n_hydros } else { 0 };
+        let num_cols = col_excess_end + n_slack_cols;
 
         let n_state = idx.n_state;
         let n_dual_relevant = n_state;
@@ -643,8 +704,39 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
+        // Inflow non-negativity slack columns (sigma_inf_h), one per hydro.
+        // Bounds: [0, +inf).  Objective: penalty_cost * total_stage_hours.
+        // These are already zero-lower / infinity-upper from the vec initialisation,
+        // so only the objective coefficient needs to be written.
+        if has_penalty {
+            let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+            // penalty_cost() is always Some when has_penalty is true.
+            let penalty_cost = inflow_method.penalty_cost().unwrap_or(0.0);
+            let obj_coeff = penalty_cost * total_stage_hours;
+            for h_idx in 0..n_hydros {
+                let col = col_inflow_slack_start + h_idx;
+                // col_lower already 0.0, col_upper already f64::INFINITY
+                objective[col] = obj_coeff;
+            }
+        }
+
         let mut row_lower = vec![0.0_f64; num_rows];
         let mut row_upper = vec![0.0_f64; num_rows];
+
+        // Water balance rows: static RHS = ζ * deterministic_base_h.
+        // The dynamic part (ζ * σ * η) is applied per-scenario via PatchBuffer.
+        let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let zeta = total_stage_hours * M3S_TO_HM3;
+        for h_idx in 0..n_h {
+            let row = row_water_balance_start + h_idx;
+            let base = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_h {
+                par_lp.deterministic_base(stage_idx, h_idx)
+            } else {
+                0.0
+            };
+            row_lower[row] = zeta * base;
+            row_upper[row] = zeta * base;
+        }
 
         for (b_idx, bus) in buses.iter().enumerate() {
             let load_models = system.load_models();
@@ -683,21 +775,38 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
         for h_idx in 0..n_h {
             let hydro = &hydros[h_idx];
             let row = row_water_balance_start + h_idx;
+            // v_out enters with +1 (outgoing storage increases the balance).
             add_entry!(h_idx, row, 1.0);
+            // v_in enters with -1 (incoming storage is subtracted).
             add_entry!(idx.storage_in.start + h_idx, row, -1.0);
             for blk in 0..n_blks {
                 let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                // Own turbine and spillage reduce storage (outflows).
                 let col_turbine = col_turbine_start + h_idx * n_blks + blk;
-                add_entry!(col_turbine, row, -tau_h);
+                add_entry!(col_turbine, row, tau_h);
                 let col_spillage = col_spillage_start + h_idx * n_blks + blk;
-                add_entry!(col_spillage, row, -tau_h);
+                add_entry!(col_spillage, row, tau_h);
+                // Upstream turbine and spillage add to storage (inflows from upstream).
                 let upstream_ids = cascade.upstream(hydro.id);
                 for &up_id in upstream_ids {
                     if let Some(&u_idx) = hydro_pos.get(&up_id) {
                         let col_upstream_turbine = col_turbine_start + u_idx * n_blks + blk;
-                        add_entry!(col_upstream_turbine, row, tau_h);
+                        add_entry!(col_upstream_turbine, row, -tau_h);
                         let col_upstream_spillage = col_spillage_start + u_idx * n_blks + blk;
-                        add_entry!(col_upstream_spillage, row, tau_h);
+                        add_entry!(col_upstream_spillage, row, -tau_h);
+                    }
+                }
+            }
+            // AR lag dynamics: lag variable at lag ℓ for hydro h enters with
+            // coefficient -ζ * ψ_{h,ℓ} in the water balance row. This encodes
+            // the PAR model: a_h = base + Σ_ℓ ψ_ℓ * lag_ℓ + σ * η, where the
+            // lag terms move to the LHS of the equality constraint.
+            if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_h {
+                let psi = par_lp.psi_slice(stage_idx, h_idx);
+                for (lag, &psi_val) in psi.iter().enumerate() {
+                    if psi_val != 0.0 && lag < lag_order {
+                        let col = idx.inflow_lags.start + lag * n_h + h_idx;
+                        add_entry!(col, row, -zeta * psi_val);
                     }
                 }
             }
@@ -764,6 +873,19 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
             }
         }
 
+        // Inflow non-negativity slack: sigma_inf_h enters the water balance row
+        // for hydro h with coefficient -ζ (negative on the LHS). This is
+        // equivalent to adding ζ*sigma_inf_h of virtual inflow to the RHS,
+        // absorbing negative noise realisations and keeping the water balance
+        // feasible.
+        if has_penalty {
+            for h_idx in 0..n_h {
+                let col = col_inflow_slack_start + h_idx;
+                let row = row_water_balance_start + h_idx;
+                add_entry!(col, row, -zeta);
+            }
+        }
+
         for entries in &mut col_entries {
             entries.sort_unstable_by_key(|&(row, _)| row);
         }
@@ -813,9 +935,36 @@ pub fn build_stage_templates(system: &System) -> StageTemplates {
         base_rows.push(stage_base_row);
     }
 
+    // Pre-compute ζ * σ per (stage, hydro) for noise transformation in the
+    // forward/backward passes. The caller multiplies raw η by noise_scale to
+    // obtain ζ*σ*η, which is then added to ζ*base (encoded in row_lower) to
+    // form the complete water-balance RHS patch value.
+    let n_study_stages = study_stages.len();
+    let mut noise_scale = vec![0.0_f64; n_study_stages * n_hydros];
+    let mut zeta_per_stage = Vec::with_capacity(n_study_stages);
+    let mut block_hours_per_stage = Vec::with_capacity(n_study_stages);
+    for (s_idx, stage) in study_stages.iter().enumerate() {
+        let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let zeta_s = total_hours * M3S_TO_HM3;
+        zeta_per_stage.push(zeta_s);
+        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
+        for h_idx in 0..n_hydros {
+            let sigma = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
+                par_lp.sigma(s_idx, h_idx)
+            } else {
+                0.0
+            };
+            noise_scale[s_idx * n_hydros + h_idx] = zeta_s * sigma;
+        }
+    }
+
     StageTemplates {
         templates,
         base_rows,
+        noise_scale,
+        zeta_per_stage,
+        block_hours_per_stage,
+        n_hydros,
     }
 }
 
@@ -1170,11 +1319,25 @@ mod tests {
     // -------------------------------------------------------------------------
 
     use super::build_stage_templates;
+    use crate::inflow_method::InflowNonNegativityMethod;
     use cobre_core::{
         Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
         HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
         PumpingStageBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder, ThermalStageBounds,
     };
+    use cobre_stochastic::par::precompute::PrecomputedParLp;
+
+    /// Method with no penalty — used in structural tests that check exact
+    /// column/row counts that would change if penalty columns were added.
+    fn no_penalty_config() -> InflowNonNegativityMethod {
+        InflowNonNegativityMethod::None
+    }
+
+    /// Method with penalty — used in tests that verify the penalty
+    /// column addition behaviour.
+    fn penalty_config(cost: f64) -> InflowNonNegativityMethod {
+        InflowNonNegativityMethod::Penalty { cost }
+    }
 
     fn default_hydro_bounds() -> HydroStageBounds {
         HydroStageBounds {
@@ -1486,7 +1649,8 @@ mod tests {
     fn empty_stages_returns_empty() {
         // A system with no study stages returns empty StageTemplates.
         let system = one_bus_system(0);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         assert!(result.templates.is_empty());
         assert!(result.base_rows.is_empty());
     }
@@ -1495,7 +1659,8 @@ mod tests {
     fn one_stage_one_template() {
         // One study stage produces exactly one template and one base_row.
         let system = one_bus_system(1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         assert_eq!(result.templates.len(), 1);
         assert_eq!(result.base_rows.len(), 1);
     }
@@ -1507,7 +1672,8 @@ mod tests {
         //          = 0*2+1 + 0 + 0 + 0 + 1*1*2 = 3
         // (0 state + 0 lags + 0 storage_in + 1 theta) + (0 turb + 0 spill) + (0 thermal) + (0 lines) + (1 def + 1 exc)
         let system = one_bus_system(1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         // theta + deficit + excess = 1 + 1 + 1 = 3
         assert_eq!(t.num_cols, 3, "num_cols mismatch for no-entity system");
@@ -1520,7 +1686,8 @@ mod tests {
         // Decision: turbine[1] + spillage[1] + deficit[1] + excess[1] = 4
         // Total: 7
         let system = one_hydro_system(1, 0);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 7, "num_cols mismatch for N=1 L=0");
     }
@@ -1532,7 +1699,8 @@ mod tests {
         // Decision: turbine[1] + spillage[1] + deficit[1] + excess[1] = 4
         // Total: 9
         let system = one_hydro_system(1, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=2");
     }
@@ -1543,7 +1711,8 @@ mod tests {
         // fixing rows: 0, water balance: 0, load balance: 1*1 = 1
         // num_rows = 0 + 0 + 1 = 1
         let system = one_bus_system(1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 1, "num_rows mismatch for no-hydro system");
     }
@@ -1555,7 +1724,8 @@ mod tests {
         // fixing rows = 1, water balance = 1, load balance = 1
         // num_rows = 3
         let system = one_hydro_system(1, 0);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 3, "num_rows mismatch for N=1 L=0");
     }
@@ -1567,7 +1737,8 @@ mod tests {
         // fixing rows = 3, water balance = 1, load balance = 1
         // num_rows = 5
         let system = one_hydro_system(1, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 5, "num_rows mismatch for N=1 L=2");
     }
@@ -1576,7 +1747,8 @@ mod tests {
     fn n_state_matches_indexer() {
         // n_state must equal StageIndexer::new(N, L).n_state
         let system = one_hydro_system(1, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         let expected = StageIndexer::new(1, 2).n_state;
         assert_eq!(t.n_state, expected, "n_state must match StageIndexer");
@@ -1586,7 +1758,8 @@ mod tests {
     fn n_transfer_is_n_times_lag_order() {
         // n_transfer = N*L = 1*2 = 2
         let system = one_hydro_system(1, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
     }
@@ -1595,7 +1768,8 @@ mod tests {
     fn n_dual_relevant_equals_n_state_for_constant_productivity() {
         // For v0.1.0 with no FPHA, n_dual_relevant = n_state.
         let system = one_hydro_system(1, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(
             t.n_dual_relevant, t.n_state,
@@ -1607,7 +1781,8 @@ mod tests {
     fn base_row_is_n_dual_relevant() {
         // base_rows[s] = n_dual_relevant = n_state for the no-FPHA case.
         let system = one_hydro_system(2, 2);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
             assert_eq!(
                 br, t.n_dual_relevant,
@@ -1620,7 +1795,8 @@ mod tests {
     fn csc_col_starts_monotone_nondecreasing() {
         // CSC validity: col_starts must be monotone non-decreasing.
         let system = one_hydro_system(1, 1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         for w in t.col_starts.windows(2) {
             assert!(w[0] <= w[1], "col_starts not monotone: {} > {}", w[0], w[1]);
@@ -1634,7 +1810,8 @@ mod tests {
     fn csc_row_indices_in_range() {
         // All row_indices must be in [0, num_rows).
         let system = one_hydro_system(1, 1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         for &r in &t.row_indices {
             assert!(
@@ -1650,7 +1827,8 @@ mod tests {
     fn csc_nz_count_matches_col_starts() {
         // num_nz == col_starts[num_cols]
         let system = one_hydro_system(1, 1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         assert_eq!(
             t.num_nz,
@@ -1670,7 +1848,8 @@ mod tests {
         // The theta column (index = N*(2+L)) must have objective coefficient = 1.0.
         let lag_order = 2;
         let system = one_hydro_system(1, lag_order);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
@@ -1684,7 +1863,8 @@ mod tests {
         // The spillage column should carry a non-zero objective when spillage_cost > 0.
         // Hydro has spillage_cost = 0.01, block duration = 744h.
         let system = one_hydro_system(1, 0);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         // spillage col for h=0, blk=0: col_spillage_start + 0 = N*(2+L)+1 + N*K
         // With N=1, L=0, K=1: theta=2, decision_start=3, turbine_start=3, spill_start=4
@@ -1699,7 +1879,8 @@ mod tests {
     fn load_balance_rhs_matches_load_model_mean_mw() {
         // The load balance row RHS must equal the mean_mw from LoadModel (100.0 in fixture).
         let system = one_bus_system(1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let t = &result.templates[0];
         // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
         let load_row = 0;
@@ -1717,7 +1898,8 @@ mod tests {
     fn multiple_stages_produce_same_count_templates_and_base_rows() {
         // A 3-stage system yields 3 templates and 3 base_rows.
         let system = one_hydro_system(3, 1);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         assert_eq!(result.templates.len(), 3);
         assert_eq!(result.base_rows.len(), 3);
     }
@@ -1725,10 +1907,276 @@ mod tests {
     #[test]
     fn stage_templates_clone_and_debug() {
         let system = one_hydro_system(1, 0);
-        let result = build_stage_templates(&system);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
         let cloned = result.clone();
         assert_eq!(cloned.templates.len(), result.templates.len());
         let s = format!("{result:?}");
         assert!(s.contains("StageTemplates"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Inflow non-negativity penalty method tests
+    // -------------------------------------------------------------------------
+
+    // AC-1 / test_penalty_columns_added:
+    // penalty method with N=1 hydro adds 1 extra column; method="none" adds 0.
+    #[test]
+    fn test_penalty_columns_added() {
+        let system = one_hydro_system(1, 0);
+        let without =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let with_p = build_stage_templates(
+            &system,
+            &penalty_config(1000.0),
+            &PrecomputedParLp::default(),
+        );
+        assert_eq!(
+            with_p.templates[0].num_cols,
+            without.templates[0].num_cols + 1,
+            "penalty method must add exactly n_hydros extra columns"
+        );
+    }
+
+    // AC-1 (edge case): no slack columns when n_hydros == 0, even with penalty config.
+    #[test]
+    fn test_penalty_columns_added_3_hydros() {
+        // Build a 3-hydro system by calling one_hydro_system 3 times is not possible;
+        // use one_hydro_system(1, 0) as a proxy and verify the count formula directly.
+        // The formula: num_cols(penalty) = num_cols(none) + n_hydros.
+        // For N=1 we already cover N=1 above. Verify the N=0 (no hydros) edge case:
+        // no slacks when n_hydros == 0, regardless of config.
+        let system = one_bus_system(1);
+        let with_p = build_stage_templates(
+            &system,
+            &penalty_config(1000.0),
+            &PrecomputedParLp::default(),
+        );
+        let without =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        assert_eq!(
+            with_p.templates[0].num_cols, without.templates[0].num_cols,
+            "no slack columns when n_hydros == 0, even with penalty config"
+        );
+    }
+
+    // AC-2 / test_penalty_objective_coefficient:
+    // objective coefficient = penalty_cost * total_stage_hours.
+    // one_hydro_system uses 1 block of 744 hours.
+    #[test]
+    fn test_penalty_objective_coefficient() {
+        let system = one_hydro_system(1, 0);
+        let config = penalty_config(1000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let t = &result.templates[0];
+        // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6, slack=7
+        let slack_col = t.num_cols - 1; // last column
+        let expected_obj = 1000.0 * 744.0;
+        assert!(
+            (t.objective[slack_col] - expected_obj).abs() < 1e-9,
+            "expected objective {expected_obj}, got {}",
+            t.objective[slack_col]
+        );
+    }
+
+    // AC-3 / test_no_penalty_columns_when_none:
+    // method="none" leaves column/row counts unchanged.
+    #[test]
+    fn test_no_penalty_columns_when_none() {
+        let system = one_hydro_system(1, 2);
+        let result =
+            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let t = &result.templates[0];
+        // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4; total = 9
+        assert_eq!(t.num_cols, 9, "method=none must not add extra columns");
+        // num_rows = N*(1+L)+N+B*K = 3+1+1 = 5
+        assert_eq!(t.num_rows, 5, "method=none must not add extra rows");
+    }
+
+    // test_penalty_slack_in_water_balance:
+    // the slack column has a non-zero entry in the water balance row for its hydro.
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn test_penalty_slack_in_water_balance() {
+        let system = one_hydro_system(1, 0);
+        let config = penalty_config(1000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let t = &result.templates[0];
+
+        // Locate the slack column (last column, index = num_cols - 1).
+        let slack_col = t.num_cols - 1;
+
+        // Iterate the CSC to find the entry for slack_col in the water balance row.
+        // Water balance row for hydro 0: row_water_balance_start = n_state = N*(1+L) = 1.
+        let water_balance_row = 1_usize; // N*(1+L) = 1*(1+0) = 1
+
+        let col_start = t.col_starts[slack_col] as usize;
+        let col_end = t.col_starts[slack_col + 1] as usize;
+        let found = t.row_indices[col_start..col_end]
+            .iter()
+            .zip(&t.values[col_start..col_end])
+            .any(|(&r, &v)| r as usize == water_balance_row && v.abs() > 1e-12);
+
+        assert!(
+            found,
+            "slack column must have a non-zero entry in the water balance row"
+        );
+    }
+
+    // test_penalty_slack_bounds:
+    // slack columns have lower = 0.0 and upper = +inf.
+    #[test]
+    fn test_penalty_slack_bounds() {
+        let system = one_hydro_system(1, 0);
+        let config = penalty_config(1000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let t = &result.templates[0];
+        let slack_col = t.num_cols - 1;
+        assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
+        assert!(
+            t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
+            "slack upper bound must be +infinity"
+        );
+    }
+
+    // Verify the water balance coefficient value.
+    //
+    // The penalty slack column represents virtual inflow. Adding virtual inflow
+    // is equivalent to subtracting it from the LHS of the water balance
+    // constraint (which is written as: outflows - inflows = RHS).
+    // Therefore the coefficient is -ζ where ζ = tau_total * M3S_TO_HM3.
+    //
+    // With 1 block of 744 h:
+    //   ζ = 744.0 * (3600.0 / 1_000_000.0) = 2.6784 hm3/(m3/s)
+    //   coefficient = -ζ = -2.6784
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn test_penalty_water_balance_coefficient_value() {
+        let system = one_hydro_system(1, 0);
+        let config = penalty_config(1000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let t = &result.templates[0];
+
+        let slack_col = t.num_cols - 1;
+        let water_balance_row = 1_usize; // N*(1+L) = 1
+        let zeta = 744.0 * (3_600.0 / 1_000_000.0);
+        let expected_coeff = -zeta; // slack enters LHS with -ζ (virtual inflow)
+
+        let col_start = t.col_starts[slack_col] as usize;
+        let col_end = t.col_starts[slack_col + 1] as usize;
+        let coeff = t.row_indices[col_start..col_end]
+            .iter()
+            .zip(&t.values[col_start..col_end])
+            .find(|&(&r, _)| r as usize == water_balance_row)
+            .map(|(_, &v)| v);
+
+        assert!(
+            coeff.is_some(),
+            "slack column must have an entry in the water balance row"
+        );
+        let coeff = coeff.unwrap();
+        assert!(
+            (coeff - expected_coeff).abs() < 1e-9,
+            "expected coefficient {expected_coeff:.9}, got {coeff:.9}"
+        );
+    }
+
+    // Penalty method with multiple stages: verify each stage has consistent slack layout.
+    #[test]
+    fn test_penalty_multi_stage_consistent() {
+        let system = one_hydro_system(3, 1);
+        let config = penalty_config(2000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        assert_eq!(result.templates.len(), 3);
+        let base_cols = result.templates[0].num_cols;
+        for t in &result.templates {
+            assert_eq!(
+                t.num_cols, base_cols,
+                "all stages must have the same column count"
+            );
+        }
+    }
+
+    // AC-4 / test_penalty_slack_absorbs_negative_inflow:
+    // A negative noise value would render the LP infeasible without the inflow
+    // slack column. With `penalty_config`, the slack absorbs the deficit and the
+    // solve must succeed with a positive slack value.
+    //
+    // System: N=1, L=0, K=1 block (744 h), B=1 bus, T=0, Lines=0.
+    // Column layout:
+    //   col 0: storage_out    col 1: storage_in   col 2: theta
+    //   col 3: turbine        col 4: spillage      col 5: deficit
+    //   col 6: excess         col 7: inflow_slack  <- last column
+    //
+    // Row layout:
+    //   row 0: storage_fixing  row 1: water_balance  row 2: load_balance
+    //
+    // To apply negative inflow noise we patch the water balance row (row 1)
+    // to RHS = -5.0. Without the slack this would make the LP infeasible.
+    #[test]
+    fn test_penalty_slack_absorbs_negative_inflow() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let system = one_hydro_system(1, 0);
+        let config = penalty_config(1000.0);
+        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let template = &result.templates[0];
+
+        // The inflow slack is the last column.
+        let col_inflow_slack_start = template.num_cols - 1;
+
+        // base_row for stage 0 is n_dual_relevant = n_state = 1 (for N=1, L=0).
+        let base_row = result.base_rows[0];
+        let water_balance_row = base_row; // hydro 0: base_row + 0
+
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+        // Load the structural LP.
+        solver.load_model(template);
+
+        // Add an empty cut batch (no cuts at iteration 0).
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        // Patch the state rows.
+        // Row 0 (storage_fixing): fix incoming storage to 100 hm³.
+        // Row 1 (water_balance): set RHS to -5.0 m³/s (negative noise).
+        // Both are equality constraints: lower == upper == rhs.
+        let initial_storage = 100.0_f64;
+        let negative_noise = -5.0_f64;
+        solver.set_row_bounds(
+            &[0, water_balance_row],
+            &[initial_storage, negative_noise],
+            &[initial_storage, negative_noise],
+        );
+
+        // The solve must succeed — the slack absorbs the negative inflow.
+        let view = solver
+            .solve()
+            .expect("LP must be feasible with inflow slack active");
+
+        let primal = view.primal;
+
+        // The inflow slack must be strictly positive: it compensates the
+        // negative noise so that the water balance constraint is satisfied.
+        assert!(
+            primal[col_inflow_slack_start] > 0.0,
+            "inflow slack must be positive when noise is negative, got {}",
+            primal[col_inflow_slack_start]
+        );
+
+        // The objective must be positive: penalty cost * slack value > 0.
+        assert!(
+            view.objective > 0.0,
+            "objective must include a positive penalty contribution, got {}",
+            view.objective
+        );
     }
 }

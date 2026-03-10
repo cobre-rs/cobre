@@ -38,30 +38,49 @@
 //! metadata of binding cuts is updated in-place so that cut selection
 //! strategies have accurate activity counts at the end of the iteration.
 //!
+//! ## Thread-level parallelism
+//!
+//! Within a rank, the outer per-stage loop remains sequential (stage `t`
+//! depends on cuts generated at stage `t+1`). The inner trial-point loop is
+//! parallelised across [`SolverWorkspace`] instances using rayon's
+//! `par_iter_mut`. Trial points are statically partitioned across workspaces
+//! (not rayon default work-stealing) to ensure deterministic assignment.
+//!
+//! Each worker thread generates cuts into a thread-local `StagedCut` buffer
+//! rather than directly into the FCF. After the parallel region completes for
+//! a stage, the staged cuts are sorted by `trial_point_idx` and inserted into
+//! the FCF in that deterministic order. This ensures bit-for-bit identical
+//! results regardless of thread count or thread completion order.
+//!
 //! ## Hot-path allocation discipline
 //!
 //! Allocations are limited to:
 //! - One `Vec<f64>` for opening probabilities per stage (outside the trial
 //!   point loop).
-//! - One `Vec<BackwardOutcome>` pre-allocated before the trial point loop and
-//!   reused via `clear()` per trial point.
+//! - One `Vec<BackwardOutcome>` per worker thread, allocated once per stage
+//!   in the parallel region and reused via `clear()` per trial point.
 //! - One `RowBatch` per stage built by [`build_cut_row_batch`] (outside the
-//!   trial point loop).
+//!   trial point loop, before the parallel region).
+//! - One `Vec<StagedCut>` per stage for the merge phase (bounded by
+//!   `local_work` entries, each holding one cut and its binding slot list).
 //!
-//! The `binding_slots` buffer is pre-allocated and reused across openings.
-//! The `coefficients` `Vec<f64>` in [`BackwardOutcome`] is still allocated
-//! per opening — a flat buffer optimization is deferred to profiling.
+//! The `binding_slots` vector inside each `StagedCut` is allocated per
+//! trial point — a flat buffer optimization is deferred to profiling.
 
 use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::StochasticContext;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer,
-    forward::build_cut_row_batch, risk_measure::BackwardOutcome, risk_measure::RiskMeasure,
+    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
+    forward::{build_cut_row_batch, partition},
+    risk_measure::BackwardOutcome,
+    risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
+    workspace::{BasisStore, SolverWorkspace},
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -78,15 +97,51 @@ pub struct BackwardResult {
     pub lp_solves: u64,
 }
 
+/// Per-thread staging buffer for one aggregated cut produced at a single trial
+/// point during the parallel backward sweep.
+///
+/// Each worker thread populates one `StagedCut` per trial point instead of
+/// writing directly into the [`FutureCostFunction`]. After the parallel region,
+/// staged cuts are sorted by `trial_point_idx` and merged into the FCF in
+/// deterministic order regardless of thread completion order.
+struct StagedCut {
+    /// Local trial-point index within `0..local_work`. Used for deterministic
+    /// merge ordering after the parallel region.
+    trial_point_idx: usize,
+
+    /// Aggregated cut intercept (result of `RiskMeasure::aggregate_cut`).
+    intercept: f64,
+
+    /// Aggregated cut coefficients (length = `n_state`).
+    coefficients: Vec<f64>,
+
+    /// Global forward-pass index (`fwd_offset + m`), stored as `u32` for the
+    /// FCF slot formula.
+    forward_pass_index: u32,
+
+    /// Slots in the successor pool that were binding for at least one opening
+    /// during this trial point. These are accumulated across openings within
+    /// the worker and applied to FCF metadata in the sequential merge phase.
+    ///
+    /// Each entry is `(slot_index, active_count_increment)` where
+    /// `active_count_increment` is the number of openings in which that cut
+    /// was binding. This allows the merge phase to correctly accumulate
+    /// activity counts without double-counting.
+    binding_increments: Vec<(usize, u64)>,
+}
+
 /// Execute the backward pass for one training iteration on this rank.
 ///
 /// Sweeps stages from `num_stages - 2` down to `0` (the last stage `T-1` has
-/// no successor stage and therefore produces no cuts). For each `(stage,
-/// trial_point)` pair, iterates over all openings at the successor stage,
-/// solves the LP at the successor stage with the trial point state and the
-/// opening noise, extracts duals to form cut coefficients, aggregates
-/// per-opening outcomes via the stage-specific [`RiskMeasure`], and inserts
-/// the aggregated cut into the FCF at the current stage.
+/// no successor stage and therefore produces no cuts). For each stage, the
+/// trial-point loop is parallelised across the provided [`SolverWorkspace`]
+/// instances using static work partitioning. Each worker generates cut data
+/// into a thread-local `StagedCut` buffer. After the parallel region, staged
+/// cuts are sorted by trial-point index and inserted into the FCF in
+/// deterministic order.
+///
+/// The outer per-stage loop remains sequential: stage `t` depends on cuts
+/// inserted at stage `t+1` in the previous iteration of the stage loop.
 ///
 /// ## Error handling
 ///
@@ -110,8 +165,9 @@ pub struct BackwardResult {
 /// - `risk_measures.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
-    solver: &mut S,
+pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
+    workspaces: &mut [SolverWorkspace<S>],
+    basis_store: &BasisStore,
     templates: &[StageTemplate],
     base_rows: &[usize],
     fcf: &mut FutureCostFunction,
@@ -120,12 +176,12 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     iteration: u64,
     horizon: &HorizonMode,
     risk_measures: &[RiskMeasure],
-    patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
     comm: &C,
-    basis_cache: &mut [Option<Basis>],
     local_work: usize,
     fwd_offset: usize,
+    noise_scale: &[f64],
+    n_hydros: usize,
 ) -> Result<BackwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let my_rank = comm.rank();
@@ -153,11 +209,17 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
     );
 
     let start = Instant::now();
-    let solves_before = solver.statistics().solve_count;
+
+    // Snapshot solve counts before the backward pass to compute the delta.
+    let solves_before: u64 = workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().solve_count)
+        .sum();
+
     let mut cuts_generated: usize = 0;
     let tree_view = stochastic.tree_view();
-    let mut outcomes: Vec<BackwardOutcome> = Vec::new();
-    let mut binding_slots: Vec<usize> = Vec::new();
+    let n_workers = workspaces.len().max(1);
+
     for t in (0..num_stages.saturating_sub(1)).rev() {
         let successor = t + 1;
         let n_openings = tree_view.n_openings(successor);
@@ -165,111 +227,207 @@ pub fn run_backward_pass<S: SolverInterface, C: Communicator>(
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
+        // Build the cut row batch for the successor stage before the parallel
+        // region. This is a read from FCF which is mutated only in the
+        // sequential merge phase between stage iterations.
         let cut_batch = build_cut_row_batch(fcf, successor, indexer);
         let num_cuts_at_successor = cut_batch.num_rows;
         let template_num_rows = templates[successor].num_rows;
 
-        if outcomes.capacity() < n_openings {
-            outcomes.reserve(n_openings - outcomes.capacity());
+        // Collect the active-cut slot indices at the successor stage once,
+        // before the parallel region, so all workers share the same read-only
+        // view. The cut_batch already embeds the cuts in row order; we need
+        // the slot indices for binding-slot tracking.
+        let successor_active_slots: Vec<usize> = fcf
+            .active_cuts(successor)
+            .map(|(slot, _, _)| slot)
+            .collect();
+
+        // Parallel trial-point evaluation.
+        //
+        // Each workspace processes a static partition of `0..local_work`.
+        // Each worker returns Ok(cuts) or Err(SddpError) from its partition.
+        // All workers complete their partition (inner `?` exits early on LP
+        // failure within each worker). The merge loop below propagates the
+        // first Err encountered.
+        let worker_staged: Vec<Result<Vec<StagedCut>, SddpError>> = workspaces
+            .par_iter_mut()
+            .enumerate()
+            .map(|(worker_id, ws)| {
+                let (start_m, end_m) = partition(local_work, n_workers, worker_id);
+                let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
+                let mut outcomes: Vec<BackwardOutcome> = Vec::with_capacity(n_openings);
+                // Accumulate binding-slot increments keyed by slot index.
+                // Re-used across trial points within this worker.
+                let mut slot_increments: std::collections::HashMap<usize, u64> =
+                    std::collections::HashMap::new();
+
+                for m in start_m..end_m {
+                    let x_hat = exchange.state_at(my_rank, m);
+                    outcomes.clear();
+                    slot_increments.clear();
+
+                    // Worker-local warm-start basis for successive openings
+                    // within this trial point. The first opening warm-starts
+                    // from the forward pass basis (read from `basis_store`);
+                    // subsequent openings warm-start from this local basis.
+                    // Discarded after all openings for trial point `m`.
+                    let mut working_basis: Option<Basis> = None;
+
+                    for omega in 0..n_openings {
+                        let raw_noise = tree_view.opening(successor, omega);
+                        ws.solver.load_model(&templates[successor]);
+                        ws.solver.add_rows(&cut_batch);
+
+                        // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+                        // RHS patch (same transformation as the forward pass).
+                        ws.noise_buf.clear();
+                        let stage_offset = successor * n_hydros;
+                        for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                            let base_rhs = templates[successor].row_lower[base_rows[successor] + h];
+                            ws.noise_buf
+                                .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                        }
+
+                        ws.patch_buf.fill_forward_patches(
+                            indexer,
+                            x_hat,
+                            &ws.noise_buf,
+                            base_rows[successor],
+                        );
+                        let patch_count = ws.patch_buf.forward_patch_count();
+                        ws.solver.set_row_bounds(
+                            &ws.patch_buf.indices[..patch_count],
+                            &ws.patch_buf.lower[..patch_count],
+                            &ws.patch_buf.upper[..patch_count],
+                        );
+
+                        // For the first opening, warm-start from the forward
+                        // pass basis for this (scenario, successor) pair (read
+                        // from the shared read-only basis store). For subsequent
+                        // openings, warm-start from the previous opening's basis
+                        // stored in the worker-local `working_basis`.
+                        let warm_basis: Option<&Basis> = if omega == 0 {
+                            basis_store.get(m, successor)
+                        } else {
+                            working_basis.as_ref()
+                        };
+
+                        let view = (if let Some(rb) = warm_basis {
+                            ws.solver.solve_with_basis(rb)
+                        } else {
+                            ws.solver.solve()
+                        })
+                        .map_err(|e| match e {
+                            SolverError::Infeasible => SddpError::Infeasible {
+                                stage: t,
+                                iteration,
+                                scenario: fwd_offset + m,
+                            },
+                            other => SddpError::Solver(other),
+                        })?;
+
+                        let objective = view.objective;
+                        let coefficients: Vec<f64> = view.dual[..indexer.n_state].to_vec();
+                        let pi_dot_x: f64 =
+                            coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
+                        let intercept = objective - pi_dot_x;
+
+                        // Accumulate binding-slot increments for this opening.
+                        if num_cuts_at_successor > 0 {
+                            let cut_duals = &view.dual
+                                [template_num_rows..template_num_rows + num_cuts_at_successor];
+                            for (cut_idx, &slot) in successor_active_slots.iter().enumerate() {
+                                if cut_duals[cut_idx] > 0.0 {
+                                    *slot_increments.entry(slot).or_insert(0) += 1;
+                                }
+                            }
+                        }
+
+                        // Update the worker-local working basis for the next
+                        // opening within this trial point.
+                        if let Some(rb) = &mut working_basis {
+                            ws.solver.get_basis(rb);
+                        } else {
+                            let mut rb = Basis::new(
+                                templates[successor].num_cols,
+                                templates[successor].num_rows,
+                            );
+                            ws.solver.get_basis(&mut rb);
+                            working_basis = Some(rb);
+                        }
+
+                        outcomes.push(BackwardOutcome {
+                            intercept,
+                            coefficients,
+                            objective_value: objective,
+                        });
+                    }
+                    // `working_basis` is dropped here; it is not written back
+                    // to the basis store — the backward pass only reads from it.
+
+                    let (agg_intercept, agg_coefficients) =
+                        risk_measures[t].aggregate_cut(&outcomes, &probabilities);
+
+                    let global_index = fwd_offset + m;
+                    debug_assert!(
+                        u32::try_from(global_index).is_ok(),
+                        "global scenario index overflows u32"
+                    );
+                    #[allow(clippy::cast_possible_truncation)]
+                    let forward_pass_index = global_index as u32;
+
+                    let binding_increments: Vec<(usize, u64)> =
+                        slot_increments.iter().map(|(&s, &c)| (s, c)).collect();
+
+                    staged.push(StagedCut {
+                        trial_point_idx: m,
+                        intercept: agg_intercept,
+                        coefficients: agg_coefficients,
+                        forward_pass_index,
+                        binding_increments,
+                    });
+                }
+                Ok(staged)
+            })
+            .collect();
+
+        // Flatten worker results, propagating the first error encountered.
+        let mut all_staged: Vec<StagedCut> = Vec::with_capacity(local_work);
+        for worker_result in worker_staged {
+            let worker_cuts = worker_result?;
+            all_staged.extend(worker_cuts);
         }
 
-        for m in 0..local_work {
-            let x_hat = exchange.state_at(my_rank, m);
+        // Sort by trial_point_idx for deterministic insertion order.
+        all_staged.sort_by_key(|c| c.trial_point_idx);
 
-            outcomes.clear();
-
-            for omega in 0..n_openings {
-                let noise = tree_view.opening(successor, omega);
-                solver.load_model(&templates[successor]);
-                solver.add_rows(&cut_batch);
-
-                patch_buf.fill_forward_patches(indexer, x_hat, noise, base_rows[successor]);
-                let patch_count = patch_buf.forward_patch_count();
-                solver.set_row_bounds(
-                    &patch_buf.indices[..patch_count],
-                    &patch_buf.lower[..patch_count],
-                    &patch_buf.upper[..patch_count],
-                );
-
-                let view = (if let Some(rb) = basis_cache[successor].as_ref() {
-                    solver.solve_with_basis(rb)
-                } else {
-                    solver.solve()
-                })
-                .map_err(|e| {
-                    basis_cache[successor] = None;
-                    match e {
-                        SolverError::Infeasible => SddpError::Infeasible {
-                            stage: t,
-                            iteration,
-                            scenario: fwd_offset + m,
-                        },
-                        other => SddpError::Solver(other),
-                    }
-                })?;
-
-                let objective = view.objective;
-                let coefficients: Vec<f64> =
-                    view.dual[..indexer.n_state].iter().map(|&d| -d).collect();
-                let pi_dot_x: f64 = coefficients.iter().zip(x_hat).map(|(pi, x)| pi * x).sum();
-                let intercept = objective - pi_dot_x;
-
-                binding_slots.clear();
-                if num_cuts_at_successor > 0 {
-                    let cut_duals =
-                        &view.dual[template_num_rows..template_num_rows + num_cuts_at_successor];
-                    binding_slots.extend(fcf.active_cuts(successor).enumerate().filter_map(
-                        |(cut_idx, (slot, _, _))| (cut_duals[cut_idx] > 0.0).then_some(slot),
-                    ));
-                }
-
-                for &slot in &binding_slots {
-                    fcf.pools[successor].metadata[slot].active_count += 1;
-                    fcf.pools[successor].metadata[slot].last_active_iter = iteration;
-                }
-
-                if let Some(rb) = &mut basis_cache[successor] {
-                    solver.get_basis(rb);
-                } else {
-                    let mut rb =
-                        Basis::new(templates[successor].num_cols, templates[successor].num_rows);
-                    solver.get_basis(&mut rb);
-                    basis_cache[successor] = Some(rb);
-                }
-
-                outcomes.push(BackwardOutcome {
-                    intercept,
-                    coefficients,
-                    objective_value: objective,
-                });
-            }
-
-            let (agg_intercept, agg_coefficients) =
-                risk_measures[t].aggregate_cut(&outcomes, &probabilities);
-
-            let global_index = fwd_offset + m;
-            debug_assert!(
-                u32::try_from(global_index).is_ok(),
-                "global scenario index overflows u32"
-            );
-            #[allow(clippy::cast_possible_truncation)]
-            let forward_pass_index = global_index as u32;
-
+        // Sequential merge: insert cuts and update binding metadata in order.
+        for cut in all_staged {
             fcf.add_cut(
                 t,
                 iteration,
-                forward_pass_index,
-                agg_intercept,
-                &agg_coefficients,
+                cut.forward_pass_index,
+                cut.intercept,
+                &cut.coefficients,
             );
             cuts_generated += 1;
+
+            for (slot, increment) in cut.binding_increments {
+                fcf.pools[successor].metadata[slot].active_count += increment;
+                fcf.pools[successor].metadata[slot].last_active_iter = iteration;
+            }
         }
     }
 
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    let lp_solves = solver.statistics().solve_count - solves_before;
+    let solves_after: u64 = workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().solve_count)
+        .sum();
+    let lp_solves = solves_after - solves_before;
 
     Ok(BackwardResult {
         cuts_generated,
@@ -287,8 +445,9 @@ mod tests {
 
     use super::{BackwardResult, run_backward_pass};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure, StageIndexer,
+        ExchangeBuffers, FutureCostFunction, HorizonMode, RiskMeasure, StageIndexer,
         TrajectoryRecord,
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Stub communicator for tests (single-rank).
@@ -470,6 +629,42 @@ mod tests {
             iterations: 0,
             solve_time_seconds: 0.0,
         }
+    }
+
+    /// Wrap a `MockSolver` into a single-element `Vec<SolverWorkspace<MockSolver>>`
+    /// for tests that exercise the workspace-based backward-pass API.
+    ///
+    /// The workspace is sized for `n_hydro=1`, `max_par_order=0`, and `n_state`
+    /// state dimensions.
+    fn single_workspace(solver: MockSolver, n_state: usize) -> Vec<SolverWorkspace<MockSolver>> {
+        use crate::lp_builder::PatchBuffer;
+        vec![SolverWorkspace {
+            solver,
+            patch_buf: PatchBuffer::new(1, 0),
+            current_state: Vec::with_capacity(n_state),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
+        }]
+    }
+
+    /// Create an empty `BasisStore` for `num_scenarios` scenarios and
+    /// `num_stages` stages (all slots `None`).
+    fn empty_basis_store(num_scenarios: usize, num_stages: usize) -> BasisStore {
+        BasisStore::new(num_scenarios, num_stages)
+    }
+
+    /// Create a `BasisStore` with one slot pre-populated at
+    /// `[scenario][stage]` with the given `Basis`.
+    fn basis_store_with_one(
+        num_scenarios: usize,
+        num_stages: usize,
+        scenario: usize,
+        stage: usize,
+        basis: Basis,
+    ) -> BasisStore {
+        let mut store = BasisStore::new(num_scenarios, num_stages);
+        *store.get_mut(scenario, stage) = Some(basis);
+        store
     }
 
     fn exchange_with_states(n_state: usize, states: Vec<Vec<f64>>) -> ExchangeBuffers {
@@ -698,20 +893,25 @@ mod tests {
         let base_rows = vec![1_usize];
 
         let n_state = indexer.n_state;
+        let n_stages = 1_usize;
         let forward_passes = 2_u32;
-        let mut fcf = FutureCostFunction::new(1, n_state, forward_passes, 10, 0);
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
-        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
         let risk_measures = vec![RiskMeasure::Expectation];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -720,11 +920,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -752,8 +952,6 @@ mod tests {
         // Two trial points with states [10.0] and [20.0] at stage 0.
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -763,11 +961,14 @@ mod tests {
         // With x_hat=[10.0]: pi=[5.0], alpha = 100 - 5*10 = 50.
         // With x_hat=[20.0]: pi=[5.0], alpha = 100 - 5*20 = 0 (could be negative).
         let solution = solution_1_0(100.0, -5.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -776,11 +977,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -811,19 +1012,20 @@ mod tests {
         // 3 trial points (forward_passes=3 on a single rank).
         let exchange = exchange_with_states(n_state, vec![vec![5.0], vec![10.0], vec![15.0]]);
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(50.0, 0.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let _ = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -832,11 +1034,11 @@ mod tests {
             2, // iteration=2
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -863,19 +1065,20 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -3.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -884,11 +1087,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -914,7 +1117,6 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -922,11 +1124,14 @@ mod tests {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(10.0, 0.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -935,11 +1140,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -962,7 +1167,6 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -971,11 +1175,14 @@ mod tests {
 
         let solution = solution_1_0(0.0, 0.0);
         // First solve call returns infeasible.
-        let mut solver = MockSolver::infeasible_on(solution, 0);
+        let solver = MockSolver::infeasible_on(solution, 0);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -984,11 +1191,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         );
 
@@ -1041,10 +1248,10 @@ mod tests {
         //   objective = 80.0
         //   x_hat = [10.0]
         //
-        // Expected:
-        //   pi[0] = -dual[0] = 3.0
-        //   intercept = 80.0 - 3.0 * 10.0 = 50.0
-        //   coefficients = [3.0]
+        // Expected (coefficients = dual, not -dual):
+        //   pi[0] = dual[0] = -3.0
+        //   intercept = 80.0 - (-3.0) * 10.0 = 110.0
+        //   coefficients = [-3.0]
         let n_stages = 2_usize;
         let stochastic = make_stochastic_context(n_stages, 1);
         let indexer = StageIndexer::new(1, 0);
@@ -1056,8 +1263,6 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1065,11 +1270,14 @@ mod tests {
 
         // dual[0] = -3.0, objective = 80.0
         let solution = solution_1_0(80.0, -3.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let _ = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1078,11 +1286,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1092,13 +1300,165 @@ mod tests {
         let (_, intercept, coefficients) = &cuts[0];
 
         assert!(
-            (intercept - 50.0).abs() < 1e-10,
-            "expected intercept=50.0, got {intercept}"
+            (intercept - 110.0).abs() < 1e-10,
+            "expected intercept=110.0, got {intercept}"
         );
         assert_eq!(coefficients.len(), 1);
         assert!(
-            (coefficients[0] - 3.0).abs() < 1e-10,
-            "expected coefficient=3.0, got {}",
+            (coefficients[0] - (-3.0)).abs() < 1e-10,
+            "expected coefficient=-3.0, got {}",
+            coefficients[0]
+        );
+    }
+
+    #[test]
+    fn cut_gradient_sign_physically_correct() {
+        // Regression test for the Benders cut sign bug.
+        //
+        // Physical invariant: more initial storage → lower future cost.
+        // The storage-fixing dual π is negative (shadow price of relaxing
+        // the fixing constraint increases cost when storage decreases).
+        //
+        // Correct: coefficient = π < 0, so the cut slope is negative
+        //   (more storage → lower cut value → lower theta → lower total cost).
+        //
+        // Old bug: coefficient = -π > 0, so the cut slope was positive
+        //   (more storage → higher cut value → wrong incentive).
+        let n_stages = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let exchange = exchange_with_states(n_state, vec![vec![50.0]]);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        // dual[0] = -2.0 (negative: more storage → less cost)
+        // objective = 100.0, x_hat = 50.0
+        let solution = solution_1_0(100.0, -2.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        let cuts: Vec<_> = fcf.active_cuts(0).collect();
+        assert_eq!(cuts.len(), 1, "expected exactly one cut");
+        let (_, _intercept, coefficients) = &cuts[0];
+
+        // The coefficient must be negative (same sign as the dual).
+        // The old bug would produce +2.0 here instead of -2.0.
+        assert!(
+            coefficients[0] < 0.0,
+            "cut coefficient must be negative (more storage → less future cost), \
+             got {} — likely the Benders cut sign bug has been reintroduced",
+            coefficients[0]
+        );
+        assert!(
+            (coefficients[0] - (-2.0)).abs() < 1e-10,
+            "expected coefficient=-2.0, got {}",
+            coefficients[0]
+        );
+    }
+
+    #[test]
+    fn cut_is_tight_at_trial_point() {
+        // Regression test: a Benders cut must be tight (exact) at the trial
+        // point x̂ where it was generated. That is:
+        //   intercept + coefficient * x̂ = Q(x̂)
+        // where Q(x̂) = objective value of the subproblem at x̂.
+        //
+        // The cut equation is: θ ≥ intercept + coefficient * x
+        // At x = x̂: θ ≥ Q(x̂) + π'(x̂ - x̂) = Q(x̂)
+        //
+        // If the sign is wrong (coefficient = -π instead of π), then:
+        //   intercept + (-π) * x̂ ≠ Q(x̂) in general
+        //
+        // This test verifies the tightness property.
+        let n_stages = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let x_hat = 30.0_f64;
+        let exchange = exchange_with_states(n_state, vec![vec![x_hat]]);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let q_xhat = 200.0_f64; // subproblem objective at x̂
+        let dual_storage = -4.0_f64;
+        let solution = solution_1_0(q_xhat, dual_storage);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &templates,
+            &base_rows,
+            &mut fcf,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        let cuts: Vec<_> = fcf.active_cuts(0).collect();
+        assert_eq!(cuts.len(), 1);
+        let (_, intercept, coefficients) = &cuts[0];
+
+        // Evaluate the cut at x̂: cut_value = intercept + coeff * x̂
+        let cut_at_xhat = intercept + coefficients[0] * x_hat;
+
+        // Must equal Q(x̂) (tightness property)
+        assert!(
+            (cut_at_xhat - q_xhat).abs() < 1e-10,
+            "cut must be tight at trial point: \
+             cut_value={cut_at_xhat}, Q(x̂)={q_xhat}, \
+             intercept={intercept}, coeff={}, x̂={x_hat}",
             coefficients[0]
         );
     }
@@ -1120,19 +1480,20 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1141,11 +1502,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1193,19 +1554,20 @@ mod tests {
             ],
         );
 
-        let mut patch_buf = PatchBuffer::new(1, 0);
-
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(50.0, 0.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let _ = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1214,11 +1576,11 @@ mod tests {
             2, // iteration=2
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut vec![None; templates.len()],
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
@@ -1235,13 +1597,13 @@ mod tests {
 
     // ── Unit tests: warm-start basis caching (backward pass) ──────────────────
 
-    /// Warm-start from a pre-populated forward basis: when `basis_cache[successor]`
-    /// is pre-filled with `Some(Basis)` before the first backward call, the
-    /// first opening at the successor stage must call `solve_with_basis`
+    /// Warm-start from a pre-populated forward basis: when `BasisStore` has
+    /// `Some(Basis)` at `(scenario=0, stage=1)` before the first backward call,
+    /// the first opening at the successor stage must call `solve_with_basis`
     /// rather than `solve`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 1 opening, with
-    /// `basis_cache[1] = Some(Basis::new(...))` pre-populated,
+    /// `basis_store.get(0, 1) = Some(Basis::new(...))` pre-populated,
     /// then `solver.warm_start_calls == 1` after the backward pass.
     #[test]
     fn warm_start_uses_prepopulated_forward_basis() {
@@ -1256,7 +1618,6 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1264,18 +1625,18 @@ mod tests {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
 
-        // Pre-populate the basis cache at stage 1 (the successor in a 2-stage system).
+        // Pre-populate the basis store at (scenario=0, stage=1).
         // This simulates a forward pass having already solved stage 1 and cached its basis.
-        let mut basis_cache: Vec<Option<Basis>> = vec![
-            None,
-            Some(Basis::new(templates[1].num_cols, templates[1].num_rows)),
-        ];
+        let pre_basis = Basis::new(templates[1].num_cols, templates[1].num_rows);
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
         let _ = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1284,26 +1645,26 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut basis_cache,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
 
+        let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
-            solver.warm_start_calls, 1,
+            warm_start_calls, 1,
             "first opening at successor stage must call solve_with_basis \
-             when basis_cache[1] is pre-populated (warm_start_calls == 1, got {})",
-            solver.warm_start_calls
+             when basis_store.get(0, 1) is pre-populated (warm_start_calls == 1, got {warm_start_calls})"
         );
     }
 
     /// Multi-opening warm-start: given 3 openings at the same successor stage,
-    /// the first opening cold-starts (`basis_cache` is None), and openings 2 and 3
-    /// warm-start from the first opening's basis.
+    /// the first opening cold-starts (store slot is None), and openings 2 and 3
+    /// warm-start from the first opening's basis via `working_basis`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
     /// then `solver.warm_start_calls == 2` after the backward pass (openings 2
@@ -1321,7 +1682,6 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1329,14 +1689,16 @@ mod tests {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
 
-        // Start with an empty cache — opening 1 must cold-start.
-        let mut basis_cache: Vec<Option<Basis>> = vec![None; n_stages];
+        // Start with an empty store — opening 1 must cold-start.
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let _ = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1345,33 +1707,38 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut basis_cache,
             exchange.local_count(),
+            0,
+            &[],
             0,
         )
         .unwrap();
 
-        // Opening 1: cold-start (cache was None).
-        // Opening 2: warm-start (cache populated by opening 1).
-        // Opening 3: warm-start (cache updated by opening 2).
+        // Opening 1: cold-start (store slot was None for scenario 0, stage 1).
+        // Opening 2: warm-start (working_basis populated by opening 1).
+        // Opening 3: warm-start (working_basis updated by opening 2).
+        let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
-            solver.warm_start_calls, 2,
+            warm_start_calls, 2,
             "openings 2 and 3 must call solve_with_basis \
-             (warm_start_calls == 2, got {})",
-            solver.warm_start_calls
+             (warm_start_calls == 2, got {warm_start_calls})"
         );
     }
 
-    /// Error invalidation: when a backward solve returns `SolverError::Infeasible`,
-    /// `basis_cache[successor]` must be set to `None` before the error propagates.
+    /// Error propagation: when a backward solve returns `SolverError::Infeasible`,
+    /// the error must propagate as `SddpError::Infeasible`.
+    ///
+    /// In the new per-scenario design, the backward pass uses a local `working_basis`
+    /// variable (not written back to `BasisStore`), so there is no shared cache slot
+    /// to check after the error. The test verifies that the error is correctly
+    /// propagated regardless of what was in the basis store at entry.
     ///
     /// AC: Given a 2-stage system, 1 opening, `MockSolver` returns infeasible on
-    /// call 0, then `basis_cache[1]` is `None` after the error.
+    /// call 0, then `run_backward_pass` returns `Err(SddpError::Infeasible { .. })`.
     #[test]
-    fn basis_invalidated_on_backward_solver_error() {
+    fn backward_solver_error_propagates() {
         let n_stages = 2_usize;
         let n_openings = 1_usize;
         let stochastic = make_stochastic_context(n_stages, n_openings);
@@ -1383,7 +1750,6 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
-        let mut patch_buf = PatchBuffer::new(1, 0);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1392,17 +1758,17 @@ mod tests {
 
         let solution = solution_1_0(0.0, 0.0);
         // The first backward solve (call 0) returns infeasible.
-        let mut solver = MockSolver::infeasible_on(solution, 0);
+        let solver = MockSolver::infeasible_on(solution, 0);
         let comm = StubComm;
 
-        // Pre-populate the cache to verify it gets cleared on error.
-        let mut basis_cache: Vec<Option<Basis>> = vec![
-            None,
-            Some(Basis::new(templates[1].num_cols, templates[1].num_rows)),
-        ];
+        // Pre-populate the store — error should propagate regardless.
+        let pre_basis = Basis::new(templates[1].num_cols, templates[1].num_rows);
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
         let result = run_backward_pass(
-            &mut solver,
+            &mut workspaces,
+            &basis_store,
             &templates,
             &base_rows,
             &mut fcf,
@@ -1411,11 +1777,11 @@ mod tests {
             0,
             &horizon,
             &risk_measures,
-            &mut patch_buf,
             &indexer,
             &comm,
-            &mut basis_cache,
             exchange.local_count(),
+            0,
+            &[],
             0,
         );
 
@@ -1423,10 +1789,156 @@ mod tests {
             matches!(result, Err(crate::SddpError::Infeasible { .. })),
             "expected SddpError::Infeasible, got: {result:?}",
         );
-        // The cache slot for the successor stage (stage 1) must be invalidated.
+        // The BasisStore is not mutated by the backward pass — the working_basis
+        // is a local variable dropped on error. The store slot at (0, 1) remains
+        // as it was; this just verifies the store is untouched by an error path.
         assert!(
-            basis_cache[1].is_none(),
-            "basis_cache[1] must be None after solver error at successor stage 1"
+            basis_store.get(0, 1).is_some(),
+            "BasisStore must not be mutated by the backward pass error path"
         );
+    }
+
+    // ── New test: parallel cut determinism ────────────────────────────────────
+
+    /// AC: When `run_backward_pass` runs with 1 workspace vs 4 workspaces given
+    /// the same input data, the FCF pools contain identical cuts (same intercept,
+    /// coefficient vectors, and slot assignments for each trial point).
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss
+    )]
+    fn test_backward_pass_parallel_cut_determinism() {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 3_usize;
+        let n_openings = 2_usize;
+        let n_trial_points = 8_usize;
+
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        #[allow(clippy::cast_possible_truncation)]
+        let forward_passes = n_trial_points as u32;
+
+        // Build 8 distinct trial-point states.
+        let states: Vec<Vec<f64>> = (0..n_trial_points).map(|i| vec![i as f64 + 1.0]).collect();
+        let exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let solution = solution_1_0(100.0, -5.0);
+        let comm = StubComm;
+
+        // --- Run with 1 workspace ---
+        let mut fcf_1 = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let solver_1 = MockSolver::always_ok(solution.clone());
+        let mut workspaces_1 = vec![SolverWorkspace {
+            solver: solver_1,
+            patch_buf: PatchBuffer::new(1, 0),
+            current_state: Vec::with_capacity(n_state),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
+        }];
+        let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
+        let _ = run_backward_pass(
+            &mut workspaces_1,
+            &basis_store_1,
+            &templates,
+            &base_rows,
+            &mut fcf_1,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        // --- Run with 4 workspaces ---
+        let mut fcf_4 = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
+            .map(|_| SolverWorkspace {
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0),
+                current_state: Vec::with_capacity(n_state),
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
+            })
+            .collect();
+        let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
+        let _ = run_backward_pass(
+            &mut workspaces_4,
+            &basis_store_4,
+            &templates,
+            &base_rows,
+            &mut fcf_4,
+            &exchange,
+            &stochastic,
+            0,
+            &horizon,
+            &risk_measures,
+            &indexer,
+            &comm,
+            exchange.local_count(),
+            0,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        // --- Verify identical FCF contents for all non-last stages ---
+        for t in 0..(n_stages - 1) {
+            let cuts_1: Vec<_> = fcf_1.active_cuts(t).collect();
+            let cuts_4: Vec<_> = fcf_4.active_cuts(t).collect();
+
+            assert_eq!(
+                cuts_1.len(),
+                cuts_4.len(),
+                "stage {t}: cut count differs (1 workspace: {}, 4 workspaces: {})",
+                cuts_1.len(),
+                cuts_4.len()
+            );
+
+            for (idx, ((slot_1, intercept_1, coeff_1), (slot_4, intercept_4, coeff_4))) in
+                cuts_1.iter().zip(cuts_4.iter()).enumerate()
+            {
+                assert_eq!(
+                    slot_1, slot_4,
+                    "stage {t} cut {idx}: slot mismatch ({slot_1} vs {slot_4})"
+                );
+                assert!(
+                    (intercept_1 - intercept_4).abs() < 1e-12,
+                    "stage {t} cut {idx}: intercept mismatch ({intercept_1} vs {intercept_4})"
+                );
+                assert_eq!(
+                    coeff_1.len(),
+                    coeff_4.len(),
+                    "stage {t} cut {idx}: coefficient vector length mismatch"
+                );
+                for (j, (c1, c4)) in coeff_1.iter().zip(coeff_4.iter()).enumerate() {
+                    assert!(
+                        (c1 - c4).abs() < 1e-12,
+                        "stage {t} cut {idx} coeff[{j}]: {c1} vs {c4}"
+                    );
+                }
+            }
+        }
+
+        // Last stage must have no cuts in both.
+        assert_eq!(fcf_1.active_cuts(n_stages - 1).count(), 0);
+        assert_eq!(fcf_4.active_cuts(n_stages - 1).count(), 0);
     }
 }

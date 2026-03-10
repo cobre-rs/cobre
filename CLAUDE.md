@@ -139,19 +139,18 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 | 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling -- 125 tests (105 unit + 5 conformance + 4 reproducibility + 11 doc) |
 | 6     | complete | SDDP training loop, forward/backward pass, cut management, convergence monitoring -- 351 tests (297 unit + 13 conformance + 7 integration + 34 doc)                       |
 | 7     | complete | Simulation pipeline, Parquet output writers, FlatBuffers policy checkpoint, manifest/dictionary writers, genericity gate -- cobre-io: 749 tests, cobre-sddp: 456 tests    |
-| 8     | complete | Execution lifecycle, config resolution, exit codes, progress reporting, banner, summary -- cobre-cli: 110 tests                                                           |
+| 8     | complete | Execution lifecycle, config resolution, exit codes, --threads, --color, progress reporting, banner, summary -- cobre-cli: 147 tests                                                           |
 
 ### Current phase
 
-**Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 1851 tests.
+**Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 1955 tests.
 
-### Critical gap: intra-rank thread parallelism
+### Intra-rank thread parallelism (RESOLVED)
 
-**BLOCKING for v0.1.0 release.** The solver currently runs single-threaded per MPI
-rank. The second level of the two-level parallelism model (thread-based
-work-stealing within each rank for forward passes, backward trial points, and
-simulation scenarios) is not implemented. See `docs/PROJECT-STATUS.md` for full
-details and required work.
+Rayon-based thread parallelism is implemented in `cobre-sddp` for the forward
+pass, backward pass, and simulation pipeline. Controlled via the `--threads N`
+CLI flag or `COBRE_THREADS` environment variable; default is 1 thread. See
+`docs/PROJECT-STATUS.md` for full details.
 
 ### Parallelizable phases
 

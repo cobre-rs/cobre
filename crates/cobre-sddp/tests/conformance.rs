@@ -800,6 +800,8 @@ mod lb_conformance {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )
@@ -819,6 +821,8 @@ mod lb_conformance {
             &indexer,
             &mut patch_buf,
             &opening_tree,
+            &[],
+            0,
             &rm,
             &comm,
         )

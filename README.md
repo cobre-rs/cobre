@@ -158,7 +158,7 @@ The minimal viable solver is built through an [8-phase implementation sequence](
 - [x] `cobre-io` — FlatBuffers policy output, Parquet result writing
 - [x] `cobre-cli` — `init`, `run`, `validate`, `report`, `version` subcommands
 
-> 1,851 tests pass across the workspace (8 crates implemented, all 8 phases complete).
+> 1,955 tests pass across the workspace (8 crates implemented, all 8 phases complete).
 
 ### v0.2 — Ecosystem Hardening
 

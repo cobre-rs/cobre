@@ -24,6 +24,24 @@
 //! this rank's first forward pass. This deterministic mapping drives the
 //! communication-free seed derivation used by [`sample_forward`].
 //!
+//! ## Thread-level parallelism
+//!
+//! Within a rank, scenarios are distributed across one or more [`SolverWorkspace`]
+//! instances from a [`crate::WorkspacePool`]. Each workspace owns its solver, patch
+//! buffer, and current-state buffer. Rayon's `par_iter_mut` drives
+//! the scenario loop: scenarios are statically partitioned across workspaces
+//! (not rayon's default work-stealing chunking) so that the assignment of
+//! scenarios to workers is deterministic and reproducible.
+//!
+//! Warm-start bases are stored per `(scenario, stage)` in a [`BasisStore`]
+//! passed by the caller. Before the parallel region the store is split into
+//! disjoint per-worker sub-views via [`BasisStore::split_workers_mut`]; each
+//! worker writes bases only for its own scenario range.
+//!
+//! `cost_sum` and `cost_sum_sq` are aggregated after the parallel region by
+//! summing worker-local results in scenario order, not in thread-completion
+//! order. This ensures identical results for any workspace count.
+//!
 //! ## LP rebuild sequence
 //!
 //! For each `(scenario, stage)` pair the LP is rebuilt in three steps:
@@ -34,10 +52,10 @@
 //!
 //! ## Hot-path allocation discipline
 //!
-//! No allocations occur per scenario or per stage during the inner loops. The
-//! [`PatchBuffer`] and [`TrajectoryRecord`] slice are pre-allocated by the
-//! caller. The only allocation inside the function is the [`RowBatch`] built
-//! by [`build_cut_row_batch`], which runs once per stage template (before the
+//! No allocations occur per scenario or per stage during the inner loops.
+//! The [`TrajectoryRecord`] slice is pre-allocated by the caller. The only
+//! allocation inside the function is the [`RowBatch`] built by
+//! [`build_cut_row_batch`], which runs once per stage template (before the
 //! scenario loop) — not once per scenario.
 
 use std::time::Instant;
@@ -45,9 +63,14 @@ use std::time::Instant;
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::{StochasticContext, sample_forward};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 use crate::{
-    FutureCostFunction, HorizonMode, PatchBuffer, SddpError, StageIndexer, TrajectoryRecord,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
+    TrajectoryRecord,
+    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -280,6 +303,29 @@ pub fn build_cut_row_batch(
     }
 }
 
+/// Compute the scenario range `[start, end)` for worker `worker_id` when
+/// distributing `n_scenarios` scenarios across `n_workers` workers.
+///
+/// Uses ceiling-division for the first `n_scenarios % n_workers` workers so
+/// that extra scenarios are assigned to lower-index workers. This is a
+/// deterministic, static partition — scenario-to-worker assignment is
+/// identical regardless of thread scheduling order.
+///
+/// Returns `(start, end)` where `start == end` when `worker_id` receives zero
+/// scenarios (only occurs when `n_workers > n_scenarios`).
+#[inline]
+pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) -> (usize, usize) {
+    if n_workers == 0 {
+        return (0, 0);
+    }
+    let base = n_scenarios / n_workers;
+    let remainder = n_scenarios % n_workers;
+    // First `remainder` workers get `base + 1` scenarios; the rest get `base`.
+    let start = base * worker_id + worker_id.min(remainder);
+    let end = start + base + usize::from(worker_id < remainder);
+    (start, end)
+}
+
 /// Execute the forward pass for one training iteration on this rank.
 ///
 /// Simulates this rank's share of forward-pass scenarios through the full
@@ -288,7 +334,12 @@ pub fn build_cut_row_batch(
 ///
 /// ## Argument layout
 ///
-/// - `solver` — mutable LP solver instance (one per rank, reused across stages).
+/// - `workspaces` — one [`SolverWorkspace`] per worker thread. Scenarios are
+///   statically partitioned across workspaces; each workspace owns its solver,
+///   patch buffer, and current-state buffer exclusively.
+/// - `basis_store` — per-scenario, per-stage basis store pre-allocated by the
+///   caller. The store is split into disjoint sub-views before the parallel
+///   region; each worker writes the optimal basis for its own scenarios.
 /// - `templates` — one [`StageTemplate`] per stage (0-indexed); shared read-only.
 /// - `base_rows` — AR dynamics base row index per stage; indexed identically to
 ///   `templates`.
@@ -302,11 +353,11 @@ pub fn build_cut_row_batch(
 /// - `initial_state` — starting state for every scenario (length `n_state`).
 /// - `records` — pre-allocated output slice of length
 ///   `local_forward_passes * num_stages`.
-/// - `patch_buf` — reusable row-bound patch buffer (pre-allocated, length
-///   `N*(2+L)`).
 /// - `indexer` — LP column/row layout map for this stage.
 /// - `fwd_offset` — global index of this rank's first forward pass. Used for
 ///   deterministic seed derivation (`global_scenario = fwd_offset + m`).
+/// - `inflow_method` — inflow non-negativity treatment. Controls whether
+///   slack columns are present in the LP for absorbing negative inflow.
 ///
 /// ## Record layout
 ///
@@ -336,8 +387,9 @@ pub fn build_cut_row_batch(
 /// - `base_rows.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-pub fn run_forward_pass<S: SolverInterface>(
-    solver: &mut S,
+pub fn run_forward_pass<S: SolverInterface + Send>(
+    workspaces: &mut [SolverWorkspace<S>],
+    basis_store: &mut BasisStore,
     templates: &[StageTemplate],
     base_rows: &[usize],
     fcf: &FutureCostFunction,
@@ -347,10 +399,11 @@ pub fn run_forward_pass<S: SolverInterface>(
     horizon: &HorizonMode,
     initial_state: &[f64],
     records: &mut [TrajectoryRecord],
-    patch_buf: &mut PatchBuffer,
     indexer: &StageIndexer,
-    basis_cache: &mut [Option<Basis>],
     fwd_offset: usize,
+    _inflow_method: &InflowNonNegativityMethod,
+    noise_scale: &[f64],
+    n_hydros: usize,
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let forward_passes = local_forward_passes;
@@ -385,7 +438,6 @@ pub fn run_forward_pass<S: SolverInterface>(
     );
 
     let start = Instant::now();
-    let solves_before = solver.statistics().solve_count;
 
     // Build one cut RowBatch per stage outside the scenario loop — batch
     // construction is O(num_cuts) and the cuts are the same for all scenarios
@@ -397,114 +449,198 @@ pub fn run_forward_pass<S: SolverInterface>(
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
 
+    let n_workers = workspaces.len().max(1);
+
+    // Split `records` into disjoint per-worker sub-slices using iterative
+    // `split_at_mut`. Each worker `w` receives the contiguous records for
+    // its scenario range `[start_m, end_m)` — i.e., records in positions
+    // `[start_m * num_stages, end_m * num_stages)` of the flat slice.
+    //
+    // The split is performed outside the parallel region (no shared mutable
+    // reference to `records` inside rayon closures).
+    let mut remaining: &mut [TrajectoryRecord] = records;
+    let mut record_slices: Vec<&mut [TrajectoryRecord]> = Vec::with_capacity(n_workers);
+    for w in 0..n_workers {
+        let (start_m, end_m) = partition(forward_passes, n_workers, w);
+        let scenarios_for_w = end_m - start_m;
+        let (slice, rest) = remaining.split_at_mut(scenarios_for_w * num_stages);
+        record_slices.push(slice);
+        remaining = rest;
+    }
+
+    // Split the basis store into disjoint per-worker sub-views by scenario
+    // range. Each worker receives exclusive write access to its own scenario
+    // range; no two workers alias the same basis slot.
+    let basis_slices: Vec<BasisStoreSliceMut<'_>> = basis_store.split_workers_mut(n_workers);
+
+    // Execute the scenario loop in parallel over workspaces. Each worker
+    // receives exclusive ownership of its workspace, its record sub-slice, and
+    // its basis store slice. Worker-local cost sums are returned as Ok values;
+    // the first infeasibility encountered by any worker short-circuits via
+    // collect::<Result<_,_>>().
+    let worker_results: Vec<Result<(f64, f64, u64), SddpError>> = workspaces
+        .par_iter_mut()
+        .zip(record_slices.par_iter_mut())
+        .zip(basis_slices.into_par_iter())
+        .enumerate()
+        .map(|(w, ((ws, worker_records), mut basis_slice))| {
+            let (start_m, end_m) = partition(forward_passes, n_workers, w);
+            let mut local_cost_sum = 0.0_f64;
+            let mut local_cost_sum_sq = 0.0_f64;
+            let mut local_solve_count_before = ws.solver.statistics().solve_count;
+
+            for (local_m, m) in (start_m..end_m).enumerate() {
+                // Global scenario index for deterministic seed derivation
+                // (SipHash-1-3 seeds for communication-free parallel noise).
+                // Uses the pre-computed offset rather than rank * forward_passes,
+                // because forward_passes may differ across ranks.
+                let global_scenario = fwd_offset + m;
+
+                // Initialise current state for this scenario.
+                ws.current_state.clear();
+                ws.current_state.extend_from_slice(initial_state);
+
+                let mut trajectory_cost = 0.0_f64;
+
+                for t in 0..num_stages {
+                    // Cast to u32 for the sampling API (SipHash-1-3 domain ID
+                    // derivation uses u32 fields). Indices bounded by u32::MAX
+                    // in practice; truncation is safe.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let (iter_u32, scenario_u32, stage_id_u32) =
+                        (iteration as u32, global_scenario as u32, t as u32);
+
+                    let (_opening_idx, raw_noise) = sample_forward(
+                        &tree_view,
+                        base_seed,
+                        iter_u32,
+                        scenario_u32,
+                        stage_id_u32,
+                        t,
+                    );
+
+                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
+                    // RHS patch. The static ζ*base part is already encoded in
+                    // the template row bounds; the patch value overwrites the
+                    // complete RHS, so the transformed value must include both
+                    // the deterministic base and the stochastic noise term.
+                    ws.noise_buf.clear();
+                    let stage_offset = t * n_hydros;
+                    for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                        let base_rhs = templates[t].row_lower[base_rows[t] + h];
+                        ws.noise_buf
+                            .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                    }
+
+                    // Rebuild LP: template → cuts → scenario-specific row bounds.
+                    ws.solver.load_model(&templates[t]);
+                    ws.solver.add_rows(&cut_batches[t]);
+
+                    ws.patch_buf.fill_forward_patches(
+                        indexer,
+                        &ws.current_state,
+                        &ws.noise_buf,
+                        base_rows[t],
+                    );
+                    let patch_count = ws.patch_buf.forward_patch_count();
+                    ws.solver.set_row_bounds(
+                        &ws.patch_buf.indices[..patch_count],
+                        &ws.patch_buf.lower[..patch_count],
+                        &ws.patch_buf.upper[..patch_count],
+                    );
+
+                    // For the terminal stage in finite horizon, the future cost
+                    // is defined as zero (no successor stages). Fix theta to
+                    // [0, 0] so that HiGHS does not see an unbounded LP when
+                    // the cut pool is empty (iteration 1) or when the system
+                    // has no cuts for this stage. The 1-based stage index
+                    // matches the is_terminal API.
+                    if horizon.is_terminal(t + 1) {
+                        ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
+                    }
+
+                    // Warm-start from this scenario's prior basis at this stage
+                    // (populated on the previous iteration), or cold-start if no
+                    // basis exists yet. On error, invalidate the basis slot so
+                    // the next call at this (scenario, stage) cold-starts.
+                    let view = match basis_slice.get(m, t) {
+                        Some(rb) => ws.solver.solve_with_basis(rb),
+                        None => ws.solver.solve(),
+                    }
+                    .map_err(|e| {
+                        *basis_slice.get_mut(m, t) = None;
+                        match e {
+                            SolverError::Infeasible => SddpError::Infeasible {
+                                stage: t,
+                                iteration,
+                                scenario: m,
+                            },
+                            other => SddpError::Solver(other),
+                        }
+                    })?;
+
+                    // Stage cost = LP objective minus theta (future cost variable).
+                    let stage_cost = view.objective - view.primal[indexer.theta];
+
+                    // Record index is relative to this worker's sub-slice:
+                    // local_m * num_stages + t.
+                    let record_idx = local_m * num_stages + t;
+                    worker_records[record_idx].primal.clear();
+                    worker_records[record_idx]
+                        .primal
+                        .extend_from_slice(view.primal);
+                    worker_records[record_idx].dual.clear();
+                    worker_records[record_idx].dual.extend_from_slice(view.dual);
+                    worker_records[record_idx].stage_cost = stage_cost;
+                    worker_records[record_idx].state.clear();
+                    worker_records[record_idx]
+                        .state
+                        .extend_from_slice(&view.primal[..indexer.n_state]);
+
+                    trajectory_cost += stage_cost;
+                    ws.current_state.clear();
+                    ws.current_state
+                        .extend_from_slice(&view.primal[..indexer.n_state]);
+
+                    // Save the optimal basis for this (scenario, stage) pair so
+                    // the backward pass can warm-start from it.
+                    if let Some(rb) = basis_slice.get_mut(m, t) {
+                        ws.solver.get_basis(rb);
+                    } else {
+                        let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
+                        ws.solver.get_basis(&mut rb);
+                        *basis_slice.get_mut(m, t) = Some(rb);
+                    }
+                }
+
+                local_cost_sum += trajectory_cost;
+                local_cost_sum_sq += trajectory_cost * trajectory_cost;
+            }
+
+            let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
+            // Reset baseline so repeated calls accumulate correctly.
+            local_solve_count_before = ws.solver.statistics().solve_count;
+            let _ = local_solve_count_before; // suppress unused-assignment lint
+
+            Ok((local_cost_sum, local_cost_sum_sq, local_solves))
+        })
+        .collect();
+
+    // Aggregate worker-local results in worker order (= scenario order, because
+    // workers are assigned contiguous scenario ranges). This order must be
+    // deterministic regardless of rayon's thread scheduling.
     let mut cost_sum = 0.0_f64;
     let mut cost_sum_sq = 0.0_f64;
-
-    // Allocate a reusable current-state buffer. Cloned from initial_state
-    // once per scenario — not on the inner (stage) loop.
-    let mut current_state: Vec<f64> = Vec::with_capacity(indexer.n_state);
-
-    for m in 0..forward_passes {
-        // Global scenario index for deterministic seed derivation (SipHash-1-3
-        // seeds for communication-free parallel noise). Uses the pre-computed
-        // offset rather than rank * forward_passes, because forward_passes may
-        // differ across ranks (non-uniform distribution).
-        let global_scenario = fwd_offset + m;
-
-        // Initialise current state for this scenario.
-        current_state.clear();
-        current_state.extend_from_slice(initial_state);
-
-        let mut trajectory_cost = 0.0_f64;
-
-        for t in 0..num_stages {
-            // Cast to u32 for the sampling API (SipHash-1-3 domain ID derivation uses u32 fields).
-            // Indices bounded by u32::MAX in practice; truncation is safe.
-            #[allow(clippy::cast_possible_truncation)]
-            let (iter_u32, scenario_u32, stage_id_u32) =
-                (iteration as u32, global_scenario as u32, t as u32);
-
-            let (_opening_idx, noise) = sample_forward(
-                &tree_view,
-                base_seed,
-                iter_u32,
-                scenario_u32,
-                stage_id_u32,
-                t,
-            );
-
-            // Rebuild LP: template → cuts → scenario-specific row bounds.
-            solver.load_model(&templates[t]);
-            solver.add_rows(&cut_batches[t]);
-
-            patch_buf.fill_forward_patches(indexer, &current_state, noise, base_rows[t]);
-            let patch_count = patch_buf.forward_patch_count();
-            solver.set_row_bounds(
-                &patch_buf.indices[..patch_count],
-                &patch_buf.lower[..patch_count],
-                &patch_buf.upper[..patch_count],
-            );
-
-            // For the terminal stage in finite horizon, the future cost is
-            // defined as zero (no successor stages). Fix theta to [0, 0] so
-            // that HiGHS does not see an unbounded LP when the cut pool is
-            // empty (iteration 1) or when the system has no cuts for this
-            // stage. The 1-based stage index matches the is_terminal API.
-            if horizon.is_terminal(t + 1) {
-                solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
-            }
-
-            let view = match basis_cache[t].as_ref() {
-                Some(rb) => solver.solve_with_basis(rb),
-                None => solver.solve(),
-            }
-            .map_err(|e| {
-                basis_cache[t] = None;
-                match e {
-                    SolverError::Infeasible => SddpError::Infeasible {
-                        stage: t,
-                        iteration,
-                        scenario: m,
-                    },
-                    other => SddpError::Solver(other),
-                }
-            })?;
-
-            // Stage cost = LP objective minus theta (future cost variable).
-            let stage_cost = view.objective - view.primal[indexer.theta];
-
-            let record_idx = m * num_stages + t;
-            records[record_idx].primal.clear();
-            records[record_idx].primal.extend_from_slice(view.primal);
-            records[record_idx].dual.clear();
-            records[record_idx].dual.extend_from_slice(view.dual);
-            records[record_idx].stage_cost = stage_cost;
-            records[record_idx].state.clear();
-            records[record_idx]
-                .state
-                .extend_from_slice(&view.primal[..indexer.n_state]);
-
-            trajectory_cost += stage_cost;
-            current_state.clear();
-            current_state.extend_from_slice(&view.primal[..indexer.n_state]);
-
-            if let Some(rb) = &mut basis_cache[t] {
-                solver.get_basis(rb);
-            } else {
-                let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
-                solver.get_basis(&mut rb);
-                basis_cache[t] = Some(rb);
-            }
-        }
-
-        cost_sum += trajectory_cost;
-        cost_sum_sq += trajectory_cost * trajectory_cost;
+    let mut lp_solves = 0u64;
+    for result in worker_results {
+        let (w_cost_sum, w_cost_sum_sq, w_solves) = result?;
+        cost_sum += w_cost_sum;
+        cost_sum_sq += w_cost_sum_sq;
+        lp_solves += w_solves;
     }
 
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;
-
-    let lp_solves = solver.statistics().solve_count - solves_before;
 
     Ok(ForwardResult {
         cost_sum,
@@ -539,10 +675,13 @@ mod tests {
 
     use cobre_comm::LocalBackend;
 
-    use super::{ForwardResult, SyncResult, build_cut_row_batch, run_forward_pass, sync_forward};
+    use super::{
+        ForwardResult, SyncResult, build_cut_row_batch, partition, run_forward_pass, sync_forward,
+    };
     use crate::{
-        FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer, TrainingConfig,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────
@@ -655,7 +794,10 @@ mod tests {
         }
 
         fn statistics(&self) -> SolverStatistics {
-            SolverStatistics::default()
+            SolverStatistics {
+                solve_count: self.call_count as u64,
+                ..SolverStatistics::default()
+            }
         }
 
         fn name(&self) -> &'static str {
@@ -975,6 +1117,20 @@ mod tests {
         assert_eq!(batch.row_lower, vec![3.0]);
     }
 
+    /// Build a single-workspace from a solver sized for the given `indexer`.
+    fn single_workspace(solver: MockSolver, indexer: &StageIndexer) -> SolverWorkspace<MockSolver> {
+        SolverWorkspace {
+            solver,
+            patch_buf: crate::lp_builder::PatchBuffer::new(
+                indexer.hydro_count,
+                indexer.max_par_order,
+            ),
+            current_state: Vec::with_capacity(indexer.n_state),
+            noise_buf: Vec::with_capacity(indexer.hydro_count),
+            inflow_m3s_buf: Vec::with_capacity(indexer.hydro_count),
+        }
+    }
+
     // ── Acceptance criteria integration tests ───────────────────────────────
 
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
@@ -984,7 +1140,7 @@ mod tests {
         // StageIndexer: N=1, L=0 → n_state=1, theta=2, num_cols=3
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
             forward_passes: 2,
@@ -1003,11 +1159,13 @@ mod tests {
         let base_rows = vec![1usize, 1, 1];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
-        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
         let result = run_forward_pass(
-            &mut solver,
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
             &templates,
             &base_rows,
             &fcf,
@@ -1017,9 +1175,10 @@ mod tests {
             &horizon,
             &initial_state,
             &mut records,
-            &mut patch_buf,
             &indexer,
-            &mut vec![None; templates.len()],
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
             0,
         )
         .unwrap();
@@ -1045,7 +1204,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
         // The 2nd solve call (index 1) is stage 1 of scenario 0.
-        let mut solver = MockSolver::infeasible_on(solution, 1);
+        let solver = MockSolver::infeasible_on(solution, 1);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
             forward_passes: 2,
@@ -1064,11 +1223,13 @@ mod tests {
         let base_rows = vec![1usize, 1, 1];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
-        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
         let result = run_forward_pass(
-            &mut solver,
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
             &templates,
             &base_rows,
             &fcf,
@@ -1078,9 +1239,10 @@ mod tests {
             &horizon,
             &initial_state,
             &mut records,
-            &mut patch_buf,
             &indexer,
-            &mut vec![None; templates.len()],
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
             0,
         );
 
@@ -1117,7 +1279,7 @@ mod tests {
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
-        let mut solver = MockSolver::always_ok(solution);
+        let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
             forward_passes: 2,
@@ -1136,11 +1298,13 @@ mod tests {
         let base_rows = vec![1usize, 1, 1];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
-        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
         let result = run_forward_pass(
-            &mut solver,
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
             &templates,
             &base_rows,
             &fcf,
@@ -1150,9 +1314,10 @@ mod tests {
             &horizon,
             &initial_state,
             &mut records,
-            &mut patch_buf,
             &indexer,
-            &mut vec![None; templates.len()],
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
             0,
         )
         .unwrap();
@@ -1430,11 +1595,11 @@ mod tests {
     // ── Unit tests: warm-start basis caching ─────────────────────────────────
 
     /// Helper: run one iteration of `run_forward_pass` with a single scenario
-    /// and a 3-stage horizon, returning the warm-start call count from the
-    /// solver.
+    /// and a 3-stage horizon. The workspace is passed mutably; the basis store
+    /// is returned so callers can inspect per-scenario, per-stage cached bases.
     fn run_one_iteration(
-        solver: &mut MockSolver,
-        basis_cache: &mut [Option<Basis>],
+        ws: &mut SolverWorkspace<MockSolver>,
+        basis_store: &mut BasisStore,
     ) -> Result<(), crate::SddpError> {
         let indexer = StageIndexer::new(1, 0);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 100, 0);
@@ -1455,11 +1620,11 @@ mod tests {
         let base_rows = vec![1usize, 1, 1];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(3);
-        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
 
         run_forward_pass(
-            solver,
+            std::slice::from_mut(ws),
+            basis_store,
             &templates,
             &base_rows,
             &fcf,
@@ -1469,9 +1634,10 @@ mod tests {
             &horizon,
             &initial_state,
             &mut records,
-            &mut patch_buf,
             &indexer,
-            basis_cache,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
             0,
         )
         .map(|_| ())
@@ -1480,83 +1646,359 @@ mod tests {
     /// Warm-start invocation: the first iteration calls `solve` (cold start);
     /// the second iteration calls `solve_with_basis` (warm start).
     ///
-    /// AC: `run_forward_pass` called twice with the same `basis_cache`.
-    /// After iteration 1: `warm_start_calls` == 0 (3 cold-start solves for 3 stages).
-    /// After iteration 2: `warm_start_calls` > 0 (all 3 stages warm-start).
+    /// AC: `run_forward_pass` called twice, sharing the same `BasisStore`
+    /// (1 scenario × 3 stages). After iteration 1: `warm_start_calls` == 0
+    /// (3 cold-start solves). After iteration 2: `warm_start_calls` > 0 (all
+    /// 3 stages warm-start from the store populated in iteration 1).
     #[test]
     fn warm_start_first_iteration_cold_second_iteration_warm() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
-        let mut solver = MockSolver::always_ok(solution);
-        let mut basis_cache: Vec<Option<Basis>> = vec![None, None, None];
+        let solver = MockSolver::always_ok(solution);
+        // Single workspace and a shared basis store (1 scenario × 3 stages).
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(1, 3);
 
         // First iteration: no cached bases → all cold-start.
-        run_one_iteration(&mut solver, &mut basis_cache).unwrap();
+        run_one_iteration(&mut ws, &mut basis_store).unwrap();
         assert_eq!(
-            solver.warm_start_calls, 0,
+            ws.solver.warm_start_calls, 0,
             "first iteration must use cold-start for all stages (warm_start_calls == 0)"
         );
 
-        // After first iteration, all 3 stages have a cached basis.
+        // After first iteration, all 3 stages for scenario 0 have a cached basis.
         assert!(
-            basis_cache.iter().all(Option::is_some),
-            "basis_cache must be fully populated after the first iteration"
+            (0..3).all(|t| basis_store.get(0, t).is_some()),
+            "basis_store must be fully populated for scenario 0 after the first iteration"
         );
 
         // Second iteration: cached bases present → all stages warm-start.
-        run_one_iteration(&mut solver, &mut basis_cache).unwrap();
+        run_one_iteration(&mut ws, &mut basis_store).unwrap();
         assert!(
-            solver.warm_start_calls > 0,
+            ws.solver.warm_start_calls > 0,
             "second iteration must use warm-start for at least one stage \
              (warm_start_calls > 0, got {})",
-            solver.warm_start_calls
+            ws.solver.warm_start_calls
         );
     }
 
-    /// Basis invalidation: when a solve returns `SolverError::Infeasible`,
-    /// `basis_cache[t]` must be set to `None` before the error is propagated.
-    /// The next iteration at that stage cold-starts.
+    /// Basis invalidation on solver error: when a forward solve returns
+    /// `SolverError::Infeasible`, the `BasisStore` slot at `(scenario, stage)`
+    /// must be set to `None` before the error propagates.
     ///
     /// AC: `MockSolver` returns `Infeasible` on call index 4 (second iteration,
-    /// stage 1 — stages 0,1,2 are calls 0,1,2 in iteration 1; then 3,4,5 in
-    /// iteration 2). After the error, `basis_cache[1]` must be `None`.
-    /// A third iteration at stage 1 must not call warm-start (cold-start instead).
+    /// stage 1 — calls 0-2 = first iteration stages 0,1,2; calls 3,4,5 = second
+    /// iteration stages 0,1,2). After the error:
+    /// - `basis_store.get(0, 1)` is `None` (invalidated at the failing stage).
+    /// - `basis_store.get(0, 0)` is `Some` (stage 0 succeeded in iteration 2).
     #[test]
     fn basis_invalidated_on_solver_error() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
         // Call 4 = second iteration, stage 1 (calls 0-2 = first iteration
         // stages 0,1,2; calls 3,4,5 = second iteration stages 0,1,2).
-        let mut solver = MockSolver::infeasible_on(solution, 4);
-        let mut basis_cache: Vec<Option<Basis>> = vec![None, None, None];
+        let solver = MockSolver::infeasible_on(solution, 4);
+        // Single workspace and a shared basis store (1 scenario × 3 stages).
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(1, 3);
 
-        // First iteration: all cold-start, all succeed, cache all 3 bases.
-        run_one_iteration(&mut solver, &mut basis_cache).unwrap();
+        // First iteration: all cold-start, all succeed, populate all 3 stages.
+        run_one_iteration(&mut ws, &mut basis_store).unwrap();
         assert!(
-            basis_cache.iter().all(Option::is_some),
-            "cache must be full after iteration 1"
+            (0..3).all(|t| basis_store.get(0, t).is_some()),
+            "basis_store must be fully populated for scenario 0 after iteration 1"
         );
 
-        // Second iteration: stages 0 warm-start (call 3 OK), stage 1 infeasible (call 4).
-        let err = run_one_iteration(&mut solver, &mut basis_cache).unwrap_err();
+        // Second iteration: stage 0 warm-starts (call 3 OK), stage 1 infeasible (call 4).
+        let err = run_one_iteration(&mut ws, &mut basis_store).unwrap_err();
         assert!(
             matches!(err, crate::SddpError::Infeasible { stage: 1, .. }),
             "expected Infeasible at stage 1, got: {err:?}"
         );
 
-        // AC: basis_cache[1] must be None after the error (invalidated).
+        // AC: basis_store slot (0, 1) must be None after the error (invalidated).
         assert!(
-            basis_cache[1].is_none(),
-            "basis_cache[1] must be None after solver error at stage 1"
+            basis_store.get(0, 1).is_none(),
+            "basis_store.get(0, 1) must be None after solver error at stage 1"
         );
 
-        // Stages 0 and 2: stage 0 was warm-started before the error (basis still set);
-        // stage 2 was never reached in iteration 2 (error propagated early).
-        // The exact state of cache[0] and cache[2] depends on traversal order:
-        // stage 0 succeeded and had its basis re-extracted; stage 2 was not reached.
+        // Stage 0 succeeded in iteration 2 — its basis was re-extracted.
         assert!(
-            basis_cache[0].is_some(),
-            "basis_cache[0] must still be Some (solve succeeded before error)"
+            basis_store.get(0, 0).is_some(),
+            "basis_store.get(0, 0) must be Some (stage 0 succeeded before error)"
         );
+    }
+
+    // ── New test: parallel cost agreement ────────────────────────────────────
+
+    /// AC: with 1-workspace and 4-workspace pools producing the same `cost_sum`.
+    ///
+    /// Given the same input data, `run_forward_pass` with a single workspace
+    /// must produce identical `cost_sum` and `cost_sum_sq` values compared to
+    /// running with 4 workspaces. This verifies the static partitioning
+    /// produces deterministic results regardless of workspace count.
+    #[test]
+    fn test_forward_pass_parallel_cost_agreement() {
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let horizon = HorizonMode::Finite { num_stages: 3 };
+        let templates = vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ];
+        let base_rows = vec![1usize, 1, 1];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let n_scenarios = 10;
+
+        // Run with 1 workspace.
+        let mut ws1 = single_workspace(MockSolver::always_ok(solution.clone()), &indexer);
+        let mut records1 = empty_records(n_scenarios * 3);
+        let mut basis_store1 = BasisStore::new(n_scenarios, templates.len());
+        let result1 = run_forward_pass(
+            std::slice::from_mut(&mut ws1),
+            &mut basis_store1,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            n_scenarios,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records1,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        // Run with 4 workspaces.
+        let mut workspaces4: Vec<SolverWorkspace<MockSolver>> = (0..4)
+            .map(|_| single_workspace(MockSolver::always_ok(solution.clone()), &indexer))
+            .collect();
+        let mut records4 = empty_records(n_scenarios * 3);
+        let mut basis_store4 = BasisStore::new(n_scenarios, templates.len());
+        let result4 = run_forward_pass(
+            &mut workspaces4,
+            &mut basis_store4,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            n_scenarios,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records4,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result1.cost_sum, result4.cost_sum,
+            "cost_sum must be identical for 1 and 4 workspaces"
+        );
+        assert_eq!(
+            result1.cost_sum_sq, result4.cost_sum_sq,
+            "cost_sum_sq must be identical for 1 and 4 workspaces"
+        );
+        assert_eq!(
+            result1.scenario_count, result4.scenario_count,
+            "scenario_count must be identical"
+        );
+    }
+
+    // ── New test: work distribution across 4 workspaces ──────────────────────
+
+    /// C1: verify that 10 scenarios distributed across 4 workspaces assign
+    /// each workspace `floor(10/4)` or `ceil(10/4)` scenarios.
+    ///
+    /// With `n=10`, `n_workers=4`: `base=2`, `remainder=2`.
+    /// - Workers 0,1 receive 3 scenarios each → 3 * 3 stages = 9 solve calls.
+    /// - Workers 2,3 receive 2 scenarios each → 2 * 3 stages = 6 solve calls.
+    ///
+    /// `MockSolver.statistics().solve_count` now returns `call_count`, so we
+    /// can verify each workspace performed its assigned number of LP solves.
+    #[test]
+    fn test_forward_pass_work_distribution() {
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let horizon = HorizonMode::Finite { num_stages: 3 };
+        let num_stages = 3usize;
+        let templates = vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ];
+        let base_rows = vec![1usize, 1, 1];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let n_scenarios = 10usize;
+        let n_workers = 4usize;
+
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|_| single_workspace(MockSolver::always_ok(solution.clone()), &indexer))
+            .collect();
+        let mut records = empty_records(n_scenarios * num_stages);
+        let mut basis_store = BasisStore::new(n_scenarios, num_stages);
+
+        let _result = run_forward_pass(
+            &mut workspaces,
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            n_scenarios,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+        )
+        .unwrap();
+
+        // Verify each workspace performed the expected number of LP solves.
+        // partition(10, 4, w): base=2, remainder=2.
+        // Workers 0,1: 3 scenarios × 3 stages = 9 solves each.
+        // Workers 2,3: 2 scenarios × 3 stages = 6 solves each.
+        for (w, ws) in workspaces.iter().enumerate() {
+            let (start_m, end_m) = partition(n_scenarios, n_workers, w);
+            let assigned_scenarios = end_m - start_m;
+            let expected_solves = assigned_scenarios * num_stages;
+
+            // floor and ceil of n_scenarios / n_workers for boundary check.
+            let floor_scenarios = n_scenarios / n_workers;
+            let ceil_scenarios = n_scenarios.div_ceil(n_workers);
+            assert!(
+                assigned_scenarios == floor_scenarios || assigned_scenarios == ceil_scenarios,
+                "worker {w} assigned {assigned_scenarios} scenarios, expected {floor_scenarios} or {ceil_scenarios}"
+            );
+
+            let actual_solves = usize::try_from(ws.solver.statistics().solve_count)
+                .expect("solve_count fits in usize in tests");
+            assert_eq!(
+                actual_solves, expected_solves,
+                "worker {w} (scenarios [{start_m}, {end_m})) performed {actual_solves} solves, expected {expected_solves}"
+            );
+        }
+
+        // Verify the total solve count equals n_scenarios * num_stages.
+        let total_solves: usize = workspaces
+            .iter()
+            .map(|ws| {
+                usize::try_from(ws.solver.statistics().solve_count)
+                    .expect("solve_count fits in usize in tests")
+            })
+            .sum();
+        assert_eq!(
+            total_solves,
+            n_scenarios * num_stages,
+            "total solve count {total_solves} must equal n_scenarios * num_stages = {}",
+            n_scenarios * num_stages
+        );
+    }
+
+    // ── New test: parallel infeasibility propagation ──────────────────────────
+
+    /// C3: when one of 4 workspaces returns `SolverError::Infeasible`, the
+    /// error propagates as `SddpError::Infeasible` with correct stage and
+    /// scenario indices.
+    ///
+    /// Worker 1 handles scenarios [3, 6) (3 scenarios) with 3 stages each.
+    /// Its solver is configured to fail on call 0 (scenario 3, stage 0).
+    /// Expected: `SddpError::Infeasible { stage: 0, scenario: 3, .. }`.
+    #[test]
+    fn test_forward_pass_parallel_infeasibility() {
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let horizon = HorizonMode::Finite { num_stages: 3 };
+        let num_stages = 3usize;
+        let templates = vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ];
+        let base_rows = vec![1usize, 1, 1];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let n_scenarios = 10usize;
+        let n_workers = 4usize;
+
+        // Worker 1 handles scenarios [3, 6). Its first solve call (call index 0
+        // within that worker) corresponds to scenario 3, stage 0.
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|w| {
+                let solver = if w == 1 {
+                    // Fail on the first solve call this worker makes.
+                    MockSolver::infeasible_on(solution.clone(), 0)
+                } else {
+                    MockSolver::always_ok(solution.clone())
+                };
+                single_workspace(solver, &indexer)
+            })
+            .collect();
+
+        let mut records = empty_records(n_scenarios * num_stages);
+        let mut basis_store = BasisStore::new(n_scenarios, num_stages);
+
+        let result = run_forward_pass(
+            &mut workspaces,
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            n_scenarios,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+        );
+
+        // Worker 1's partition: partition(10, 4, 1) → start_m=3.
+        // The first solve in that worker is scenario 3, stage 0.
+        match result {
+            Err(crate::SddpError::Infeasible {
+                stage,
+                scenario,
+                iteration,
+            }) => {
+                assert_eq!(
+                    stage, 0,
+                    "infeasible stage must be 0 (first stage of worker 1)"
+                );
+                assert_eq!(
+                    scenario, 3,
+                    "infeasible scenario must be 3 (start_m of worker 1)"
+                );
+                assert_eq!(
+                    iteration, 0,
+                    "iteration must be 0 (first training iteration)"
+                );
+            }
+            Err(other) => panic!("expected SddpError::Infeasible, got: {other:?}"),
+            Ok(_) => panic!("expected Err(SddpError::Infeasible), got Ok"),
+        }
     }
 }

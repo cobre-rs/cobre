@@ -3,8 +3,14 @@
 ## Synopsis
 
 ```
-cobre <SUBCOMMAND> [OPTIONS]
+cobre [--color <WHEN>] <SUBCOMMAND> [OPTIONS]
 ```
+
+## Global Options
+
+| Option           | Type                          | Default | Description                                                                                                                                                   |
+| ---------------- | ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--color <WHEN>` | `auto` \| `always` \| `never` | `auto`  | Control ANSI color output on stderr. `always` forces color on — useful under `mpiexec` which pipes stderr through a non-TTY. Also honoured via `COBRE_COLOR`. |
 
 ## Subcommands
 
@@ -34,13 +40,14 @@ Executes the full solve lifecycle for a case directory:
 
 ### Options
 
-| Option              | Type | Default              | Description                                                               |
-| ------------------- | ---- | -------------------- | ------------------------------------------------------------------------- |
-| `--output <DIR>`    | Path | `<CASE_DIR>/output/` | Output directory for results                                              |
-| `--skip-simulation` | flag | off                  | Train only; skip the post-training simulation phase                       |
-| `--quiet`           | flag | off                  | Suppress the banner and progress bars. Errors still go to stderr          |
-| `--no-banner`       | flag | off                  | Suppress the startup banner but keep progress bars                        |
-| `--verbose`         | flag | off                  | Enable debug-level logging for `cobre_cli`; info-level for library crates |
+| Option              | Type    | Default              | Description                                                                                                                                                            |
+| ------------------- | ------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--output <DIR>`    | Path    | `<CASE_DIR>/output/` | Output directory for results                                                                                                                                           |
+| `--threads <N>`     | integer | `1`                  | Number of worker threads per MPI rank. Each thread solves its own LP instances; scenarios are distributed across threads. Resolves: `--threads` > `COBRE_THREADS` > 1. |
+| `--skip-simulation` | flag    | off                  | Train only; skip the post-training simulation phase                                                                                                                    |
+| `--quiet`           | flag    | off                  | Suppress the banner and progress bars. Errors still go to stderr                                                                                                       |
+| `--no-banner`       | flag    | off                  | Suppress the startup banner but keep progress bars                                                                                                                     |
+| `--verbose`         | flag    | off                  | Enable debug-level logging for `cobre_cli`; info-level for library crates                                                                                              |
 
 ### Examples
 
@@ -54,8 +61,14 @@ cobre run /data/cases/hydro_study --output /data/results/run_001
 # Train only, no simulation
 cobre run /data/cases/hydro_study --skip-simulation
 
+# Use 4 worker threads per MPI rank
+cobre run /data/cases/hydro_study --threads 4
+
 # Run without any terminal decorations (useful in scripts)
 cobre run /data/cases/hydro_study --quiet
+
+# Force color output when running under mpiexec
+cobre --color always run /data/cases/hydro_study
 
 # Enable verbose logging to diagnose solver issues
 cobre run /data/cases/hydro_study --verbose
@@ -206,5 +219,8 @@ See [Error Codes](../reference/error-codes.md) for a detailed catalog.
 | Variable             | Description                                                                                                                                                                      |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `COBRE_COMM_BACKEND` | Override the communication backend at runtime. Set to `local` to force the local backend even when the binary was compiled with `mpi` support.                                   |
+| `COBRE_THREADS`      | Number of worker threads per MPI rank for `cobre run`. Overridden by the `--threads` flag. Must be a positive integer.                                                           |
+| `COBRE_COLOR`        | Override color output when `--color auto` is in effect. Set to `always` or `never`. Ignored if `--color always` or `--color never` is given explicitly.                          |
+| `FORCE_COLOR`        | Force color output on (any non-empty value). Checked after `COBRE_COLOR`. See [force-color.org](https://force-color.org).                                                        |
+| `NO_COLOR`           | Disable colored terminal output. Respected by the banner and error formatters. Set to any non-empty value.                                                                       |
 | `RUST_LOG`           | Control the tracing subscriber log level using standard `env_logger` syntax (e.g., `RUST_LOG=debug`, `RUST_LOG=cobre_sddp=trace`). Takes effect when `--verbose` is also passed. |
-| `NO_COLOR`           | Disable colored terminal output. Respected automatically by the `console` crate. Set to any non-empty value.                                                                     |

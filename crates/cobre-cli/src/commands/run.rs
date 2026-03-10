@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, create_communicator};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_stage_templates,
-    build_training_output, simulate, train,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -104,6 +104,11 @@ struct BroadcastConfig {
     /// Relative path for the policy checkpoint directory (within `output_dir`).
     /// Used by rank 0 for writing the FCF checkpoint.
     policy_path: String,
+    /// Inflow non-negativity treatment method broadcast to all ranks.
+    ///
+    /// All ranks must build LP templates with identical column counts, so the
+    /// method must be broadcast from rank 0 alongside all other config fields.
+    inflow_method: InflowNonNegativityMethod,
 }
 
 impl BroadcastConfig {
@@ -176,6 +181,7 @@ impl BroadcastConfig {
             n_scenarios: config.simulation.num_scenarios,
             io_channel_capacity: config.simulation.io_channel_capacity,
             policy_path: config.policy.path.clone(),
+            inflow_method: InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity),
         }
     }
 }
@@ -238,6 +244,36 @@ pub struct RunArgs {
     /// Increase the tracing log level (debug for `cobre_cli`, info for library crates).
     #[arg(long)]
     pub verbose: bool,
+
+    /// Number of worker threads for parallel scenario processing within each
+    /// MPI rank.  Each thread solves its own LP instances sequentially; multiple
+    /// scenarios (forward passes, backward trial points, simulation runs) are
+    /// processed in parallel across threads.
+    ///
+    /// Resolves in this order: (1) this flag, (2) `COBRE_THREADS` env var,
+    /// (3) default of 1.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub threads: Option<u32>,
+}
+
+/// Resolve the rayon thread count for the current rank.
+///
+/// Resolution order (first non-zero value wins):
+/// 1. `cli_threads` — explicit `--threads` CLI argument.
+/// 2. `COBRE_THREADS` environment variable (HPC cluster integration).
+/// 3. Default of 1 (conservative: avoids unexpected oversubscription).
+fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
+    if let Some(n) = cli_threads {
+        return n as usize;
+    }
+    if let Ok(val) = std::env::var("COBRE_THREADS") {
+        if let Ok(n) = val.parse::<usize>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    1
 }
 
 /// Broadcast a serializable value from rank 0 to all ranks.
@@ -393,6 +429,18 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         crate::banner::print_banner(&stderr);
     }
 
+    // Resolve thread count and initialize parallelism infrastructure.
+    //
+    // Resolution order: --threads CLI flag > COBRE_THREADS > 1.
+    let n_threads = resolve_thread_count(args.threads);
+    // build_global returns Err only if called more than once; ignore gracefully.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build_global()
+        .unwrap_or_else(|_| {
+            tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
+        });
+
     // Rank 0 loads from disk; all ranks receive via broadcast.
     //
     // Only rank 0 accesses the filesystem. Non-root ranks may not have the
@@ -435,7 +483,17 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let system = system_result?;
     let bcast_config = bcast_config_result?;
 
-    let stage_templates = build_stage_templates(&system);
+    // Build stochastic context first so par_lp is available for LP template construction.
+    let seed = bcast_config.seed;
+    let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
+        message: format!("stochastic context error: {e}"),
+    })?;
+
+    // Build LP templates on all ranks. The par_lp from the stochastic context
+    // supplies PAR coefficients that are embedded in the static LP row bounds
+    // and in the noise_scale pre-computation.
+    let stage_templates =
+        build_stage_templates(&system, &bcast_config.inflow_method, stochastic.par_lp());
     if stage_templates.templates.is_empty() {
         return Err(CliError::Validation {
             report: "system has no study stages — cannot train".to_string(),
@@ -443,12 +501,18 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
     let stage_templates_ref = &stage_templates.templates;
     let base_rows = &stage_templates.base_rows;
+    let noise_scale = &stage_templates.noise_scale;
+    let zeta_per_stage = &stage_templates.zeta_per_stage;
+    let block_hours_per_stage = &stage_templates.block_hours_per_stage;
+    let n_hydros_lp = stage_templates.n_hydros;
 
     // Build the full indexer with equipment column ranges.
     // Assumption: all stages have the same block count (uniform horizon).
     // The 1dtoy example has 1 block per stage; heterogeneous block counts
     // would require a per-stage indexer (deferred).
     let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
+    let has_inflow_penalty =
+        bcast_config.inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
     let indexer = StageIndexer::with_equipment(
         stage_templates_ref[0].n_hydro,
         stage_templates_ref[0].max_par_order,
@@ -456,13 +520,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         system.lines().len(),
         system.buses().len(),
         n_blks_stage0,
+        has_inflow_penalty,
     );
     let initial_state = build_initial_state(&system, &indexer);
-
-    let seed = bcast_config.seed;
-    let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
-        message: format!("stochastic context error: {e}"),
-    })?;
 
     let forward_passes = bcast_config.forward_passes;
     let stopping_rules = stopping_rules_from_broadcast(&bcast_config);
@@ -530,6 +590,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         None,
         None,
         &comm,
+        n_threads,
+        HighsSolver::new,
+        &bcast_config.inflow_method,
+        noise_scale,
+        n_hydros_lp,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -549,6 +614,22 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         (None, None) => Vec::new(),
     };
     let training_output = build_training_output(&training_result, &events, &fcf);
+
+    // Aggregate per-rank LP solve counts across all ranks so that the reported
+    // total is invariant regardless of the parallel configuration (single-process
+    // vs MPI vs threaded). Each rank computes its local total from the per-iteration
+    // events, then allreduce(Sum) produces the program-wide total on every rank.
+    let local_lp_solves: u64 = training_output
+        .convergence_records
+        .iter()
+        .map(|r| u64::from(r.lp_solves))
+        .sum();
+    let mut global_lp_solves = [0u64];
+    comm.allreduce(&[local_lp_solves], &mut global_lp_solves, ReduceOp::Sum)
+        .map_err(|e| CliError::Internal {
+            message: format!("LP solve count allreduce error: {e}"),
+        })?;
+    let global_lp_solves = global_lp_solves[0];
 
     // Barrier: ensure all ranks have finished training before rank 0 writes
     // the policy checkpoint. Without this, rank 0 could write stale cut data
@@ -581,6 +662,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
         let entity_counts = build_entity_counts(&system);
 
+        // Build a workspace pool for simulation. The pool uses the same resolved
+        // thread count as the training forward pass so that the simulation phase
+        // matches the training parallelism configuration.
+        let mut sim_pool = WorkspacePool::try_new(
+            n_threads,
+            indexer.hydro_count,
+            indexer.max_par_order,
+            indexer.n_state,
+            HighsSolver::new,
+        )
+        .map_err(|e| CliError::Solver {
+            message: format!("HiGHS initialisation failed for simulation pool: {e}"),
+        })?;
+
         // All ranks create the channel: simulate() sends results through
         // result_tx regardless of rank. Each rank collects its own subset of
         // scenario results from the channel.
@@ -602,7 +697,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         });
 
         let sim_result = simulate(
-            &mut solver,
+            &mut sim_pool.workspaces,
             stage_templates_ref,
             base_rows,
             &fcf,
@@ -614,6 +709,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &entity_counts,
             &comm,
             &result_tx,
+            &bcast_config.inflow_method,
+            noise_scale,
+            n_hydros_lp,
+            zeta_per_stage,
+            block_hours_per_stage,
         )
         .map_err(CliError::from);
 
@@ -793,11 +893,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     gap_percent: training_result.final_gap * 100.0,
                     total_cuts_active: training_output.cut_stats.total_active,
                     total_cuts_generated: training_output.cut_stats.total_generated,
-                    total_lp_solves: training_output
-                        .convergence_records
-                        .iter()
-                        .map(|r| u64::from(r.lp_solves))
-                        .sum(),
+                    total_lp_solves: global_lp_solves,
                     total_time_ms: training_result.total_time_ms,
                 },
                 simulation: simulation_output.as_ref().map(|sim| SimulationSummary {
@@ -896,7 +992,7 @@ fn build_initial_state(system: &cobre_core::System, indexer: &StageIndexer) -> V
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::broadcast_value;
+    use super::{broadcast_value, resolve_thread_count};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -983,5 +1079,35 @@ mod tests {
         let value: u64 = 42;
         let result = broadcast_value(Some(value), &comm).unwrap();
         assert_eq!(result, 42u64);
+    }
+
+    // ------------------------------------------------------------------
+    // resolve_thread_count tests
+    //
+    // Note: env var mutation (`set_var`/`remove_var`) is unsafe in Rust 2024
+    // and is forbidden by the workspace `unsafe_code = "forbid"` lint.
+    // These tests therefore exercise only the paths that do not require env
+    // var mutation: the CLI argument path and the fixed default value.
+    // ------------------------------------------------------------------
+
+    /// CLI `--threads` value is returned directly without consulting env vars.
+    #[test]
+    fn test_resolve_thread_count_cli_value() {
+        assert_eq!(
+            resolve_thread_count(Some(4)),
+            4,
+            "CLI value must be returned as-is"
+        );
+    }
+
+    /// Single-thread default: passing Some(1) yields 1, matching the hardcoded
+    /// fallback value and confirming single-threaded operation is always available.
+    #[test]
+    fn test_resolve_thread_count_default() {
+        assert_eq!(
+            resolve_thread_count(Some(1)),
+            1,
+            "single-thread CLI value must produce 1"
+        );
     }
 }

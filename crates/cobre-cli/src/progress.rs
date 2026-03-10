@@ -37,9 +37,8 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 const TRAINING_TEMPLATE: &str = "Training {bar:40} {pos}/{len} iter  {msg}";
 const SIMULATION_TEMPLATE: &str =
-    "Simulation {bar:40} {pos}/{len} scenarios  [{elapsed_precise} < {eta_precise}]";
+    "Simulation {bar:40} {pos}/{len} scenarios  {msg}  [{elapsed_precise} < {eta_precise}]";
 
-/// Handle to a background progress thread.
 pub struct ProgressHandle {
     handle: thread::JoinHandle<Vec<TrainingEvent>>,
 }
@@ -110,12 +109,23 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationProgress {
                         scenarios_complete,
                         scenarios_total,
+                        mean_cost,
+                        std_cost,
+                        ci_95_half_width,
                         ..
                     } => {
                         let bar = simulation_bar.get_or_insert_with(|| {
                             create_simulation_bar(u64::from(scenarios_total))
                         });
                         bar.set_position(u64::from(scenarios_complete));
+                        let msg = if scenarios_complete >= 2 {
+                            format!(
+                                "mean: {mean_cost:.1}  std: {std_cost:.1}  CI95: +/-{ci_95_half_width:.1}"
+                            )
+                        } else {
+                            format!("mean: {mean_cost:.1}")
+                        };
+                        bar.set_message(msg);
                     }
 
                     TrainingEvent::SimulationFinished { scenarios, .. } => {
@@ -169,8 +179,6 @@ fn create_simulation_bar(scenarios_total: u64) -> ProgressBar {
     bar
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -210,6 +218,9 @@ mod tests {
             scenarios_complete: complete,
             scenarios_total: total,
             elapsed_ms: u64::from(complete) * 50,
+            mean_cost: 45_230.4,
+            std_cost: 3_100.2,
+            ci_95_half_width: 858.6,
         }
     }
 
@@ -350,6 +361,75 @@ mod tests {
             );
         }
         assert!(matches!(events[5], TrainingEvent::TrainingFinished { .. }));
+    }
+
+    #[test]
+    fn test_simulation_progress_message_with_statistics() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, 10);
+
+        // scenarios_complete >= 2: full statistics message expected
+        tx.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: 50,
+            scenarios_total: 200,
+            elapsed_ms: 2_500,
+            mean_cost: 45_230.4,
+            std_cost: 3_100.2,
+            ci_95_half_width: 858.6,
+        })
+        .unwrap();
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 2, "expected 2 events, got {}", events.len());
+        assert!(
+            matches!(
+                events[0],
+                TrainingEvent::SimulationProgress {
+                    scenarios_complete: 50,
+                    mean_cost,
+                    std_cost,
+                    ci_95_half_width,
+                    ..
+                } if (mean_cost - 45_230.4).abs() < f64::EPSILON
+                    && (std_cost - 3_100.2).abs() < f64::EPSILON
+                    && (ci_95_half_width - 858.6).abs() < f64::EPSILON
+            ),
+            "event must be SimulationProgress with expected statistics"
+        );
+    }
+
+    #[test]
+    fn test_simulation_progress_message_single_scenario() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, 10);
+
+        // scenarios_complete == 1: only mean shown, no std/CI
+        tx.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: 1,
+            scenarios_total: 200,
+            elapsed_ms: 50,
+            mean_cost: 45_230.4,
+            std_cost: 0.0,
+            ci_95_half_width: 0.0,
+        })
+        .unwrap();
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 2, "expected 2 events, got {}", events.len());
+        assert!(
+            matches!(
+                events[0],
+                TrainingEvent::SimulationProgress {
+                    scenarios_complete: 1,
+                    ..
+                }
+            ),
+            "first event must be SimulationProgress with scenarios_complete == 1"
+        );
     }
 
     #[test]

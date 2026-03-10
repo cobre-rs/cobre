@@ -19,11 +19,11 @@ pub mod training_writer;
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use manifest::{
-    ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
-    ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,
-    MetadataPerformanceSummary, MetadataProblemDimensions, MetadataRunInfo, SimulationManifest,
-    TrainingManifest, TrainingMetadata, write_metadata, write_simulation_manifest,
-    write_training_manifest,
+    write_metadata, write_simulation_manifest, write_training_manifest, ManifestChecksum,
+    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
+    MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
+    MetadataProblemDimensions, MetadataRunInfo, SimulationManifest, TrainingManifest,
+    TrainingMetadata,
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use simulation_writer::SimulationParquetWriter;
@@ -640,8 +640,6 @@ mod tests {
         assert_eq!(stats.peak_active, 250);
     }
 
-    // ── Output writer acceptance tests ────────────────────────────────────────
-
     #[test]
     fn write_results_creates_success_marker() {
         let tmp = tempfile::tempdir().unwrap();
@@ -871,22 +869,12 @@ mod tests {
         );
     }
 
-    // ── Helper: Build a minimal [`System`] for use in tests. ─────────────────
-
-    /// Build a minimal [`System`] for use in tests.
-    ///
-    /// `SystemBuilder::new().build()` succeeds with an empty system that is valid
-    /// for tests that do not exercise entity-level output paths.
     fn make_system() -> System {
         cobre_core::SystemBuilder::new()
             .build()
             .expect("empty system must be valid")
     }
 
-    /// Build a minimal [`Config`] for use in tests.
-    ///
-    /// Constructs the struct directly rather than deserializing from JSON, so
-    /// the test does not require a filesystem fixture.
     fn make_config() -> Config {
         use crate::config::{
             CheckpointingConfig, CutSelectionConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -895,7 +883,6 @@ mod tests {
         };
         Config {
             schema: None,
-            version: None,
             modeling: ModelingConfig {
                 inflow_non_negativity: InflowNonNegativityConfig::default(),
             },

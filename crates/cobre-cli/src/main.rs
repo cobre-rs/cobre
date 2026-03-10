@@ -12,6 +12,7 @@
 //! | `cobre run <CASE_DIR>` | Load, train, simulate, and write results |
 //! | `cobre validate <CASE_DIR>` | Validate a case directory |
 //! | `cobre report <RESULTS_DIR>` | Query results and print to stdout |
+//! | `cobre schema export` | Export JSON Schema files for all input types |
 //! | `cobre version` | Print version and build information |
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
@@ -32,6 +33,7 @@ use commands::{
     init::{self, InitArgs},
     report::{self, ReportArgs},
     run::{self, RunArgs},
+    schema::{self, SchemaArgs},
     validate::{self, ValidateArgs},
     version,
 };
@@ -107,6 +109,8 @@ enum Command {
     Validate(ValidateArgs),
     /// Query results from a completed run and print them to stdout.
     Report(ReportArgs),
+    /// Manage JSON Schema files for case directory input types.
+    Schema(SchemaArgs),
     /// Print version, solver backend, and build information.
     Version,
 }
@@ -126,6 +130,7 @@ fn main() {
         Command::Run(args) => run::execute(args),
         Command::Validate(args) => validate::execute(args),
         Command::Report(args) => report::execute(args),
+        Command::Schema(args) => schema::execute(args),
         Command::Version => version::execute(),
     };
 
@@ -140,12 +145,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorWhen, resolve_color};
+    use super::{resolve_color, ColorWhen};
 
     // Unit tests cover only `Always` and `Never` variants (safe without env var mutation).
     // Environment variable tests are in the integration suite (cli_color.rs).
 
-    /// `ColorWhen::Always` forces color on regardless of TTY state.
     #[test]
     fn test_resolve_color_always_enables_color() {
         resolve_color(ColorWhen::Always);
@@ -155,7 +159,6 @@ mod tests {
         );
     }
 
-    /// `ColorWhen::Never` forces color off regardless of TTY state.
     #[test]
     fn test_resolve_color_never_disables_color() {
         resolve_color(ColorWhen::Never);

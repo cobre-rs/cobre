@@ -29,13 +29,12 @@ use std::path::Path;
 
 use crate::LoadError;
 
-// ── Intermediate serde types ──────────────────────────────────────────────────
-
 /// Top-level intermediate type for `penalties.json`.
 ///
 /// Private — only used during deserialization. Not re-exported.
 #[derive(Deserialize)]
-struct RawPenalties {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPenalties {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -59,7 +58,8 @@ struct RawPenalties {
 
 /// Intermediate type for the `bus` section.
 #[derive(Deserialize)]
-struct RawBusPenalties {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawBusPenalties {
     /// Piecewise-linear deficit cost segments.
     deficit_segments: Vec<RawDeficitSegment>,
     /// Excess generation cost \[$/`MWh`\].
@@ -68,7 +68,8 @@ struct RawBusPenalties {
 
 /// Intermediate type for one deficit segment entry.
 #[derive(Deserialize)]
-struct RawDeficitSegment {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawDeficitSegment {
     /// MW depth of this segment. `null` means the segment is unbounded (last segment).
     depth_mw: Option<f64>,
     /// Cost per `MWh` of deficit in this segment \[$/`MWh`\].
@@ -77,7 +78,8 @@ struct RawDeficitSegment {
 
 /// Intermediate type for the `line` section.
 #[derive(Deserialize)]
-struct RawLinePenalties {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawLinePenalties {
     /// Exchange cost \[$/`MWh`\].
     exchange_cost: f64,
 }
@@ -89,7 +91,8 @@ struct RawLinePenalties {
 /// [`HydroPenalties`] struct field names.
 #[allow(clippy::struct_field_names)]
 #[derive(Deserialize)]
-struct RawHydroPenalties {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawHydroPenalties {
     spillage_cost: f64,
     fpha_turbined_cost: f64,
     diversion_cost: f64,
@@ -105,12 +108,11 @@ struct RawHydroPenalties {
 
 /// Intermediate type for the `non_controllable_source` section.
 #[derive(Deserialize)]
-struct RawNcsPenalties {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawNcsPenalties {
     /// Curtailment cost \[$/`MWh`\].
     curtailment_cost: f64,
 }
-
-// ── Public API ────────────────────────────────────────────────────────────────
 
 /// Load and validate `penalties.json` from `path`.
 ///
@@ -147,8 +149,6 @@ pub fn parse_penalties(path: &Path) -> Result<GlobalPenaltyDefaults, LoadError> 
 
     Ok(convert(raw))
 }
-
-// ── Validation ────────────────────────────────────────────────────────────────
 
 /// Validate all invariants on the raw deserialized data.
 ///
@@ -311,8 +311,6 @@ fn validate_ncs(raw: &RawPenalties, path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
-// ── Conversion ────────────────────────────────────────────────────────────────
-
 /// Convert validated raw data into [`GlobalPenaltyDefaults`].
 ///
 /// Precondition: [`validate_raw`] has returned `Ok(())` for this data.
@@ -350,8 +348,6 @@ fn convert(raw: RawPenalties) -> GlobalPenaltyDefaults {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
 mod tests {
@@ -359,14 +355,12 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    /// Write a string to a temp file and return the file handle (keeps it alive).
     fn write_json(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(content.as_bytes()).unwrap();
         f
     }
 
-    /// Canonical valid `penalties.json` with 2 deficit segments.
     const VALID_JSON: &str = r#"{
       "$schema": "https://cobre.dev/schemas/v2/penalties.schema.json",
       "version": "1.0",

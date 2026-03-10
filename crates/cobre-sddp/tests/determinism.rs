@@ -641,6 +641,7 @@ fn run_simulation(
                 &[],
                 0,
                 &[],
+                &[],
             )
         })
         .unwrap();

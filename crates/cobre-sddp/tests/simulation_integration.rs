@@ -731,6 +731,7 @@ fn train_simulate_write_cycle() {
         &[],
         0,
         &[],
+        &[],
     )
     .expect("simulate must succeed");
 

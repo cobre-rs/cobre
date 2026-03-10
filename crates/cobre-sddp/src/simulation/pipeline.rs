@@ -143,6 +143,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     noise_scale: &[f64],
     n_hydros: usize,
     zeta_per_stage: &[f64],
+    block_hours_per_stage: &[Vec<f64>],
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -305,6 +306,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     }
 
                     // Extract per-entity typed result for this stage.
+                    let blk_hrs = block_hours_per_stage
+                        .get(t)
+                        .map_or(&[][..], |v| v.as_slice());
                     let stage_result = extract_stage_result(
                         view.primal,
                         view.dual,
@@ -315,6 +319,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         stage_id_u32,
                         entity_counts,
                         &ws.inflow_m3s_buf,
+                        blk_hrs,
                     );
 
                     // Accumulate per-category costs for this stage.
@@ -787,6 +792,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -856,6 +862,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         );
 
         match result {
@@ -919,6 +926,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         );
 
         match result {
@@ -979,6 +987,7 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            &[],
             &[],
         );
 
@@ -1042,6 +1051,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         )
         .unwrap();
 
@@ -1102,6 +1112,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         )
         .unwrap();
 
@@ -1157,6 +1168,7 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            &[],
             &[],
         )
         .unwrap();
@@ -1214,6 +1226,7 @@ mod tests {
             &[],
             0,
             &[],
+            &[],
         )
         .unwrap();
 
@@ -1244,6 +1257,7 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            &[],
             &[],
         )
         .unwrap();

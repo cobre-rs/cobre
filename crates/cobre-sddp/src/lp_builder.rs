@@ -425,6 +425,12 @@ pub struct StageTemplates {
     /// convert the water-balance RHS (in hm³) back to inflow in m³/s for
     /// output reporting: `inflow_m3s = rhs_hm3 / zeta_per_stage[stage]`.
     pub zeta_per_stage: Vec<f64>,
+    /// Per-stage block durations in hours.
+    ///
+    /// `block_hours_per_stage[stage]` is a `Vec<f64>` of length `n_blocks` for
+    /// that stage.  Used by the simulation pipeline to convert load-balance
+    /// constraint duals from $/MW to $/`MWh`: `spot_price = dual / block_hours`.
+    pub block_hours_per_stage: Vec<Vec<f64>>,
     /// Number of hydro plants (N) used to stride into `noise_scale`.
     pub n_hydros: usize,
 }
@@ -535,6 +541,7 @@ pub fn build_stage_templates(
             base_rows: Vec::new(),
             noise_scale: Vec::new(),
             zeta_per_stage: Vec::new(),
+            block_hours_per_stage: Vec::new(),
             n_hydros,
         };
     }
@@ -935,10 +942,12 @@ pub fn build_stage_templates(
     let n_study_stages = study_stages.len();
     let mut noise_scale = vec![0.0_f64; n_study_stages * n_hydros];
     let mut zeta_per_stage = Vec::with_capacity(n_study_stages);
+    let mut block_hours_per_stage = Vec::with_capacity(n_study_stages);
     for (s_idx, stage) in study_stages.iter().enumerate() {
         let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let zeta_s = total_hours * M3S_TO_HM3;
         zeta_per_stage.push(zeta_s);
+        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
         for h_idx in 0..n_hydros {
             let sigma = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
                 par_lp.sigma(s_idx, h_idx)
@@ -954,6 +963,7 @@ pub fn build_stage_templates(
         base_rows,
         noise_scale,
         zeta_per_stage,
+        block_hours_per_stage,
         n_hydros,
     }
 }

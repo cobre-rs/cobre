@@ -503,6 +503,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let base_rows = &stage_templates.base_rows;
     let noise_scale = &stage_templates.noise_scale;
     let zeta_per_stage = &stage_templates.zeta_per_stage;
+    let block_hours_per_stage = &stage_templates.block_hours_per_stage;
     let n_hydros_lp = stage_templates.n_hydros;
 
     // Build the full indexer with equipment column ranges.
@@ -712,6 +713,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             noise_scale,
             n_hydros_lp,
             zeta_per_stage,
+            block_hours_per_stage,
         )
         .map_err(CliError::from);
 

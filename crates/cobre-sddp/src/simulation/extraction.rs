@@ -176,6 +176,7 @@ pub fn extract_stage_result(
     stage_id: u32,
     entity_counts: &EntityCounts,
     inflow_m3s_per_hydro: &[f64],
+    block_hours: &[f64],
 ) -> SimulationStageResult {
     debug_assert!(
         primal.len() > indexer.theta,
@@ -565,7 +566,15 @@ pub fn extract_stage_result(
                         load_mw: row_lower[load_row],
                         deficit_mw: primal[deficit_col],
                         excess_mw: primal[excess_col],
-                        spot_price: dual.get(load_row).copied().unwrap_or(0.0),
+                        spot_price: {
+                            let raw = dual.get(load_row).copied().unwrap_or(0.0);
+                            let hrs = block_hours.get(b).copied().unwrap_or(0.0);
+                            if hrs > 0.0 {
+                                raw / hrs
+                            } else {
+                                0.0
+                            }
+                        },
                     }
                 })
             })
@@ -837,6 +846,7 @@ mod tests {
             3,
             &make_entity_counts_2_hydros(),
             &[],
+            &[],
         );
 
         assert_eq!(result.costs.len(), 1);
@@ -863,6 +873,7 @@ mod tests {
             0,
             &make_entity_counts_2_hydros(),
             &[],
+            &[],
         );
 
         let cost = &result.costs[0];
@@ -888,6 +899,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
             &[],
         );
 
@@ -917,6 +929,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
             &[],
         );
 
@@ -949,8 +962,18 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result =
-            extract_stage_result(&primal, &dual, 600.0, &[], &[], &indexer, 2, &counts, &[]);
+        let result = extract_stage_result(
+            &primal,
+            &dual,
+            600.0,
+            &[],
+            &[],
+            &indexer,
+            2,
+            &counts,
+            &[],
+            &[],
+        );
 
         assert!(result.inflow_lags.is_empty());
         assert_eq!(result.hydros[0].incremental_inflow_m3s, 0.0);
@@ -972,6 +995,7 @@ mod tests {
             &indexer,
             stage_id,
             &make_entity_counts_2_hydros(),
+            &[],
             &[],
         );
 
@@ -1001,6 +1025,7 @@ mod tests {
             &indexer,
             0,
             &make_entity_counts_2_hydros(),
+            &[],
             &[],
         );
 
@@ -1098,12 +1123,13 @@ mod tests {
         let mut dual = vec![0.0_f64; 7];
         dual[4] = -120.0; // water value h0 ($/hm³)
         dual[5] = -95.0; // water value h1 ($/hm³)
-        dual[6] = 150.0; // spot price b0 ($/MWh)
+        dual[6] = 108_000.0; // raw load balance dual ($/MW); 150 $/MWh × 720 h
 
         // Build row_lower for the load balance row. N=2, L=1 → n_state=4, water_bal_start=4,
         // load_bal_start=4+2=6. K=1, B=1 → one load balance row at index 6.
         let mut row_lower = vec![0.0_f64; 7]; // must be >= load_balance.end = 7
         row_lower[6] = 75.0; // load = 75 MW for bus 100
+        let block_hours = [720.0_f64]; // one block, 30-day month
         let result = extract_stage_result(
             &primal,
             &dual,
@@ -1114,6 +1140,7 @@ mod tests {
             0,
             &counts,
             &[],
+            &block_hours,
         );
 
         // Hydro: one entry per (hydro, block), block_id = Some(0)
@@ -1151,7 +1178,7 @@ mod tests {
         assert_eq!(result.buses[0].deficit_mw, 10.0);
         assert_eq!(result.buses[0].excess_mw, 2.0);
         assert_eq!(result.buses[0].block_id, Some(0));
-        assert!((result.buses[0].spot_price - 150.0).abs() < 1e-12);
+        assert!((result.buses[0].spot_price - 150.0).abs() < 1e-12); // 108_000 / 720 = 150 $/MWh
 
         // Water value from dual of water balance rows
         assert!((result.hydros[0].water_value_per_hm3 - (-120.0)).abs() < 1e-12);
@@ -1182,8 +1209,18 @@ mod tests {
             non_controllable_ids: vec![],
         };
 
-        let result =
-            extract_stage_result(&primal, &dual, 250.0, &[], &[], &indexer, 0, &counts, &[]);
+        let result = extract_stage_result(
+            &primal,
+            &dual,
+            250.0,
+            &[],
+            &[],
+            &indexer,
+            0,
+            &counts,
+            &[],
+            &[],
+        );
 
         assert!(result.pumping_stations.is_empty());
         assert!(result.contracts.is_empty());
@@ -1410,6 +1447,7 @@ mod tests {
             0,
             &counts,
             &[],
+            &[],
         );
 
         // turbine is non-empty → per-(hydro, block) results, so 2 hydros × 1 block = 2 entries
@@ -1466,6 +1504,7 @@ mod tests {
             &indexer,
             0,
             &counts,
+            &[],
             &[],
         );
 
@@ -1534,6 +1573,7 @@ mod tests {
             &indexer,
             0,
             &counts,
+            &[],
             &[],
         );
 

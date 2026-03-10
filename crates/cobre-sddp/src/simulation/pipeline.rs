@@ -63,7 +63,7 @@ use crate::{
         types::{ScenarioCategoryCosts, SimulationScenarioResult},
     },
     workspace::SolverWorkspace,
-    FutureCostFunction, HorizonMode, StageIndexer,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -139,6 +139,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     entity_counts: &EntityCounts,
     comm: &C,
     result_tx: &SyncSender<SimulationScenarioResult>,
+    _inflow_method: &InflowNonNegativityMethod,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -375,7 +376,7 @@ mod tests {
     use crate::{
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::SolverWorkspace,
-        FutureCostFunction, HorizonMode, PatchBuffer, StageIndexer,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -755,6 +756,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -820,6 +822,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         );
 
         match result {
@@ -879,6 +882,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         );
 
         match result {
@@ -936,6 +940,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         );
 
         assert!(
@@ -994,6 +999,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1050,6 +1056,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1102,6 +1109,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1154,6 +1162,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx1,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1179,6 +1188,7 @@ mod tests {
             &entity_counts,
             &comm,
             &tx4,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 

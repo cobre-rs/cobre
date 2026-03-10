@@ -25,6 +25,13 @@
 //! [theta+1+2*H*K+T*K+2*L_n*K+B*K,   theta+1+2*H*K+T*K+2*L_n*K+2*B*K) excess
 //! ```
 //!
+//! When the inflow non-negativity penalty method is active (`has_inflow_penalty == true`),
+//! `N` additional slack columns are appended after `excess`:
+//!
+//! ```text
+//! [excess_end, excess_end+N)  inflow_slack — sigma_inf_h (m³/s), one per hydro
+//! ```
+//!
 //! where H = `hydro_count`, K = `n_blks`, T = `n_thermals`, Ln = `n_lines`, B = `n_buses`.
 //!
 //! ## Row layout (Solver Abstraction SS2.2)
@@ -191,6 +198,34 @@ pub struct StageIndexer {
     /// The RHS of these rows contains the load (MW) for each bus in each block.
     /// Empty when built via [`StageIndexer::new`].
     pub load_balance: Range<usize>,
+
+    /// Column range for inflow non-negativity slack variables `sigma_inf_h`.
+    ///
+    /// One slack per operating hydro, appended after `excess` when the penalty
+    /// method is active (`has_inflow_penalty == true`).  The slack is in m³/s;
+    /// it absorbs negative inflow realisations and enters the water balance row
+    /// with coefficient `+tau_total * M3S_TO_HM3`.
+    ///
+    /// Empty (`0..0`) when `has_inflow_penalty == false` or when built via
+    /// [`StageIndexer::new`].
+    pub inflow_slack: Range<usize>,
+
+    /// Row range for inflow non-negativity constraint rows.
+    ///
+    /// Currently unused as a separate constraint block — the slack appears
+    /// directly in the water balance row.  Reserved for future formulations
+    /// that add an explicit `sigma_inf_h + a_h >= 0` row.
+    ///
+    /// Empty (`0..0`) in this implementation.
+    pub inflow_slack_rows: Range<usize>,
+
+    /// Whether inflow non-negativity penalty slack columns are present.
+    ///
+    /// `true` when `build_stage_templates` was called with an
+    /// [`InflowNonNegativityMethod`](crate::inflow_method::InflowNonNegativityMethod)
+    /// whose `has_slack_columns()` returns `true` and `n_hydros > 0`.
+    /// `false` otherwise (including when built via [`StageIndexer::new`]).
+    pub has_inflow_penalty: bool,
 }
 
 impl StageIndexer {
@@ -261,6 +296,11 @@ impl StageIndexer {
             n_lines: 0,
             n_buses: 0,
             load_balance: 0..0,
+            // Inflow penalty slack ranges are empty until `with_equipment` is called
+            // with `has_inflow_penalty == true`.
+            inflow_slack: 0..0,
+            inflow_slack_rows: 0..0,
+            has_inflow_penalty: false,
         }
     }
 
@@ -294,7 +334,7 @@ impl StageIndexer {
     /// ```
     /// use cobre_sddp::StageIndexer;
     ///
-    /// // N=1 hydro, L=0 lags, T=2 thermals, L_n=1 line, B=2 buses, K=1 block
+    /// // N=1 hydro, L=0 lags, T=2 thermals, L_n=1 line, B=2 buses, K=1 block, no penalty
     /// // theta = N*(2+L) = 1*(2+0) = 2
     /// // decision_start = 3
     /// // turbine:   3..4   (1 hydro * 1 block)
@@ -304,7 +344,7 @@ impl StageIndexer {
     /// // line_rev:  8..9   (1 line * 1 block)
     /// // deficit:   9..11  (2 buses * 1 block)
     /// // excess:   11..13  (2 buses * 1 block)
-    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1);
+    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false);
     /// assert_eq!(idx.turbine,   3..4);
     /// assert_eq!(idx.spillage,  4..5);
     /// assert_eq!(idx.thermal,   5..7);
@@ -312,6 +352,7 @@ impl StageIndexer {
     /// assert_eq!(idx.line_rev,  8..9);
     /// assert_eq!(idx.deficit,   9..11);
     /// assert_eq!(idx.excess,   11..13);
+    /// assert!(idx.inflow_slack.is_empty());
     /// assert_eq!(idx.n_blks, 1);
     /// assert_eq!(idx.n_thermals, 2);
     /// assert_eq!(idx.n_lines, 1);
@@ -325,6 +366,7 @@ impl StageIndexer {
         n_lines: usize,
         n_buses: usize,
         n_blks: usize,
+        has_inflow_penalty: bool,
     ) -> Self {
         let base = Self::new(hydro_count, max_par_order);
         let decision_start = base.theta + 1;
@@ -337,6 +379,14 @@ impl StageIndexer {
         let deficit_start = line_rev_start + n_lines * n_blks;
         let excess_start = deficit_start + n_buses * n_blks;
         let excess_end = excess_start + n_buses * n_blks;
+
+        // Inflow slack columns are appended after excess when the penalty method
+        // is active and there is at least one hydro.
+        let (inflow_slack, active_penalty) = if has_inflow_penalty && hydro_count > 0 {
+            (excess_end..excess_end + hydro_count, true)
+        } else {
+            (0..0, false)
+        };
 
         // Row layout: [storage_fixing | lag_fixing | water_balance | load_balance]
         // water_balance_start = n_state (= n_dual_relevant)
@@ -357,6 +407,9 @@ impl StageIndexer {
             n_lines,
             n_buses,
             load_balance: load_balance_start..load_balance_end,
+            inflow_slack,
+            inflow_slack_rows: 0..0,
+            has_inflow_penalty: active_penalty,
             ..base
         }
     }
@@ -653,7 +706,7 @@ mod tests {
     // excess:   [11, 11+2*1) = 11..13
     #[test]
     fn with_equipment_doctest_n1_l0_t2_l1_b2_k1() {
-        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1);
+        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false);
 
         // State ranges are identical to new(1, 0)
         assert_eq!(idx.storage, 0..1);
@@ -691,7 +744,7 @@ mod tests {
     // excess:   [37, 37+4*2)  = 37..45
     #[test]
     fn with_equipment_n2_l1_t3_l2_b4_k2() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2);
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false);
 
         // State ranges identical to new(2, 1)
         assert_eq!(idx.theta, 6);
@@ -710,7 +763,7 @@ mod tests {
     // with_equipment: no equipment (all counts zero), matches new() state layout
     #[test]
     fn with_equipment_all_counts_zero_matches_new() {
-        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0);
+        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0, false);
         let base = StageIndexer::new(3, 2);
 
         assert_eq!(with_eq.storage, base.storage);
@@ -731,7 +784,7 @@ mod tests {
     // with_equipment: adjacency invariant — ranges must be contiguous and non-overlapping
     #[test]
     fn with_equipment_ranges_are_contiguous() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2);
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false);
 
         // turbine immediately follows theta
         assert_eq!(idx.turbine.start, idx.theta + 1);
@@ -748,7 +801,7 @@ mod tests {
     #[test]
     fn with_equipment_column_index_formulas() {
         let n_blks = 3_usize;
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks);
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks, false);
 
         // turbine[h=0, b=0] = turbine.start (no offset for h=0, b=0)
         assert_eq!(idx.turbine.start, idx.turbine.start);
@@ -758,5 +811,46 @@ mod tests {
         assert_eq!(idx.deficit.start + 1, idx.deficit.start + 1);
         // turbine[h=1, b=0] = turbine.start + n_blks
         assert_eq!(idx.turbine.start + n_blks, idx.turbine.start + 3);
+    }
+
+    // with_equipment: has_inflow_penalty=true appends N slack columns after excess
+    //
+    // N=2, L=1, T=1, Ln=1, B=1, K=1, penalty=true
+    // theta = N*(2+L) = 2*(2+1) = 6
+    // decision_start = 7
+    // turbine:  [7,  9)
+    // spillage: [9,  11)
+    // thermal:  [11, 12)
+    // line_fwd: [12, 13)
+    // line_rev: [13, 14)
+    // deficit:  [14, 15)
+    // excess:   [15, 16)
+    // inflow_slack: [16, 18)  <- excess_end..excess_end+N
+    #[test]
+    fn with_equipment_inflow_penalty_appends_slack() {
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true);
+
+        assert!(idx.has_inflow_penalty, "has_inflow_penalty must be true");
+        // inflow_slack must start exactly where excess ends
+        assert_eq!(
+            idx.inflow_slack.start, idx.excess.end,
+            "inflow_slack.start must equal excess.end (contiguous)"
+        );
+        // inflow_slack must contain exactly hydro_count columns
+        assert_eq!(
+            idx.inflow_slack.len(),
+            idx.hydro_count,
+            "inflow_slack must contain exactly hydro_count columns"
+        );
+        assert_eq!(idx.inflow_slack, 16..18);
+        // inflow_slack_rows stays empty in this implementation
+        assert!(
+            idx.inflow_slack_rows.is_empty(),
+            "inflow_slack_rows must remain empty"
+        );
+        // without penalty the slack range is empty
+        let no_penalty = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
+        assert!(!no_penalty.has_inflow_penalty);
+        assert!(no_penalty.inflow_slack.is_empty());
     }
 }

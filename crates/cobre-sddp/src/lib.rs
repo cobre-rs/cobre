@@ -44,6 +44,7 @@ pub mod error;
 pub mod forward;
 pub mod horizon_mode;
 pub mod indexer;
+pub mod inflow_method;
 pub mod lower_bound;
 pub mod lp_builder;
 pub mod risk_measure;
@@ -55,31 +56,32 @@ pub mod training_output;
 pub mod trajectory;
 pub mod workspace;
 
-pub use backward::{run_backward_pass, BackwardResult};
+pub use backward::{BackwardResult, run_backward_pass};
 pub use config::TrainingConfig;
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
-pub use forward::{run_forward_pass, sync_forward, ForwardResult, SyncResult};
+pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
+pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::evaluate_lower_bound;
-pub use lp_builder::{ar_dynamics_row_offset, build_stage_templates, PatchBuffer, StageTemplates};
+pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use simulation::{
+    CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
+    SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
+    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
+    SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
+    SimulationStageResult, SimulationSummary, SimulationThermalResult, StageSummaryStats,
     accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
-    simulate, CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult,
-    SimulationConfig, SimulationContractResult, SimulationCostResult, SimulationError,
-    SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
-    SimulationInflowLagResult, SimulationNonControllableResult, SimulationPumpingResult,
-    SimulationScenarioResult, SimulationStageResult, SimulationSummary, SimulationThermalResult,
-    StageSummaryStats,
+    simulate,
 };
 pub use state_exchange::ExchangeBuffers;
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
-pub use training::{train, TrainingResult};
+pub use training::{TrainingResult, train};
 pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
 pub use workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace, WorkspacePool};

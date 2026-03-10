@@ -31,8 +31,8 @@ use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    forward::build_cut_row_batch, FutureCostFunction, PatchBuffer, RiskMeasure, SddpError,
-    StageIndexer,
+    FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
+    forward::build_cut_row_batch,
 };
 use cobre_solver::StageTemplate;
 
@@ -207,12 +207,12 @@ mod tests {
     fn simple_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
+            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

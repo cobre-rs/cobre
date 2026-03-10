@@ -26,13 +26,13 @@
 
 use std::ops::Range;
 
+use crate::StageIndexer;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
     SimulationThermalResult,
 };
-use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -310,6 +310,13 @@ pub fn extract_stage_result(
                 } else {
                     0.0
                 };
+                // Read the inflow non-negativity slack from the primal solution
+                // when the penalty method is active (slack column exists).
+                let inflow_slack = if indexer.has_inflow_penalty {
+                    primal[indexer.inflow_slack.start + h]
+                } else {
+                    0.0
+                };
                 SimulationHydroResult {
                     stage_id,
                     block_id: None,
@@ -336,7 +343,7 @@ pub fn extract_stage_result(
                     storage_violation_below_hm3: 0.0,
                     filling_target_violation_hm3: 0.0,
                     evaporation_violation_m3s: 0.0,
-                    inflow_nonnegativity_slack_m3s: 0.0,
+                    inflow_nonnegativity_slack_m3s: inflow_slack,
                 }
             })
             .collect()
@@ -355,6 +362,15 @@ pub fn extract_stage_result(
                     0.0
                 };
                 let productivity = entity_counts.hydro_productivities[h];
+                // Read the inflow non-negativity slack from the primal solution
+                // when the penalty method is active (slack column exists).
+                // The slack is a per-hydro quantity (one column per hydro), so the
+                // same value is replicated across all block entries for this hydro.
+                let inflow_slack = if indexer.has_inflow_penalty {
+                    primal[indexer.inflow_slack.start + h]
+                } else {
+                    0.0
+                };
 
                 (0..n_blks).map(move |b| {
                     let t_col = indexer.turbine.start + h * n_blks + b;
@@ -391,7 +407,7 @@ pub fn extract_stage_result(
                         storage_violation_below_hm3: 0.0,
                         filling_target_violation_hm3: 0.0,
                         evaporation_violation_m3s: 0.0,
-                        inflow_nonnegativity_slack_m3s: 0.0,
+                        inflow_nonnegativity_slack_m3s: inflow_slack,
                     }
                 })
             })
@@ -680,9 +696,9 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts};
-    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
+    use super::{EntityCounts, accumulate_category_costs, assign_scenarios, extract_stage_result};
     use crate::StageIndexer;
+    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -892,7 +908,7 @@ mod tests {
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-                                                 // Hydro 10, lag 0 → primal[2] = 50.0
+        // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);
@@ -1008,7 +1024,7 @@ mod tests {
     #[test]
     fn extract_equipment_reads_primal_when_with_equipment() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1);
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
         // theta = 6, equipment starts at 7
         assert_eq!(indexer.theta, 6);
         assert_eq!(indexer.turbine, 7..9);
@@ -1290,5 +1306,183 @@ mod tests {
         accumulate_category_costs(&cost, &mut accum);
 
         assert_eq!(accum.regularization_cost, 14.0);
+    }
+
+    // ── test_slack_extraction_in_simulation ──────────────────────────────────
+
+    /// Verify that `inflow_nonnegativity_slack_m3s` is read from the primal
+    /// solution when `has_inflow_penalty == true`.
+    ///
+    /// Column layout for N=2 hydros, L=1 lag, T=1 thermal, Ln=1 line, B=1 bus,
+    /// K=1 block, with penalty method active:
+    ///
+    /// theta=6, `turbine`=[7,9), `spillage`=[9,11), `thermal`=[11,12),
+    /// `line_fwd`=[12,13), `line_rev`=[13,14), `deficit`=[14,15), `excess`=[15,16),
+    /// `inflow_slack`=[16,18)
+    #[test]
+    fn test_slack_extraction_with_penalty_active() {
+        // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=true
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true);
+
+        assert!(
+            indexer.has_inflow_penalty,
+            "has_inflow_penalty must be true"
+        );
+        assert!(
+            !indexer.inflow_slack.is_empty(),
+            "inflow_slack must be non-empty"
+        );
+
+        // Primal vector: 16 base columns + 2 slack columns = 18 total
+        let n_cols = indexer.inflow_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+
+        // Fill base values
+        primal[0] = 100.0; // storage h0
+        primal[1] = 200.0; // storage h1
+        primal[2] = 50.0; // lag h0
+        primal[3] = 60.0; // lag h1
+        primal[4] = 90.0; // storage_in h0
+        primal[5] = 180.0; // storage_in h1
+        primal[6] = 500.0; // theta
+
+        // Inflow slack values: hydro 0 has slack 7.5, hydro 1 has slack 0.0
+        primal[indexer.inflow_slack.start] = 7.5; // slack h0
+        primal[indexer.inflow_slack.start + 1] = 0.0; // slack h1
+
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 4];
+        let row_lower = vec![0.0_f64; indexer.load_balance.end.max(1)];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
+            thermal_ids: vec![1],
+            line_ids: vec![5],
+            bus_ids: vec![100],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &primal, &dual, 500.0, &obj, &row_lower, &indexer, 0, &counts,
+        );
+
+        // turbine is non-empty → per-(hydro, block) results, so 2 hydros × 1 block = 2 entries
+        assert_eq!(result.hydros.len(), 2);
+
+        // Slack for hydro 0 must equal the primal slack column value
+        assert!(
+            (result.hydros[0].inflow_nonnegativity_slack_m3s - 7.5).abs() < 1e-12,
+            "hydro 0 slack should be 7.5, got {}",
+            result.hydros[0].inflow_nonnegativity_slack_m3s
+        );
+
+        // Slack for hydro 1 must be 0.0
+        assert_eq!(
+            result.hydros[1].inflow_nonnegativity_slack_m3s, 0.0,
+            "hydro 1 slack should be 0.0"
+        );
+    }
+
+    /// Verify that `inflow_nonnegativity_slack_m3s` is zero when the penalty
+    /// method is inactive (`has_inflow_penalty == false`).
+    #[test]
+    fn test_slack_extraction_without_penalty_is_zero() {
+        // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=false
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
+        assert!(
+            !indexer.has_inflow_penalty,
+            "has_inflow_penalty must be false"
+        );
+
+        let n_cols = indexer.excess.end; // 16 columns, no slack
+        let primal = vec![1.0_f64; n_cols]; // all ones (no slack columns present)
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 4];
+        let row_lower = vec![0.0_f64; indexer.load_balance.end.max(1)];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
+            thermal_ids: vec![1],
+            line_ids: vec![5],
+            bus_ids: vec![100],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result =
+            extract_stage_result(&primal, &dual, 1.0, &obj, &row_lower, &indexer, 0, &counts);
+
+        for (h, hr) in result.hydros.iter().enumerate() {
+            assert_eq!(
+                hr.inflow_nonnegativity_slack_m3s, 0.0,
+                "hydro {h} slack must be 0.0 when penalty is inactive"
+            );
+        }
+    }
+
+    /// Verify that the fallback path (no equipment ranges) also reads slack
+    /// when `has_inflow_penalty == true`.
+    #[test]
+    fn test_slack_extraction_fallback_path_with_penalty() {
+        // Use StageIndexer::new (no equipment) but manually set has_inflow_penalty
+        // by using with_equipment with zero blocks — turbine.is_empty() triggers fallback.
+        // N=2, L=1, T=0, Ln=0, B=0, K=0, has_inflow_penalty=true
+        let indexer = StageIndexer::with_equipment(2, 1, 0, 0, 0, 0, true);
+
+        // turbine is empty (n_blks=0) → fallback path
+        assert!(
+            indexer.turbine.is_empty(),
+            "turbine must be empty to trigger fallback"
+        );
+        assert!(
+            indexer.has_inflow_penalty,
+            "has_inflow_penalty must be true"
+        );
+
+        // Layout: storage[0..2], lags[2..4], storage_in[4..6], theta=6,
+        //         inflow_slack=[7..9)
+        let n_cols = indexer.inflow_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[0] = 150.0; // storage h0
+        primal[1] = 250.0; // storage h1
+        primal[2] = 55.0; // lag h0
+        primal[3] = 65.0; // lag h1
+        primal[4] = 140.0; // storage_in h0
+        primal[5] = 240.0; // storage_in h1
+        primal[6] = 0.0; // theta
+        primal[indexer.inflow_slack.start] = 3.0; // slack h0
+        primal[indexer.inflow_slack.start + 1] = 0.0; // slack h1
+
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 4];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![10, 20],
+            hydro_productivities: vec![1.0, 1.0],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result =
+            extract_stage_result(&primal, &dual, 0.0, &obj, &row_lower, &indexer, 0, &counts);
+
+        // Fallback: one entry per hydro (block_id = None)
+        assert_eq!(result.hydros.len(), 2);
+        assert!(
+            (result.hydros[0].inflow_nonnegativity_slack_m3s - 3.0).abs() < 1e-12,
+            "hydro 0 fallback slack should be 3.0, got {}",
+            result.hydros[0].inflow_nonnegativity_slack_m3s
+        );
+        assert_eq!(result.hydros[1].inflow_nonnegativity_slack_m3s, 0.0);
     }
 }

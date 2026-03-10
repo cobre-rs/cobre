@@ -37,9 +37,9 @@ use cobre_core::{
     Bus, DeficitSegment, EntityId,
 };
 use cobre_sddp::{
-    simulate, train, EntityCounts, FutureCostFunction, HorizonMode, PatchBuffer, RiskMeasure,
-    SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig,
+    simulate, train, EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
+    PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -555,6 +555,7 @@ fn run_training(
                 &comm,
                 n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
+                &InflowNonNegativityMethod::None,
             )
         })
         .unwrap();
@@ -631,6 +632,7 @@ fn run_simulation(
                 &entity_counts,
                 &comm,
                 &result_tx,
+                &InflowNonNegativityMethod::None,
             )
         })
         .unwrap();

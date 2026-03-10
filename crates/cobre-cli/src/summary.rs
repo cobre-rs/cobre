@@ -78,7 +78,9 @@ pub struct TrainingSummary {
     /// Total number of Benders cuts generated over the entire training run.
     pub total_cuts_generated: u64,
 
-    /// Total number of LP solves across all stages, iterations, and passes.
+    /// Total number of LP solves across all ranks, stages, iterations, and
+    /// passes.  Aggregated via `allreduce(Sum)` so that the reported value is
+    /// invariant regardless of the parallel configuration.
     pub total_lp_solves: u64,
 
     /// Total elapsed wall-clock time for the training run (milliseconds).
@@ -279,8 +281,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
-        print_summary,
+        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
+        TrainingSummary,
     };
 
     fn make_training_summary() -> TrainingSummary {

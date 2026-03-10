@@ -41,8 +41,8 @@ use cobre_io::{
 };
 use cobre_sddp::{
     build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
-    PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
 };
 
 /// Single-rank communicator for testing.
@@ -593,6 +593,7 @@ fn train_simulate_write_cycle() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
+        &InflowNonNegativityMethod::None,
     )
     .expect("train must succeed");
 
@@ -723,6 +724,7 @@ fn train_simulate_write_cycle() {
         &entity_counts,
         &sim_comm,
         &result_tx,
+        &InflowNonNegativityMethod::None,
     )
     .expect("simulate must succeed");
 

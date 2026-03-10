@@ -94,8 +94,8 @@ use crate::lp_builder::PatchBuffer;
 ///   not be shared between threads.
 /// - `patch_buf`: pre-allocated row-bound patch buffer. Reused across all
 ///   solves in the thread to avoid per-solve allocation on the hot path.
-/// - `current_state`: scratch buffer for the current reservoir state vector
-///   passed into each stage solve. Pre-allocated to avoid hot-path allocation.
+/// - `current_state`: scratch buffer for the current state vector. Pre-allocated
+///   to avoid hot-path allocation.
 pub struct SolverWorkspace<S: SolverInterface> {
     /// LP solver instance owned exclusively by this workspace.
     pub solver: S,
@@ -125,8 +125,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// - A fresh `S` instance from `solver_factory`.
     /// - A [`PatchBuffer`] sized for `hydro_count` hydros and `max_par_order`
     ///   AR lag order: `hydro_count * (2 + max_par_order)` patch slots.
-    /// - A `Vec<f64>` with capacity `n_state` and length zero. The caller
-    ///   extends it as needed per solve.
+    /// - A `Vec<f64>` with capacity `n_state` and length zero.
     ///
     /// # Arguments
     ///

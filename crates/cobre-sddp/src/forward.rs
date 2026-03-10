@@ -69,7 +69,8 @@ use rayon::iter::{
 
 use crate::{
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, HorizonMode, SddpError, StageIndexer, TrajectoryRecord,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
+    TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -355,6 +356,8 @@ pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) 
 /// - `indexer` — LP column/row layout map for this stage.
 /// - `fwd_offset` — global index of this rank's first forward pass. Used for
 ///   deterministic seed derivation (`global_scenario = fwd_offset + m`).
+/// - `inflow_method` — inflow non-negativity treatment. Controls whether
+///   slack columns are present in the LP for absorbing negative inflow.
 ///
 /// ## Record layout
 ///
@@ -398,6 +401,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     records: &mut [TrajectoryRecord],
     indexer: &StageIndexer,
     fwd_offset: usize,
+    _inflow_method: &InflowNonNegativityMethod,
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let forward_passes = local_forward_passes;
@@ -661,7 +665,8 @@ mod tests {
     };
     use crate::{
         workspace::{BasisStore, SolverWorkspace},
-        FutureCostFunction, HorizonMode, StageIndexer, TrainingConfig, TrajectoryRecord,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────
@@ -1155,6 +1160,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1216,6 +1222,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1288,6 +1295,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1605,6 +1613,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .map(|_| ())
     }
@@ -1737,6 +1746,7 @@ mod tests {
             &mut records1,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1760,6 +1770,7 @@ mod tests {
             &mut records4,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1826,6 +1837,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1928,6 +1940,7 @@ mod tests {
             &mut records,
             &indexer,
             0,
+            &InflowNonNegativityMethod::None,
         );
 
         // Worker 1's partition: partition(10, 4, 1) → start_m=3.

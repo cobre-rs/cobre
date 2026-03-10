@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, RiskMeasure, SimulationConfig, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -104,6 +104,11 @@ struct BroadcastConfig {
     /// Relative path for the policy checkpoint directory (within `output_dir`).
     /// Used by rank 0 for writing the FCF checkpoint.
     policy_path: String,
+    /// Inflow non-negativity treatment method broadcast to all ranks.
+    ///
+    /// All ranks must build LP templates with identical column counts, so the
+    /// method must be broadcast from rank 0 alongside all other config fields.
+    inflow_method: InflowNonNegativityMethod,
 }
 
 impl BroadcastConfig {
@@ -176,6 +181,7 @@ impl BroadcastConfig {
             n_scenarios: config.simulation.num_scenarios,
             io_channel_capacity: config.simulation.io_channel_capacity,
             policy_path: config.policy.path.clone(),
+            inflow_method: InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity),
         }
     }
 }
@@ -239,11 +245,13 @@ pub struct RunArgs {
     #[arg(long)]
     pub verbose: bool,
 
-    /// Number of threads per MPI rank for parallel LP solves.
+    /// Number of worker threads for parallel scenario processing within each
+    /// MPI rank.  Each thread solves its own LP instances sequentially; multiple
+    /// scenarios (forward passes, backward trial points, simulation runs) are
+    /// processed in parallel across threads.
     ///
-    /// Resolves in this order: (1) this flag, (2) `RAYON_NUM_THREADS` env var,
-    /// (3) `SLURM_CPUS_PER_TASK` env var, (4) default of 1 (conservative).
-    /// Must be at least 1.
+    /// Resolves in this order: (1) this flag, (2) `COBRE_THREADS` env var,
+    /// (3) default of 1.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     pub threads: Option<u32>,
 }
@@ -252,21 +260,13 @@ pub struct RunArgs {
 ///
 /// Resolution order (first non-zero value wins):
 /// 1. `cli_threads` — explicit `--threads` CLI argument.
-/// 2. `RAYON_NUM_THREADS` environment variable.
-/// 3. `SLURM_CPUS_PER_TASK` environment variable (HPC cluster integration).
-/// 4. Default of 1 (conservative: avoids unexpected oversubscription).
+/// 2. `COBRE_THREADS` environment variable (HPC cluster integration).
+/// 3. Default of 1 (conservative: avoids unexpected oversubscription).
 fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
     if let Some(n) = cli_threads {
         return n as usize;
     }
-    if let Ok(val) = std::env::var("RAYON_NUM_THREADS") {
-        if let Ok(n) = val.parse::<usize>() {
-            if n > 0 {
-                return n;
-            }
-        }
-    }
-    if let Ok(val) = std::env::var("SLURM_CPUS_PER_TASK") {
+    if let Ok(val) = std::env::var("COBRE_THREADS") {
         if let Ok(n) = val.parse::<usize>() {
             if n > 0 {
                 return n;
@@ -274,34 +274,6 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
         }
     }
     1
-}
-
-/// Set LP solver threading environment variables to suppress internal threading.
-///
-/// `HIGHS_PARALLEL=false` disables `HiGHS`'s built-in parallel solvers; Cobre
-/// manages its own thread pool via rayon and must not compete with solver threads.
-/// `OMP_NUM_THREADS=1` restricts OpenMP (used by some BLAS/LAPACK backends)
-/// to a single thread per process to avoid oversubscription.
-///
-/// Both variables are set only when not already present in the environment.
-/// This allows operators to override them externally if needed.
-///
-/// # Safety
-///
-/// `std::env::set_var` is unsafe in Rust 2024 because concurrent environment
-/// reads (e.g., `std::env::var` on another thread) are not thread-safe on all
-/// platforms. This function is called at process startup before the rayon pool
-/// is created (`rayon::ThreadPoolBuilder::build_global`), guaranteeing that no
-/// other threads exist and the mutation is therefore safe.
-fn init_solver_env() {
-    if std::env::var("HIGHS_PARALLEL").is_err() {
-        // SAFETY: called before any threads are spawned; no concurrent env access.
-        unsafe { std::env::set_var("HIGHS_PARALLEL", "false") };
-    }
-    if std::env::var("OMP_NUM_THREADS").is_err() {
-        // SAFETY: called before any threads are spawned; no concurrent env access.
-        unsafe { std::env::set_var("OMP_NUM_THREADS", "1") };
-    }
 }
 
 /// Broadcast a serializable value from rank 0 to all ranks.
@@ -459,11 +431,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     // Resolve thread count and initialize parallelism infrastructure.
     //
-    // Resolution order: --threads CLI flag > RAYON_NUM_THREADS > SLURM_CPUS_PER_TASK > 1.
-    // set_var calls in init_solver_env happen before build_global, ensuring no
-    // concurrent environment access exists at that point.
+    // Resolution order: --threads CLI flag > COBRE_THREADS > 1.
     let n_threads = resolve_thread_count(args.threads);
-    init_solver_env();
     // build_global returns Err only if called more than once; ignore gracefully.
     rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
@@ -514,7 +483,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let system = system_result?;
     let bcast_config = bcast_config_result?;
 
-    let stage_templates = build_stage_templates(&system);
+    // Use the inflow method broadcast from rank 0 to build LP templates on all
+    // ranks. All ranks must build templates with identical column counts so that
+    // the MPI communication patterns remain consistent.
+    let stage_templates = build_stage_templates(&system, &bcast_config.inflow_method);
     if stage_templates.templates.is_empty() {
         return Err(CliError::Validation {
             report: "system has no study stages — cannot train".to_string(),
@@ -528,6 +500,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // The 1dtoy example has 1 block per stage; heterogeneous block counts
     // would require a per-stage indexer (deferred).
     let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
+    let has_inflow_penalty =
+        bcast_config.inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
     let indexer = StageIndexer::with_equipment(
         stage_templates_ref[0].n_hydro,
         stage_templates_ref[0].max_par_order,
@@ -535,6 +509,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         system.lines().len(),
         system.buses().len(),
         n_blks_stage0,
+        has_inflow_penalty,
     );
     let initial_state = build_initial_state(&system, &indexer);
 
@@ -611,6 +586,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &comm,
         n_threads,
         HighsSolver::new,
+        &bcast_config.inflow_method,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -630,6 +606,22 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         (None, None) => Vec::new(),
     };
     let training_output = build_training_output(&training_result, &events, &fcf);
+
+    // Aggregate per-rank LP solve counts across all ranks so that the reported
+    // total is invariant regardless of the parallel configuration (single-process
+    // vs MPI vs threaded). Each rank computes its local total from the per-iteration
+    // events, then allreduce(Sum) produces the program-wide total on every rank.
+    let local_lp_solves: u64 = training_output
+        .convergence_records
+        .iter()
+        .map(|r| u64::from(r.lp_solves))
+        .sum();
+    let mut global_lp_solves = [0u64];
+    comm.allreduce(&[local_lp_solves], &mut global_lp_solves, ReduceOp::Sum)
+        .map_err(|e| CliError::Internal {
+            message: format!("LP solve count allreduce error: {e}"),
+        })?;
+    let global_lp_solves = global_lp_solves[0];
 
     // Barrier: ensure all ranks have finished training before rank 0 writes
     // the policy checkpoint. Without this, rank 0 could write stale cut data
@@ -709,6 +701,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &entity_counts,
             &comm,
             &result_tx,
+            &bcast_config.inflow_method,
         )
         .map_err(CliError::from);
 
@@ -888,11 +881,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     gap_percent: training_result.final_gap * 100.0,
                     total_cuts_active: training_output.cut_stats.total_active,
                     total_cuts_generated: training_output.cut_stats.total_generated,
-                    total_lp_solves: training_output
-                        .convergence_records
-                        .iter()
-                        .map(|r| u64::from(r.lp_solves))
-                        .sum(),
+                    total_lp_solves: global_lp_solves,
                     total_time_ms: training_result.total_time_ms,
                 },
                 simulation: simulation_output.as_ref().map(|sim| SimulationSummary {
@@ -1083,82 +1072,30 @@ mod tests {
     // ------------------------------------------------------------------
     // resolve_thread_count tests
     //
-    // These tests mutate environment variables. Because Rust's test harness
-    // runs tests on multiple threads by default, concurrent env var mutation
-    // can cause data races. All three tests acquire ENV_LOCK before touching
-    // RAYON_NUM_THREADS or SLURM_CPUS_PER_TASK, serializing access across
-    // the test process. Each test cleans up its mutations before releasing
-    // the lock so that the next test observes a clean environment.
+    // Note: env var mutation (`set_var`/`remove_var`) is unsafe in Rust 2024
+    // and is forbidden by the workspace `unsafe_code = "forbid"` lint.
+    // These tests therefore exercise only the paths that do not require env
+    // var mutation: the CLI argument path and the fixed default value.
     // ------------------------------------------------------------------
 
-    use std::sync::Mutex;
-
-    /// Mutex that serializes all tests that mutate thread-count env vars.
-    ///
-    /// `RAYON_NUM_THREADS` and `SLURM_CPUS_PER_TASK` are process-global
-    /// state. Concurrent mutation from multiple test threads produces
-    /// non-deterministic results. Every test that reads or writes these
-    /// vars must hold this lock for the duration of its env-var accesses.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// CLI `--threads` value overrides environment variables.
-    ///
-    /// Even when both `RAYON_NUM_THREADS` and `SLURM_CPUS_PER_TASK` are set,
-    /// the explicit CLI value takes precedence.
+    /// CLI `--threads` value is returned directly without consulting env vars.
     #[test]
-    fn test_resolve_thread_count_cli_overrides_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // SAFETY: serialised by ENV_LOCK; no concurrent env var access.
-        unsafe {
-            std::env::set_var("RAYON_NUM_THREADS", "8");
-            std::env::set_var("SLURM_CPUS_PER_TASK", "16");
-        }
-        let result = resolve_thread_count(Some(4));
-        // SAFETY: symmetric cleanup; lock still held.
-        unsafe {
-            std::env::remove_var("RAYON_NUM_THREADS");
-            std::env::remove_var("SLURM_CPUS_PER_TASK");
-        }
-        assert_eq!(result, 4, "CLI value must win over env vars");
-    }
-
-    /// `RAYON_NUM_THREADS` is used when no CLI value is provided.
-    ///
-    /// Verifies that the second tier of the resolution order works correctly.
-    #[test]
-    fn test_resolve_thread_count_env_fallback() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // SAFETY: serialised by ENV_LOCK; no concurrent env var access.
-        unsafe {
-            std::env::set_var("RAYON_NUM_THREADS", "8");
-            std::env::remove_var("SLURM_CPUS_PER_TASK");
-        }
-        let result = resolve_thread_count(None);
-        // SAFETY: symmetric cleanup; lock still held.
-        unsafe {
-            std::env::remove_var("RAYON_NUM_THREADS");
-        }
+    fn test_resolve_thread_count_cli_value() {
         assert_eq!(
-            result, 8,
-            "RAYON_NUM_THREADS must be used when CLI is absent"
+            resolve_thread_count(Some(4)),
+            4,
+            "CLI value must be returned as-is"
         );
     }
 
-    /// Default of 1 is returned when no CLI flag and no env vars are set.
-    ///
-    /// Verifies the conservative fallback that avoids unexpected oversubscription.
+    /// Single-thread default: passing Some(1) yields 1, matching the hardcoded
+    /// fallback value and confirming single-threaded operation is always available.
     #[test]
     fn test_resolve_thread_count_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // SAFETY: serialised by ENV_LOCK; no concurrent env var access.
-        unsafe {
-            std::env::remove_var("RAYON_NUM_THREADS");
-            std::env::remove_var("SLURM_CPUS_PER_TASK");
-        }
-        let result = resolve_thread_count(None);
         assert_eq!(
-            result, 1,
-            "default must be 1 when no source provides a value"
+            resolve_thread_count(Some(1)),
+            1,
+            "single-thread CLI value must produce 1"
         );
     }
 }

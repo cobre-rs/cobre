@@ -5,6 +5,11 @@
 //! case directory. All file bytes are embedded at compile time via
 //! [`include_bytes!`], so the registry is entirely allocation-free.
 //!
+//! The template source files live at `examples/1dtoy/` in the workspace root.
+//! The build script (`build.rs`) copies them into `OUT_DIR/templates/1dtoy/`
+//! so that `include_bytes!` works with `cargo publish` (which only packages
+//! files within the crate directory).
+//!
 //! # Example
 //!
 //! ```rust
@@ -37,80 +42,80 @@ static DTOY1_FILES: &[TemplateFile] = &[
     TemplateFile {
         relative_path: "config.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/config.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/config.json"
         )),
         description: "Algorithm configuration: training (forward passes, stopping rules) and simulation settings",
     },
     TemplateFile {
         relative_path: "initial_conditions.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/initial_conditions.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/initial_conditions.json"
         )),
         description: "Initial reservoir storage volumes for each hydro plant at the start of the planning horizon",
     },
     TemplateFile {
         relative_path: "penalties.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/penalties.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/penalties.json"
         )),
         description: "Global penalty costs for constraint violations (deficit, excess, spillage, storage bounds, etc.)",
     },
     TemplateFile {
         relative_path: "stages.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/stages.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/stages.json"
         )),
         description: "Planning horizon definition: policy graph type, discount rate, stage dates, time blocks, and scenario counts",
     },
     TemplateFile {
         relative_path: "system/buses.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/system/buses.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/system/buses.json"
         )),
         description: "Electrical bus definitions with deficit cost segments",
     },
     TemplateFile {
         relative_path: "system/hydros.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/system/hydros.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/system/hydros.json"
         )),
         description: "Hydro plant definitions: reservoir bounds, outflow limits, turbine model, and generation limits",
     },
     TemplateFile {
         relative_path: "system/lines.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/system/lines.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/system/lines.json"
         )),
         description: "Transmission line definitions (empty in this single-bus example)",
     },
     TemplateFile {
         relative_path: "system/thermals.json",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/system/thermals.json"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/system/thermals.json"
         )),
         description: "Thermal plant definitions with piecewise cost segments and generation bounds",
     },
     TemplateFile {
         relative_path: "scenarios/inflow_seasonal_stats.parquet",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/scenarios/inflow_seasonal_stats.parquet"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/scenarios/inflow_seasonal_stats.parquet"
         )),
         description: "Seasonal PAR(p) statistics for hydro inflow scenario generation (mean, std, lag correlations)",
     },
     TemplateFile {
         relative_path: "scenarios/load_seasonal_stats.parquet",
         content: include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/1dtoy/scenarios/load_seasonal_stats.parquet"
+            env!("OUT_DIR"),
+            "/templates/1dtoy/scenarios/load_seasonal_stats.parquet"
         )),
         description: "Seasonal PAR(p) statistics for electrical load scenario generation (mean, std, lag correlations)",
     },

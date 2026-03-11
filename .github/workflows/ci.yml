@@ -130,14 +130,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install maturin and test dependencies
-        run: pip install maturin pytest pytest-cov
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest pytest-cov
       - name: Build and install cobre-python
         working-directory: crates/cobre-python
-        run: maturin develop --release
+        run: |
+          source ../../.venv/bin/activate
+          maturin develop --release
       - name: Run Python tests with coverage
         working-directory: crates/cobre-python
-        run: pytest tests/ -v --cov=cobre --cov-report=xml:../../python-coverage.xml
+        run: |
+          source ../../.venv/bin/activate
+          pytest tests/ -v --cov=cobre --cov-report=xml:../../python-coverage.xml
       - uses: codecov/codecov-action@v4
         with:
           files: python-coverage.xml

@@ -2,6 +2,9 @@
 #
 # Triggered by version tags and manual dispatch. Requires a CARGO_REGISTRY_TOKEN
 # secret in the "crates-io" GitHub environment.
+#
+# Each publish step tolerates "already exists" so the workflow is idempotent
+# and can be safely re-run after partial failures.
 
 name: Publish
 
@@ -30,71 +33,54 @@ jobs:
       # one is submitted. The 30-second sleeps give the index time to propagate
       # before the next crate tries to resolve the previous one as a dependency.
 
-      - name: Publish cobre-core
-        run: cargo publish -p cobre-core
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish all crates
+        shell: bash
+        run: |
+          publish() {
+            local crate="$1"
+            echo "::group::Publishing $crate"
+            local output
+            if output=$(cargo publish -p "$crate" 2>&1); then
+              echo "$output"
+              echo "Published $crate successfully."
+            elif echo "$output" | grep -q "already exists"; then
+              echo "$output"
+              echo "Crate $crate already published, skipping."
+            else
+              echo "$output"
+              echo "::error::Failed to publish $crate"
+              echo "::endgroup::"
+              return 1
+            fi
+            echo "::endgroup::"
+          }
 
-      - name: Wait for cobre-core index propagation
-        run: sleep 30
+          # Layer 1: no intra-workspace dependencies
+          publish cobre-core || exit 1
+          sleep 30
 
-      # These four crates depend only on cobre-core and can be published in
-      # any order relative to each other.
-      - name: Publish cobre-io
-        run: cargo publish -p cobre-io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Layer 2: depends on cobre-core only
+          publish cobre-io || exit 1
+          publish cobre-stochastic || exit 1
+          publish cobre-solver || exit 1
+          publish cobre-comm || exit 1
+          publish cobre-tui || exit 1
+          sleep 30
 
-      - name: Publish cobre-stochastic
-        run: cargo publish -p cobre-stochastic
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Layer 3: depends on infrastructure crates
+          publish cobre-sddp || exit 1
+          sleep 30
 
-      - name: Publish cobre-solver
-        run: cargo publish -p cobre-solver
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Layer 4: application crates (depend on cobre-sddp)
+          publish cobre-cli || exit 1
+          publish cobre-mcp || exit 1
+          sleep 30
 
-      - name: Publish cobre-comm
-        run: cargo publish -p cobre-comm
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Layer 5: umbrella crate (depends on all of the above)
+          # cobre-python is published to PyPI via maturin, not crates.io.
+          publish cobre || exit 1
 
-      - name: Publish cobre-tui
-        run: cargo publish -p cobre-tui
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for infrastructure crates index propagation
-        run: sleep 30
-
-      - name: Publish cobre-sddp
-        run: cargo publish -p cobre-sddp
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for cobre-sddp index propagation
-        run: sleep 30
-
-      # Application-layer crates depend on cobre-sddp.
-      - name: Publish cobre-cli
-        run: cargo publish -p cobre-cli
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Publish cobre-mcp
-        run: cargo publish -p cobre-mcp
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      # cobre-python is published to PyPI via maturin, not crates.io.
-
-      - name: Wait for application crates index propagation
-        run: sleep 30
-
-      # Umbrella crate depends on all of the above.
-      - name: Publish cobre (umbrella)
-        run: cargo publish -p cobre
+          echo "All crates published successfully."
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

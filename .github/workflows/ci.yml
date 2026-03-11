@@ -114,3 +114,33 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  python:
+    name: Python Bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y libmpich-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install maturin and test dependencies
+        run: pip install maturin pytest pytest-cov
+      - name: Build and install cobre-python
+        working-directory: crates/cobre-python
+        run: maturin develop --release
+      - name: Run Python tests with coverage
+        working-directory: crates/cobre-python
+        run: pytest tests/ -v --cov=cobre --cov-report=xml:../../python-coverage.xml
+      - uses: codecov/codecov-action@v4
+        with:
+          files: python-coverage.xml
+          flags: python
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

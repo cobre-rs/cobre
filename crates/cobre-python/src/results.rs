@@ -22,7 +22,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
 /// Convert a `serde_json::Value` to a Python object recursively.
-fn json_value_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<PyObject> {
+fn json_value_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
     match val {
         serde_json::Value::Null => Ok(py.None()),
 
@@ -122,7 +122,7 @@ fn read_json_file(path: &std::path::Path) -> PyResult<serde_json::Value> {
 /// ```
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
-pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
+pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> {
     // Canonicalize to get absolute paths even if a relative path is given.
     let output_dir = output_dir.canonicalize().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -168,7 +168,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
     let sim_manifest_path = simulation_dir.join("_manifest.json");
     let sim_success = simulation_dir.join("_SUCCESS");
 
-    let sim_manifest_py: PyObject = if sim_manifest_path.exists() {
+    let sim_manifest_py: Py<PyAny> = if sim_manifest_path.exists() {
         let sim_manifest_val = read_json_file(&sim_manifest_path)?;
         json_value_to_py(py, &sim_manifest_val)?
     } else {
@@ -236,7 +236,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
 /// ```
 #[pyfunction]
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
-pub fn load_convergence(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
+pub fn load_convergence(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> {
     let output_dir = output_dir.canonicalize().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             PyFileNotFoundError::new_err(format!(

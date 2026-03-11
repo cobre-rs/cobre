@@ -845,7 +845,7 @@ pub fn run(
     output_dir: Option<PathBuf>,
     threads: Option<u32>,
     skip_simulation: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     // Validate case_dir before releasing the GIL so we can raise OSError
     // immediately with no overhead from trying to acquire the GIL later.
     if !case_dir.exists() {
@@ -859,7 +859,8 @@ pub fn run(
     let skip = skip_simulation.unwrap_or(false);
 
     // Release the GIL for the entire Rust computation.
-    let result = py.allow_threads(move || run_inner(&case_dir, resolved_output, threads, skip));
+    let result: Result<RunSummary, String> =
+        py.detach(move || run_inner(&case_dir, resolved_output, threads, skip));
 
     // Re-acquire the GIL here; convert the result to a Python dict.
     match result {
@@ -886,7 +887,9 @@ pub fn run(
         }
         Err(msg) => {
             // Map error string prefix to the appropriate exception type.
-            if msg.starts_with("output write error") || msg.starts_with("policy checkpoint error") {
+            if msg.as_str().starts_with("output write error")
+                || msg.as_str().starts_with("policy checkpoint error")
+            {
                 Err(PyOSError::new_err(msg))
             } else {
                 Err(PyRuntimeError::new_err(msg))

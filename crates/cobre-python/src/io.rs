@@ -113,7 +113,7 @@ pub fn load_case(path: PathBuf) -> PyResult<PySystem> {
 /// ```
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
-pub fn validate(py: Python<'_>, path: PathBuf) -> PyResult<PyObject> {
+pub fn validate(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let result = cobre_io::load_case(&path);
 
     let dict = PyDict::new(py);

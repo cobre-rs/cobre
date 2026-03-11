@@ -22,7 +22,7 @@ use pyo3::types::PyDict;
 /// A `Bus` represents a node in the transmission network. Each bus has an
 /// associated power balance constraint that must be satisfied at every stage
 /// and block. The deficit cost curve is stored as pre-resolved segments.
-#[pyclass(name = "Bus", frozen)]
+#[pyclass(name = "Bus", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyBus {
     inner: cobre_core::Bus,
@@ -84,7 +84,7 @@ impl PyBus {
 ///
 /// Lines allow bidirectional power transfer subject to capacity limits and
 /// transmission losses.
-#[pyclass(name = "Line", frozen)]
+#[pyclass(name = "Line", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyLine {
     inner: cobre_core::Line,
@@ -159,7 +159,7 @@ impl PyLine {
 ///
 /// A `Thermal` contributes generation variables and cost objective terms to
 /// each stage LP.
-#[pyclass(name = "Thermal", frozen)]
+#[pyclass(name = "Thermal", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyThermal {
     inner: cobre_core::Thermal,
@@ -232,7 +232,7 @@ impl PyThermal {
 ///
 /// A `Hydro` plant controls a reservoir and operates turbines and spillways.
 /// Multiple plants may form a cascade via `downstream_id` references.
-#[pyclass(name = "Hydro", frozen)]
+#[pyclass(name = "Hydro", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyHydro {
     inner: cobre_core::Hydro,
@@ -322,7 +322,7 @@ impl PyHydro {
 ///
 /// In the minimal viable solver this entity is data-complete but contributes
 /// no LP variables or constraints.
-#[pyclass(name = "EnergyContract", frozen)]
+#[pyclass(name = "EnergyContract", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyEnergyContract {
     inner: cobre_core::EnergyContract,
@@ -360,7 +360,7 @@ impl PyEnergyContract {
 ///
 /// In the minimal viable solver this entity is data-complete but contributes
 /// no LP variables or constraints.
-#[pyclass(name = "PumpingStation", frozen)]
+#[pyclass(name = "PumpingStation", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyPumpingStation {
     inner: cobre_core::PumpingStation,
@@ -398,7 +398,7 @@ impl PyPumpingStation {
 ///
 /// In the minimal viable solver this entity is data-complete but contributes
 /// no LP variables or constraints.
-#[pyclass(name = "NonControllableSource", frozen)]
+#[pyclass(name = "NonControllableSource", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyNonControllableSource {
     inner: cobre_core::NonControllableSource,

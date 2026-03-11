@@ -1,9 +1,20 @@
+# Publish workspace crates to crates.io in dependency order.
+#
+# DISABLED for v0.1.0: Two blockers must be resolved first:
+#   1. CARGO_REGISTRY_TOKEN secret must be configured in the "crates-io" environment
+#   2. cobre-solver requires HiGHS vendored sources in the published tarball
+#      (git submodules are not included by cargo publish)
+#
+# To re-enable: uncomment the `on:` trigger and set up the crates-io environment
+# with a valid CARGO_REGISTRY_TOKEN secret in the repository settings.
+
 name: Publish
 
-on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+# on:
+#   push:
+#     tags:
+#       - "v[0-9]+.[0-9]+.[0-9]+"
+on: workflow_dispatch
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,14 +26,14 @@ jobs:
     environment: crates-io
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       # Publish in dependency order so each crate is available when the next
-      # one is submitted. The --no-verify flag is intentionally omitted so that
-      # crates.io runs its own validation pass. The 30-second sleeps give the
-      # index time to propagate before the next crate tries to resolve the
-      # previous one as a dependency.
+      # one is submitted. The 30-second sleeps give the index time to propagate
+      # before the next crate tries to resolve the previous one as a dependency.
 
       - name: Publish cobre-core
         run: cargo publish -p cobre-core
@@ -81,10 +92,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish cobre-python
-        run: cargo publish -p cobre-python
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # cobre-python is published to PyPI via maturin, not crates.io.
 
       - name: Wait for application crates index propagation
         run: sleep 30

@@ -34,16 +34,34 @@ fn main() {
 
     eprintln!("cobre-solver: building HiGHS from {}", highs_src.display());
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+
     // Always build HiGHS in Release mode regardless of the Rust profile.
     // HiGHS is a solver library — an unoptimized build is ~10x slower and
     // would produce misleading results even during development.
-    let highs_dst = cmake::Config::new(&highs_src)
+    let mut cmake_config = cmake::Config::new(&highs_src);
+    cmake_config
         .define("CMAKE_BUILD_TYPE", "Release")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("HIGHS_NO_DEFAULT_THREADS", "ON")
         .define("BUILD_TESTING", "OFF")
         .define("BUILD_EXAMPLES", "OFF")
-        .build();
+        // Disable zlib in HiGHS. HiGHS uses zlib only for reading compressed
+        // .mps.gz/.lp.gz files via Highs_readModel(). Cobre constructs all LPs
+        // programmatically via the C API and never uses file-based model I/O.
+        // Disabling zlib eliminates a system dependency that causes
+        // cross-compilation failures in the Python wheel CI.
+        .define("CMAKE_DISABLE_FIND_PACKAGE_ZLIB", "ON");
+
+    // On MSVC, use static CRT to avoid requiring vcruntime140.dll in the wheel.
+    if target_env == "msvc" {
+        cmake_config.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded");
+        cmake_config.cflag("/MT");
+        cmake_config.cxxflag("/MT");
+    }
+
+    let highs_dst = cmake_config.build();
 
     eprintln!(
         "cobre-solver: HiGHS cmake output at {}",
@@ -59,17 +77,25 @@ fn main() {
         highs_dst.join("lib64").display()
     );
 
-    println!("cargo:rustc-link-lib=static=highs");
-
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
-    if target_os == "macos" {
-        println!("cargo:rustc-link-lib=c++");
-    } else {
-        println!("cargo:rustc-link-lib=stdc++");
+    // MSVC cmake may place libraries in a configuration subdirectory.
+    if target_env == "msvc" {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            highs_dst.join("lib/Release").display()
+        );
     }
 
-    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=static=highs");
+
+    // Link the C++ standard library.
+    // MSVC links it automatically — no explicit directive needed.
+    if target_env != "msvc" {
+        if target_os == "macos" {
+            println!("cargo:rustc-link-lib=c++");
+        } else {
+            println!("cargo:rustc-link-lib=stdc++");
+        }
+    }
 
     let highs_include = highs_dst.join("include");
     let highs_include_highs = highs_dst.join("include/highs");
@@ -88,6 +114,11 @@ fn main() {
         .include(&highs_include_highs)
         .warnings(true)
         .extra_warnings(true);
-    build.flag("-Wno-unused-function");
+
+    // GCC/Clang-specific warning suppression.
+    if target_env != "msvc" {
+        build.flag("-Wno-unused-function");
+    }
+
     build.compile("highs_wrapper");
 }

@@ -35,3 +35,6 @@ examples/**/output
 # Terminal recording temporary files
 recordings/demo/
 __pycache__/
+
+# Python bindings
+.venv

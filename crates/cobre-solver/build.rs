@@ -1,7 +1,7 @@
 //! Build script for cobre-solver.
 //!
 //! This script:
-//! 1. Checks that the `HiGHS` git submodule is initialized at `vendor/HiGHS/`
+//! 1. Checks that the `HiGHS` git submodule is initialized at `crates/cobre-solver/vendor/HiGHS/`
 //! 2. Builds `HiGHS` from source using the `cmake` crate (static library)
 //! 3. Compiles the thin C wrapper (`csrc/highs_wrapper.c`) via `cc`
 //! 4. Links the built `HiGHS` static library and the C++ standard library
@@ -24,11 +24,12 @@ fn main() {
     let manifest_dir = PathBuf::from(
         env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by Cargo"),
     );
-    let highs_src = manifest_dir.join("../../vendor/HiGHS");
+    let highs_src = manifest_dir.join("vendor/HiGHS");
 
     if !highs_src.join("CMakeLists.txt").exists() {
         panic!(
-            "HiGHS source not found at vendor/HiGHS/. Run: git submodule update --init --recursive"
+            "HiGHS source not found at crates/cobre-solver/vendor/HiGHS/. \
+             Run: git submodule update --init --recursive"
         );
     }
 

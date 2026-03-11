@@ -62,7 +62,7 @@ function. All FFI calls are `unsafe`; safe wrappers live in `highs.rs`.
 ### Vendored HiGHS build
 
 HiGHS is compiled from source at build time via the `cmake` crate. The source
-lives in `vendor/HiGHS/` as a git submodule. The build script
+lives in `crates/cobre-solver/vendor/HiGHS/` as a git submodule. The build script
 (`crates/cobre-solver/build.rs`) invokes cmake with a fixed Release
 configuration and links the resulting static library. HiGHS is always built in
 Release mode regardless of the Cargo profile, because a debug HiGHS build is
@@ -365,7 +365,7 @@ fn main() -> Result<(), SolverError> {
 
 ### Git submodule
 
-HiGHS is vendored as a git submodule at `vendor/HiGHS/`. Before building
+HiGHS is vendored as a git submodule at `crates/cobre-solver/vendor/HiGHS/`. Before building
 `cobre-solver` for the first time (or after a fresh clone), initialize the
 submodule:
 
@@ -373,17 +373,17 @@ submodule:
 git submodule update --init --recursive
 ```
 
-The build script checks for `vendor/HiGHS/CMakeLists.txt` and panics with a
+The build script checks for `crates/cobre-solver/vendor/HiGHS/CMakeLists.txt` and panics with a
 clear error message if the submodule is not initialized.
 
 ### System dependencies
 
-| Dependency   | Minimum version | Notes                                           |
-| ------------ | --------------- | ----------------------------------------------- |
-| cmake        | 3.15            | Required by the HiGHS build system              |
-| C compiler   | C11             | gcc or clang; HiGHS and the C wrapper are C/C++ |
-| C++ compiler | C++17           | Required by HiGHS internals                     |
-| zlib         | any             | Required by HiGHS MPS file reader               |
+| Dependency   | Minimum version | Notes                                                       |
+| ------------ | --------------- | ----------------------------------------------------------- |
+| cmake        | 3.15            | Required by the HiGHS build system                          |
+| C compiler   | C11             | gcc or clang; HiGHS and the C wrapper are C/C++             |
+| C++ compiler | C++17           | Required by HiGHS internals                                 |
+| ~~zlib~~     | ~~any~~         | Not needed — disabled via `CMAKE_DISABLE_FIND_PACKAGE_ZLIB` |
 
 ### Feature flags
 
@@ -404,7 +404,7 @@ own feature flags but are not yet implemented.
 cargo test -p cobre-solver --features highs
 ```
 
-This requires cmake, a C/C++ compiler, and an initialized `vendor/HiGHS/`
+This requires cmake, a C/C++ compiler, and an initialized `crates/cobre-solver/vendor/HiGHS/`
 submodule (see [Build requirements](#build-requirements)).
 
 ### Conformance suite (`tests/conformance.rs`)

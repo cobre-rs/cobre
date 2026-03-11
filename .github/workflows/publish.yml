@@ -1,20 +1,15 @@
 # Publish workspace crates to crates.io in dependency order.
 #
-# DISABLED for v0.1.0: Two blockers must be resolved first:
-#   1. CARGO_REGISTRY_TOKEN secret must be configured in the "crates-io" environment
-#   2. cobre-solver requires HiGHS vendored sources in the published tarball
-#      (git submodules are not included by cargo publish)
-#
-# To re-enable: uncomment the `on:` trigger and set up the crates-io environment
-# with a valid CARGO_REGISTRY_TOKEN secret in the repository settings.
+# Triggered by version tags and manual dispatch. Requires a CARGO_REGISTRY_TOKEN
+# secret in the "crates-io" GitHub environment.
 
 name: Publish
 
-# on:
-#   push:
-#     tags:
-#       - "v[0-9]+.[0-9]+.[0-9]+"
-on: workflow_dispatch
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

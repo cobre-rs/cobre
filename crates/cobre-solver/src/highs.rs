@@ -1567,7 +1567,7 @@ mod research_tests_ticket_023 {
     /// time_limit=0.0 is always exceeded by wall-clock time before any pivot.
     ///
     /// Observed: run_status=WARNING (1), model_status=TIME_LIMIT (13).
-    /// Confirmed in vendor/HiGHS/check/TestQpSolver.cpp line 1083-1085.
+    /// Confirmed in HiGHS check/TestQpSolver.cpp line 1083-1085.
     #[test]
     fn test_research_time_limit_zero_triggers_time_limit_status() {
         use crate::ffi;
@@ -1607,7 +1607,7 @@ mod research_tests_ticket_023 {
     /// Uses the 5-variable, 4-constraint LP with presolve disabled so that
     /// the crash phase does not solve it, and the iteration limit check fires.
     ///
-    /// Confirmed pattern from vendor/HiGHS/check/TestLpSolversIterations.cpp
+    /// Confirmed pattern from HiGHS check/TestLpSolversIterations.cpp
     /// lines 145-165: iteration_limit=0 -> HighsStatus::kWarning +
     /// HighsModelStatus::kIterationLimit, iteration count = 0.
     #[test]

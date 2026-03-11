@@ -8,6 +8,10 @@
 #
 # aarch64-unknown-linux-gnu uses GitHub's free ARM64 runners (ubuntu-24.04-arm)
 # available for public repositories since January 2025.
+#
+# x86_64-apple-darwin is omitted: the macos-13 Intel runner was deprecated and
+# cross-compiling MPI on ARM runners is non-trivial. Intel Mac users can build
+# from source with `cargo build --release --features mpi -p cobre-cli`.
 
 name: Release MPI
 
@@ -32,9 +36,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             mpi_install: sudo apt-get update && sudo apt-get install -y libmpich-dev
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            mpi_install: brew install mpich
           - target: aarch64-apple-darwin
             runner: macos-14
             mpi_install: brew install mpich

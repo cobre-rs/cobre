@@ -18,6 +18,28 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+cobre-core = { path = "../cobre-core" }
+cobre-io = { path = "../cobre-io" }
+cobre-sddp = { path = "../cobre-sddp" }
+cobre-stochastic = { path = "../cobre-stochastic" }
+cobre-solver = { path = "../cobre-solver" }
+cobre-comm = { path = "../cobre-comm" }
+rayon = "1"
+arrow = { version = "58", default-features = false }
+parquet = { version = "58", default-features = false, features = ["arrow"] }
+serde_json = "1"
 
-[lints]
-workspace = true
+# PyO3 proc macros generate unsafe code internally. The workspace forbids unsafe_code,
+# but this crate must override that lint to allow it, because the #[pymodule] and
+# #[pyclass] macros emit unsafe code that we do not write ourselves.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

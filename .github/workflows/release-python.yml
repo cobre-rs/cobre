@@ -5,6 +5,10 @@
 # Platforms:  linux x86_64, linux aarch64, macOS x86_64, macOS aarch64
 # Python:    3.12+ (single abi3 wheel per platform via PyO3 stable ABI)
 #
+# Note: sdist is not built because maturin cannot package crates with path
+# dependencies outside the crate directory (known maturin limitation).
+# Users who need to build from source should clone the full workspace.
+#
 # Uses PyPI trusted publishing (OIDC) — no API tokens needed.
 # Configure at: https://pypi.org/manage/project/cobre/settings/publishing/
 
@@ -45,7 +49,7 @@ jobs:
             manylinux: "2_28"
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
@@ -64,38 +68,25 @@ jobs:
           args: --release --out dist
           working-directory: crates/cobre-python
           before-script-linux: |
-            # cmake is required for building HiGHS (vendored LP solver)
-            apt-get update && apt-get install -y cmake || yum install -y cmake3 || true
+            # cmake is required for building HiGHS (vendored LP solver).
+            # manylinux_2_28 containers use dnf/yum depending on the image.
+            if command -v dnf &>/dev/null; then
+              dnf install -y cmake
+            elif command -v yum &>/dev/null; then
+              yum install -y cmake3 || yum install -y cmake
+            elif command -v apt-get &>/dev/null; then
+              apt-get update && apt-get install -y cmake
+            fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}
           path: crates/cobre-python/dist/
 
-  # Build source distribution.
-  sdist:
-    name: sdist
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-          working-directory: crates/cobre-python
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: crates/cobre-python/dist/
-
-  # Publish all wheels + sdist to PyPI.
+  # Publish all wheels to PyPI.
   publish:
     name: Publish to PyPI
-    needs: [build, sdist]
+    needs: [build]
     if: >-
       startsWith(github.ref, 'refs/tags/v')
       && !(github.event.inputs.dry-run == 'true')
@@ -108,11 +99,6 @@ jobs:
         with:
           pattern: "wheels-*"
           merge-multiple: true
-          path: dist/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sdist
           path: dist/
 
       - name: List artifacts

@@ -18,13 +18,13 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
-cobre-core = { path = "../cobre-core" }
-cobre-io = { path = "../cobre-io" }
-cobre-sddp = { path = "../cobre-sddp" }
-cobre-stochastic = { path = "../cobre-stochastic" }
-cobre-solver = { path = "../cobre-solver" }
-cobre-comm = { path = "../cobre-comm" }
+pyo3 = { version = "0.24", features = ["extension-module"] }
+cobre-core = { version = "0.1.0", path = "../cobre-core" }
+cobre-io = { version = "0.1.0", path = "../cobre-io" }
+cobre-sddp = { version = "0.1.0", path = "../cobre-sddp" }
+cobre-stochastic = { version = "0.1.0", path = "../cobre-stochastic" }
+cobre-solver = { version = "0.1.0", path = "../cobre-solver" }
+cobre-comm = { version = "0.1.0", path = "../cobre-comm" }
 rayon = "1"
 arrow = { version = "58", default-features = false }
 parquet = { version = "58", default-features = false, features = ["arrow"] }

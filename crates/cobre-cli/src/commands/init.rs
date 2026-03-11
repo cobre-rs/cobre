@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use console::{style, Term};
+use console::{Term, style};
 
 use crate::error::CliError;
 use crate::templates;
@@ -242,10 +242,12 @@ mod tests {
 
         assert!(target.join("config.json").exists());
         assert!(target.join("system").join("hydros.json").exists());
-        assert!(target
-            .join("scenarios")
-            .join("inflow_seasonal_stats.parquet")
-            .exists());
+        assert!(
+            target
+                .join("scenarios")
+                .join("inflow_seasonal_stats.parquet")
+                .exists()
+        );
 
         let template = templates::find_template("1dtoy").unwrap();
         for file in template.files {

@@ -7,13 +7,14 @@ Cobre is a high-performance SDDP (Stochastic Dual Dynamic Programming) solver fo
 ## Installation
 
 ```bash
-pip install cobre
+pip install cobre-python
 ```
 
 Pre-built wheels are available for:
 
-- Linux x86_64 and aarch64 (manylinux_2_28)
+- Linux x86_64 and aarch64 (manylinux_2_34), musl x86_64
 - macOS Apple Silicon (aarch64) and Intel (x86_64)
+- Windows x86_64
 - Python 3.12+
 
 ## Quick Start

@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "cobre"
+name = "cobre-python"
 dynamic = ["version"]
 description = "High-performance SDDP solver for hydrothermal dispatch — Python bindings for the Cobre ecosystem"
 requires-python = ">=3.12"

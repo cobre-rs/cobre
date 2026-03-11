@@ -125,7 +125,7 @@ jobs:
 
       - name: Install wheel and test dependencies
         run: |
-          pip install --find-links dist/ cobre
+          pip install --find-links dist/ cobre-python
           pip install pytest
 
       - name: Run tests

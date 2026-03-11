@@ -116,20 +116,16 @@ def test_load_results_simulation_section_present(run_output: pathlib.Path) -> No
     assert "complete" in sim, "simulation must have 'complete' key"
 
 
-def test_load_results_no_simulation_manifest_is_none(
+def test_load_results_simulation_ran(
     run_output: pathlib.Path,
 ) -> None:
-    """When 1dtoy simulation is not enabled, simulation.manifest is None."""
+    """1dtoy has simulation.enabled=true, so simulation results should exist."""
     import cobre.results  # noqa: PLC0415
 
     result = cobre.results.load_results(str(run_output))
-    # 1dtoy config.json has simulation.enabled = false by default,
-    # so no simulation/_manifest.json is written.
-    # This verifies the None-not-error contract.
     sim = result["simulation"]
-    assert sim["complete"] is False or sim["manifest"] is None, (
-        "Without simulation, manifest must be None and complete must be False"
-    )
+    assert sim["complete"] is True, "simulation must be complete after a successful run"
+    assert isinstance(sim["manifest"], dict), "simulation manifest must be a dict"
 
 
 def test_load_results_no_success_raises(tmp_path: pathlib.Path) -> None:

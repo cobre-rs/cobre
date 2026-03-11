@@ -76,6 +76,12 @@ fn convert_load_error(err: &LoadError) -> PyErr {
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 pub fn load_case(path: PathBuf) -> PyResult<PySystem> {
+    if !path.exists() {
+        return Err(PyOSError::new_err(format!(
+            "case directory does not exist: {}",
+            path.display()
+        )));
+    }
     let system = cobre_io::load_case(&path).map_err(|e| convert_load_error(&e))?;
     Ok(PySystem::from_rust(system))
 }

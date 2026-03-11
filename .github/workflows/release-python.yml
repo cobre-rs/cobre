@@ -2,8 +2,8 @@
 # to PyPI.  Wheels contain the compiled Rust extension (PyO3/maturin) with
 # the HiGHS LP solver statically linked.
 #
-# Platforms:  linux x86_64/aarch64 (manylinux_2_34), linux musl x86_64,
-#             macOS x86_64/aarch64, Windows x86_64
+# Platforms:  linux x86_64 (manylinux_2_34), linux aarch64 (manylinux_2_28),
+#             linux musl x86_64, macOS x86_64/aarch64, Windows x86_64
 # Python:    3.12+ (single abi3 wheel per platform via PyO3 stable ABI)
 #
 # Note: sdist is not built because maturin cannot package crates with path
@@ -11,7 +11,7 @@
 # Users who need to build from source should clone the full workspace.
 #
 # Uses PyPI trusted publishing (OIDC) — no API tokens needed.
-# Configure at: https://pypi.org/manage/project/cobre/settings/publishing/
+# Configure at: https://pypi.org/manage/project/cobre-python/settings/publishing/
 
 name: Release Python
 
@@ -46,9 +46,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             manylinux: "2_34"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            manylinux: "2_34"
+            manylinux: "2_28"
           # --- Linux (musl) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -67,10 +67,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up QEMU
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: docker/setup-qemu-action@v3
-
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -81,12 +77,12 @@ jobs:
             # cmake is required for building HiGHS (vendored LP solver).
             # zlib is NOT needed — disabled via CMAKE_DISABLE_FIND_PACKAGE_ZLIB
             # in cobre-solver/build.rs.
-            if command -v apt-get &>/dev/null; then
-              apt-get update && apt-get install -y cmake
-            elif command -v dnf &>/dev/null; then
+            if command -v dnf &>/dev/null; then
               dnf install -y cmake
             elif command -v yum &>/dev/null; then
               yum install -y cmake3 || yum install -y cmake
+            elif command -v apt-get &>/dev/null; then
+              apt-get update && apt-get install -y cmake
             elif command -v apk &>/dev/null; then
               apk add --no-cache cmake make g++
             fi

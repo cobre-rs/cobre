@@ -3,7 +3,7 @@
 # the HiGHS LP solver statically linked.
 #
 # Platforms:  linux x86_64, linux aarch64, macOS x86_64, macOS aarch64
-# Python:    3.12, 3.13
+# Python:    3.12+ (single abi3 wheel per platform via PyO3 stable ABI)
 #
 # Uses PyPI trusted publishing (OIDC) — no API tokens needed.
 # Configure at: https://pypi.org/manage/project/cobre/settings/publishing/
@@ -61,7 +61,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          args: --release --out dist --interpreter 3.12 3.13
+          args: --release --out dist
           working-directory: crates/cobre-python
           before-script-linux: |
             # cmake is required for building HiGHS (vendored LP solver)

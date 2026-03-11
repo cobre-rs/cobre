@@ -43,6 +43,22 @@ use std::path::PathBuf;
 
 use console::Term;
 
+/// Format a floating-point value as scientific notation with 6 significant digits.
+///
+/// Delegates to the same logic as `progress::fmt_sci` — duplicated here to
+/// avoid making `fmt_sci` part of the public API of this crate.
+fn fmt_sci(v: f64) -> String {
+    let raw = format!("{v:.5e}");
+    if let Some(pos) = raw.find('e') {
+        let mantissa = &raw[..pos];
+        let exp_str = &raw[pos + 1..];
+        if let Ok(exp) = exp_str.parse::<i32>() {
+            return format!("{mantissa}e{exp}");
+        }
+    }
+    raw
+}
+
 /// Training convergence metrics and timing for display in the post-run summary.
 pub struct TrainingSummary {
     /// Total number of iterations completed.
@@ -182,10 +198,14 @@ pub fn format_summary_string(summary: &RunSummary) -> String {
         "Training complete in {duration} ({} iterations, {convergence_detail})",
         t.iterations
     ));
-    lines.push(format!("  Lower bound:  {:.1} $/stage", t.lower_bound));
     lines.push(format!(
-        "  Upper bound:  {:.1} +/- {:.1} $/stage",
-        t.upper_bound, t.upper_bound_std
+        "  Lower bound:  {} $/stage",
+        fmt_sci(t.lower_bound)
+    ));
+    lines.push(format!(
+        "  Upper bound:  {} +/- {} $/stage",
+        fmt_sci(t.upper_bound),
+        fmt_sci(t.upper_bound_std)
     ));
     lines.push(format!("  Gap:          {:.1}%", t.gap_percent));
     lines.push(format!(
@@ -237,10 +257,14 @@ pub fn print_summary(stderr: &Term, summary: &RunSummary) {
         console::style(format!("Training complete in {duration}")).bold(),
         t.iterations
     ));
-    let _ = stderr.write_line(&format!("  Lower bound:  {:.1} $/stage", t.lower_bound));
     let _ = stderr.write_line(&format!(
-        "  Upper bound:  {:.1} +/- {:.1} $/stage",
-        t.upper_bound, t.upper_bound_std
+        "  Lower bound:  {} $/stage",
+        fmt_sci(t.lower_bound)
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Upper bound:  {} +/- {} $/stage",
+        fmt_sci(t.upper_bound),
+        fmt_sci(t.upper_bound_std)
     ));
     let _ = stderr.write_line(&format!("  Gap:          {:.1}%", t.gap_percent));
     let _ = stderr.write_line(&format!(
@@ -388,8 +412,8 @@ mod tests {
         let s = format_summary_string(&summary);
 
         assert!(
-            s.contains("100.5"),
-            "summary must contain '100.5' for lower_bound = 100.5, got: {s}"
+            s.contains("1.00500e2"),
+            "summary must contain '1.00500e2' (scientific notation) for lower_bound = 100.5, got: {s}"
         );
     }
 
@@ -452,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_summary_one_decimal_place() {
+    fn test_format_summary_scientific_notation() {
         let summary = RunSummary {
             training: TrainingSummary {
                 lower_bound: 45230.41,
@@ -464,8 +488,8 @@ mod tests {
         let s = format_summary_string(&summary);
 
         assert!(
-            s.contains("45230.4"),
-            "summary must contain '45230.4' (one decimal place) for lower_bound = 45230.41, got: {s}"
+            s.contains("4.52304e4"),
+            "summary must contain '4.52304e4' (scientific notation) for lower_bound = 45230.41, got: {s}"
         );
     }
 

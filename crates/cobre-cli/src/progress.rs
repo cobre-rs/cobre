@@ -35,9 +35,31 @@ use cobre_core::TrainingEvent;
 use console::Term;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-const TRAINING_TEMPLATE: &str = "Training {bar:40} {pos}/{len} iter  {msg}";
+const TRAINING_TEMPLATE: &str = "Training   {bar:40} {pos}/{len} iter  {msg}";
 const SIMULATION_TEMPLATE: &str =
     "Simulation {bar:40} {pos}/{len} scenarios  {msg}  [{elapsed_precise} < {eta_precise}]";
+
+/// Format a floating-point value as scientific notation with 6 significant digits.
+///
+/// Uses Rust's `{:.5e}` specifier (1 digit before + 5 after the decimal point)
+/// and strips the leading `+` and zero-padding from the exponent for readability.
+/// For example, `2371091.9` → `"2.37109e6"`, `577560.0` → `"5.77560e5"`.
+fn fmt_sci(v: f64) -> String {
+    // {:.5e} produces e.g. "2.37109e6" or "5.77560e+05" depending on platform.
+    // Normalise to the compact form "Xe±N" (no leading zeros in exponent,
+    // no leading '+' sign).
+    let raw = format!("{v:.5e}");
+    // Split at 'e' to handle the exponent separately.
+    if let Some(pos) = raw.find('e') {
+        let mantissa = &raw[..pos];
+        let exp_str = &raw[pos + 1..];
+        // Parse the exponent as i32 to strip sign and leading zeros.
+        if let Ok(exp) = exp_str.parse::<i32>() {
+            return format!("{mantissa}e{exp}");
+        }
+    }
+    raw
+}
 
 pub struct ProgressHandle {
     handle: thread::JoinHandle<Vec<TrainingEvent>>,
@@ -88,7 +110,9 @@ pub fn run_progress_thread(
                         let gap_pct = gap * 100.0;
                         bar.set_position(iteration);
                         bar.set_message(format!(
-                            "LB: {lower_bound:.1}  UB: {upper_bound:.1}  gap: {gap_pct:.1}%"
+                            "LB: {}  UB: {}  gap: {gap_pct:.1}%",
+                            fmt_sci(lower_bound),
+                            fmt_sci(upper_bound)
                         ));
                     }
 
@@ -101,7 +125,9 @@ pub fn run_progress_thread(
                         if let Some(bar) = training_bar.take() {
                             bar.set_position(iterations);
                             bar.finish_with_message(format!(
-                                "LB: {final_lb:.1}  UB: {final_ub:.1}  done"
+                                "LB: {}  UB: {}  done",
+                                fmt_sci(final_lb),
+                                fmt_sci(final_ub)
                             ));
                         }
                     }
@@ -120,10 +146,13 @@ pub fn run_progress_thread(
                         bar.set_position(u64::from(scenarios_complete));
                         let msg = if scenarios_complete >= 2 {
                             format!(
-                                "mean: {mean_cost:.1}  std: {std_cost:.1}  CI95: +/-{ci_95_half_width:.1}"
+                                "mean: {}  std: {}  CI95: +/-{}",
+                                fmt_sci(mean_cost),
+                                fmt_sci(std_cost),
+                                fmt_sci(ci_95_half_width)
                             )
                         } else {
-                            format!("mean: {mean_cost:.1}")
+                            format!("mean: {}", fmt_sci(mean_cost))
                         };
                         bar.set_message(msg);
                     }

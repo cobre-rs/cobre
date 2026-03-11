@@ -491,37 +491,34 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     // MPI aggregation regardless of thread completion order.
     //
     // While flattening, accumulate per-scenario total costs into the Welford
-    // accumulator. The parallel region is already complete at this point, so
-    // there is no shared-state concern: the accumulator runs single-threaded
-    // on the main thread after `collect()` returns.
-    //
-    // One `SimulationProgress` event is emitted per worker batch completion
-    // (i.e., once per worker after that worker's entire sub-range is done),
-    // not once per scenario. This matches the "emit after each parallel batch"
-    // requirement in the ticket and avoids flooding the channel.
+    // accumulator and emit one progress event per scenario. The parallel
+    // region is already complete at this point, so the accumulator runs
+    // single-threaded on the main thread after `collect()` returns. Emitting
+    // per-scenario (rather than per-worker-batch) ensures the progress bar
+    // animates in real-time regardless of thread count, including the common
+    // single-threaded case where there is only one worker batch.
     let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
     let mut acc = WelfordAccumulator::new();
     for result in worker_results {
         let batch = result?;
         for &(_, total_cost, _) in &batch {
             acc.update(total_cost);
+            // Emit a progress event after each scenario.
+            // `scenarios_complete` reflects this rank's locally accumulated count.
+            #[allow(clippy::cast_possible_truncation)]
+            let scenarios_complete = acc.count as u32;
+            let elapsed_ms = sim_start.elapsed().as_millis();
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms_u64 = elapsed_ms as u64;
+            emit_simulation_progress(
+                event_sender,
+                scenarios_complete,
+                config.n_scenarios,
+                elapsed_ms_u64,
+                &acc,
+            );
         }
         all_costs.extend(batch);
-
-        // Emit a progress event after each worker batch.
-        // `scenarios_complete` reflects this rank's locally accumulated count.
-        #[allow(clippy::cast_possible_truncation)]
-        let scenarios_complete = acc.count as u32;
-        let elapsed_ms = sim_start.elapsed().as_millis();
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms_u64 = elapsed_ms as u64;
-        emit_simulation_progress(
-            event_sender,
-            scenarios_complete,
-            config.n_scenarios,
-            elapsed_ms_u64,
-            &acc,
-        );
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
 

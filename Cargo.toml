@@ -20,7 +20,7 @@ exclude = ["crates/cobre-python"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 license = "Apache-2.0"
 repository = "https://github.com/cobre-rs/cobre"
 homepage = "https://cobre-rs.github.io/cobre-docs/"

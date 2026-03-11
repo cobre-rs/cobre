@@ -551,9 +551,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     })?;
 
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
-    // Clone the sender before moving it into TrainingConfig so that simulation
-    // progress events flow through the same channel as training events.
-    let sim_event_tx = event_tx.clone();
     let training_config = TrainingConfig {
         forward_passes,
         max_iterations,
@@ -679,6 +676,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("HiGHS initialisation failed for simulation pool: {e}"),
         })?;
 
+        // Create a dedicated event channel for simulation progress. The
+        // training channel was already consumed by the progress thread join
+        // above, so simulation needs its own sender/receiver pair.
+        let (sim_event_tx, sim_event_rx) = mpsc::channel::<TrainingEvent>();
+        let sim_progress_handle = if quiet {
+            drop(sim_event_rx);
+            None
+        } else {
+            Some(crate::progress::run_progress_thread(
+                sim_event_rx,
+                u64::from(n_scenarios),
+            ))
+        };
+
         // All ranks create the channel: simulate() sends results through
         // result_tx regardless of rank. Each rank collects its own subset of
         // scenario results from the channel.
@@ -720,6 +731,12 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             Some(&sim_event_tx),
         )
         .map_err(CliError::from);
+
+        // Drop sim_event_tx so the simulation progress thread can exit.
+        drop(sim_event_tx);
+        if let Some(handle) = sim_progress_handle {
+            let _ = handle.join();
+        }
 
         // Drop result_tx before joining drain_handle. The background thread's
         // into_iter() loop terminates only when the sender is closed; dropping

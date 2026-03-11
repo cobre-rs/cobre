@@ -141,10 +141,9 @@ jobs:
           source ../../.venv/bin/activate
           maturin develop --release
       - name: Run Python tests with coverage
-        working-directory: crates/cobre-python
         run: |
-          source ../../.venv/bin/activate
-          pytest tests/ -v --cov=cobre --cov-report=xml:../../python-coverage.xml
+          source .venv/bin/activate
+          pytest crates/cobre-python/tests/ -v --cov=cobre --cov-report=xml:python-coverage.xml
       - uses: codecov/codecov-action@v4
         with:
           files: python-coverage.xml

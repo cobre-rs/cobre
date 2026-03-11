@@ -1,13 +1,13 @@
 [package]
 name = "cobre-python"
 description = "Python bindings for the Cobre power systems solver — import cobre from Python scripts and Jupyter notebooks"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-homepage.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/cobre-rs/cobre"
+homepage = "https://cobre-rs.github.io/cobre-docs/"
+authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]
 readme = "README.md"
 keywords = ["python", "bindings", "pyo3", "power-systems", "energy"]
 categories = ["science", "api-bindings"]

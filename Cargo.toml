@@ -10,9 +10,12 @@ members = [
     "crates/cobre-sddp",
     "crates/cobre-cli",
     "crates/cobre-mcp",
-    "crates/cobre-python",
     "crates/cobre-tui",
 ]
+# cobre-python requires a Python interpreter with PyO3 and is built separately
+# via maturin. Excluding it from the workspace prevents cargo-dist and
+# `cargo test --workspace` from requiring a compatible Python installation.
+exclude = ["crates/cobre-python"]
 
 [workspace.package]
 version = "0.1.0"

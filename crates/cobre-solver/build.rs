@@ -80,15 +80,21 @@ fn main() {
         highs_include_highs.display()
     );
 
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
         .file("csrc/highs_wrapper.c")
         .include("csrc")
         .include(&highs_include)
         .include(&highs_include_highs)
         .warnings(true)
-        .extra_warnings(true)
-        // Suppress warning from HiGHS header: `Highs_compilationDate` is
-        // declared static in highs_c_api.h but defined only in the .cpp file.
-        .flag("-Wno-unused-function")
-        .compile("highs_wrapper");
+        .extra_warnings(true);
+    // Suppress warning from HiGHS header: `Highs_compilationDate` is
+    // declared static in highs_c_api.h but defined only in the .cpp file.
+    // Use MSVC-style flag on Windows, GCC/Clang-style elsewhere.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flag("/wd4505");
+    } else {
+        build.flag("-Wno-unused-function");
+    }
+    build.compile("highs_wrapper");
 }

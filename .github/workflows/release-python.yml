@@ -77,11 +77,11 @@ jobs:
               if [ -d /usr/aarch64-unknown-linux-gnu ]; then
                 curl -fsSL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz
                 tar xzf /tmp/zlib.tar.gz -C /tmp
-                cd /tmp/zlib-1.3.1
+                pushd /tmp/zlib-1.3.1
                 CC=aarch64-unknown-linux-gnu-gcc \
                   ./configure --prefix=/usr/aarch64-unknown-linux-gnu
                 make -j"$(nproc)" install
-                cd /
+                popd
                 rm -rf /tmp/zlib-1.3.1 /tmp/zlib.tar.gz
               fi
             elif command -v dnf &>/dev/null; then

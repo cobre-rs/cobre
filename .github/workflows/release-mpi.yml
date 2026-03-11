@@ -90,12 +90,14 @@ jobs:
 
       - name: Upload to GitHub Release
         run: |
-          # Wait for the main release workflow to create the GitHub Release.
-          for i in $(seq 1 10); do
+          # Wait for the main release workflow (cargo-dist) to create the
+          # GitHub Release. With Windows targets the build can take 15+ minutes.
+          for i in $(seq 1 30); do
             if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+              echo "Release $GITHUB_REF_NAME found."
               break
             fi
-            echo "Waiting for release $GITHUB_REF_NAME... ($i/10)"
+            echo "Waiting for release $GITHUB_REF_NAME... ($i/30)"
             sleep 30
           done
           gh release upload "$GITHUB_REF_NAME" "$ARCHIVE" --clobber

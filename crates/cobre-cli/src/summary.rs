@@ -1,45 +1,12 @@
 //! Post-run summary block for the `cobre run` command.
 //!
-//! Formats a multi-line summary of training convergence metrics, cut statistics,
-//! and optional simulation results after a run completes.
+//! Provides separate printing functions for each phase of the run:
+//! - [`print_training_summary`] — training convergence metrics
+//! - [`print_simulation_summary`] — simulation completion stats
+//! - [`print_output_path`] — output directory location
 //!
-//! ## Design
-//!
-//! The module separates formatting from printing: [`format_summary_string`] builds
-//! a plain-text `String` without any ANSI escapes (enabling unit testing without a
-//! real terminal), and [`print_summary`] applies `console::style` for bold headers
-//! and dim file paths when writing to stderr.
-//!
-//! ## Example
-//!
-//! ```rust,no_run
-//! use std::path::PathBuf;
-//! use console::Term;
-//! use cobre_cli::summary::{RunSummary, TrainingSummary, print_summary};
-//!
-//! let summary = RunSummary {
-//!     training: TrainingSummary {
-//!         iterations: 50,
-//!         converged: false,
-//!         converged_at: None,
-//!         reason: "iteration_limit".to_string(),
-//!         lower_bound: 45230.41,
-//!         upper_bound: 47800.0,
-//!         upper_bound_std: 310.5,
-//!         gap_percent: 5.7,
-//!         total_cuts_active: 480,
-//!         total_cuts_generated: 1200,
-//!         total_lp_solves: 36000,
-//!         total_time_ms: 222_000,
-//!     },
-//!     simulation: None,
-//!     output_dir: PathBuf::from("/results/study-001"),
-//! };
-//!
-//! print_summary(&Term::buffered_stderr(), &summary);
-//! ```
-
-use std::path::PathBuf;
+//! Each function prints its section independently so the caller can display
+//! results at the right point in the execution flow.
 
 use console::Term;
 
@@ -113,18 +80,19 @@ pub struct SimulationSummary {
 
     /// Number of scenarios that failed during simulation.
     pub failed: u32,
+
+    /// Total elapsed wall-clock time for the simulation phase (milliseconds).
+    pub total_time_ms: u64,
 }
 
-/// All data needed to render the post-run summary block.
+/// All data needed to render the complete post-run summary block.
+///
+/// Used only in tests; the production code calls the individual print functions.
+#[cfg(test)]
 pub struct RunSummary {
-    /// Training convergence and timing data.
     pub training: TrainingSummary,
-
-    /// Simulation completion data, or `None` when simulation was skipped.
     pub simulation: Option<SimulationSummary>,
-
-    /// Root output directory where all artifacts were written.
-    pub output_dir: PathBuf,
+    pub output_dir: std::path::PathBuf,
 }
 
 /// Format a millisecond duration as a human-readable string.
@@ -216,9 +184,10 @@ pub fn format_summary_string(summary: &RunSummary) -> String {
 
     // Simulation section (optional)
     if let Some(sim) = &summary.simulation {
+        let sim_duration = format_duration(sim.total_time_ms);
         lines.push(String::new());
         lines.push(format!(
-            "Simulation complete ({} scenarios)",
+            "Simulation complete in {sim_duration} ({} scenarios)",
             sim.n_scenarios
         ));
         lines.push(format!(
@@ -237,21 +206,14 @@ pub fn format_summary_string(summary: &RunSummary) -> String {
     lines.join("\n")
 }
 
-/// Write the post-run summary block to `stderr`.
+/// Print the training completion summary to `stderr`.
 ///
-/// Section headers ("Training complete", "Simulation complete", "Output written")
-/// are rendered bold. The output directory path is rendered muted (dim).
-/// Numerical values use plain text for copy-paste friendliness. Write errors
-/// are silently ignored (fire-and-forget, same pattern as [`crate::banner`]).
-///
-/// When `summary.simulation` is `None`, the "Simulation complete" section is
-/// omitted entirely.
-pub fn print_summary(stderr: &Term, summary: &RunSummary) {
-    let t = &summary.training;
+/// Rendered bold header with convergence metrics, bounds, cuts, and LP solves.
+/// Write errors are silently ignored (fire-and-forget).
+pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
     let duration = format_duration(t.total_time_ms);
     let convergence_detail = format_convergence_detail(t.converged, t.converged_at, &t.reason);
 
-    // Training section header — bold
     let _ = stderr.write_line(&format!(
         "{} ({} iterations, {convergence_detail})",
         console::style(format!("Training complete in {duration}")).bold(),
@@ -272,28 +234,52 @@ pub fn print_summary(stderr: &Term, summary: &RunSummary) {
         t.total_cuts_active, t.total_cuts_generated
     ));
     let _ = stderr.write_line(&format!("  LP solves:    {}", t.total_lp_solves));
+}
 
-    // Simulation section (optional)
+/// Print the simulation completion summary to `stderr`.
+///
+/// Rendered bold header with scenario counts. Write errors are silently ignored.
+pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
+    let duration = format_duration(sim.total_time_ms);
+    let _ = stderr.write_line(&format!(
+        "{} ({} scenarios)",
+        console::style(format!("Simulation complete in {duration}")).bold(),
+        sim.n_scenarios
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Completed: {}  Failed: {}",
+        sim.completed, sim.failed
+    ));
+}
+
+/// Print the output directory path and write duration to `stderr`.
+///
+/// Rendered with bold label and dim path. Write errors are silently ignored.
+pub fn print_output_path(stderr: &Term, output_dir: &std::path::Path, write_secs: f64) {
+    let _ = stderr.write_line(&format!(
+        "{} {}/ {}",
+        console::style("Output written to").bold(),
+        console::style(output_dir.display()).dim(),
+        console::style(format!("({write_secs:.1}s)")).dim()
+    ));
+}
+
+/// Write the complete post-run summary block to `stderr`.
+///
+/// Convenience wrapper that calls [`print_training_summary`],
+/// [`print_simulation_summary`] (if present), and [`print_output_path`]
+/// in sequence.
+///
+/// Used only in tests; the production code calls the individual print functions.
+#[cfg(test)]
+pub fn print_summary(stderr: &Term, summary: &RunSummary) {
+    print_training_summary(stderr, &summary.training);
     if let Some(sim) = &summary.simulation {
         let _ = stderr.write_line("");
-        let _ = stderr.write_line(&format!(
-            "{} ({} scenarios)",
-            console::style("Simulation complete").bold(),
-            sim.n_scenarios
-        ));
-        let _ = stderr.write_line(&format!(
-            "  Completed: {}  Failed: {}",
-            sim.completed, sim.failed
-        ));
+        print_simulation_summary(stderr, sim);
     }
-
-    // Output path — dim
     let _ = stderr.write_line("");
-    let _ = stderr.write_line(&format!(
-        "{} {}/",
-        console::style("Output written to").bold(),
-        console::style(summary.output_dir.display()).dim()
-    ));
+    print_output_path(stderr, &summary.output_dir, 0.0);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -305,8 +291,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
-        print_summary,
+        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
+        TrainingSummary,
     };
 
     fn make_training_summary() -> TrainingSummary {
@@ -385,6 +371,7 @@ mod tests {
             n_scenarios: 200,
             completed: 198,
             failed: 2,
+            total_time_ms: 10_000,
         };
         let summary = make_run_summary(Some(sim));
         let s = format_summary_string(&summary);
@@ -539,6 +526,7 @@ mod tests {
             n_scenarios: 100,
             completed: 100,
             failed: 0,
+            total_time_ms: 5_000,
         };
         let summary = make_run_summary(Some(sim));
         print_summary(&Term::buffered_stderr(), &summary);

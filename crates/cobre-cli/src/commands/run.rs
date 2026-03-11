@@ -18,19 +18,19 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
 
 use crate::error::CliError;
-use crate::summary::{RunSummary, SimulationSummary, TrainingSummary};
+use crate::summary::{SimulationSummary, TrainingSummary};
 
 /// Default number of forward-pass trajectories when not specified in config.
 const DEFAULT_FORWARD_PASSES: u32 = 1;
@@ -638,6 +638,29 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-training barrier error: {e}"),
     })?;
 
+    // Print training summary immediately after training completes.
+    let training_summary = TrainingSummary {
+        iterations: training_result.iterations,
+        converged: training_output.converged,
+        converged_at: if training_output.converged {
+            Some(training_result.iterations)
+        } else {
+            None
+        },
+        reason: training_result.reason.clone(),
+        lower_bound: training_result.final_lb,
+        upper_bound: training_result.final_ub,
+        upper_bound_std: 0.0,
+        gap_percent: training_result.final_gap * 100.0,
+        total_cuts_active: training_output.cut_stats.total_active,
+        total_cuts_generated: training_output.cut_stats.total_generated,
+        total_lp_solves: global_lp_solves,
+        total_time_ms: training_result.total_time_ms,
+    };
+    if !quiet && is_root {
+        crate::summary::print_training_summary(&stderr, &training_summary);
+    }
+
     // should_simulate was resolved on rank 0 and included in BroadcastConfig,
     // so all ranks agree on whether to run the simulation phase.
     let should_simulate = bcast_config.should_simulate;
@@ -647,9 +670,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // consistent. Non-root ranks compute a meaningless default but never
     // access the filesystem with it.
     let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
-
-    // Determine simulation output for summary (populated on rank 0 only).
-    let simulation_output;
 
     if should_simulate {
         let n_scenarios = bcast_config.n_scenarios;
@@ -710,6 +730,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 .collect::<Vec<cobre_sddp::SimulationScenarioResult>>()
         });
 
+        // ── Simulation (LP solves) ───────────────────────────────────────
+        let sim_start = std::time::Instant::now();
+
         let sim_result = simulate(
             &mut sim_pool.workspaces,
             stage_templates_ref,
@@ -750,6 +773,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let local_results = drain_handle.join().expect("drain thread panicked");
 
         sim_result?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let sim_time_ms = sim_start.elapsed().as_millis() as u64;
+
+        // ── MPI gather ───────────────────────────────────────────────────
 
         // Serialize local results with postcard for MPI transfer.
         let local_bytes =
@@ -804,20 +832,34 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("post-simulation barrier error: {e}"),
         })?;
 
-        // Only rank 0 deserializes, writes Parquet files, and returns output.
-        simulation_output = if is_root {
-            // Write the policy checkpoint (cuts + basis as FlatBuffers).
-            let policy_dir = output_dir.join(&bcast_config.policy_path);
-            crate::policy_io::write_checkpoint(
-                &policy_dir,
-                &fcf,
-                &training_result,
-                &crate::policy_io::CheckpointParams {
-                    max_iterations,
-                    forward_passes,
-                    seed,
+        // Print the simulation summary now — before I/O starts.
+        if !quiet && is_root {
+            crate::summary::print_simulation_summary(
+                &stderr,
+                &SimulationSummary {
+                    n_scenarios,
+                    completed: n_scenarios,
+                    failed: 0,
+                    total_time_ms: sim_time_ms,
                 },
-            )?;
+            );
+        }
+
+        // ── Write all output files ───────────────────────────────────────
+        // Only rank 0 deserializes gathered results, writes simulation
+        // Parquet, policy checkpoint, training Parquet, manifest, and
+        // metadata. All I/O is under this block so the user sees
+        // "Writing outputs..." for the entire duration.
+        if is_root {
+            let config = root_config.ok_or_else(|| CliError::Internal {
+                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+            })?;
+            if !quiet {
+                use std::io::Write;
+                let _ = stderr.write_line("Writing outputs...");
+                let _ = std::io::stderr().flush();
+            }
+            let write_start = std::time::Instant::now();
 
             // Deserialize each rank's portion from the gathered byte buffer
             // and combine into a single contiguous result set.
@@ -835,8 +877,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 offset += count;
             }
 
-            // Create the Parquet writer on the main thread (needs &System), then
-            // write all gathered results.
+            // Write simulation Parquet files.
             let parquet_config = cobre_io::ParquetWriterConfig::default();
             let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
                 &output_dir,
@@ -845,10 +886,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             )
             .map_err(CliError::from)?;
 
-            // Write each scenario result through the Parquet writer.
             let mut failed: u32 = 0;
             for scenario_result in all_results {
-                let payload = crate::simulation_io::convert_scenario_for_writer(scenario_result);
+                let payload = crate::simulation_io::convert_scenario(scenario_result);
                 if let Err(e) = sim_writer.write_scenario(payload) {
                     tracing::error!("simulation write error: {e}");
                     failed += 1;
@@ -857,15 +897,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize();
             sim_output.failed = failed;
 
-            Some(sim_output)
-        } else {
-            None
-        };
-    } else {
-        simulation_output = None;
-
-        // When skipping simulation, rank 0 still writes the policy checkpoint.
-        if is_root {
+            // Write the policy checkpoint (cuts + basis as FlatBuffers).
             let policy_dir = output_dir.join(&bcast_config.policy_path);
             crate::policy_io::write_checkpoint(
                 &policy_dir,
@@ -877,54 +909,55 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     seed,
                 },
             )?;
+
+            // Write training Parquet, manifest, and metadata.
+            write_results(
+                &output_dir,
+                &training_output,
+                Some(&sim_output),
+                &system,
+                &config,
+            )
+            .map_err(CliError::from)?;
+
+            if !quiet {
+                let write_secs = write_start.elapsed().as_secs_f64();
+                crate::summary::print_output_path(&stderr, &output_dir, write_secs);
+            }
         }
-    }
+    } else {
+        // ── No simulation: write policy + training outputs only ──────────
+        if is_root {
+            let config = root_config.ok_or_else(|| CliError::Internal {
+                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+            })?;
+            if !quiet {
+                use std::io::Write;
+                let _ = stderr.write_line("Writing outputs...");
+                let _ = std::io::stderr().flush();
+            }
+            let write_start = std::time::Instant::now();
 
-    // Only rank 0 writes training/simulation summaries and prints the summary.
-    // root_config is Some on rank 0 (loaded from disk above) and None on
-    // non-root ranks. The is_root guard ensures we never unwrap on a non-root rank.
-    if is_root {
-        // root_config is guaranteed Some on rank 0.
-        let config = root_config.ok_or_else(|| CliError::Internal {
-            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-        })?;
-        write_results(
-            &output_dir,
-            &training_output,
-            simulation_output.as_ref(),
-            &system,
-            &config,
-        )
-        .map_err(CliError::from)?;
-
-        if !quiet {
-            let summary = RunSummary {
-                training: TrainingSummary {
-                    iterations: training_result.iterations,
-                    converged: training_output.converged,
-                    converged_at: if training_output.converged {
-                        Some(training_result.iterations)
-                    } else {
-                        None
-                    },
-                    reason: training_result.reason.clone(),
-                    lower_bound: training_result.final_lb,
-                    upper_bound: training_result.final_ub,
-                    upper_bound_std: 0.0,
-                    gap_percent: training_result.final_gap * 100.0,
-                    total_cuts_active: training_output.cut_stats.total_active,
-                    total_cuts_generated: training_output.cut_stats.total_generated,
-                    total_lp_solves: global_lp_solves,
-                    total_time_ms: training_result.total_time_ms,
+            // Write the policy checkpoint (cuts + basis as FlatBuffers).
+            let policy_dir = output_dir.join(&bcast_config.policy_path);
+            crate::policy_io::write_checkpoint(
+                &policy_dir,
+                &fcf,
+                &training_result,
+                &crate::policy_io::CheckpointParams {
+                    max_iterations,
+                    forward_passes,
+                    seed,
                 },
-                simulation: simulation_output.as_ref().map(|sim| SimulationSummary {
-                    n_scenarios: sim.n_scenarios,
-                    completed: sim.completed,
-                    failed: sim.failed,
-                }),
-                output_dir: output_dir.clone(),
-            };
-            crate::summary::print_summary(&stderr, &summary);
+            )?;
+
+            write_results(&output_dir, &training_output, None, &system, &config)
+                .map_err(CliError::from)?;
+
+            if !quiet {
+                let write_secs = write_start.elapsed().as_secs_f64();
+                crate::summary::print_output_path(&stderr, &output_dir, write_secs);
+            }
         }
     }
 

@@ -1,21 +1,16 @@
-//! Simulation I/O thread: receives scenario results from the solver and
-//! writes them to Hive-partitioned Parquet files via [`SimulationParquetWriter`].
+//! Type conversion from solver-specific [`SimulationScenarioResult`] to the
+//! I/O-layer [`ScenarioWritePayload`].
 //!
-//! This module also provides the type conversion from solver-specific
-//! [`SimulationScenarioResult`] to the I/O-layer [`ScenarioWritePayload`].
 //! The two type hierarchies are structurally identical (field-for-field) but
 //! live in separate crates to avoid circular dependencies.
 
 #![allow(clippy::needless_pass_by_value)]
 
-use std::sync::mpsc::Receiver;
-
-use cobre_io::SimulationOutput;
 use cobre_io::output::simulation_writer::{
     BusWriteRecord, ContractWriteRecord, CostWriteRecord, ExchangeWriteRecord,
     GenericViolationWriteRecord, HydroWriteRecord, InflowLagWriteRecord,
-    NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
-    StageWritePayload, ThermalWriteRecord,
+    NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, StageWritePayload,
+    ThermalWriteRecord,
 };
 use cobre_sddp::{
     SimulationBusResult, SimulationContractResult, SimulationCostResult, SimulationExchangeResult,
@@ -24,54 +19,9 @@ use cobre_sddp::{
     SimulationStageResult, SimulationThermalResult,
 };
 
-/// I/O thread loop: receives scenario results, converts them, and writes
-/// Parquet files. The writer must be created by the caller (on the main
-/// thread, where `&System` is available) and moved in.
-///
-/// The `Receiver` is consumed by value because it is moved into the thread.
-///
-/// Under MPI, result gathering uses the allgatherv path in `run.rs` rather
-/// than this function. This function remains for single-process mode and
-/// potential future use.
-#[allow(clippy::needless_pass_by_value, dead_code)]
-pub fn drain_results(
-    rx: Receiver<SimulationScenarioResult>,
-    mut writer: SimulationParquetWriter,
-) -> SimulationOutput {
-    let mut failed: u32 = 0;
-    while let Ok(scenario_result) = rx.recv() {
-        let payload = convert_scenario(scenario_result);
-        if let Err(e) = writer.write_scenario(payload) {
-            tracing::error!("simulation write error: {e}");
-            failed += 1;
-        }
-    }
-
-    let mut output = writer.finalize();
-    output.failed = failed;
-    output
-}
-
 /// Convert a [`SimulationScenarioResult`] into a [`ScenarioWritePayload`]
 /// for use with [`SimulationParquetWriter::write_scenario`].
-///
-/// Exposed for the MPI result-gathering path in `run.rs`, where rank 0
-/// accumulates gathered results from all ranks and feeds them directly to
-/// the writer without going through a channel.
-pub fn convert_scenario_for_writer(src: SimulationScenarioResult) -> ScenarioWritePayload {
-    convert_scenario(src)
-}
-
-// ---------------------------------------------------------------------------
-// Type conversions: cobre-sddp → cobre-io
-//
-// These functions consume the source structs by value (moved from the channel)
-// and produce the I/O-layer equivalents. Clippy flags them as
-// "needless_pass_by_value" because the structs only have Copy fields, but
-// taking ownership is intentional: the source is dropped after conversion.
-// ---------------------------------------------------------------------------
-
-fn convert_scenario(src: SimulationScenarioResult) -> ScenarioWritePayload {
+pub(crate) fn convert_scenario(src: SimulationScenarioResult) -> ScenarioWritePayload {
     ScenarioWritePayload {
         scenario_id: src.scenario_id,
         stages: src.stages.into_iter().map(convert_stage).collect(),

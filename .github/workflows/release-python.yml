@@ -86,6 +86,14 @@ jobs:
             elif command -v apk &>/dev/null; then
               apk add --no-cache cmake make g++
             fi
+            # Ensure Python 3.12+ is on PATH for abi3 wheel generation.
+            # Manylinux containers ship multiple Pythons in /opt/python/.
+            for pydir in /opt/python/cp313-cp313 /opt/python/cp312-cp312; do
+              if [ -x "$pydir/bin/python3" ]; then
+                export PATH="$pydir/bin:$PATH"
+                break
+              fi
+            done
 
       - uses: actions/upload-artifact@v4
         with:

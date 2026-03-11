@@ -69,13 +69,14 @@ jobs:
           working-directory: crates/cobre-python
           before-script-linux: |
             # cmake is required for building HiGHS (vendored LP solver).
-            # manylinux_2_28 containers use dnf/yum depending on the image.
-            if command -v dnf &>/dev/null; then
-              dnf install -y cmake
+            # zlib is required by several dependencies (arrow/parquet).
+            # manylinux_2_28 containers use dnf/yum; cross images may use apt-get.
+            if command -v apt-get &>/dev/null; then
+              apt-get update && apt-get install -y cmake zlib1g-dev
+            elif command -v dnf &>/dev/null; then
+              dnf install -y cmake zlib-devel
             elif command -v yum &>/dev/null; then
-              yum install -y cmake3 || yum install -y cmake
-            elif command -v apt-get &>/dev/null; then
-              apt-get update && apt-get install -y cmake
+              yum install -y cmake3 zlib-devel || yum install -y cmake zlib-devel
             fi
 
       - uses: actions/upload-artifact@v4

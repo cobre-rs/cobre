@@ -34,3 +34,4 @@ examples/**/output
 
 # Terminal recording temporary files
 recordings/demo/
+__pycache__/

@@ -34,10 +34,6 @@
 //!
 //! See [`TrainingEvent`] for the full variant catalogue.
 
-// ---------------------------------------------------------------------------
-// StoppingRuleResult
-// ---------------------------------------------------------------------------
-
 /// Result of evaluating a single stopping rule at a given iteration.
 ///
 /// The [`TrainingEvent::ConvergenceUpdate`] variant carries a [`Vec`] of these,
@@ -56,10 +52,6 @@ pub struct StoppingRuleResult {
     /// (e.g., `"gap 0.42% <= 1.00%"`, `"LB stable for 12/10 iterations"`).
     pub detail: String,
 }
-
-// ---------------------------------------------------------------------------
-// TrainingEvent
-// ---------------------------------------------------------------------------
 
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
@@ -271,7 +263,7 @@ pub enum TrainingEvent {
     /// Emitted periodically during policy simulation (not during training).
     ///
     /// Consumers can use this to display a progress indicator during the
-    /// simulation phase.
+    /// simulation phase, including live cost statistics as scenarios complete.
     SimulationProgress {
         /// Number of simulation scenarios completed so far.
         scenarios_complete: u32,
@@ -279,6 +271,20 @@ pub enum TrainingEvent {
         scenarios_total: u32,
         /// Wall-clock time since simulation started, in milliseconds.
         elapsed_ms: u64,
+        /// Running mean of total scenario costs computed so far, in cost units.
+        ///
+        /// Populated by the emitter after each batch of completed scenarios.
+        mean_cost: f64,
+        /// Running standard deviation of total scenario costs.
+        ///
+        /// Set to `0.0` when `scenarios_complete < 2` (insufficient data for
+        /// variance estimation).
+        std_cost: f64,
+        /// Half-width of the 95% confidence interval, in cost units.
+        ///
+        /// Computed as `1.96 * std_cost / sqrt(scenarios_complete)`.
+        /// Set to `0.0` when `scenarios_complete < 2`.
+        ci_95_half_width: f64,
     },
 
     /// Emitted once when policy simulation completes.
@@ -291,10 +297,6 @@ pub enum TrainingEvent {
         elapsed_ms: u64,
     },
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -385,6 +387,9 @@ mod tests {
                 scenarios_complete: 50,
                 scenarios_total: 200,
                 elapsed_ms: 5_000,
+                mean_cost: 45_230.0,
+                std_cost: 3_100.0,
+                ci_95_half_width: 430.0,
             },
             TrainingEvent::SimulationFinished {
                 scenarios: 200,
@@ -548,5 +553,57 @@ mod tests {
             panic!("wrong variant")
         };
         assert_eq!(timestamp, "2026-03-01T08:00:00Z");
+    }
+
+    #[test]
+    fn simulation_progress_statistics_fields_accessible() {
+        let event = TrainingEvent::SimulationProgress {
+            scenarios_complete: 100,
+            scenarios_total: 500,
+            elapsed_ms: 10_000,
+            mean_cost: 45_230.0,
+            std_cost: 3_100.0,
+            ci_95_half_width: 430.0,
+        };
+        let TrainingEvent::SimulationProgress {
+            scenarios_complete,
+            scenarios_total,
+            elapsed_ms,
+            mean_cost,
+            std_cost,
+            ci_95_half_width,
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(scenarios_complete, 100);
+        assert_eq!(scenarios_total, 500);
+        assert_eq!(elapsed_ms, 10_000);
+        assert!((mean_cost - 45_230.0).abs() < f64::EPSILON);
+        assert!((std_cost - 3_100.0).abs() < f64::EPSILON);
+        assert!((ci_95_half_width - 430.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn simulation_progress_zero_stats_when_insufficient_data() {
+        // When scenarios_complete < 2, std_cost and ci_95_half_width must be 0.0.
+        let event = TrainingEvent::SimulationProgress {
+            scenarios_complete: 1,
+            scenarios_total: 200,
+            elapsed_ms: 100,
+            mean_cost: 50_000.0,
+            std_cost: 0.0,
+            ci_95_half_width: 0.0,
+        };
+        let TrainingEvent::SimulationProgress {
+            std_cost,
+            ci_95_half_width,
+            ..
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(std_cost, 0.0);
+        assert_eq!(ci_95_half_width, 0.0);
     }
 }

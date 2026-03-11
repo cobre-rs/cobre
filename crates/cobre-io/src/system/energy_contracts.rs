@@ -64,7 +64,8 @@ use crate::LoadError;
 
 /// Top-level intermediate type for `energy_contracts.json` (serde only, not re-exported).
 #[derive(Deserialize)]
-struct RawContractFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawContractFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -74,7 +75,8 @@ struct RawContractFile {
 
 /// Intermediate type for a single energy contract entry.
 #[derive(Deserialize)]
-struct RawContract {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawContract {
     /// Contract identifier. Must be unique within the file.
     id: i32,
     /// Human-readable contract name.
@@ -104,7 +106,8 @@ struct RawContract {
 /// carry `rename_all`, so we use this intermediate.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum RawContractType {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawContractType {
     /// External energy flows into the modeled system.
     Import,
     /// System energy flows out to an external entity.
@@ -113,7 +116,8 @@ enum RawContractType {
 
 /// Intermediate type for the nested limits sub-object.
 #[derive(Deserialize)]
-struct RawContractLimits {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawContractLimits {
     /// Minimum contracted power [MW].
     min_mw: f64,
     /// Maximum contracted power [MW].

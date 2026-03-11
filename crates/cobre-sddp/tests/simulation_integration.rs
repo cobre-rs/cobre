@@ -399,7 +399,6 @@ fn make_config() -> Config {
     };
     Config {
         schema: None,
-        version: None,
         modeling: ModelingConfig {
             inflow_non_negativity: InflowNonNegativityConfig::default(),
         },
@@ -732,6 +731,7 @@ fn train_simulate_write_cycle() {
         0,
         &[],
         &[],
+        None,
     )
     .expect("simulate must succeed");
 

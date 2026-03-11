@@ -4,8 +4,8 @@ This directory contains scripts and tape files for generating terminal recording
 that demonstrate Cobre in action. The recordings are intended for use in the README
 and documentation pages.
 
-Generated output files (`.gif`, `.svg`, `.cast`, `demo/`) are gitignored. Only the
-scripts and tape files are tracked.
+Generated recordings (`.gif` and `.cast` files) are committed so they can be
+embedded in the README and documentation. Temporary files (`demo/`) are gitignored.
 
 ## Prerequisites
 

@@ -22,7 +22,7 @@ use crate::templates;
         to create a new case directory from a template."
 )]
 pub struct InitArgs {
-    /// Template name to scaffold (e.g. `1dtoy`). Mutually informative with `--list`.
+    /// Template name to scaffold (e.g. `1dtoy`).
     #[arg(
         long,
         value_name = "NAME",
@@ -39,9 +39,7 @@ pub struct InitArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Target directory where the template files will be written.
-    ///
-    /// Required when `--template` is provided; ignored with `--list`.
+    /// Target directory where template files will be written.
     #[arg(required_unless_present = "list", conflicts_with = "list")]
     pub directory: Option<PathBuf>,
 }
@@ -255,6 +253,60 @@ mod tests {
         for file in template.files {
             let dest = target.join(file.relative_path);
             assert!(dest.exists());
+        }
+    }
+
+    /// AC (ticket-007b): generated `config.json` contains the correct `$schema` URL.
+    #[test]
+    fn test_init_config_json_contains_schema_url() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("schema_case");
+        let args = InitArgs {
+            template: Some("1dtoy".to_string()),
+            list: false,
+            force: false,
+            directory: Some(target.clone()),
+        };
+        assert!(execute(args).is_ok());
+
+        let config_content = std::fs::read_to_string(target.join("config.json")).unwrap();
+        assert!(
+            config_content.contains("https://cobre-rs.github.io/cobre/schemas/config.schema.json"),
+            "generated config.json must contain the $schema URL"
+        );
+    }
+
+    /// AC (ticket-007b): generated `system/buses.json` contains the correct `$schema` URL.
+    #[test]
+    fn test_init_system_json_files_contain_schema_urls() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("schema_system_case");
+        let args = InitArgs {
+            template: Some("1dtoy".to_string()),
+            list: false,
+            force: false,
+            directory: Some(target.clone()),
+        };
+        assert!(execute(args).is_ok());
+
+        let base = "https://cobre-rs.github.io/cobre/schemas/";
+
+        let checks: &[(&str, &str)] = &[
+            ("system/buses.json", "buses.schema.json"),
+            ("system/hydros.json", "hydros.schema.json"),
+            ("system/thermals.json", "thermals.schema.json"),
+            ("system/lines.json", "lines.schema.json"),
+            ("stages.json", "stages.schema.json"),
+            ("penalties.json", "penalties.schema.json"),
+        ];
+
+        for (file, schema_suffix) in checks {
+            let content = std::fs::read_to_string(target.join(file)).unwrap();
+            let expected_url = format!("{base}{schema_suffix}");
+            assert!(
+                content.contains(&expected_url),
+                "generated {file} must contain the $schema URL '{expected_url}'"
+            );
         }
     }
 

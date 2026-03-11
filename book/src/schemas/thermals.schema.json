@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "RawGnlConfig": {
+      "description": "Intermediate type for GNL configuration.",
+      "properties": {
+        "lag_stages": {
+          "description": "Number of stages of dispatch anticipation.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lag_stages"
+      ],
+      "type": "object"
+    },
+    "RawThermal": {
+      "description": "Intermediate type for a single thermal plant entry.",
+      "properties": {
+        "bus_id": {
+          "description": "Bus to which this plant's generation is injected.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "cost_segments": {
+          "description": "Piecewise-linear cost segments. Must be non-empty.",
+          "items": {
+            "$ref": "#/$defs/RawThermalCostSegment"
+          },
+          "type": "array"
+        },
+        "entry_stage_id": {
+          "default": null,
+          "description": "Stage index when the plant enters service. Absent or null = always exists.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exit_stage_id": {
+          "default": null,
+          "description": "Stage index when the plant is decommissioned. Absent or null = never.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "generation": {
+          "$ref": "#/$defs/RawThermalGeneration",
+          "description": "Generation bounds."
+        },
+        "gnl_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawGnlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "GNL dispatch anticipation configuration. Absent = no lag."
+        },
+        "id": {
+          "description": "Thermal plant identifier. Must be unique within the file.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Human-readable plant name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "bus_id",
+        "cost_segments",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "RawThermalCostSegment": {
+      "description": "Intermediate type for a single cost segment.",
+      "properties": {
+        "capacity_mw": {
+          "description": "Generation capacity of this segment [MW].",
+          "format": "double",
+          "type": "number"
+        },
+        "cost_per_mwh": {
+          "description": "Marginal cost in this segment [$/`MWh`].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "capacity_mw",
+        "cost_per_mwh"
+      ],
+      "type": "object"
+    },
+    "RawThermalGeneration": {
+      "description": "Intermediate type for the generation bounds sub-object.",
+      "properties": {
+        "max_mw": {
+          "description": "Maximum generation (installed capacity) [MW].",
+          "format": "double",
+          "type": "number"
+        },
+        "min_mw": {
+          "description": "Minimum generation (minimum stable load) [MW].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_mw",
+        "max_mw"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level intermediate type for `thermals.json` (serde only, not re-exported).",
+  "properties": {
+    "$schema": {
+      "description": "`$schema` field — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "thermals": {
+      "description": "Array of thermal plant entries.",
+      "items": {
+        "$ref": "#/$defs/RawThermal"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "thermals"
+  ],
+  "title": "RawThermalFile",
+  "type": "object"
+}

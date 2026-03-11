@@ -27,20 +27,16 @@ use crate::LoadError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-// ── Top-level Config ─────────────────────────────────────────────────────────
-
 /// Top-level deserialized representation of `config.json`.
 ///
 /// All sections except `training` are optional; their defaults are applied by
 /// serde when the section is absent from the JSON.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Config {
     /// JSON schema URI — informational, not validated.
     #[serde(rename = "$schema")]
     pub schema: Option<String>,
-
-    /// Config format version (e.g. `"2.0.0"`).
-    pub version: Option<String>,
 
     /// Modeling options (inflow non-negativity treatment).
     #[serde(default)]
@@ -66,10 +62,9 @@ pub struct Config {
     pub exports: ExportsConfig,
 }
 
-// ── Modeling Configuration ───────────────────────────────────────────────────
-
 /// Modeling options (`config.json → modeling`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelingConfig {
     /// Strategy for handling non-negative inflow constraints.
     #[serde(default)]
@@ -79,6 +74,7 @@ pub struct ModelingConfig {
 /// Inflow non-negativity treatment settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InflowNonNegativityConfig {
     /// Method: `"none"` or `"penalty"`.
     pub method: String,
@@ -96,13 +92,12 @@ impl Default for InflowNonNegativityConfig {
     }
 }
 
-// ── Training Configuration ───────────────────────────────────────────────────
-
 /// Training parameters (`config.json → training`).
 ///
 /// `forward_passes` and `stopping_rules` are mandatory — the loader returns
 /// [`LoadError::SchemaError`] if either is absent.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TrainingConfig {
     /// Enable the training phase. When `false`, skip directly to simulation.
     #[serde(default = "TrainingConfig::default_enabled")]
@@ -158,6 +153,7 @@ impl TrainingConfig {
 
 /// Forward pass mode configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ForwardPassConfig {
     /// Forward pass type: `"default"` or other variants.
     #[serde(rename = "type")]
@@ -166,6 +162,7 @@ pub struct ForwardPassConfig {
 
 /// Cut selection settings (`config.json → training.cut_selection`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CutSelectionConfig {
     /// Enable cut pruning.
     #[serde(default)]
@@ -191,6 +188,7 @@ pub struct CutSelectionConfig {
 /// LP solver retry settings (`config.json → training.solver`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TrainingSolverConfig {
     /// Maximum solver retry attempts before propagating a hard error.
     pub retry_max_attempts: u32,
@@ -207,8 +205,6 @@ impl Default for TrainingSolverConfig {
         }
     }
 }
-
-// ── Stopping Rules ───────────────────────────────────────────────────────────
 
 /// Deserialized configuration for one entry in `training.stopping_rules[]`.
 ///
@@ -229,6 +225,7 @@ impl Default for TrainingSolverConfig {
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StoppingRuleConfig {
     /// Stop after a fixed number of iterations. **Mandatory** — every rule set must
     /// contain at least one `iteration_limit` rule.
@@ -263,10 +260,9 @@ pub enum StoppingRuleConfig {
     },
 }
 
-// ── Upper-Bound Evaluation ───────────────────────────────────────────────────
-
 /// Upper-bound evaluation settings (`config.json → upper_bound_evaluation`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UpperBoundEvaluationConfig {
     /// Enable vertex-based inner approximation for upper bound computation.
     #[serde(default)]
@@ -287,6 +283,7 @@ pub struct UpperBoundEvaluationConfig {
 
 /// Lipschitz constant settings for inner approximation.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LipschitzConfig {
     /// Computation mode: `"auto"`.
     #[serde(default)]
@@ -301,11 +298,10 @@ pub struct LipschitzConfig {
     pub scale_factor: Option<f64>,
 }
 
-// ── Policy Configuration ─────────────────────────────────────────────────────
-
 /// Policy directory settings (`config.json → policy`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PolicyConfig {
     /// Directory for policy data (cuts, states, vertices, basis).
     pub path: String,
@@ -333,6 +329,7 @@ impl Default for PolicyConfig {
 
 /// Checkpoint settings (`config.json → policy.checkpointing`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CheckpointingConfig {
     /// Enable periodic checkpointing.
     #[serde(default)]
@@ -355,11 +352,10 @@ pub struct CheckpointingConfig {
     pub compress: Option<bool>,
 }
 
-// ── Simulation Configuration ─────────────────────────────────────────────────
-
 /// Post-training simulation settings (`config.json → simulation`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SimulationConfig {
     /// Enable post-training simulation.
     pub enabled: bool,
@@ -400,6 +396,7 @@ impl Default for SimulationConfig {
 /// Sampling scheme for the post-training simulation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SimulationSamplingConfig {
     /// Scheme type: `"in_sample"`, `"out_of_sample"`, or `"external"`.
     #[serde(rename = "type")]
@@ -414,8 +411,6 @@ impl Default for SimulationSamplingConfig {
     }
 }
 
-// ── Exports Configuration ────────────────────────────────────────────────────
-
 /// Export flags controlling which outputs are written to disk
 /// (`config.json → exports`).
 ///
@@ -425,6 +420,7 @@ impl Default for SimulationSamplingConfig {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExportsConfig {
     /// Export training summary metrics.
     pub training: bool,
@@ -465,8 +461,6 @@ impl Default for ExportsConfig {
         }
     }
 }
-
-// ── parse_config ─────────────────────────────────────────────────────────────
 
 /// Load and validate `config.json` from `path`.
 ///
@@ -575,22 +569,18 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    // ── helpers ──
-
     fn write_config(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(content.as_bytes()).unwrap();
         f
     }
 
-    // ── unit tests ──
-
     /// AC-1: minimal config returns Ok with correct forward_passes and all
     /// optional sections at their default values.
     #[test]
     fn test_parse_minimal_config() {
         let f = write_config(
-            r#"{"version": "2.0.0", "training": {"seed": 42, "forward_passes": 192, "stopping_rules": [{"type": "iteration_limit", "limit": 50}]}}"#,
+            r#"{"training": {"seed": 42, "forward_passes": 192, "stopping_rules": [{"type": "iteration_limit", "limit": 50}]}}"#,
         );
         let cfg = parse_config(f.path()).unwrap();
 
@@ -668,8 +658,7 @@ mod tests {
     #[test]
     fn test_parse_full_config() {
         let json = r#"{
-          "$schema": "https://cobre.dev/schemas/v2/config.schema.json",
-          "version": "2.0.0",
+          "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
           "modeling": {
             "inflow_non_negativity": {
               "method": "penalty",
@@ -839,5 +828,58 @@ mod tests {
             matches!(err, LoadError::SchemaError { .. }),
             "expected SchemaError for unknown rule type, got: {err:?}"
         );
+    }
+
+    /// AC (ticket-007b): `Config` has no `version` field — the struct does not
+    /// expose `.version` and the field is not present after deserialization.
+    #[test]
+    fn test_config_has_no_version_field() {
+        let f = write_config(
+            r#"{"training": {"forward_passes": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        // The struct must not have a `version` field — verified by compilation.
+        // We also check that the $schema field is None when absent from JSON.
+        assert!(cfg.schema.is_none(), "schema should be None when absent");
+    }
+
+    /// AC (ticket-007b): JSON with `"$schema"` property is accepted and the field
+    /// value is stored correctly.
+    #[test]
+    fn test_schema_field_accepted() {
+        let f = write_config(
+            r#"{
+            "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+            "training": {
+                "forward_passes": 1,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 10}]
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(
+            cfg.schema.as_deref(),
+            Some("https://cobre-rs.github.io/cobre/schemas/config.schema.json"),
+            "schema field should be stored when present in JSON"
+        );
+    }
+
+    /// AC (ticket-007b): JSON that still contains a `"version"` property is
+    /// silently accepted because `Config` has no `deny_unknown_fields` and the
+    /// removed field is treated as an unknown key that serde ignores.
+    #[test]
+    fn test_legacy_version_field_silently_ignored() {
+        let f = write_config(
+            r#"{
+            "version": "1.0.0",
+            "training": {
+                "forward_passes": 1,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 10}]
+            }
+        }"#,
+        );
+        // Must parse successfully — backward compatibility for existing case dirs.
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.training.forward_passes, Some(1));
     }
 }

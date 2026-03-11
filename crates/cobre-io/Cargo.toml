@@ -12,6 +12,9 @@ readme = "README.md"
 keywords = ["power-systems", "energy", "io", "validation"]
 categories = ["science", "parser-implementations"]
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 cobre-core = { version = "0.1.0", path = "../cobre-core", features = ["serde"] }
 arrow = { version = "58", default-features = false, features = ["prettyprint"] }
@@ -19,6 +22,7 @@ chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
 parquet = { version = "58", default-features = false, features = ["arrow", "zstd"] }
 postcard = { version = "1", features = ["alloc"] }
+schemars = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

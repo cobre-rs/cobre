@@ -567,6 +567,7 @@ fn simulate_fixture(
         fx.stage_templates.n_hydros,
         &fx.stage_templates.zeta_per_stage,
         &fx.stage_templates.block_hours_per_stage,
+        None,
     )?;
 
     drop(result_tx);

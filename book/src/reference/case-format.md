@@ -7,6 +7,10 @@ a fully-validated `System` ready for the solver.
 For a description of how these files are parsed and validated, see
 [cobre-io](../crates/io.md).
 
+> JSON Schema files for all JSON input types are available on the
+> [Schemas](./schemas.md) page. Download them for use with your editor's JSON
+> Schema validation feature.
+
 ## Directory layout
 
 ```
@@ -98,15 +102,15 @@ sections are optional and fall back to documented defaults when absent.
 
 **Top-level sections:**
 
-| Section                  | Type   | Default      | Purpose                                        |
-| ------------------------ | ------ | ------------ | ---------------------------------------------- |
-| `version`                | string | `null`       | Config format version (informational)          |
-| `modeling`               | object | `{}`         | Inflow non-negativity treatment                |
-| `training`               | object | **required** | Iteration count, stopping rules, cut selection |
-| `upper_bound_evaluation` | object | `{}`         | Inner approximation upper-bound settings       |
-| `policy`                 | object | fresh mode   | Policy directory path and warm-start mode      |
-| `simulation`             | object | disabled     | Post-training simulation settings              |
-| `exports`                | object | all enabled  | Output file selection flags                    |
+| Section                  | Type   | Default      | Purpose                                                           |
+| ------------------------ | ------ | ------------ | ----------------------------------------------------------------- |
+| `$schema`                | string | `null`       | JSON Schema URI for editor validation (ignored during processing) |
+| `modeling`               | object | `{}`         | Inflow non-negativity treatment                                   |
+| `training`               | object | **required** | Iteration count, stopping rules, cut selection                    |
+| `upper_bound_evaluation` | object | `{}`         | Inner approximation upper-bound settings                          |
+| `policy`                 | object | fresh mode   | Policy directory path and warm-start mode                         |
+| `simulation`             | object | disabled     | Post-training simulation settings                                 |
+| `exports`                | object | all enabled  | Output file selection flags                                       |
 
 **`modeling` section:**
 
@@ -200,6 +204,7 @@ Each entry has a `"type"` discriminator. Valid types:
 
 ```json
 {
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
   "training": {
     "forward_passes": 192,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]
@@ -240,6 +245,7 @@ have `depth_mw: null` (unbounded).
 
 ```json
 {
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/penalties.schema.json",
   "bus": {
     "deficit_segments": [
       { "depth_mw": 500.0, "cost": 1000.0 },

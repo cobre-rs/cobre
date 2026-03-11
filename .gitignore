@@ -32,8 +32,6 @@ plans/
 # Examples
 examples/**/output
 
-# Terminal recording output (generated artifacts; scripts and tape files are tracked)
-recordings/*.gif
-recordings/*.svg
-recordings/*.cast
+# Terminal recording temporary files
 recordings/demo/
+__pycache__/

@@ -98,6 +98,10 @@ Key design decisions:
 
 ## Quick Start
 
+<p align="center">
+  <img src="recordings/quickstart.gif" alt="Quick Start Demo" width="800"/>
+</p>
+
 > **Warning:** Cobre v0.1 is experimental. The API and case format are not stable yet.
 
 ```bash

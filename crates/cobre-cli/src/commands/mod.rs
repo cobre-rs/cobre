@@ -7,5 +7,6 @@
 pub mod init;
 pub mod report;
 pub mod run;
+pub mod schema;
 pub mod validate;
 pub mod version;

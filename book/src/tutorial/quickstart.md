@@ -7,6 +7,8 @@ enough to run in seconds, complete enough to demonstrate every stage of the work
 
 If you have not installed Cobre yet, start with [Installation](./installation.md).
 
+![Quick Start Demo](../images/quickstart.gif)
+
 ---
 
 ## Step 1: Scaffold a Case Directory

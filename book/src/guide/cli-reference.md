@@ -90,7 +90,9 @@ Valid case: 3 buses, 12 hydros, 8 thermals, 4 lines
   lines: 4
 ```
 
-On failure, prints each error prefixed with `error:` and exits with code 1.
+On failure, prints each error prefixed with `error:` and exits with code 1:
+
+![Validation Error Demo](../images/validation-error.gif)
 
 ### Arguments
 

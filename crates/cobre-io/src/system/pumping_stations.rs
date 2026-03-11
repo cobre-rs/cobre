@@ -48,7 +48,8 @@ use crate::LoadError;
 
 /// Top-level intermediate type for `pumping_stations.json` (serde only, not re-exported).
 #[derive(Deserialize)]
-struct RawPumpingFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPumpingFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -58,7 +59,8 @@ struct RawPumpingFile {
 
 /// Intermediate type for a single pumping station entry.
 #[derive(Deserialize)]
-struct RawPumpingStation {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPumpingStation {
     /// Station identifier. Must be unique within the file.
     id: i32,
     /// Human-readable station name.
@@ -83,7 +85,8 @@ struct RawPumpingStation {
 
 /// Intermediate type for the nested flow bounds sub-object.
 #[derive(Deserialize)]
-struct RawPumpingFlow {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawPumpingFlow {
     /// Minimum pumped flow [m³/s].
     min_m3s: f64,
     /// Maximum pumped flow [m³/s].

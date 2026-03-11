@@ -1441,7 +1441,7 @@ mod tests {
     // ── Welford accumulator unit tests ───────────────────────────────────────
 
     /// Known dataset: `[2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]`
-    /// Expected: mean=5.0, variance=4.0, std_dev=2.0.
+    /// Expected: mean=5.0, variance=4.0, `std_dev`=2.0.
     #[test]
     fn welford_known_dataset_mean_variance_std() {
         let values = [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
@@ -1466,7 +1466,7 @@ mod tests {
         );
     }
 
-    /// Single value: mean equals that value, std_dev=0.0, CI half-width=0.0.
+    /// Single value: mean equals that value, `std_dev`=0.0, CI half-width=0.0.
     #[test]
     fn welford_single_value_no_variance() {
         let mut acc = super::WelfordAccumulator::new();
@@ -1488,7 +1488,7 @@ mod tests {
         );
     }
 
-    /// Zero updates: mean=0.0, std_dev=0.0.
+    /// Zero updates: mean=0.0, `std_dev`=0.0.
     #[test]
     fn welford_zero_updates() {
         let acc = super::WelfordAccumulator::new();

@@ -121,6 +121,7 @@ fn read_json_file(path: &std::path::Path) -> PyResult<serde_json::Value> {
 /// df = polars.read_parquet(result["training"]["convergence_path"])
 /// ```
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)]
 pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
     // Canonicalize to get absolute paths even if a relative path is given.
     let output_dir = output_dir.canonicalize().map_err(|e| {
@@ -234,6 +235,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
 ///     print(row["iteration"], row["lower_bound"], row["upper_bound_mean"])
 /// ```
 #[pyfunction]
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 pub fn load_convergence(py: Python<'_>, output_dir: PathBuf) -> PyResult<PyObject> {
     let output_dir = output_dir.canonicalize().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

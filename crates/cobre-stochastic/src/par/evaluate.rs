@@ -1,8 +1,9 @@
-//! PAR(p) inflow evaluation functions.
+//! PAR(p) inflow evaluation and inverse functions.
 //!
 //! This module provides functions for evaluating the Periodic Autoregressive
-//! model equation in the forward direction: computing the inflow value at a
-//! given stage from the current lag state and a noise realisation.
+//! model equation in both directions: computing the inflow value at a given
+//! stage from the current lag state and a noise realisation (forward), and
+//! solving for the noise value that produces a desired target inflow (inverse).
 //!
 //! ## PAR inflow equation
 //!
@@ -179,55 +180,62 @@ pub fn evaluate_par_inflows(
     }
 }
 
-/// Compute the noise value `eta_min` that makes the PAR(p) inflow exactly zero
-/// for a single hydro.
+/// Solve the PAR(p) equation for the noise value `η` that produces a given
+/// target inflow.
 ///
-/// Derived by setting `a_h = 0` in the PAR equation and solving for `eta`:
+/// Derived by setting `a_h = target` in the PAR equation and solving for `η`:
 ///
 /// ```text
-/// eta_min = -(deterministic_base + sum_{l=0}^{order-1} psi[l] * lags[l]) / sigma
+/// η = (target - deterministic_base - Σ psi[l] * lags[l]) / sigma
 /// ```
 ///
-/// When `sigma == 0.0`, noise has no effect on the inflow. Any noise value is
-/// equally valid (or invalid), so `f64::NEG_INFINITY` is returned to indicate
-/// that the caller may use any noise without worrying about the truncation bound.
+/// Common use cases:
+/// - **Inflow truncation**: `target = 0.0` gives the noise floor that clamps
+///   inflow to zero.
+/// - **Residual recovery**: `target = historical_inflow` recovers the noise
+///   that would reproduce a historical observation.
+///
+/// When `sigma == 0.0`, noise has no effect on the inflow. `f64::NEG_INFINITY`
+/// is returned to indicate that no finite noise bound applies.
 ///
 /// # Parameters
 ///
-/// - `deterministic_base` — the precomputed `b_{h,m(t)} = mu_m - sum psi_{m,l} * mu_{m-l}`
+/// - `deterministic_base` — the precomputed `b_{h,m(t)} = mu_m - Σ psi_{m,l} * mu_{m-l}`
 /// - `psi` — AR coefficients in original units; only `psi[0..order]` are used
 /// - `order` — number of meaningful entries in `psi` (the AR order)
 /// - `lags` — observed inflow values at lags 1..p; must have `lags.len() >= order`
 /// - `sigma` — residual standard deviation
+/// - `target` — desired inflow value to solve for
 ///
 /// # Examples
 ///
-/// AR(1) — known truncation noise:
+/// Solve for noise that produces zero inflow (truncation):
 ///
 /// ```
-/// use cobre_stochastic::compute_truncation_noise;
+/// use cobre_stochastic::solve_par_noise;
 ///
-/// // eta_min = -(70.0 + 0.48 * 90.0) / 28.62 = -(70.0 + 43.2) / 28.62
-/// let eta_min = compute_truncation_noise(70.0, &[0.48], 1, &[90.0], 28.62);
+/// // η = (0.0 - 70.0 - 0.48 * 90.0) / 28.62
+/// let eta = solve_par_noise(70.0, &[0.48], 1, &[90.0], 28.62, 0.0);
 /// let expected = -(70.0 + 0.48 * 90.0) / 28.62;
-/// assert!((eta_min - expected).abs() < 1e-10);
+/// assert!((eta - expected).abs() < 1e-10);
 /// ```
 ///
 /// Zero sigma returns `f64::NEG_INFINITY`:
 ///
 /// ```
-/// use cobre_stochastic::compute_truncation_noise;
+/// use cobre_stochastic::solve_par_noise;
 ///
-/// let eta_min = compute_truncation_noise(100.0, &[0.5], 1, &[50.0], 0.0);
-/// assert_eq!(eta_min, f64::NEG_INFINITY);
+/// let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 0.0);
+/// assert_eq!(eta, f64::NEG_INFINITY);
 /// ```
 #[must_use]
-pub fn compute_truncation_noise(
+pub fn solve_par_noise(
     deterministic_base: f64,
     psi: &[f64],
     order: usize,
     lags: &[f64],
     sigma: f64,
+    target: f64,
 ) -> f64 {
     if sigma == 0.0 {
         return f64::NEG_INFINITY;
@@ -242,12 +250,13 @@ pub fn compute_truncation_noise(
     for l in 0..order {
         deterministic_inflow += psi[l] * lags[l];
     }
-    -deterministic_inflow / sigma
+    (target - deterministic_inflow) / sigma
 }
 
-/// Compute noise truncation thresholds for all hydros at a given stage.
+/// Solve the PAR(p) equation for all hydros at a given stage, computing the
+/// noise value that produces each hydro's target inflow.
 ///
-/// Writes `eta_min` for each hydro into `output[0..n_hydros]`. Does not
+/// Writes the solved noise values into `output[0..n_hydros]`. Does not
 /// allocate. The `lag_matrix` uses the same layout as [`evaluate_par_inflows`]:
 /// indexed as `[lag * n_hydros + hydro]`.
 ///
@@ -257,14 +266,15 @@ pub fn compute_truncation_noise(
 /// - `stage` — 0-based stage index (must be `< par_lp.n_stages()`)
 /// - `lag_matrix` — flat lag array, length `max_order * n_hydros`, indexed
 ///   as `[lag * n_hydros + hydro]`
-/// - `output` — output buffer; filled with `eta_min` values, length `n_hydros`
+/// - `targets` — desired inflow values per hydro, length `n_hydros`
+/// - `output` — output buffer; filled with solved noise values, length `n_hydros`
 ///
 /// # Examples
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
 /// use cobre_stochastic::par::precompute::PrecomputedParLp;
-/// use cobre_stochastic::{compute_truncation_noise, compute_truncation_noises};
+/// use cobre_stochastic::{solve_par_noise, solve_par_noises};
 /// use chrono::NaiveDate;
 ///
 /// let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -288,18 +298,26 @@ pub fn compute_truncation_noise(
 /// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
+/// let targets = vec![0.0]; // solve for zero inflow (truncation)
 /// let mut output = vec![0.0];
-/// compute_truncation_noises(&par_lp, 0, &lag_matrix, &mut output);
-/// // eta_min = -100.0 / 30.0
+/// solve_par_noises(&par_lp, 0, &lag_matrix, &targets, &mut output);
+/// // η = (0.0 - 100.0) / 30.0
 /// assert!((output[0] - (-100.0 / 30.0)).abs() < 1e-10);
 /// ```
-pub fn compute_truncation_noises(
+pub fn solve_par_noises(
     par_lp: &PrecomputedParLp,
     stage: usize,
     lag_matrix: &[f64],
+    targets: &[f64],
     output: &mut [f64],
 ) {
     let n_hydros = par_lp.n_hydros();
+    debug_assert!(
+        targets.len() == n_hydros,
+        "targets.len() ({}) must equal n_hydros ({})",
+        targets.len(),
+        n_hydros
+    );
     debug_assert!(
         output.len() == n_hydros,
         "output.len() ({}) must equal n_hydros ({})",
@@ -322,7 +340,7 @@ pub fn compute_truncation_noises(
         for l in 0..order {
             deterministic_inflow += psi[l] * lag_matrix[l * n_hydros + h];
         }
-        output[h] = -deterministic_inflow / sigma;
+        output[h] = (targets[h] - deterministic_inflow) / sigma;
     }
 }
 
@@ -342,10 +360,7 @@ mod tests {
         EntityId,
     };
 
-    use super::{
-        compute_truncation_noise, compute_truncation_noises, evaluate_par_inflow,
-        evaluate_par_inflows,
-    };
+    use super::{evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises};
     use crate::par::precompute::PrecomputedParLp;
 
     fn dummy_date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -653,41 +668,41 @@ mod tests {
     }
 
     #[test]
-    fn truncation_ar1_acceptance_criterion() {
-        // eta_min = -(70.0 + 0.48 * 90.0) / 28.62 = -113.2 / 28.62
+    fn solve_noise_ar1_for_zero_target() {
+        // η = (0.0 - 70.0 - 0.48 * 90.0) / 28.62 = -113.2 / 28.62
         let expected = -(70.0_f64 + 0.48 * 90.0) / 28.62;
-        let eta_min = compute_truncation_noise(70.0, &[0.48], 1, &[90.0], 28.62);
+        let eta = solve_par_noise(70.0, &[0.48], 1, &[90.0], 28.62, 0.0);
         assert!(
-            (eta_min - expected).abs() < 1e-10,
-            "AR(1) acceptance criterion: expected {expected}, got {eta_min}"
+            (eta - expected).abs() < 1e-10,
+            "AR(1) zero target: expected {expected}, got {eta}"
         );
     }
 
     #[test]
-    fn truncation_roundtrip_makes_inflow_zero() {
-        // Given eta_min, evaluate_par_inflow(..., eta_min) must be 0.0 within 1e-10.
+    fn solve_noise_roundtrip_zero_target() {
+        // Given η from solve_par_noise(..., 0.0), evaluate_par_inflow(..., η) must be 0.0.
         let det_base = 70.0_f64;
         let psi = [0.48_f64];
         let lags = [90.0_f64];
         let sigma = 28.62_f64;
 
-        let eta_min = compute_truncation_noise(det_base, &psi, 1, &lags, sigma);
-        let inflow = evaluate_par_inflow(det_base, &psi, 1, &lags, sigma, eta_min);
+        let eta = solve_par_noise(det_base, &psi, 1, &lags, sigma, 0.0);
+        let inflow = evaluate_par_inflow(det_base, &psi, 1, &lags, sigma, eta);
         assert!(
             inflow.abs() < 1e-10,
-            "roundtrip: inflow with eta_min must be 0.0, got {inflow}"
+            "roundtrip: inflow with solved η must be 0.0, got {inflow}"
         );
     }
 
     #[test]
-    fn truncation_roundtrip_ar2() {
+    fn solve_noise_roundtrip_ar2() {
         let det_base = 50.0_f64;
         let psi = [0.4_f64, 0.2];
         let lags = [80.0_f64, 60.0];
         let sigma = 20.0_f64;
 
-        let eta_min = compute_truncation_noise(det_base, &psi, 2, &lags, sigma);
-        let inflow = evaluate_par_inflow(det_base, &psi, 2, &lags, sigma, eta_min);
+        let eta = solve_par_noise(det_base, &psi, 2, &lags, sigma, 0.0);
+        let inflow = evaluate_par_inflow(det_base, &psi, 2, &lags, sigma, eta);
         assert!(
             inflow.abs() < 1e-10,
             "AR(2) roundtrip: expected 0.0, got {inflow}"
@@ -695,57 +710,74 @@ mod tests {
     }
 
     #[test]
-    fn truncation_ar0_case() {
-        // eta_min = -deterministic_base / sigma
+    fn solve_noise_roundtrip_nonzero_target() {
+        // Solve for a non-zero target and verify roundtrip.
+        let det_base = 70.0_f64;
+        let psi = [0.48_f64];
+        let lags = [90.0_f64];
+        let sigma = 28.62_f64;
+        let target = 42.0_f64;
+
+        let eta = solve_par_noise(det_base, &psi, 1, &lags, sigma, target);
+        let inflow = evaluate_par_inflow(det_base, &psi, 1, &lags, sigma, eta);
+        assert!(
+            (inflow - target).abs() < 1e-10,
+            "roundtrip with target={target}: expected {target}, got {inflow}"
+        );
+    }
+
+    #[test]
+    fn solve_noise_ar0_case() {
+        // η = (0.0 - deterministic_base) / sigma
         let det_base = 120.0_f64;
         let sigma = 40.0_f64;
         let expected = -det_base / sigma;
-        let eta_min = compute_truncation_noise(det_base, &[], 0, &[], sigma);
+        let eta = solve_par_noise(det_base, &[], 0, &[], sigma, 0.0);
         assert!(
-            (eta_min - expected).abs() < 1e-10,
-            "AR(0): expected {expected}, got {eta_min}"
+            (eta - expected).abs() < 1e-10,
+            "AR(0): expected {expected}, got {eta}"
         );
     }
 
     #[test]
-    fn truncation_zero_sigma_returns_neg_infinity() {
-        let eta_min = compute_truncation_noise(100.0, &[0.5], 1, &[50.0], 0.0);
+    fn solve_noise_zero_sigma_returns_neg_infinity() {
+        let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 0.0);
         assert!(
-            eta_min.is_infinite() && eta_min.is_sign_negative(),
-            "zero sigma: expected NEG_INFINITY, got {eta_min}"
+            eta.is_infinite() && eta.is_sign_negative(),
+            "zero sigma: expected NEG_INFINITY, got {eta}"
         );
     }
 
     #[test]
-    fn truncation_positive_deterministic_inflow_gives_negative_eta_min() {
+    fn solve_noise_positive_deterministic_gives_negative_eta_for_zero() {
         // Positive deterministic inflow → need large negative noise to reach zero.
         let det_base = 100.0_f64;
         let sigma = 30.0_f64;
-        let eta_min = compute_truncation_noise(det_base, &[], 0, &[], sigma);
+        let eta = solve_par_noise(det_base, &[], 0, &[], sigma, 0.0);
         assert!(
-            eta_min < 0.0,
-            "positive deterministic inflow: eta_min must be negative, got {eta_min}"
+            eta < 0.0,
+            "positive deterministic inflow: η for zero target must be negative, got {eta}"
         );
     }
 
     #[test]
-    fn truncation_negative_deterministic_inflow_gives_positive_eta_min() {
-        // Negative deterministic inflow → need positive noise to push inflow up to zero.
-        // det_base = -50.0, no lags, sigma = 20.0 → eta_min = -(-50.0) / 20.0 = 2.5
-        let eta_min = compute_truncation_noise(-50.0, &[], 0, &[], 20.0);
+    fn solve_noise_negative_deterministic_gives_positive_eta_for_zero() {
+        // Negative deterministic inflow → need positive noise to reach zero.
+        // η = (0.0 - (-50.0)) / 20.0 = 2.5
+        let eta = solve_par_noise(-50.0, &[], 0, &[], 20.0, 0.0);
         assert!(
-            eta_min > 0.0,
-            "negative deterministic inflow: eta_min must be positive, got {eta_min}"
+            eta > 0.0,
+            "negative deterministic inflow: η for zero target must be positive, got {eta}"
         );
-        assert!((eta_min - 2.5).abs() < 1e-10, "expected 2.5, got {eta_min}");
+        assert!((eta - 2.5).abs() < 1e-10, "expected 2.5, got {eta}");
     }
 
     // -----------------------------------------------------------------------
-    // compute_truncation_noises batch unit tests
+    // solve_par_noises batch unit tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn batch_truncation_matches_single_hydro_at_stage_0() {
+    fn batch_solve_matches_single_hydro_at_stage_0() {
         let par_lp = make_two_hydro_three_stage_par();
         let n_hydros = par_lp.n_hydros();
 
@@ -754,30 +786,33 @@ mod tests {
         let lag0_h1 = 58.0_f64;
         let lag1_h0 = 78.0_f64;
         let lag_matrix = vec![lag0_h0, lag0_h1, lag1_h0, 0.0];
+        let targets = vec![0.0_f64; n_hydros];
 
         let mut output = vec![0.0_f64; n_hydros];
-        compute_truncation_noises(&par_lp, 0, &lag_matrix, &mut output);
+        solve_par_noises(&par_lp, 0, &lag_matrix, &targets, &mut output);
 
         // Per-hydro single-call references.
         let order_h0 = par_lp.order(0);
         let lags_for_h0: Vec<f64> = (0..order_h0).map(|l| lag_matrix[l * n_hydros]).collect();
-        let expected_h0 = compute_truncation_noise(
+        let expected_h0 = solve_par_noise(
             par_lp.deterministic_base(0, 0),
             par_lp.psi_slice(0, 0),
             order_h0,
             &lags_for_h0,
             par_lp.sigma(0, 0),
+            0.0,
         );
         let order_h1 = par_lp.order(1);
         let lags_for_h1: Vec<f64> = (0..order_h1)
             .map(|l| lag_matrix[l * n_hydros + 1])
             .collect();
-        let expected_h1 = compute_truncation_noise(
+        let expected_h1 = solve_par_noise(
             par_lp.deterministic_base(0, 1),
             par_lp.psi_slice(0, 1),
             order_h1,
             &lags_for_h1,
             par_lp.sigma(0, 1),
+            0.0,
         );
 
         assert!(
@@ -793,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_truncation_roundtrip_makes_all_inflows_zero() {
+    fn batch_solve_roundtrip_makes_all_inflows_hit_target() {
         let par_lp = make_two_hydro_three_stage_par();
         let n_hydros = par_lp.n_hydros();
 
@@ -803,17 +838,42 @@ mod tests {
             0.0,  // lag1, hydro 3 (unused for AR(1))
             0.0,  // lag1, hydro 5 (unused for AR(1))
         ];
+        let targets = vec![0.0_f64; n_hydros];
 
-        let mut eta_min = vec![0.0_f64; n_hydros];
-        compute_truncation_noises(&par_lp, 1, &lag_matrix, &mut eta_min);
+        let mut eta = vec![0.0_f64; n_hydros];
+        solve_par_noises(&par_lp, 1, &lag_matrix, &targets, &mut eta);
 
         let mut inflows = vec![0.0_f64; n_hydros];
-        evaluate_par_inflows(&par_lp, 1, &lag_matrix, &eta_min, &mut inflows);
+        evaluate_par_inflows(&par_lp, 1, &lag_matrix, &eta, &mut inflows);
 
         for (h, &inflow) in inflows.iter().enumerate() {
             assert!(
-                inflow.abs() < 1e-10,
-                "batch roundtrip: h={h} inflow must be 0.0, got {inflow}"
+                (inflow - targets[h]).abs() < 1e-10,
+                "batch roundtrip: h={h} inflow must be {}, got {inflow}",
+                targets[h]
+            );
+        }
+    }
+
+    #[test]
+    fn batch_solve_roundtrip_nonzero_targets() {
+        let par_lp = make_two_hydro_three_stage_par();
+        let n_hydros = par_lp.n_hydros();
+
+        let lag_matrix = vec![85.0, 55.0, 0.0, 0.0];
+        let targets = vec![42.0_f64, 17.5_f64];
+
+        let mut eta = vec![0.0_f64; n_hydros];
+        solve_par_noises(&par_lp, 1, &lag_matrix, &targets, &mut eta);
+
+        let mut inflows = vec![0.0_f64; n_hydros];
+        evaluate_par_inflows(&par_lp, 1, &lag_matrix, &eta, &mut inflows);
+
+        for (h, &inflow) in inflows.iter().enumerate() {
+            assert!(
+                (inflow - targets[h]).abs() < 1e-10,
+                "batch roundtrip nonzero: h={h} expected {}, got {inflow}",
+                targets[h]
             );
         }
     }

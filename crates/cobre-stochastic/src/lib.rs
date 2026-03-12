@@ -48,7 +48,7 @@ pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
 pub use par::{
-    compute_truncation_noise, compute_truncation_noises, evaluate_par_inflow, evaluate_par_inflows,
+    evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises,
     validate_par_parameters, ParValidationReport, ParWarning, PrecomputedParLp,
 };
 pub use sampling::insample::sample_forward;

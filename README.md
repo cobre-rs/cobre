@@ -10,6 +10,8 @@
   <a href="https://github.com/cobre-rs/cobre/actions/workflows/ci.yml"><img src="https://github.com/cobre-rs/cobre/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://codecov.io/gh/cobre-rs/cobre"><img src="https://codecov.io/gh/cobre-rs/cobre/branch/main/graph/badge.svg" alt="Coverage"/></a>
   <a href="https://crates.io/crates/cobre"><img src="https://img.shields.io/crates/v/cobre.svg" alt="crates.io"/></a>
+  <a href="https://pypi.org/project/cobre-python/"><img alt="PyPI - Version" src="https://img.shields.io/pypi/v/cobre-python"></a>
+  <a href="https://pypi.org/project/cobre-python/"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/cobre-python"></a>
   <a href="https://docs.rs/cobre"><img src="https://docs.rs/cobre/badge.svg" alt="docs.rs"/></a>
   <a href="https://github.com/cobre-rs/cobre/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0"/></a>
 </p>

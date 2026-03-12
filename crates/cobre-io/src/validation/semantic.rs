@@ -42,10 +42,12 @@
 //! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |17  | Each `block_factors[j].block_id` matches a `Block.index` in its stage  | `scenarios/load_factors.json`                  | `BusinessRuleViolation`  |
+//! |18  | Load-factors entry for `(bus_id, stage_id)` with `std_mw == 0.0`       | `scenarios/load_factors.json`                  | `ModelQuality` (warning) |
 
 use std::collections::{HashMap, HashSet};
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
@@ -423,7 +425,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 /// Performs Layer 5b semantic validation: stage structure, penalty ordering,
 /// and scenario model rules.
 ///
-/// All 16 rules are checked regardless of failures in earlier rules — every
+/// All 18 rules are checked regardless of failures in earlier rules — every
 /// violation is collected before returning.  This function is infallible; it
 /// never returns a `Result`.  Errors are pushed to `ctx` as
 /// [`ErrorKind::InvalidValue`] or [`ErrorKind::BusinessRuleViolation`] entries;
@@ -438,6 +440,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 ///
 /// Rules 12-13 are only checked when `data.inflow_seasonal_stats` is non-empty.
 /// Rules 14-16 are only checked when `data.correlation` is `Some`.
+/// Rules 17-18 are only checked when `data.load_factors` is non-empty.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_stages_penalties_scenarios(
     data: &ParsedData,
@@ -448,6 +451,7 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_fpha_penalty_rule(data, ctx);
     check_scenario_models(data, ctx);
     check_correlation_matrices(data, ctx);
+    check_load_factor_consistency(data, ctx);
 }
 
 // ── Tolerances ────────────────────────────────────────────────────────────────
@@ -951,6 +955,88 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
+// ── Rules 17-18: Load factor consistency ─────────────────────────────────────
+
+/// Validates cross-file consistency between `load_factors.json` and
+/// `load_seasonal_stats.parquet`.
+///
+/// Rule 17: For every `LoadFactorEntry`, each `block_factors[j].block_id` must
+/// match a `Block.index` in the corresponding stage's `blocks` array.
+///
+/// Rule 18: A `LoadFactorEntry` for a `(bus_id, stage_id)` pair where
+/// `load_seasonal_stats` has `std_mw == 0.0` (deterministic load) produces a
+/// `ModelQuality` warning because block factors have no effect on deterministic
+/// loads.
+///
+/// Silently skips when `data.load_factors` is empty.
+fn check_load_factor_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.load_factors.is_empty() {
+        return;
+    }
+
+    // Build a map from stage_id to the set of valid block indices for that stage.
+    let stage_block_indices: HashMap<i32, HashSet<usize>> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| {
+            let indices: HashSet<usize> = s.blocks.iter().map(|b| b.index).collect();
+            (s.id, indices)
+        })
+        .collect();
+
+    // Build a map from (bus_id, stage_id) to std_mw for deterministic-load detection.
+    let load_std: HashMap<(i32, i32), f64> = data
+        .load_seasonal_stats
+        .iter()
+        .map(|row| ((row.bus_id.0, row.stage_id), row.std_mw))
+        .collect();
+
+    for (i, entry) in data.load_factors.iter().enumerate() {
+        // Rule 17: each block_id must match a Block.index in the entry's stage.
+        if let Some(valid_indices) = stage_block_indices.get(&entry.stage_id) {
+            for bf in &entry.block_factors {
+                let block_idx = usize::try_from(bf.block_id).unwrap_or(usize::MAX);
+                if !valid_indices.contains(&block_idx) {
+                    let sorted: Vec<usize> = {
+                        let mut v: Vec<usize> = valid_indices.iter().copied().collect();
+                        v.sort_unstable();
+                        v
+                    };
+                    ctx.add_error(
+                        ErrorKind::BusinessRuleViolation,
+                        "scenarios/load_factors.json",
+                        Some(format!("LoadFactorEntry[{i}]")),
+                        format!(
+                            "LoadFactorEntry[{i}] has block_id {} which is not in the block set \
+                             {sorted:?} for stage {}",
+                            bf.block_id, entry.stage_id
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Rule 18: warn when the (bus_id, stage_id) pair has std_mw == 0.0.
+        let key = (entry.bus_id.0, entry.stage_id);
+        if let Some(&std_mw) = load_std.get(&key) {
+            if std_mw == 0.0 {
+                ctx.add_warning(
+                    ErrorKind::ModelQuality,
+                    "scenarios/load_factors.json",
+                    Some(format!("LoadFactorEntry[{i}]")),
+                    format!(
+                        "LoadFactorEntry[{i}] (bus {}, stage {}) references a deterministic load \
+                         (std_mw == 0.0); block factors have no effect on deterministic loads",
+                        entry.bus_id.0, entry.stage_id
+                    ),
+                );
+            }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -963,7 +1049,6 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -974,13 +1059,14 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+        validation::{schema::ParsedData, ErrorKind, ValidationContext},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1649,7 +1735,7 @@ mod tests {
     fn test_fpha_negative_gamma_v() {
         let mut row = make_fpha_row(1, None, 0);
         row.gamma_v = -0.5; // invalid: must be > 0
-        // Add two more valid planes so rule 11 (count) doesn't trigger.
+                            // Add two more valid planes so rule 11 (count) doesn't trigger.
         let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
         let data = make_data(
             vec![make_hydro(1, None)],
@@ -1948,7 +2034,10 @@ mod tests {
 
     // ── Tests for validate_semantic_stages_penalties_scenarios ────────────────
 
-    use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
+    use crate::scenarios::{
+        BlockFactor, InflowArCoefficientRow, InflowSeasonalStatsRow, LoadFactorEntry,
+        LoadSeasonalStatsRow,
+    };
     use cobre_core::{
         entities::DeficitSegment,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
@@ -2831,6 +2920,154 @@ mod tests {
             !ctx.has_errors(),
             "empty correlation and inflow should produce no errors, got: {:?}",
             ctx.errors()
+        );
+    }
+
+    // ── Rules 17-18: Load factor consistency ─────────────────────────────────
+
+    /// Build a `StagesData` with one stage that has one block (index = 0).
+    fn make_stages_with_block(stage_id: i32) -> StagesData {
+        let mut stage = make_stage(stage_id);
+        stage.blocks = vec![Block {
+            index: 0,
+            name: "FLAT".to_string(),
+            duration_hours: 744.0,
+        }];
+        StagesData {
+            stages: vec![stage],
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: None,
+            },
+            scenario_source: ScenarioSource {
+                sampling_scheme: SamplingScheme::InSample,
+                seed: Some(42),
+                selection_mode: None,
+            },
+        }
+    }
+
+    /// `LoadFactorEntry` with a `block_id` not present in the stage's blocks
+    /// produces 1 `BusinessRuleViolation` error.
+    #[test]
+    fn test_5b_load_factors_invalid_block_id() {
+        let mut data = make_data_5b(
+            vec![],
+            make_stages_with_block(0),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // Stage 0 has block index 0 only; block_id=99 is invalid.
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 99,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected 1 BusinessRuleViolation, got: {errors:?}"
+        );
+        assert!(
+            errors[0].file.to_string_lossy().contains("load_factors"),
+            "error should reference load_factors.json"
+        );
+        assert!(
+            errors[0].message.contains("99"),
+            "message should mention invalid block_id 99"
+        );
+    }
+
+    /// `LoadFactorEntry` for a `(bus_id, stage_id)` where `load_seasonal_stats`
+    /// has `std_mw == 0.0` produces 1 `ModelQuality` warning.
+    #[test]
+    fn test_5b_load_factors_deterministic_bus_warning() {
+        let mut data = make_data_5b(
+            vec![],
+            make_stages_with_block(0),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // Bus 1, stage 0 with std_mw == 0.0 (deterministic load).
+        data.load_seasonal_stats = vec![LoadSeasonalStatsRow {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "deterministic load warning should not produce an error, got: {:?}",
+            ctx.errors()
+        );
+        let warnings = ctx.warnings();
+        let relevant: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality)
+            .filter(|w| w.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        assert_eq!(
+            relevant.len(),
+            1,
+            "expected 1 ModelQuality warning for load_factors.json, got: {warnings:?}"
+        );
+    }
+
+    /// Empty `load_factors` produces zero load-related diagnostics.
+    #[test]
+    fn test_5b_load_factors_empty_no_errors() {
+        let data = make_data_5b(
+            vec![],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // load_factors is already empty in make_data_5b
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let load_factor_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        let load_factor_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| w.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        assert!(
+            load_factor_errors.is_empty() && load_factor_warnings.is_empty(),
+            "empty load_factors should produce no load-related diagnostics; \
+             errors: {load_factor_errors:?}, warnings: {load_factor_warnings:?}"
         );
     }
 }

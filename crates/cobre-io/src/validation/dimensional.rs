@@ -483,9 +483,9 @@ mod tests {
     fn base_parsed_data() -> ParsedData {
         use crate::{
             config::{
-                Config, CutSelectionConfig, ExportsConfig, ModelingConfig, PolicyConfig,
-                SimulationConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
-                UpperBoundEvaluationConfig,
+                Config, CutSelectionConfig, EstimationConfig, ExportsConfig, ModelingConfig,
+                PolicyConfig, SimulationConfig, StoppingRuleConfig, TrainingConfig,
+                TrainingSolverConfig, UpperBoundEvaluationConfig,
             },
             stages::StagesData,
         };
@@ -512,6 +512,7 @@ mod tests {
             policy: PolicyConfig::default(),
             simulation: SimulationConfig::default(),
             exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
         };
 
         ParsedData {

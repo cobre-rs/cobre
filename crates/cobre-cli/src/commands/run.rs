@@ -21,6 +21,7 @@ use console::Term;
 use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
+use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
     SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
@@ -368,6 +369,10 @@ fn load_case_and_config(
     let system = cobre_io::load_case(&args.case_dir)?;
     let config_path = args.case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path)?;
+    let system =
+        estimate_from_history(system, &args.case_dir, &config).map_err(|e| CliError::Internal {
+            message: format!("estimation error: {e}"),
+        })?;
     let bcast = BroadcastConfig::from_config(&config, args.skip_simulation);
     Ok((system, bcast, config))
 }

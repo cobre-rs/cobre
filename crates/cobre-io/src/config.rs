@@ -60,6 +60,10 @@ pub struct Config {
     /// Export flags controlling which outputs are written to disk.
     #[serde(default)]
     pub exports: ExportsConfig,
+
+    /// Time series estimation settings for automatic model parameter fitting.
+    #[serde(default)]
+    pub estimation: EstimationConfig,
 }
 
 /// Modeling options (`config.json → modeling`).
@@ -407,6 +411,49 @@ impl Default for SimulationSamplingConfig {
     fn default() -> Self {
         Self {
             scheme_type: "in_sample".to_string(),
+        }
+    }
+}
+
+/// Order selection criterion for autoregressive model fitting.
+///
+/// Controls how the lag order is chosen when fitting a time series model.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum OrderSelectionMethod {
+    /// Use a fixed maximum lag order specified by `max_order`.
+    Fixed,
+    /// Select the lag order minimising the Akaike Information Criterion.
+    #[default]
+    Aic,
+}
+
+/// Time series estimation settings (`config.json → estimation`).
+///
+/// Controls automatic parameter estimation when historical inflow data is
+/// provided without explicit model statistics or coefficients.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct EstimationConfig {
+    /// Maximum lag order considered during autoregressive model fitting.
+    pub max_order: u32,
+
+    /// Order selection criterion: fixed maximum or information-criterion-based.
+    pub order_selection: OrderSelectionMethod,
+
+    /// Minimum number of observations required per (entity, season) group
+    /// to proceed with estimation. Groups below this threshold are skipped.
+    pub min_observations_per_season: u32,
+}
+
+impl Default for EstimationConfig {
+    fn default() -> Self {
+        Self {
+            max_order: 6,
+            order_selection: OrderSelectionMethod::Aic,
+            min_observations_per_season: 30,
         }
     }
 }
@@ -905,5 +952,60 @@ mod tests {
             (cfg.modeling.inflow_non_negativity.penalty_cost - 1000.0).abs() < f64::EPSILON,
             "penalty_cost should be the default 1000.0 when absent from JSON"
         );
+    }
+
+    /// AC-035-1: `config.json` without `"estimation"` section → all three defaults applied.
+    #[test]
+    fn test_estimation_config_defaults() {
+        let f = write_config(
+            r#"{"training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.estimation.max_order, 6);
+        assert!(
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Aic),
+            "default order_selection should be Aic"
+        );
+        assert_eq!(cfg.estimation.min_observations_per_season, 30);
+    }
+
+    /// AC-035-2: explicit estimation section round-trips all three fields.
+    #[test]
+    fn test_estimation_config_explicit() {
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
+            "estimation": {"max_order": 3, "order_selection": "fixed", "min_observations_per_season": 20}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.estimation.max_order, 3);
+        assert!(
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Fixed),
+            "order_selection should be Fixed"
+        );
+        assert_eq!(cfg.estimation.min_observations_per_season, 20);
+    }
+
+    /// AC-035-3: unknown `order_selection` value → `LoadError::SchemaError` with
+    /// message containing `"unknown variant"`.
+    #[test]
+    fn test_estimation_config_unknown_order_selection() {
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
+            "estimation": {"order_selection": "bogus"}
+        }"#,
+        );
+        let err = parse_config(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, .. } => {
+                assert!(
+                    message.contains("unknown variant"),
+                    "message should contain 'unknown variant', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
     }
 }

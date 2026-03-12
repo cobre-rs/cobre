@@ -55,7 +55,7 @@ pub mod system;
 pub mod validation;
 
 pub use broadcast::{deserialize_system, serialize_system};
-pub use config::{Config, parse_config};
+pub use config::{Config, EstimationConfig, OrderSelectionMethod, parse_config};
 pub use constraints::{
     BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry,
     GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow,
@@ -104,7 +104,7 @@ pub use scenarios::{
     parse_external_scenarios, parse_inflow_ar_coefficients, parse_inflow_history,
     parse_inflow_seasonal_stats, parse_load_factors, parse_load_seasonal_stats,
 };
-pub use stages::{StagesData, parse_stages};
+pub use stages::{StagesData, build_season_stage_map, parse_stages};
 pub use system::{
     load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
     parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,

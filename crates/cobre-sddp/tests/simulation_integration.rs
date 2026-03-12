@@ -430,6 +430,7 @@ fn make_config() -> Config {
             sampling_scheme: SimulationSamplingConfig::default(),
         },
         exports: ExportsConfig::default(),
+        estimation: cobre_io::EstimationConfig::default(),
     }
 }
 

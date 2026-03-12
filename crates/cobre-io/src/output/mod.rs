@@ -879,9 +879,10 @@ mod tests {
 
     fn make_config() -> Config {
         use crate::config::{
-            CheckpointingConfig, CutSelectionConfig, ExportsConfig, InflowNonNegativityConfig,
-            ModelingConfig, PolicyConfig, SimulationConfig, SimulationSamplingConfig,
-            StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+            CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
+            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, SimulationConfig,
+            SimulationSamplingConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
+            UpperBoundEvaluationConfig,
         };
         Config {
             schema: None,
@@ -916,6 +917,7 @@ mod tests {
                 sampling_scheme: SimulationSamplingConfig::default(),
             },
             exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
         }
     }
 }

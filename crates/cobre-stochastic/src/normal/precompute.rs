@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{EntityId, scenario::LoadModel, temporal::Stage};
+use cobre_core::{scenario::LoadModel, temporal::Stage, EntityId};
 
 use crate::StochasticError;
 
@@ -243,12 +243,12 @@ impl PrecomputedNormalLp {
     /// Panics if `stage >= n_stages` or `entity >= n_entities`.
     #[must_use]
     pub fn mean(&self, stage: usize, entity: usize) -> f64 {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             entity < self.n_entities,
             "entity index {entity} is out of bounds (n_entities = {})",
             self.n_entities
@@ -263,12 +263,12 @@ impl PrecomputedNormalLp {
     /// Panics if `stage >= n_stages` or `entity >= n_entities`.
     #[must_use]
     pub fn std(&self, stage: usize, entity: usize) -> f64 {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             entity < self.n_entities,
             "entity index {entity} is out of bounds (n_entities = {})",
             self.n_entities
@@ -287,17 +287,17 @@ impl PrecomputedNormalLp {
     /// `block >= max_blocks`.
     #[must_use]
     pub fn block_factor(&self, stage: usize, entity: usize, block: usize) -> f64 {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             entity < self.n_entities,
             "entity index {entity} is out of bounds (n_entities = {})",
             self.n_entities
         );
-        assert!(
+        debug_assert!(
             block < self.max_blocks,
             "block index {block} is out of bounds (max_blocks = {})",
             self.max_blocks
@@ -350,12 +350,12 @@ impl Default for PrecomputedNormalLp {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::LoadModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};

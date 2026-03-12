@@ -718,7 +718,7 @@ pub fn estimate_ar_coefficients(
                 // Bessel-corrected cross-covariance: divide by (N_m - 1).
                 #[allow(clippy::cast_precision_loss)]
                 let gamma = cross_sum / (valid_count - 1) as f64;
-                let rho = gamma / (stats_m.std * stats_lag.std);
+                let rho = (gamma / (stats_m.std * stats_lag.std)).clamp(-1.0, 1.0);
                 autocorrelations.push(rho);
             }
 

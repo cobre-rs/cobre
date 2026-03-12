@@ -89,6 +89,11 @@ pub fn estimate_from_history(
     let mut ctx = ValidationContext::new();
     let manifest = validate_structure(case_dir, &mut ctx);
 
+    // Abort early if structural validation found errors.
+    if ctx.into_result().is_err() {
+        return Ok(system);
+    }
+
     // ── Step 2: input path matrix ────────────────────────────────────────────
     if !manifest.scenarios_inflow_history_parquet {
         // No history file — nothing to estimate.
@@ -315,8 +320,10 @@ fn estimate_ar_with_aic(
             continue;
         }
 
-        // AIC selection.
-        let aic_result = select_order_aic(&ld.sigma2_per_order, n_obs);
+        // AIC selection. Use effective observation count: subtract the AR order
+        // since the earliest `order` observations lack lag predecessors.
+        let effective_n = n_obs.saturating_sub(actual_order);
+        let aic_result = select_order_aic(&ld.sigma2_per_order, effective_n);
         let selected = aic_result.selected_order;
 
         if selected < actual_order {

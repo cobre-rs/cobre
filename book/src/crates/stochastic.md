@@ -17,15 +17,18 @@ for deterministic noise generation.
 
 ## Module overview
 
-| Module        | Purpose                                                                                                   |
-| ------------- | --------------------------------------------------------------------------------------------------------- |
-| `par`         | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedParLp` cache  |
-| `noise`       | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`) |
-| `correlation` | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)         |
-| `tree`        | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)           |
-| `sampling`    | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage |
-| `context`     | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                  |
-| `error`       | `StochasticError` with five variants covering all failure domains of the stochastic layer                 |
+| Module          | Purpose                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedParLp` cache                             |
+| `par::evaluate` | PAR model forward evaluation (`evaluate_par_inflow`) and inverse noise solving (`solve_par_noise`)                                   |
+| `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, AIC order selection |
+| `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                            |
+| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormalLp` cache with stage-major layout                            |
+| `correlation`   | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                    |
+| `tree`          | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                      |
+| `sampling`      | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage                            |
+| `context`       | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                             |
+| `error`         | `StochasticError` with five variants covering all failure domains of the stochastic layer                                            |
 
 ## Architecture
 
@@ -164,6 +167,134 @@ from the tree by deriving a seed via `derive_forward_seed` and sampling a
 so the caller can both log which opening was chosen and immediately use the
 noise values.
 
+## PAR model evaluation
+
+The `par::evaluate` module provides two complementary functions for applying a
+fitted PAR(p) model to concrete state and noise values. Both operate on slices
+(no allocation) and are designed for repeated calls inside the iterative
+optimization loop.
+
+### `evaluate_par_inflow`
+
+Computes the inflow for a single hydro plant at a single stage:
+
+```text
+a_h = deterministic_base + Σ_{l=0}^{order-1} psi[l] * lags[l] + sigma * eta
+```
+
+where `deterministic_base` is the precomputed intercept `μ_m − Σ ψ_{m,l} μ_{m−l}`
+(stored in `PrecomputedParLp`), `psi[l]` are the AR coefficients in original
+units, `lags[l]` are the observed inflow values at lag positions 1..p, `sigma`
+is the residual standard deviation, and `eta` is the standardized noise draw.
+
+The returned value may be negative; truncation to a physical minimum (e.g.,
+zero) is the caller's responsibility.
+
+```rust,no_run
+use cobre_stochastic::evaluate_par_inflow;
+
+// AR(1): a_h = 70.0 + 0.48 * 90.0 + 28.62 * 0.5 = 127.51
+let a_h = evaluate_par_inflow(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
+```
+
+The batch variant `evaluate_par_inflows` fills an output slice for all hydro
+plants at a given stage in one call, reading from a lag matrix indexed as
+`[lag * n_hydros + hydro]` for cache-optimal access.
+
+### `solve_par_noise`
+
+The inverse function: given a target inflow, solve for the noise value `η` that
+produces it:
+
+```text
+η = (target − deterministic_base − Σ psi[l] * lags[l]) / sigma
+```
+
+A common use case is computing the truncation noise floor (the `η` at which
+the inflow would reach zero):
+
+```rust,no_run
+use cobre_stochastic::solve_par_noise;
+
+// Solve for η such that inflow = 0.0
+let eta = solve_par_noise(70.0, &[0.48], 1, &[90.0], 28.62, 0.0);
+```
+
+When `sigma == 0.0` (deterministic stage), `f64::NEG_INFINITY` is returned to
+indicate that no finite noise bound applies. The batch variant `solve_par_noises`
+fills an output slice for all hydros at a given stage.
+
+## Estimation pipeline
+
+The `par::fitting` module implements the complete pipeline for fitting PAR(p)
+model parameters from historical inflow observations. The pipeline consists of
+four steps, each a standalone function that can be composed independently.
+
+### Step 1: Seasonal statistics
+
+`estimate_seasonal_stats` groups historical observations by `(entity, season)`
+and computes the sample mean and Bessel-corrected standard deviation (N − 1
+divisor) for each group. Observations are matched to seasons via the stage
+table's `start_date` / `end_date` intervals.
+
+Input: `&[(EntityId, NaiveDate, f64)]` observation triples, sorted by
+`(entity_id, date)`. Output: `Vec<SeasonalStats>`, sorted by
+`(entity_id, stage_id)`.
+
+### Step 2: AR coefficient estimation
+
+`estimate_ar_coefficients` computes cross-seasonal autocorrelations from the
+historical observations and calls `levinson_durbin` internally to fit an AR(p)
+model of at most `max_order` for each `(entity, season)` pair.
+
+The cross-seasonal autocorrelation for season `m` at lag `l` is:
+
+```text
+γ_m(l) = (1 / (N_m − 1)) · Σ_{t: season(t)=m} (a_t − μ_m)(a_{t−l} − μ_{m−l})
+ρ_m(l) = γ_m(l) / (s_m · s_{m−l})
+```
+
+where `μ_m` and `s_m` come from the seasonal statistics and season indices
+wrap cyclically. Output: `Vec<ArCoefficientEstimate>`, each carrying the
+standardized AR coefficients ψ\*₁..ψ\*ₚ and the residual std ratio `σ_m / s_m`.
+
+### Step 3: Levinson-Durbin recursion
+
+`levinson_durbin` solves the Yule-Walker equations for an AR(p) process in
+O(p²) time without forming the full Toeplitz matrix. Given autocorrelations
+ρ(1)..ρ(p), it returns a `LevinsonDurbinResult` containing:
+
+- `coefficients` — fitted AR coefficients ψ\*₁..ψ\*ₚ
+- `sigma2_per_order` — prediction error variance at each intermediate order
+- `parcor` — partial autocorrelation (reflection) coefficients
+- `sigma2` — final prediction error variance
+
+The recursion is truncated if the prediction error variance drops to or below
+`f64::EPSILON`, handling near-singular autocorrelation sequences without
+returning an error.
+
+### Step 4: AIC order selection
+
+`select_order_aic` selects the AR order that minimises the Akaike Information
+Criterion:
+
+```text
+AIC(p) = N · ln(σ²_p) + 2p
+```
+
+where `N` is the number of historical observations for the season and `σ²_p`
+is the prediction error variance from `LevinsonDurbinResult::sigma2_per_order`.
+The white-noise baseline (order 0) has `AIC(0) = 0.0`. On ties the lower
+order wins (parsimony principle).
+
+### Step 5: Correlation estimation
+
+`estimate_correlation` computes the Pearson correlation matrix of PAR model
+residuals across entities. Residuals are the standardized deviations of
+historical observations from their seasonal means. The output is a
+`CorrelationModel` (from `cobre-core`) suitable for downstream Cholesky
+decomposition.
+
 ## Public types
 
 ### `StochasticContext`
@@ -181,6 +312,26 @@ deviations, original-unit AR coefficients (ψ), and intercept terms (base) in
 stage-major flat arrays (`Box<[f64]>`). Built via `PrecomputedParLp::build`.
 Accessors: `n_hydros()`, `n_stages()`, `max_order()`, `mean()`, `std()`,
 `base()`, `psi()`.
+
+### `PrecomputedNormalLp`
+
+Cache-friendly normal noise model data for LP RHS patching, analogous to
+`PrecomputedParLp` for entities following a simple i.i.d. Gaussian model
+(`x = μ + σ · f_b · ε`). Built once at initialization from raw `LoadModel`
+parameters via `PrecomputedNormalLp::build`. The three-dimensional factor
+array supports per-(stage, entity, block) scaling and defaults to `1.0` for
+any (stage, entity, block) combination not explicitly provided.
+
+Arrays use stage-major layout:
+
+```text
+mean[stage * n_entities + entity_idx]
+factors[stage * n_entities * max_blocks + entity_idx * max_blocks + block_idx]
+```
+
+Accessors: `n_stages()`, `n_entities()`, `max_blocks()`, `mean(stage, entity)`,
+`std(stage, entity)`, `block_factor(stage, entity, block)`. Implements `Default`
+as an empty sentinel for systems without normal-noise entities.
 
 ### `DecomposedCorrelation`
 
@@ -229,6 +380,33 @@ to `PrecomputedParLp::build`.
 
 A non-fatal PAR parameter warning. Carries the hydro ID, stage ID, and a
 human-readable description of the potential issue.
+
+### `SeasonalStats`
+
+Seasonal mean and standard deviation for one `(entity, season)` pair. Produced
+by `estimate_seasonal_stats` and consumed by AR coefficient estimation. Fields:
+`entity_id`, `stage_id` (the first stage whose season matches), `mean`, `std`
+(Bessel-corrected).
+
+### `ArCoefficientEstimate`
+
+Standardized AR coefficients for one `(entity, season)` pair, as produced by
+`estimate_ar_coefficients`. Fields: `hydro_id`, `season_id`, `coefficients`
+(ψ\*₁..ψ\*ₚ; empty for white noise), `residual_std_ratio` (`σ_m / s_m`,
+always in (0, 1]).
+
+### `LevinsonDurbinResult`
+
+Full output of the Levinson-Durbin recursion. Fields: `coefficients` (AR
+coefficients for the fitted order), `sigma2_per_order` (prediction error
+variance at each intermediate order, length = actual fitted order), `parcor`
+(partial autocorrelation coefficients), `sigma2` (final prediction error
+variance).
+
+### `AicSelectionResult`
+
+Output of `select_order_aic`. Fields: `selected_order` (0 for white noise),
+`aic_values` (one entry per candidate order from 0 to `p_max` inclusive).
 
 ### `GroupFactor`
 
@@ -327,11 +505,11 @@ substitution.
 
 ### `Box<[f64]>` for the no-resize invariant
 
-All fixed-size hot-path arrays in `PrecomputedParLp`, `OpeningTree`, and
-`CholeskyFactor` use `Box<[f64]>` rather than `Vec<f64>`. The boxed-slice
-type communicates that these arrays are immutable after construction, eliminates
-the capacity word from each allocation, and allows the optimizer to treat the
-length as a compile-time-stable bound.
+All fixed-size hot-path arrays in `PrecomputedParLp`, `PrecomputedNormalLp`,
+`OpeningTree`, and `CholeskyFactor` use `Box<[f64]>` rather than `Vec<f64>`.
+The boxed-slice type communicates that these arrays are immutable after
+construction, eliminates the capacity word from each allocation, and allows
+the optimizer to treat the length as a compile-time-stable bound.
 
 ## Feature flags
 
@@ -357,8 +535,10 @@ No external dependencies or system libraries are required. All dependencies
 
 ### Test suite overview
 
-The crate has 125 tests total: 105 unit tests, 5 conformance integration tests,
-4 reproducibility integration tests, and 11 doc-tests.
+The crate has 220 tests total covering unit tests, conformance integration
+tests, reproducibility integration tests, and doc-tests. New tests were added
+in v0.1.1 for the PAR evaluation functions, normal noise precomputation, and
+the estimation pipeline.
 
 ### Conformance suite (`tests/conformance.rs`)
 

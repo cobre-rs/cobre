@@ -14,12 +14,13 @@ cobre [--color <WHEN>] <SUBCOMMAND> [OPTIONS]
 
 ## Subcommands
 
-| Subcommand | Synopsis                         | Description                                                 |
-| ---------- | -------------------------------- | ----------------------------------------------------------- |
-| `run`      | `cobre run <CASE_DIR> [OPTIONS]` | Load, train, simulate, and write results                    |
-| `validate` | `cobre validate <CASE_DIR>`      | Validate a case directory and print a diagnostic report     |
-| `report`   | `cobre report <RESULTS_DIR>`     | Query results from a completed run and print JSON to stdout |
-| `version`  | `cobre version`                  | Print version, solver backend, and build information        |
+| Subcommand | Synopsis                         | Description                                                          |
+| ---------- | -------------------------------- | -------------------------------------------------------------------- |
+| `run`      | `cobre run <CASE_DIR> [OPTIONS]` | Load, train, simulate, and write results                             |
+| `validate` | `cobre validate <CASE_DIR>`      | Validate a case directory and print a diagnostic report              |
+| `report`   | `cobre report <RESULTS_DIR>`     | Query results from a completed run and print JSON to stdout          |
+| `summary`  | `cobre summary <OUTPUT_DIR>`     | Display the post-run summary table from a completed output directory |
+| `version`  | `cobre version`                  | Print version, solver backend, and build information                 |
 
 ---
 
@@ -159,6 +160,63 @@ status=$(cobre report /data/cases/hydro_study/output | jq -r '.status')
 if [ "$status" = "complete" ]; then
   echo "Training converged"
 fi
+```
+
+---
+
+## `cobre summary`
+
+Reads the training manifest and convergence log from a completed run's output
+directory and prints the same human-readable summary table that `cobre run`
+displays at the end of a study. This lets users inspect a past run without
+re-executing it.
+
+All output goes to stderr, matching the `cobre run` convention. stdout is
+reserved for machine-readable output (see `cobre report`).
+
+### File resolution
+
+| File                           | Required | Behaviour when absent                                            |
+| ------------------------------ | -------- | ---------------------------------------------------------------- |
+| `training/_manifest.json`      | Yes      | Exits with code 2 (I/O error)                                    |
+| `training/convergence.parquet` | No       | Falls back to zero-valued timing fields; gap comes from manifest |
+| `simulation/_manifest.json`    | No       | Simulation section is omitted from the output                    |
+
+### Output format
+
+```
+Training complete in 3m 42s (42 iterations, converged at iter 38)
+  Lower bound:  4.85000e4 $/stage
+  Upper bound:  4.90000e4 +/- 2.50000e2 $/stage
+  Gap:          1.0%
+  Cuts:         980000 active / 1250000 generated
+  LP solves:    84000
+
+Simulation complete in 0.0s (200 scenarios)
+  Completed: 198  Failed: 2
+```
+
+The simulation section is omitted when `simulation/_manifest.json` is absent
+(e.g., the run used `--skip-simulation`).
+
+### Arguments
+
+| Argument       | Type | Description                                          |
+| -------------- | ---- | ---------------------------------------------------- |
+| `<OUTPUT_DIR>` | Path | Path to the output directory produced by `cobre run` |
+
+### Options
+
+None.
+
+### Examples
+
+```bash
+# Print the summary for a completed run
+cobre summary /data/cases/hydro_study/output
+
+# Inspect a run that used a custom output directory
+cobre summary /data/results/run_001
 ```
 
 ---

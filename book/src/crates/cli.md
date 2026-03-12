@@ -7,13 +7,14 @@ into a single executable with a consistent user interface.
 
 ## Subcommands
 
-| Subcommand                   | Description                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| `cobre run <CASE_DIR>`       | Load a case, train an SDDP policy, optionally simulate, and write all results |
-| `cobre validate <CASE_DIR>`  | Run the 5-layer validation pipeline and print a structured diagnostic report  |
-| `cobre report <RESULTS_DIR>` | Read result manifests and print a machine-readable JSON summary to stdout     |
-| `cobre version`              | Print version, solver backend, communication backend, and build information   |
-| `cobre init <DIRECTORY>`     | Scaffold a new case directory from an embedded template                       |
+| Subcommand                   | Description                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `cobre run <CASE_DIR>`       | Load a case, train an SDDP policy, optionally simulate, and write all results       |
+| `cobre validate <CASE_DIR>`  | Run the 5-layer validation pipeline and print a structured diagnostic report        |
+| `cobre report <RESULTS_DIR>` | Read result manifests and print a machine-readable JSON summary to stdout           |
+| `cobre summary <OUTPUT_DIR>` | Display the human-readable post-run summary table from a completed output directory |
+| `cobre version`              | Print version, solver backend, communication backend, and build information         |
+| `cobre init <DIRECTORY>`     | Scaffold a new case directory from an embedded template                             |
 
 ## Exit Code Contract
 
@@ -37,6 +38,10 @@ schedulers by inspecting the process exit code.
 (both suppressed in `--quiet` mode). Error messages are always written to stderr.
 
 `cobre report` prints pretty-printed JSON to stdout, suitable for piping to `jq`.
+
+`cobre summary` prints the same human-readable summary table as `cobre run` to
+stderr, reading it from the files in the output directory rather than from a
+live run.
 
 ## `cobre init`
 

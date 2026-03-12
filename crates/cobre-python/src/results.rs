@@ -22,9 +22,10 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use arrow::array::{Array, BooleanArray, Float64Array, Int32Array, Int64Array, Int8Array};
+use arrow::array::{Array, BooleanArray, Float64Array, Int8Array, Int32Array, Int64Array};
 use arrow::datatypes::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use pyo3::BoundObject;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
@@ -475,11 +476,14 @@ fn arrow_value_to_py(py: Python<'_>, col: &dyn Array, i: usize) -> PyResult<Py<P
 }
 
 /// Convert a value to a Python object, mapping errors appropriately.
-fn into_py<T: pyo3::IntoPyObject>(py: Python<'_>, val: T) -> PyResult<Py<PyAny>> {
+fn into_py<'py, T>(py: Python<'py>, val: T) -> PyResult<Py<PyAny>>
+where
+    T: pyo3::IntoPyObject<'py>,
+    <T as pyo3::IntoPyObject<'py>>::Error: std::fmt::Display,
+{
     val.into_pyobject(py)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?
-        .unbind()
-        .into()
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+        .map(|b| b.into_any().unbind())
 }
 
 /// Convert a [`cobre_io::OutputError`] to an appropriate Python exception.

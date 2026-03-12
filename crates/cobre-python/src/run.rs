@@ -34,12 +34,12 @@ use cobre_io::output::simulation_writer::{
     NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
     StageWritePayload, ThermalWriteRecord,
 };
-use cobre_io::{write_results, ParquetWriterConfig};
+use cobre_io::{ParquetWriterConfig, write_results};
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, WorkspacePool,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SimulationConfig, SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool, build_stage_templates,
+    build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -363,8 +363,8 @@ fn write_policy_checkpoint(
     seed: u64,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        write_policy_checkpoint as io_write_policy_checkpoint, PolicyBasisRecord,
-        PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+        PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+        write_policy_checkpoint as io_write_policy_checkpoint,
     };
 
     let n_stages = fcf.pools.len();
@@ -693,6 +693,10 @@ fn run_inner(
             &inflow_method,
             noise_scale,
             n_hydros_lp,
+            n_load_buses,
+            load_balance_row_starts,
+            load_bus_indices,
+            &block_counts_per_stage,
             zeta_per_stage,
             block_hours_per_stage,
             Some(sim_event_tx),

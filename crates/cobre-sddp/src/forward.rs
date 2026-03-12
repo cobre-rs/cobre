@@ -62,15 +62,15 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, evaluate_par_inflows, sample_forward, solve_par_noises};
+use cobre_stochastic::{evaluate_par_inflows, sample_forward, solve_par_noises, StochasticContext};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
     TrajectoryRecord,
-    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -487,7 +487,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let (start_m, end_m) = partition(forward_passes, n_workers, w);
             let mut local_cost_sum = 0.0_f64;
             let mut local_cost_sum_sq = 0.0_f64;
-            let mut local_solve_count_before = ws.solver.statistics().solve_count;
+            let local_solve_count_before = ws.solver.statistics().solve_count;
 
             for (local_m, m) in (start_m..end_m).enumerate() {
                 // Global scenario index for deterministic seed derivation
@@ -721,18 +721,18 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardResult, SyncResult, build_cut_row_batch, partition, run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardResult, SyncResult,
     };
     use crate::{
+        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
-        workspace::{BasisStore, SolverWorkspace},
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ categories = ["science", "simulation", "mathematics"]
 
 [dependencies]
 cobre-core = { version = "0.1.0", path = "../cobre-core" }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 siphasher = "1"
 rand = "0.10"
 rand_distr = "0.6"

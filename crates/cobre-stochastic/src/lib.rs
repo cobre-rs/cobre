@@ -50,8 +50,10 @@ pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
 pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
 pub use par::{
-    ParValidationReport, ParWarning, PrecomputedParLp, evaluate_par_inflow, evaluate_par_inflows,
-    solve_par_noise, solve_par_noises, validate_par_parameters,
+    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedParLp,
+    SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par_inflow,
+    evaluate_par_inflows, levinson_durbin, solve_par_noise, solve_par_noises,
+    validate_par_parameters,
 };
 pub use sampling::insample::sample_forward;
 pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};

@@ -13,11 +13,20 @@
 //!   and invertibility conditions required for sound scenario generation
 //! - [`evaluate`] — evaluates the PAR(p) inflow equation (forward) and
 //!   solves for the noise that produces a target inflow (inverse)
+//! - [`fitting`] — Levinson-Durbin recursion for solving Yule-Walker
+//!   equations; provides AR coefficients and prediction error variances
+//!   for each intermediate order
 
 pub mod evaluate;
+pub mod fitting;
 pub mod precompute;
 pub mod validation;
 
 pub use evaluate::{evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises};
+pub use fitting::{
+    AicSelectionResult, ArCoefficientEstimate, LevinsonDurbinResult, SeasonalStats,
+    estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats, levinson_durbin,
+    select_order_aic,
+};
 pub use precompute::PrecomputedParLp;
 pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

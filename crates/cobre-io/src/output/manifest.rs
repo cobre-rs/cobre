@@ -347,6 +347,44 @@ pub fn write_metadata(path: &Path, metadata: &TrainingMetadata) -> Result<(), Ou
     write_json_atomic(path, metadata, "metadata")
 }
 
+/// Read a training manifest from `path`.
+///
+/// Reads the file at `path`, then deserializes the JSON content into a
+/// [`TrainingManifest`].
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] if the file cannot be read (e.g., not found).
+/// - [`OutputError::ManifestError`] if the file contains malformed JSON.
+pub fn read_training_manifest(path: &Path) -> Result<TrainingManifest, OutputError> {
+    read_json(path, "training")
+}
+
+/// Read a simulation manifest from `path`.
+///
+/// Reads the file at `path`, then deserializes the JSON content into a
+/// [`SimulationManifest`].
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] if the file cannot be read (e.g., not found).
+/// - [`OutputError::ManifestError`] if the file contains malformed JSON.
+pub fn read_simulation_manifest(path: &Path) -> Result<SimulationManifest, OutputError> {
+    read_json(path, "simulation")
+}
+
+/// Read and deserialize a JSON file into `T`.
+fn read_json<T>(path: &Path, manifest_type: &str) -> Result<T, OutputError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let content = std::fs::read_to_string(path).map_err(|e| OutputError::io(path, e))?;
+    serde_json::from_str(&content).map_err(|e| OutputError::ManifestError {
+        manifest_type: manifest_type.to_string(),
+        message: e.to_string(),
+    })
+}
+
 /// Serialize `value` to pretty-printed JSON and atomically write it to `path`.
 ///
 /// The write sequence is:
@@ -820,6 +858,87 @@ mod tests {
         assert!(
             value["checksum"].is_null(),
             "checksum: None must serialize as null in training manifest"
+        );
+    }
+
+    // ── Reader tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn read_training_manifest_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("_manifest.json");
+        let original = make_training_manifest();
+
+        write_training_manifest(&path, &original).expect("write must succeed");
+        let decoded = read_training_manifest(&path).expect("read must succeed");
+
+        assert_eq!(decoded.version, original.version);
+        assert_eq!(decoded.status, original.status);
+        assert_eq!(decoded.iterations.completed, original.iterations.completed);
+        assert_eq!(
+            decoded.iterations.max_iterations,
+            original.iterations.max_iterations
+        );
+        assert_eq!(decoded.convergence.achieved, original.convergence.achieved);
+        assert_eq!(
+            decoded.convergence.final_gap_percent,
+            original.convergence.final_gap_percent
+        );
+        assert_eq!(
+            decoded.convergence.termination_reason,
+            original.convergence.termination_reason
+        );
+        assert_eq!(decoded.cuts.total_generated, original.cuts.total_generated);
+        assert_eq!(decoded.cuts.total_active, original.cuts.total_active);
+        assert_eq!(decoded.cuts.peak_active, original.cuts.peak_active);
+    }
+
+    #[test]
+    fn read_training_manifest_missing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent_manifest.json");
+
+        let result = read_training_manifest(&path);
+
+        assert!(
+            matches!(result, Err(OutputError::IoError { .. })),
+            "missing file must return OutputError::IoError, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn read_simulation_manifest_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("_manifest.json");
+        let original = make_simulation_manifest();
+
+        write_simulation_manifest(&path, &original).expect("write must succeed");
+        let decoded = read_simulation_manifest(&path).expect("read must succeed");
+
+        assert_eq!(decoded.version, original.version);
+        assert_eq!(decoded.status, original.status);
+        assert_eq!(decoded.scenarios.total, original.scenarios.total);
+        assert_eq!(decoded.scenarios.completed, original.scenarios.completed);
+        assert_eq!(decoded.scenarios.failed, original.scenarios.failed);
+        assert_eq!(
+            decoded.partitions_written.len(),
+            original.partitions_written.len()
+        );
+    }
+
+    #[test]
+    fn read_training_manifest_malformed_json_returns_manifest_error() {
+        use std::io::Write;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("_manifest.json");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(file, "{{not valid json at all").unwrap();
+
+        let result = read_training_manifest(&path);
+
+        assert!(
+            matches!(result, Err(OutputError::ManifestError { .. })),
+            "malformed JSON must return OutputError::ManifestError, got: {result:?}"
         );
     }
 }

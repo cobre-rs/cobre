@@ -7,7 +7,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre.dev/schemas/v2/lines.schema.json",
+//!   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json",
 //!   "lines": [
 //!     {
 //!       "id": 0,
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn test_parse_valid_lines() {
         let json = r#"{
-          "$schema": "https://cobre.dev/schemas/v2/lines.schema.json",
+          "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json",
           "lines": [
             {
               "id": 0,

@@ -34,6 +34,7 @@ my_study/
     inflow_seasonal_stats.parquet
     load_seasonal_stats.parquet
     inflow_ar_coefficients.parquet    (only when ar_order > 0)
+    inflow_history.parquet            (alternative to pre-computed stats)
 ```
 
 The directory is optional. When it is absent, Cobre generates independent
@@ -189,6 +190,55 @@ in the methodology reference.
 
 ---
 
+## Estimation from History
+
+Instead of supplying pre-computed seasonal statistics in
+`inflow_seasonal_stats.parquet`, you can provide raw historical inflow
+observations and let Cobre estimate the PAR(p) parameters for you.
+
+### Input: `inflow_history.parquet`
+
+Place `inflow_history.parquet` in the `scenarios/` directory. The schema
+and required column types are documented in the
+[Case Format Reference](../reference/case-format.md). Each row represents
+one historical observation of inflow at a given hydro plant and stage.
+
+### What Cobre estimates
+
+When `inflow_history.parquet` is present, Cobre performs the following
+estimation steps automatically before building the scenario model:
+
+1. **Seasonal statistics** — mean and standard deviation are computed from
+   the historical observations for each (hydro plant, stage) pair. These
+   replace the values you would otherwise provide in
+   `inflow_seasonal_stats.parquet`.
+
+2. **AR order selection** — Cobre evaluates candidate orders and selects
+   the best fit per (hydro plant, stage) using AIC (Akaike Information
+   Criterion). This avoids overfitting in series with little autocorrelation
+   and captures meaningful persistence where it exists.
+
+3. **AR coefficients** — Coefficients for the selected order are estimated
+   via the Levinson-Durbin algorithm applied to the partial autocorrelation
+   structure of the standardised historical series.
+
+4. **Spatial correlation** — The contemporaneous correlation between
+   hydro plants is estimated from the historical residuals after AR fitting.
+   The resulting correlation matrix is used by the Cholesky-based noise
+   generator in exactly the same way as a manually specified
+   `correlation.json`.
+
+### History vs. pre-computed stats: choose one
+
+`inflow_history.parquet` and `inflow_seasonal_stats.parquet` are mutually
+exclusive inputs for the inflow model. Providing both in the same
+`scenarios/` directory is a validation error. Use history-based estimation
+when raw observations are available and you want Cobre to handle the
+statistical fitting; use pre-computed stats when you have already fitted
+the model externally or when you need precise control over the parameters.
+
+---
+
 ## Correlation
 
 Hydro plants that share a watershed tend to have correlated inflows: when
@@ -239,6 +289,39 @@ using a wet-season correlation structure in January through March and a
 dry-season structure for the remaining months). Detailed correlation
 configuration documentation will be added with future multi-plant example
 cases.
+
+---
+
+## Stochastic Load
+
+Electrical load at each bus can be modeled as a stochastic process in
+addition to, or independently of, inflow uncertainty. When
+`load_seasonal_stats.parquet` is present in the `scenarios/` directory,
+Cobre applies a noise model to bus demand during training and simulation.
+
+### How load noise works
+
+Load noise uses the same PAR(p) framework as inflows. For each bus and each
+stage, Cobre draws a noise realisation from the PAR(p) model specified by
+the bus's `ar_order`, `mean_mw`, and `std_mw` columns in
+`load_seasonal_stats.parquet`. This realisation is then applied as a
+multiplicative factor on the base demand for that bus and stage: the sampled
+load replaces the deterministic demand value during scenario generation.
+
+Because the PAR(p) model is the same for both inflows and loads, load
+variability captures the same seasonal structure and stage-to-stage
+persistence that inflow models do. A bus with `ar_order = 0` gets
+independently drawn demand noise at each stage; a bus with `ar_order = 1`
+gets demand noise that has month-to-month persistence consistent with the
+historical standard deviation.
+
+### Optional: deterministic loads without the file
+
+`load_seasonal_stats.parquet` is entirely optional. When the file is absent,
+Cobre treats all bus demands as deterministic: the demand at each bus and
+stage is the fixed value from the case data, with no noise applied. This is
+the correct setting for studies where load uncertainty is negligible or where
+you want to isolate inflow uncertainty in isolation.
 
 ---
 
@@ -297,26 +380,51 @@ realisation that, after applying the AR dynamics, produces a negative inflow
 value. Negative inflow has no physical meaning and, if uncorrected, would
 violate water balance constraints in the LP.
 
-### Method in v0.1.0: penalty
+Cobre provides two available methods for handling negative inflow realisations,
+controlled by the `modeling.inflow_non_negativity.method` field in `config.json`.
 
-Cobre v0.1.0 uses the **penalty method** to handle negative inflow
-realisations. A high-cost slack variable is added to each water balance
-row. When the LP solver encounters a scenario where the inflow would
-be negative, it draws on this virtual inflow at the penalty cost rather
-than violating the balance constraint. The penalty cost is configurable
-via the `inflow_non_negativity` field in the case configuration; the
-default keeps it high enough that the slack is used only when necessary.
+### Penalty method (default)
 
-In practice, the penalty is rarely activated in well-specified studies.
-It acts as a backstop for low-probability tail realisations.
+The **penalty method** adds a high-cost slack variable to each water balance
+row. When the solver encounters a scenario where the inflow would be negative,
+it draws on this virtual inflow at the penalty cost rather than violating the
+balance constraint. The penalty cost is configurable via the
+`inflow_non_negativity` field in the case configuration; the default keeps it
+high enough that the slack is used only when necessary.
 
-### Truncation methods: planned for a future release
+In practice, the penalty is rarely activated in well-specified studies. It acts
+as a backstop for low-probability tail realisations. This method is
+**Recommended** for production use.
 
-Two additional methods from the literature — **truncation** (modifying LP
-row bounds based on external AR evaluation) and **truncation with penalty**
-(combining bounded slack with modified bounds) — are planned for a future
-release. These require evaluating the full inflow value `a_h` as a scalar
-before LP patching, which is a non-trivial architectural change in v0.1.0.
+### Truncation method
+
+Available since v0.1.1, the **truncation method** evaluates the full inflow
+value before constructing the LP and clamps any negative result to zero. The
+water balance row receives the clamped inflow directly; no slack variable is
+added and no penalty cost is incurred. To enable truncation, set the method
+field in `config.json`:
+
+```json
+{
+  "modeling": {
+    "inflow_non_negativity": {
+      "method": "truncation"
+    }
+  }
+}
+```
+
+Truncation eliminates the penalty cost for tail realisations at the expense
+of introducing a small bias: scenarios where the true inflow would be
+slightly negative are treated as zero-inflow scenarios, which is
+conservative but physically interpretable. For most well-specified studies,
+both methods produce similar results because negative realisations are rare.
+
+### Truncation with penalty (deferred)
+
+A combined **truncation with penalty** method — which applies bounded slack
+variables on top of the clamped LP bounds — is not yet available in the
+current release. It remains on the roadmap for a future version.
 
 For the mathematical theory behind all three methods, see the
 [Inflow Non-Negativity](https://cobre-rs.github.io/cobre-docs/theory/inflow-non-negativity.html)

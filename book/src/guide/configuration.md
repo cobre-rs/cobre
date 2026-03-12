@@ -163,7 +163,7 @@ Controls which outputs are written to the results directory.
 
 ```json
 {
-  "$schema": "https://cobre.dev/schemas/v2/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "version": "2.0.0",
   "training": {
     "seed": 42,

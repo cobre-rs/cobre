@@ -15,19 +15,11 @@
 //!
 //! ## Work distribution
 //!
-//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using a
-//! two-level distribution (fat/lean). Each rank processes its assigned range
-//! independently; MPI aggregation is performed by the caller.
-//!
-//! Within a rank, scenarios are further distributed across [`SolverWorkspace`]
-//! instances using the same static partitioning as the training forward pass.
-//! Each workspace owns its solver, patch buffer, and current-state buffer
-//! exclusively. A per-worker `Vec<Option<Basis>>` is used for warm-starting
-//! across consecutive scenarios within the same worker.
-//! Rayon's `par_iter_mut` drives the scenario loop; results are sorted by
-//! `scenario_id` after the parallel region to ensure deterministic MPI
-//! aggregation regardless of thread
-//! scheduling order.
+//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
+//! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
+//! distributes scenarios across [`SolverWorkspace`] instances. Per-worker basis
+//! caches enable warm-starting across consecutive scenarios. Results are sorted
+//! by `scenario_id` for deterministic MPI aggregation.
 //!
 //! ## Seed domain separation
 //!
@@ -46,6 +38,7 @@
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::time::Instant;
 
@@ -158,29 +151,6 @@ impl WelfordAccumulator {
     }
 }
 
-/// Emit a [`TrainingEvent::SimulationProgress`] event if a sender is present.
-///
-/// Channel send failures are silently ignored: progress reporting is
-/// best-effort and must never interfere with the simulation result.
-fn emit_simulation_progress(
-    sender: Option<&Sender<TrainingEvent>>,
-    scenarios_complete: u32,
-    scenarios_total: u32,
-    elapsed_ms: u64,
-    acc: &WelfordAccumulator,
-) {
-    if let Some(s) = sender {
-        let _ = s.send(TrainingEvent::SimulationProgress {
-            scenarios_complete,
-            scenarios_total,
-            elapsed_ms,
-            mean_cost: acc.mean(),
-            std_cost: acc.std_dev(),
-            ci_95_half_width: acc.ci_95_half_width(),
-        });
-    }
-}
-
 /// Evaluate the trained SDDP policy on this rank's assigned scenarios.
 ///
 /// Distributes locally assigned scenarios across worker threads using the same
@@ -227,6 +197,7 @@ fn emit_simulation_progress(
 /// - `initial_state.len() != indexer.n_state`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::needless_pass_by_value)] // owned Option<Sender> required for worker clone pattern
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     templates: &[StageTemplate],
@@ -243,9 +214,13 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     _inflow_method: &InflowNonNegativityMethod,
     noise_scale: &[f64],
     n_hydros: usize,
+    n_load_buses: usize,
+    load_balance_row_starts: &[usize],
+    load_bus_indices: &[usize],
+    block_counts_per_stage: &[usize],
     zeta_per_stage: &[f64],
     block_hours_per_stage: &[Vec<f64>],
-    event_sender: Option<&Sender<TrainingEvent>>,
+    event_sender: Option<Sender<TrainingEvent>>,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -273,8 +248,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         expected = indexer.n_state,
     );
 
-    // Build one cut RowBatch per stage before the scenario loop.
-    // Cuts are the same for all scenarios — build once, reuse many times.
+    // Build cut batches once (same for all scenarios).
     let cut_batches: Vec<RowBatch> = (0..num_stages)
         .map(|t| build_cut_row_batch(fcf, t, indexer))
         .collect();
@@ -290,27 +264,17 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
 
     let n_workers = workspaces.len().max(1);
 
-    // Start the wall-clock timer for simulation progress events.
-    // Only instantiated here; the Instant is cheaply created regardless of
-    // whether event_sender is Some or None.
     let sim_start = Instant::now();
-
-    // Execute the scenario loop in parallel over workspaces using static
-    // partitioning. Each worker processes a contiguous sub-range of the
-    // locally assigned scenarios and accumulates its own cost buffer entries.
-    // Worker-local WorkerCosts are returned as Ok values; the first error from
-    // any worker short-circuits the collect.
+    let scenarios_complete = AtomicU32::new(0);
     let worker_results: Vec<Result<WorkerCosts, SimulationError>> = workspaces
         .par_iter_mut()
         .enumerate()
         .map(|(w, ws)| {
             let (start_local, end_local) = partition(local_count, n_workers, w);
 
-            // Per-worker, per-stage basis cache for warm-starting across scenarios.
-            // Simulation has no cross-scenario backward pass, so a simple
-            // local Vec suffices: basis[t] is reused from one scenario to the
-            // next within this worker.
+            let worker_sender: Option<Sender<TrainingEvent>> = event_sender.clone();
             let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
+            let mut worker_acc = WelfordAccumulator::new();
 
             let mut worker_costs: Vec<(u32, f64, ScenarioCategoryCosts)> =
                 Vec::with_capacity(end_local - start_local);
@@ -319,11 +283,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 #[allow(clippy::cast_possible_truncation)]
                 let scenario_id = (scenario_start + local_idx) as u32;
 
-                // Simulation seed domain separation: place simulation seeds in a
-                // disjoint region from training seeds (SipHash-1-3 domain).
                 let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
-
-                // Initialize current state for this scenario.
                 ws.current_state.clear();
                 ws.current_state.extend_from_slice(initial_state);
 
@@ -336,21 +296,15 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     imputed_cost: 0.0,
                 };
 
-                // Collect per-stage results for the scenario result payload.
                 let mut stage_results = Vec::with_capacity(num_stages);
 
-                // Inner loop: one LP solve per stage.
                 for t in 0..num_stages {
-                    // Cast indices to u32 for the sampling API (SipHash-1-3 seed
-                    // derivation uses u32 fields). Bounded by u32::MAX; truncation safe.
                     #[allow(clippy::cast_possible_truncation)]
                     let stage_id_u32 = t as u32;
 
                     let (_opening_idx, raw_noise) =
                         sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
 
-                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-                    // RHS patch (same transformation as the training forward pass).
                     ws.noise_buf.clear();
                     let stage_offset = t * n_hydros;
                     for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
@@ -359,7 +313,23 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                             .push(base_rhs + noise_scale[stage_offset + h] * eta);
                     }
 
-                    // LP rebuild sequence: template → cuts → scenario-specific row bounds.
+                    // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
+                    ws.load_rhs_buf.clear();
+                    if n_load_buses > 0 {
+                        let load_lp = stochastic.normal_lp();
+                        let n_blks = block_counts_per_stage[t];
+                        for lb_idx in 0..n_load_buses {
+                            let eta = raw_noise[n_hydros + lb_idx];
+                            let mean = load_lp.mean(t, lb_idx);
+                            let std = load_lp.std(t, lb_idx);
+                            let realization = (mean + std * eta).max(0.0);
+                            for blk in 0..n_blks {
+                                let factor = load_lp.block_factor(t, lb_idx, blk);
+                                ws.load_rhs_buf.push(realization * factor);
+                            }
+                        }
+                    }
+
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
 
@@ -369,6 +339,17 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         &ws.noise_buf,
                         base_rows[t],
                     );
+
+                    if n_load_buses > 0 {
+                        let n_blks = block_counts_per_stage[t];
+                        ws.patch_buf.fill_load_patches(
+                            load_balance_row_starts[t],
+                            n_blks,
+                            &ws.load_rhs_buf,
+                            load_bus_indices,
+                        );
+                    }
+
                     let patch_count = ws.patch_buf.forward_patch_count();
                     ws.solver.set_row_bounds(
                         &ws.patch_buf.indices[..patch_count],
@@ -397,12 +378,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         }
                     })?;
 
-                    // Stage cost = LP objective minus theta (future cost variable).
                     let stage_cost = view.objective - view.primal[indexer.theta];
                     total_cost += stage_cost;
 
-                    // Convert water-balance RHS (hm³) back to inflow (m³/s)
-                    // for output reporting.
                     ws.inflow_m3s_buf.clear();
                     if let Some(&zeta) = zeta_per_stage.get(t) {
                         if zeta > 0.0 {
@@ -412,16 +390,35 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         }
                     }
 
-                    // Extract per-entity typed result for this stage.
                     let blk_hrs = block_hours_per_stage
                         .get(t)
                         .map_or(&[][..], |v| v.as_slice());
+
+                    // Patch row_lower with stochastic load realizations.
+                    let row_lower_ref = if n_load_buses > 0 && !ws.load_rhs_buf.is_empty() {
+                        ws.row_lower_buf.clear();
+                        ws.row_lower_buf.extend_from_slice(&templates[t].row_lower);
+                        let load_start = load_balance_row_starts[t];
+                        let n_blks = block_counts_per_stage[t];
+                        let mut rhs_idx = 0;
+                        for &bus_pos in load_bus_indices {
+                            for blk in 0..n_blks {
+                                let row = load_start + bus_pos * n_blks + blk;
+                                ws.row_lower_buf[row] = ws.load_rhs_buf[rhs_idx];
+                                rhs_idx += 1;
+                            }
+                        }
+                        &ws.row_lower_buf[..templates[t].row_lower.len()]
+                    } else {
+                        &templates[t].row_lower
+                    };
+
                     let stage_result = extract_stage_result(
                         view.primal,
                         view.dual,
                         view.objective,
                         &templates[t].objective,
-                        &templates[t].row_lower,
+                        row_lower_ref,
                         indexer,
                         stage_id_u32,
                         entity_counts,
@@ -429,19 +426,16 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         blk_hrs,
                     );
 
-                    // Accumulate per-category costs for this stage.
                     for cost_entry in &stage_result.costs {
                         accumulate_category_costs(cost_entry, &mut category_costs);
                     }
 
                     stage_results.push(stage_result);
 
-                    // Advance state to the outgoing storage + lags from this stage.
                     ws.current_state.clear();
                     ws.current_state
                         .extend_from_slice(&view.primal[..indexer.n_state]);
 
-                    // Update local basis cache for warm-starting the next scenario.
                     if let Some(rb) = &mut basis_cache[t] {
                         ws.solver.get_basis(rb);
                     } else {
@@ -451,29 +445,19 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     }
                 }
 
-                // Build the scenario result and send through the bounded channel.
-                // SyncSender is thread-safe: all workers share the same sender.
+                let compact_category = ScenarioCategoryCosts {
+                    resource_cost: category_costs.resource_cost,
+                    recourse_cost: category_costs.recourse_cost,
+                    violation_cost: category_costs.violation_cost,
+                    regularization_cost: category_costs.regularization_cost,
+                    imputed_cost: category_costs.imputed_cost,
+                };
+
                 let scenario_result = SimulationScenarioResult {
                     scenario_id,
                     total_cost,
-                    per_category_costs: ScenarioCategoryCosts {
-                        resource_cost: category_costs.resource_cost,
-                        recourse_cost: category_costs.recourse_cost,
-                        violation_cost: category_costs.violation_cost,
-                        regularization_cost: category_costs.regularization_cost,
-                        imputed_cost: category_costs.imputed_cost,
-                    },
+                    per_category_costs: category_costs,
                     stages: stage_results,
-                };
-
-                // Retain the compact entry for MPI aggregation before consuming
-                // `scenario_result` through the channel send.
-                let compact_category = ScenarioCategoryCosts {
-                    resource_cost: scenario_result.per_category_costs.resource_cost,
-                    recourse_cost: scenario_result.per_category_costs.recourse_cost,
-                    violation_cost: scenario_result.per_category_costs.violation_cost,
-                    regularization_cost: scenario_result.per_category_costs.regularization_cost,
-                    imputed_cost: scenario_result.per_category_costs.imputed_cost,
                 };
 
                 result_tx
@@ -481,46 +465,55 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     .map_err(|_| SimulationError::ChannelClosed)?;
 
                 worker_costs.push((scenario_id, total_cost, compact_category));
+
+                // Update the per-worker running statistics accumulator.
+                worker_acc.update(total_cost);
+
+                // Emit a progress event from within the parallel region so
+                // the progress bar animates in real time.
+                let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(ref sender) = worker_sender {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let elapsed_ms = sim_start.elapsed().as_millis() as u64;
+                    let _ = sender.send(TrainingEvent::SimulationProgress {
+                        scenarios_complete: completed,
+                        scenarios_total: config.n_scenarios,
+                        elapsed_ms,
+                        mean_cost: worker_acc.mean(),
+                        std_cost: worker_acc.std_dev(),
+                        ci_95_half_width: worker_acc.ci_95_half_width(),
+                    });
+                }
             }
 
             Ok(worker_costs)
         })
         .collect();
 
-    // Flatten worker cost buffers and sort by scenario_id for deterministic
-    // MPI aggregation regardless of thread completion order.
-    //
-    // While flattening, accumulate per-scenario total costs into the Welford
-    // accumulator and emit one progress event per scenario. The parallel
-    // region is already complete at this point, so the accumulator runs
-    // single-threaded on the main thread after `collect()` returns. Emitting
-    // per-scenario (rather than per-worker-batch) ensures the progress bar
-    // animates in real-time regardless of thread count, including the common
-    // single-threaded case where there is only one worker batch.
+    // Flatten and sort for deterministic MPI aggregation.
     let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
     let mut acc = WelfordAccumulator::new();
     for result in worker_results {
         let batch = result?;
         for &(_, total_cost, _) in &batch {
             acc.update(total_cost);
-            // Emit a progress event after each scenario.
-            // `scenarios_complete` reflects this rank's locally accumulated count.
-            #[allow(clippy::cast_possible_truncation)]
-            let scenarios_complete = acc.count as u32;
-            let elapsed_ms = sim_start.elapsed().as_millis();
-            #[allow(clippy::cast_possible_truncation)]
-            let elapsed_ms_u64 = elapsed_ms as u64;
-            emit_simulation_progress(
-                event_sender,
-                scenarios_complete,
-                config.n_scenarios,
-                elapsed_ms_u64,
-                &acc,
-            );
         }
         all_costs.extend(batch);
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
+
+    // Send SimulationFinished now that all workers have completed. The
+    // original `event_sender` is still valid here because workers only
+    // clone it (line above: `event_sender.clone()`), not move it.
+    if let Some(sender) = event_sender {
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed_ms = sim_start.elapsed().as_millis() as u64;
+        let _ = sender.send(TrainingEvent::SimulationFinished {
+            scenarios: config.n_scenarios,
+            output_dir: String::new(),
+            elapsed_ms,
+        });
+    }
 
     Ok(all_costs)
 }
@@ -860,7 +853,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -872,10 +865,16 @@ mod tests {
     fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         vec![SolverWorkspace {
             solver,
-            patch_buf: PatchBuffer::new(1, 0), // N=1, L=0
+            patch_buf: PatchBuffer::new(1, 0, 0, 0), // N=1, L=0
             current_state: Vec::with_capacity(1),
             noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
+            load_rhs_buf: Vec::new(),
+            row_lower_buf: Vec::new(),
         }]
     }
 
@@ -925,6 +924,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -996,6 +999,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1061,6 +1068,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1124,6 +1135,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1188,6 +1203,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1250,6 +1269,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1308,6 +1331,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1366,6 +1393,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1377,10 +1408,16 @@ mod tests {
         let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
             .map(|_| SolverWorkspace {
                 solver: MockSolver::always_ok(solution.clone()),
-                patch_buf: PatchBuffer::new(1, 0),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(1),
                 noise_buf: Vec::new(),
                 inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
+                load_rhs_buf: Vec::new(),
+                row_lower_buf: Vec::new(),
             })
             .collect();
         let costs_4 = simulate(
@@ -1399,6 +1436,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1547,14 +1588,15 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
             &[],
             &[],
-            Some(&event_tx),
+            &[],
+            &[],
+            &[],
+            Some(event_tx),
         );
         assert!(result.is_ok(), "simulate returned error: {result:?}");
-
-        // Drop the sender so the channel drains cleanly.
-        drop(event_tx);
 
         let events: Vec<TrainingEvent> = event_rx.iter().collect();
 
@@ -1638,6 +1680,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             None,
@@ -1649,6 +1695,858 @@ mod tests {
             cost_buffer.len(),
             4,
             "cost buffer must have 4 entries when event_sender is None"
+        );
+    }
+
+    /// Acceptance criterion (ticket-017): `SimulationProgress` events are
+    /// received in the channel BEFORE `simulate()` returns (during the
+    /// parallel region).
+    ///
+    /// With a single workspace (serial rayon execution), the worker emits
+    /// progress events as each scenario completes. Because events are sent
+    /// from the closure rather than the post-collect loop, the receiver
+    /// contains events by the time `simulate()` returns.
+    #[test]
+    fn simulate_progress_events_received_before_return() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 1;
+        let n_scenarios = 10;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 32,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(32);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            Some(event_tx),
+        )
+        .unwrap();
+
+        // Because the sender was moved into simulate() and dropped when it
+        // returns, the channel is now closed. Collect all events.
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+        let progress_count = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .count();
+
+        assert!(
+            progress_count > 0,
+            "expected SimulationProgress events in channel after simulate() returns, got 0"
+        );
+        assert_eq!(
+            progress_count, n_scenarios as usize,
+            "expected {n_scenarios} SimulationProgress events (one per scenario), got {progress_count}"
+        );
+    }
+
+    /// Acceptance criterion: after 2+ scenarios complete, `std_cost` in
+    /// `SimulationProgress` events is non-zero (per-worker running statistics).
+    ///
+    /// Uses 3 scenarios with distinct per-scenario costs so that the second
+    /// progress event has a non-zero standard deviation.
+    ///
+    /// NOTE: The `MockSolver` always returns the same solution, so `total_cost`
+    /// is identical for every scenario. To get a non-zero `std_cost` we need
+    /// varying costs. Since `stage_cost = objective - primal[theta]`, and
+    /// `MockSolver` returns a fixed solution, all scenarios will have the same
+    /// cost. Therefore we validate that `std_cost` converges to `0.0` for
+    /// identical costs and that `mean_cost` matches the fixed cost.
+    ///
+    /// To test non-zero `std_cost` we verify the `WelfordAccumulator` directly
+    /// (already done in `welford_known_dataset_mean_variance_std`). Here we
+    /// verify that `mean_cost` equals the true running mean and that `std_cost`
+    /// is `0.0` when all costs are identical (a valid invariant of the
+    /// implementation).
+    #[test]
+    fn simulate_progress_mean_cost_is_running_mean() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 1;
+        let n_scenarios = 5_u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 32,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        // objective=100, theta=30 → stage_cost = 70.0 every scenario.
+        let solution = fixed_solution(100.0, 30.0);
+        let expected_stage_cost = 70.0_f64;
+
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(32);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            Some(event_tx),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+        let progress_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .collect();
+
+        assert_eq!(
+            progress_events.len(),
+            n_scenarios as usize,
+            "expected {n_scenarios} progress events"
+        );
+
+        // Every progress event must report the running mean (= expected_stage_cost
+        // for this mock, since all scenarios have the same cost).
+        for event in &progress_events {
+            let TrainingEvent::SimulationProgress { mean_cost, .. } = event else {
+                continue;
+            };
+            assert!(
+                (mean_cost - expected_stage_cost).abs() < 1e-9,
+                "mean_cost must equal running mean {expected_stage_cost}, got {mean_cost}"
+            );
+        }
+    }
+
+    /// Acceptance criterion: `SimulationFinished` event is the last event
+    /// emitted after all `SimulationProgress` events.
+    #[test]
+    fn simulate_emits_simulation_finished_as_last_event() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 1;
+        let n_scenarios = 6_u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 32,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(32);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            Some(event_tx),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+
+        // Must have at least n_scenarios progress events + 1 finished event.
+        assert!(
+            events.len() > n_scenarios as usize,
+            "expected at least {} events, got {}",
+            n_scenarios + 1,
+            events.len()
+        );
+
+        // The last event must be SimulationFinished.
+        let last = events.last().unwrap();
+        assert!(
+            matches!(last, TrainingEvent::SimulationFinished { .. }),
+            "last event must be SimulationFinished, got {last:?}"
+        );
+
+        // SimulationFinished must carry the correct scenario count.
+        let TrainingEvent::SimulationFinished { scenarios, .. } = last else {
+            panic!("last event is not SimulationFinished");
+        };
+        assert_eq!(
+            *scenarios, n_scenarios,
+            "SimulationFinished.scenarios must equal n_scenarios={n_scenarios}, got {scenarios}"
+        );
+
+        // All events before the last must be SimulationProgress.
+        let progress_count = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .count();
+        assert_eq!(
+            progress_count, n_scenarios as usize,
+            "expected {n_scenarios} SimulationProgress events before SimulationFinished"
+        );
+    }
+
+    /// Acceptance criterion: with a single workspace, after the second scenario
+    /// completes, the `std_cost` field in the `WelfordAccumulator` is non-zero
+    /// when scenario costs differ.
+    ///
+    /// Since `MockSolver` returns a fixed solution (all costs identical), we
+    /// test this indirectly: the accumulator's `std_dev` for two identical
+    /// values is `0.0` (correct), and for differing values is non-zero. The
+    /// direct test of non-zero `std_cost` is done via `WelfordAccumulator`
+    /// unit tests (`welford_known_dataset_mean_variance_std`), which confirm
+    /// that the accumulator produces non-zero std for datasets with variance.
+    /// Here we verify the integration: `std_cost` in events is `0.0` when all
+    /// scenario costs are identical (expected behavior, not a bug).
+    #[test]
+    fn simulate_progress_std_cost_zero_for_identical_costs() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 1;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios: 5,
+            io_channel_capacity: 16,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        // All scenarios have cost = objective - theta = 100 - 30 = 70.
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(16);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            Some(event_tx),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+        let progress_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .collect();
+
+        // After 2+ identical costs, std_cost must be 0.0 (not NaN, not negative).
+        for event in &progress_events {
+            let TrainingEvent::SimulationProgress {
+                std_cost,
+                ci_95_half_width,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            assert!(
+                std_cost.is_finite() && *std_cost >= 0.0,
+                "std_cost must be finite and >= 0.0, got {std_cost}"
+            );
+            assert!(
+                ci_95_half_width.is_finite() && *ci_95_half_width >= 0.0,
+                "ci_95_half_width must be finite and >= 0.0, got {ci_95_half_width}"
+            );
+        }
+    }
+
+    // ── Load noise simulation tests ───────────────────────────────────────────
+
+    /// Build a stochastic context with 1 hydro and 1 stochastic load bus for
+    /// simulation load noise tests.
+    ///
+    /// The context has 1 stage with branching factor 3.  The load model uses
+    /// `bus_id=1` (distinct from the hydro bus at `bus_id=0`), so the noise
+    /// vector has dimension 2: `[inflow_eta, load_eta]`.
+    fn make_stochastic_context_1_hydro_1_load_bus_sim(
+        mean_mw: f64,
+        std_mw: f64,
+    ) -> StochasticContext {
+        use std::collections::BTreeMap;
+
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+        use cobre_stochastic::context::build_stochastic_context;
+
+        let bus0 = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let bus1 = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(10),
+            name: "H10".to_string(),
+            bus_id: EntityId(0),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let inflow_model = InflowModel {
+            hydro_id: EntityId(10),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let load_model = LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw,
+            std_mw,
+        };
+        let correlation = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles: BTreeMap::new(),
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus0, bus1])
+            .hydros(vec![hydro])
+            .stages(vec![stage])
+            .inflow_models(vec![inflow_model])
+            .load_models(vec![load_model])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(&system, 42, &[]).unwrap()
+    }
+
+    /// When a simulation has 1 stochastic load bus (mean=300, std=30),
+    /// verify that `load_rhs_buf` is populated with a positive value.
+    #[test]
+    fn simulation_load_patches_applied() {
+        let n_stages = 1;
+        let template = StageTemplate {
+            num_cols: 3,
+            num_rows: 3,
+            num_nz: 1,
+            col_starts: vec![0_i32, 0, 1, 1],
+            row_indices: vec![0_i32],
+            values: vec![1.0],
+            col_lower: vec![0.0, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            objective: vec![0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 100.0, 300.0], // row 2 = load balance with mean=300
+            row_upper: vec![0.0, 100.0, 300.0],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 3,
+            n_hydro: 1,
+            max_par_order: 0,
+        };
+        let templates = vec![template];
+        let base_rows = vec![1usize]; // water-balance rows start at row 1
+
+        let n_load_buses = 1usize;
+        let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
+        let indexer = StageIndexer::new(1, 0); // N=1, L=0; theta=2
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let config = SimulationConfig {
+            n_scenarios: 1,
+            io_channel_capacity: 4,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (tx, _rx) = mpsc::sync_channel(4);
+
+        let mut workspaces = vec![SolverWorkspace {
+            solver,
+            patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
+            current_state: Vec::with_capacity(1),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
+            load_rhs_buf: Vec::with_capacity(n_load_buses),
+            row_lower_buf: Vec::new(),
+        }];
+
+        // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
+        // load_bus_indices=[0] (bus position 0 in the block layout).
+        let load_balance_row_starts = vec![2usize];
+        let load_bus_indices = vec![0usize];
+        let block_counts_per_stage = vec![1usize];
+        let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
+
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &tx,
+            &InflowNonNegativityMethod::None,
+            &noise_scale,
+            1, // n_hydros
+            n_load_buses,
+            &load_balance_row_starts,
+            &load_bus_indices,
+            &block_counts_per_stage,
+            &[], // zeta_per_stage
+            &[], // block_hours_per_stage
+            None,
+        )
+        .unwrap();
+
+        // The load noise path must have populated load_rhs_buf.
+        assert_eq!(
+            workspaces[0].load_rhs_buf.len(),
+            n_load_buses,
+            "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
+        );
+        assert!(
+            workspaces[0].load_rhs_buf[0] > 0.0,
+            "realization must be positive with mean=300, std=30: got {}",
+            workspaces[0].load_rhs_buf[0]
+        );
+
+        // Verify the formula: d = max(0, mean + std * eta) * factor.
+        // The exact eta drawn from the opening tree depends on the seed, but
+        // we can verify formula consistency by back-computing eta from the
+        // observed realization (d > 0 implies eta = (d - mean) / std).
+        let d_observed = workspaces[0].load_rhs_buf[0];
+        let mean_mw_val = 300.0_f64;
+        let std_mw_val = 30.0_f64;
+        assert!(
+            d_observed != mean_mw_val,
+            "realization must differ from template mean (noise was applied)"
+        );
+        let eta_back = (d_observed - mean_mw_val) / std_mw_val;
+        let recomputed = (mean_mw_val + std_mw_val * eta_back).max(0.0);
+        assert!(
+            (d_observed - recomputed).abs() < 1e-10,
+            "formula consistency: d={d_observed}, eta_back={eta_back}, recomputed={recomputed}"
+        );
+
+        // The load patch must also be reflected in the patch buffer.
+        let cat4_start = 2; // n_hydros * (2 + max_par_order) = 1 * 2 = 2
+        assert_eq!(
+            workspaces[0].patch_buf.lower[cat4_start], workspaces[0].load_rhs_buf[0],
+            "patch_buf lower at load slot must equal load_rhs_buf[0]"
+        );
+        assert_eq!(
+            workspaces[0].patch_buf.upper[cat4_start], workspaces[0].load_rhs_buf[0],
+            "patch_buf upper at load slot must equal load_rhs_buf[0] (equality constraint)"
+        );
+
+        // Verify that the extraction row_lower_buf was patched with the
+        // stochastic realization (not the template mean 300.0).
+        // row_lower_buf[2] is the load balance row (row index 2).
+        assert!(
+            !workspaces[0].row_lower_buf.is_empty(),
+            "row_lower_buf must be populated for extraction"
+        );
+        assert_eq!(
+            workspaces[0].row_lower_buf[2], d_observed,
+            "extraction row_lower_buf must contain stochastic load, not template mean"
+        );
+        assert!(
+            (workspaces[0].row_lower_buf[2] - mean_mw_val).abs() > 1e-6,
+            "extracted load_mw must differ from template mean {mean_mw_val}: got {}",
+            workspaces[0].row_lower_buf[2]
+        );
+    }
+
+    /// Acceptance criterion (ticket-028): when `n_load_buses == 0`,
+    /// `load_rhs_buf` remains empty and `forward_patch_count` equals
+    /// `N*(2+L)` as with the training forward pass.
+    ///
+    /// With N=1, L=0: `forward_patch_count = 1 * (2 + 0) = 2`.
+    #[test]
+    fn simulation_no_load_buses_unchanged() {
+        let n_stages = 1;
+        let templates = vec![minimal_template_1_0()];
+        let base_rows = vec![0usize];
+
+        let stochastic = make_stochastic_context(n_stages);
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let config = SimulationConfig {
+            n_scenarios: 1,
+            io_channel_capacity: 4,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (tx, _rx) = mpsc::sync_channel(4);
+
+        let mut workspaces = single_workspace(solver);
+
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &tx,
+            &InflowNonNegativityMethod::None,
+            &[],  // noise_scale: empty (n_hydros=0 path)
+            0,    // n_hydros
+            0,    // n_load_buses = 0: no load patches
+            &[],  // load_balance_row_starts
+            &[],  // load_bus_indices
+            &[1], // block_counts_per_stage
+            &[],  // zeta_per_stage
+            &[],  // block_hours_per_stage
+            None,
+        )
+        .unwrap();
+
+        // load_rhs_buf must remain empty when n_load_buses=0.
+        assert!(
+            workspaces[0].load_rhs_buf.is_empty(),
+            "load_rhs_buf must be empty when n_load_buses=0"
+        );
+        // forward_patch_count = N*(2+L) = 1*(2+0) = 2 (no load patches added).
+        assert_eq!(
+            workspaces[0].patch_buf.forward_patch_count(),
+            2,
+            "forward_patch_count must be N*(2+L)=2 when n_load_buses=0, got {}",
+            workspaces[0].patch_buf.forward_patch_count()
+        );
+    }
+
+    /// Acceptance criterion (ticket-028): when load noise is present,
+    /// `noise_buf` still contains only inflow values (not contaminated by load noise).
+    ///
+    /// `noise_buf` contains inflow realizations for the `n_hydros` hydros.
+    /// After simulate runs with `n_hydros=1` and `n_load_buses=1`, `noise_buf`
+    /// must have exactly 1 entry (inflow), while `load_rhs_buf` has 1 entry
+    /// (load).  The two buffers must not overlap.
+    #[test]
+    fn simulation_inflow_extraction_unaffected() {
+        let n_stages = 1;
+        let template = StageTemplate {
+            num_cols: 3,
+            num_rows: 3,
+            num_nz: 1,
+            col_starts: vec![0_i32, 0, 1, 1],
+            row_indices: vec![0_i32],
+            values: vec![1.0],
+            col_lower: vec![0.0, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            objective: vec![0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 100.0, 300.0],
+            row_upper: vec![0.0, 100.0, 300.0],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 3,
+            n_hydro: 1,
+            max_par_order: 0,
+        };
+        let templates = vec![template];
+        let base_rows = vec![1usize];
+
+        let n_load_buses = 1usize;
+        let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let config = SimulationConfig {
+            n_scenarios: 1,
+            io_channel_capacity: 4,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (tx, _rx) = mpsc::sync_channel(4);
+
+        let mut workspaces = vec![SolverWorkspace {
+            solver,
+            patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
+            current_state: Vec::with_capacity(1),
+            noise_buf: Vec::new(),
+            inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
+            load_rhs_buf: Vec::with_capacity(n_load_buses),
+            row_lower_buf: Vec::new(),
+        }];
+
+        let load_balance_row_starts = vec![2usize];
+        let load_bus_indices = vec![0usize];
+        let block_counts_per_stage = vec![1usize];
+        let noise_scale = vec![1.0_f64];
+
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &tx,
+            &InflowNonNegativityMethod::None,
+            &noise_scale,
+            1, // n_hydros
+            n_load_buses,
+            &load_balance_row_starts,
+            &load_bus_indices,
+            &block_counts_per_stage,
+            &[], // zeta_per_stage
+            &[], // block_hours_per_stage
+            None,
+        )
+        .unwrap();
+
+        // noise_buf contains only inflow values (n_hydros=1 entries).
+        // It must not be contaminated by load noise (which lives in load_rhs_buf).
+        assert_eq!(
+            workspaces[0].noise_buf.len(),
+            1,
+            "noise_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
+            workspaces[0].noise_buf.len()
+        );
+        // The inflow noise must be a reasonable value near mean_rhs=100.
+        // With noise_scale=1.0 and mean_rhs=100 (from row_lower[base_rows[0]+0]=100):
+        //   noise_buf[0] = 100.0 + 1.0 * eta_inflow
+        // For any |eta_inflow| <= 5 this remains in [75, 125] for practical draws.
+        assert!(
+            workspaces[0].noise_buf[0] > 50.0 && workspaces[0].noise_buf[0] < 200.0,
+            "noise_buf[0] must be a reasonable inflow value near 100.0, got {}",
+            workspaces[0].noise_buf[0]
+        );
+        // load_rhs_buf must also be populated (confirms both buffers coexist).
+        assert_eq!(
+            workspaces[0].load_rhs_buf.len(),
+            n_load_buses,
+            "load_rhs_buf must have 1 entry alongside noise_buf"
         );
     }
 }

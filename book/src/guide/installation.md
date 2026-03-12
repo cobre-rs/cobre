@@ -111,6 +111,7 @@ cargo test --workspace --all-features
 
 ## Next Steps
 
-- [Your First Study](./first-study.md) — run a complete SDDP study end to end
+- [Quickstart](../tutorial/quickstart.md) — run a complete study end to end using the built-in `1dtoy` template
+- [Running Studies](./running-studies.md) — validate, run, and inspect results for any case directory
 - [Case Directory Format](../reference/case-format.md) — how to structure input data
 - [CLI Reference](./cli-reference.md) — complete flag and subcommand reference

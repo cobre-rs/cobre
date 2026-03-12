@@ -118,7 +118,6 @@ pub(crate) struct ParsedData {
     /// Parsed `scenarios/load_factors.json`. Empty when absent.
     ///
     /// Parsed for schema validation; not yet forwarded to `System`.
-    #[allow(dead_code)]
     pub(crate) load_factors: Vec<LoadFactorEntry>,
     /// Parsed `scenarios/correlation.json`. `None` when absent.
     pub(crate) correlation: Option<CorrelationModel>,

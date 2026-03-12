@@ -136,14 +136,16 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 | 2     | complete | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests                                                               |
 | 3     | complete | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc)                                                 |
 | 4     | complete | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc)                                              |
-| 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling -- 125 tests (105 unit + 5 conformance + 4 reproducibility + 11 doc) |
-| 6     | complete | SDDP training loop, forward/backward pass, cut management, convergence monitoring -- 351 tests (297 unit + 13 conformance + 7 integration + 34 doc)                       |
-| 7     | complete | Simulation pipeline, Parquet output writers, FlatBuffers policy checkpoint, manifest/dictionary writers, genericity gate -- cobre-io: 749 tests, cobre-sddp: 456 tests    |
-| 8     | complete | Execution lifecycle, config resolution, exit codes, --threads, --color, progress reporting, banner, summary -- cobre-cli: 147 tests                                                           |
+| 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling; v0.1.1: PAR fitting (Levinson-Durbin, AIC), inflow estimation, inflow truncation, stochastic load -- 220 tests (187 unit + 5 conformance + 4 reproducibility + 24 doc) |
+| 6     | complete | SDDP training loop, forward/backward pass, cut management, convergence monitoring; v0.1.1: stochastic load demand integration -- 588 tests (509 unit + 13 conformance + 21 integration + 45 doc) |
+| 7     | complete | Simulation pipeline, Parquet output writers, FlatBuffers policy checkpoint, manifest/dictionary writers, genericity gate -- cobre-io: 818 tests, cobre-sddp: 588 tests    |
+| 8     | complete | Execution lifecycle, config resolution, exit codes, --threads, --color, progress reporting, banner, summary; v0.1.1: init subcommand, summary subcommand -- cobre-cli: 162 tests                 |
 
 ### Current phase
 
-**Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 1955 tests.
+**Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, `summary`, `init`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 2179 tests.
+
+**v0.1.1 -- Stochastic Foundation Complete.** Built on top of the minimal viable solver, v0.1.1 adds: PAR model fitting via Levinson-Durbin with AIC-based order selection; inflow estimation from historical series; inflow truncation to non-negative support; stochastic load demand (noise generation and LP integration); the `cobre summary` subcommand for post-run reporting; the `cobre init` subcommand for case scaffolding; and load validation rules in `cobre-io`. Workspace total: 2179 tests.
 
 ### Intra-rank thread parallelism (RESOLVED)
 

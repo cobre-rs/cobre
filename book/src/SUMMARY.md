@@ -19,7 +19,6 @@
 
 - [Getting Started](./guide/getting-started.md)
   - [Installation](./guide/installation.md)
-  - [Your First Study](./guide/first-study.md)
 - [System Modeling](./guide/system-modeling.md)
   - [Hydro Plants](./guide/hydro-plants.md)
   - [Thermal Units](./guide/thermal-units.md)
@@ -29,6 +28,13 @@
   - [Configuration](./guide/configuration.md)
   - [CLI Reference](./guide/cli-reference.md)
   - [Interpreting Results](./guide/interpreting-results.md)
+
+---
+
+# Examples
+
+- [1dtoy](./examples/1dtoy.md)
+- [Creating Your Own Case](./examples/creating-your-own.md)
 
 ---
 

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::panic)]
 //! Build script for cobre-cli.
 //!
 //! Copies the 1dtoy template files from `templates/1dtoy/` into

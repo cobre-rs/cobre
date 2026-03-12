@@ -177,7 +177,7 @@ fn build_fixture(hydros: Vec<Hydro>, base_seed: u64) -> cobre_stochastic::Stocha
         .build()
         .expect("build_fixture: system build must succeed");
 
-    build_stochastic_context(&system, base_seed)
+    build_stochastic_context(&system, base_seed, &[])
         .expect("build_fixture: build_stochastic_context must succeed")
 }
 

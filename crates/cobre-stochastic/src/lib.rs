@@ -38,6 +38,7 @@ mod error;
 pub mod context;
 pub mod correlation;
 pub mod noise;
+pub mod normal;
 pub mod par;
 pub mod sampling;
 pub mod tree;
@@ -47,7 +48,13 @@ pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
-pub use par::{ParValidationReport, ParWarning, PrecomputedParLp, validate_par_parameters};
+pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
+pub use par::{
+    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedParLp,
+    SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par_inflow,
+    evaluate_par_inflows, levinson_durbin, solve_par_noise, solve_par_noises,
+    validate_par_parameters,
+};
 pub use sampling::insample::sample_forward;
 pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 
@@ -69,6 +76,8 @@ mod tests {
         use crate::correlation::resolve as _;
         use crate::noise::rng as _;
         use crate::noise::seed as _;
+        use crate::normal::precompute as _;
+        use crate::par::evaluate as _;
         use crate::par::precompute as _;
         use crate::par::validation as _;
         use crate::sampling::insample as _;

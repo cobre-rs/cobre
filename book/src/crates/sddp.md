@@ -13,8 +13,8 @@ cut coefficient derivation, and risk measure theory — see the
 [methodology reference](https://cobre-rs.github.io/cobre-docs/).
 
 This crate depends on `cobre-core` for system data types, `cobre-stochastic` for
-inflow scenario generation, `cobre-solver` for LP subproblem solving, and
-`cobre-comm` for distributed communication.
+inflow scenario generation and load noise parameters, `cobre-solver` for LP
+subproblem solving, and `cobre-comm` for distributed communication.
 
 ## Iteration lifecycle
 
@@ -207,15 +207,25 @@ The FCF is built once before training begins. Total slot capacity is
 ### `PatchBuffer`
 
 A `PatchBuffer` holds the three parallel arrays consumed by the LP solver's
-`set_row_bounds` call. It is sized for `N * (2 + L)` patches, where N is the
-number of hydro plants and L is the maximum PAR order:
+`set_row_bounds` call. It is sized for `N * (2 + L) + M * B` patches, where
+N is the number of hydro plants, L is the maximum PAR order, M is the number
+of stochastic load buses, and B is the maximum block count across stages:
 
 - **Category 1** `[0, N)` — storage-fixing: equality constraint at incoming storage.
 - **Category 2** `[N, N*(1+L))` — lag-fixing: equality constraint at AR lagged inflows.
 - **Category 3** `[N*(1+L), N*(2+L))` — noise-fixing: equality constraint at scenario noise.
+- **Category 4** `[N*(2+L), N*(2+L) + M*B_active)` — load balance row patches: equality
+  constraint at stochastic load demand per bus per block (optional; empty when
+  `n_load_buses == 0`).
 
-The backward pass uses only categories 1 and 2 (`fill_state_patches`).
-The forward pass uses all three (`fill_forward_patches`).
+The backward pass uses only categories 1 and 2 (`fill_state_patches`) for
+the state-fixing rows, then applies Category 4 (`fill_load_patches`) to set
+the stochastic load demand at each bus before solving the successor LP.
+The forward pass uses all four categories (`fill_forward_patches` followed by
+`fill_load_patches`).
+
+When `n_load_buses == 0`, Category 4 is empty and `forward_patch_count`
+returns `N*(2+L)` unchanged, making load noise an optional zero-cost extension.
 
 ### `ExchangeBuffers` and `CutSyncBuffers`
 
@@ -232,6 +242,45 @@ allocation-free on the hot path.
 
 - Send buffer: `max_cuts_per_rank * cut_wire_size(n_state)` bytes.
 - Receive buffer: `max_cuts_per_rank * num_ranks * cut_wire_size(n_state)` bytes.
+
+## Load noise integration
+
+When `load_seasonal_stats.parquet` is present in the case directory, the
+`cobre-io` loader populates a `PrecomputedNormalLp` (from `cobre-stochastic`)
+alongside the PAR model. This object stores the per-stage, per-bus mean and
+standard deviation for stochastic bus demand and the per-block load factors
+derived from the seasonal statistics.
+
+The forward and backward passes apply stochastic load noise as follows:
+
+1. **Noise drawing**: for each stochastic load bus `i` at stage `t`, the pass
+   draws a standard normal variate `eta` (from the shared noise vector whose
+   first `n_hydros` entries are inflow innovations and next `n_load_buses`
+   entries are load innovations). The realized demand is:
+
+   ```text
+   load_rhs[i * K + blk] = max(0, mean(t, i) + std(t, i) * eta) * block_factor(t, i, blk)
+   ```
+
+   The `max(0, ...)` clamp prevents negative demand. `block_factor` scales the
+   base realization by the per-block load profile.
+
+2. **Load patching**: `fill_load_patches` writes each `load_rhs` entry into
+   Category 4 of the `PatchBuffer`, targeting the load balance row for that
+   bus and block. Row indices are provided by `load_balance_row_starts` (one
+   per stage) and `load_bus_indices` (position of each stochastic bus within
+   the LP row layout).
+
+3. **State independence**: load noise realizations do not produce additional
+   state variables. The Benders cut coefficients cover only the hydro state
+   dimensions (storage volumes and AR lags). Load noise enters the subproblem
+   purely as a right-hand side perturbation of the bus power balance constraints.
+
+Load noise follows the same PAR(p) framework used for inflow noise — the
+combined noise vector `[inflow_noise | load_noise]` is drawn from the
+correlated multivariate normal defined by the `StochasticContext`. For details
+on the PAR(p) model and correlation structure, see the `cobre-stochastic`
+crate page.
 
 ## Convergence monitoring
 
@@ -267,15 +316,15 @@ assert!((monitor.gap() - 10.0 / 110.0).abs() < 1e-10);
 
 Accessor methods on `ConvergenceMonitor`:
 
-| Method               | Returns                                            |
-| -------------------- | -------------------------------------------------- |
-| `lower_bound()`      | Latest LB value                                    |
-| `upper_bound()`      | Latest UB mean                                     |
-| `upper_bound_std()`  | Latest UB standard deviation                       |
-| `ci_95_half_width()` | Latest 95% CI half-width                           |
-| `gap()`              | Convergence gap: (UB - LB) / max(1.0, abs(UB))    |
-| `iteration_count()`  | Number of completed `update` calls               |
-| `set_shutdown()`     | Signal a graceful shutdown before next update      |
+| Method               | Returns                                        |
+| -------------------- | ---------------------------------------------- |
+| `lower_bound()`      | Latest LB value                                |
+| `upper_bound()`      | Latest UB mean                                 |
+| `upper_bound_std()`  | Latest UB standard deviation                   |
+| `ci_95_half_width()` | Latest 95% CI half-width                       |
+| `gap()`              | Convergence gap: (UB - LB) / max(1.0, abs(UB)) |
+| `iteration_count()`  | Number of completed `update` calls             |
+| `set_shutdown()`     | Signal a graceful shutdown before next update  |
 
 ## Event system
 
@@ -379,7 +428,7 @@ The training loop makes no heap allocations on the hot path inside the
 iteration loop. All workspace buffers are allocated once before the loop:
 
 - `TrajectoryRecord` flat vec: `forward_passes * num_stages` records.
-- `PatchBuffer`: `N * (2 + L)` entries.
+- `PatchBuffer`: `N * (2 + L) + M * max_blocks` entries.
 - `ExchangeBuffers`: `local_count * num_ranks * n_state` floats.
 - `CutSyncBuffers`: `max_cuts_per_rank * num_ranks * cut_wire_size(n_state)` bytes.
 
@@ -409,7 +458,7 @@ of `cobre-comm`).
 
 ### Test suite overview
 
-The crate has tests across 15 source modules covering:
+The crate has 590 tests across 15 source modules covering:
 
 - Unit tests for each module's core logic.
 - Integration tests using `LocalBackend` (single-rank) for the

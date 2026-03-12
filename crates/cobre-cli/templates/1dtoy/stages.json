@@ -1,5 +1,5 @@
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/stages.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
   "policy_graph": {
     "type": "finite_horizon",
     "annual_discount_rate": 0.12

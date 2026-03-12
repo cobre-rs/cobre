@@ -62,7 +62,7 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{StochasticContext, evaluate_par_inflows, sample_forward, solve_par_noises};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
@@ -401,9 +401,13 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     records: &mut [TrajectoryRecord],
     indexer: &StageIndexer,
     fwd_offset: usize,
-    _inflow_method: &InflowNonNegativityMethod,
+    inflow_method: &InflowNonNegativityMethod,
     noise_scale: &[f64],
     n_hydros: usize,
+    n_load_buses: usize,
+    load_balance_row_starts: &[usize],
+    load_bus_indices: &[usize],
+    block_counts_per_stage: &[usize],
 ) -> Result<ForwardResult, SddpError> {
     let num_stages = horizon.num_stages();
     let forward_passes = local_forward_passes;
@@ -487,7 +491,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let (start_m, end_m) = partition(forward_passes, n_workers, w);
             let mut local_cost_sum = 0.0_f64;
             let mut local_cost_sum_sq = 0.0_f64;
-            let mut local_solve_count_before = ws.solver.statistics().solve_count;
+            let local_solve_count_before = ws.solver.statistics().solve_count;
 
             for (local_m, m) in (start_m..end_m).enumerate() {
                 // Global scenario index for deterministic seed derivation
@@ -524,15 +528,87 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     // the template row bounds; the patch value overwrites the
                     // complete RHS, so the transformed value must include both
                     // the deterministic base and the stochastic noise term.
+                    //
+                    // When truncation is active, η is clamped to the floor that
+                    // produces zero inflow so that the water-balance RHS never
+                    // drives the sampled inflow below zero.
                     ws.noise_buf.clear();
                     let stage_offset = t * n_hydros;
-                    for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                        let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                        ws.noise_buf
-                            .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                    match inflow_method {
+                        InflowNonNegativityMethod::Truncation => {
+                            let max_order = indexer.max_par_order;
+                            let lag_len = max_order * n_hydros;
+                            ws.lag_matrix_buf.clear();
+                            ws.lag_matrix_buf.resize(lag_len, 0.0);
+                            for h in 0..n_hydros {
+                                for l in 0..max_order {
+                                    ws.lag_matrix_buf[l * n_hydros + h] = ws.current_state
+                                        [indexer.inflow_lags.start + h * max_order + l];
+                                }
+                            }
+
+                            let par_lp = stochastic.par_lp();
+                            ws.par_inflow_buf.clear();
+                            ws.par_inflow_buf.resize(n_hydros, 0.0);
+                            evaluate_par_inflows(
+                                par_lp,
+                                t,
+                                &ws.lag_matrix_buf,
+                                raw_noise,
+                                &mut ws.par_inflow_buf,
+                            );
+
+                            let has_negative = ws.par_inflow_buf.iter().any(|&a| a < 0.0);
+                            if has_negative {
+                                ws.eta_floor_buf.clear();
+                                ws.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+                                solve_par_noises(
+                                    par_lp,
+                                    t,
+                                    &ws.lag_matrix_buf,
+                                    &ws.zero_targets_buf[..n_hydros],
+                                    &mut ws.eta_floor_buf,
+                                );
+                            }
+
+                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                                let clamped_eta = if has_negative && ws.par_inflow_buf[h] < 0.0 {
+                                    eta.max(ws.eta_floor_buf[h])
+                                } else {
+                                    eta
+                                };
+                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
+                                ws.noise_buf
+                                    .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
+                            }
+                        }
+                        InflowNonNegativityMethod::None
+                        | InflowNonNegativityMethod::Penalty { .. } => {
+                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
+                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
+                                ws.noise_buf
+                                    .push(base_rhs + noise_scale[stage_offset + h] * eta);
+                            }
+                        }
                     }
 
-                    // Rebuild LP: template → cuts → scenario-specific row bounds.
+                    // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
+                    ws.load_rhs_buf.clear();
+                    if n_load_buses > 0 {
+                        let load_lp = stochastic.normal_lp();
+                        let n_blks = block_counts_per_stage[t];
+                        for lb_idx in 0..n_load_buses {
+                            let eta = raw_noise[n_hydros + lb_idx];
+                            let mean = load_lp.mean(t, lb_idx);
+                            let std = load_lp.std(t, lb_idx);
+                            let realization = (mean + std * eta).max(0.0);
+                            for blk in 0..n_blks {
+                                let factor = load_lp.block_factor(t, lb_idx, blk);
+                                ws.load_rhs_buf.push(realization * factor);
+                            }
+                        }
+                    }
+
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
 
@@ -542,6 +618,17 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         &ws.noise_buf,
                         base_rows[t],
                     );
+
+                    if n_load_buses > 0 {
+                        let n_blks = block_counts_per_stage[t];
+                        ws.patch_buf.fill_load_patches(
+                            load_balance_row_starts[t],
+                            n_blks,
+                            &ws.load_rhs_buf,
+                            load_bus_indices,
+                        );
+                    }
+
                     let patch_count = ws.patch_buf.forward_patch_count();
                     ws.solver.set_row_bounds(
                         &ws.patch_buf.indices[..patch_count],
@@ -582,8 +669,6 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     // Stage cost = LP objective minus theta (future cost variable).
                     let stage_cost = view.objective - view.primal[indexer.theta];
 
-                    // Record index is relative to this worker's sub-slice:
-                    // local_m * num_stages + t.
                     let record_idx = local_m * num_stages + t;
                     worker_records[record_idx].primal.clear();
                     worker_records[record_idx]
@@ -618,9 +703,6 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             }
 
             let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-            // Reset baseline so repeated calls accumulate correctly.
-            local_solve_count_before = ws.solver.statistics().solve_count;
-            let _ = local_solve_count_before; // suppress unused-assignment lint
 
             Ok((local_cost_sum, local_cost_sum_sq, local_solves))
         })
@@ -661,6 +743,7 @@ mod tests {
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        LoadModel,
     };
     use cobre_core::temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -992,7 +1075,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1124,10 +1207,18 @@ mod tests {
             patch_buf: crate::lp_builder::PatchBuffer::new(
                 indexer.hydro_count,
                 indexer.max_par_order,
+                0,
+                0,
             ),
             current_state: Vec::with_capacity(indexer.n_state),
             noise_buf: Vec::with_capacity(indexer.hydro_count),
             inflow_m3s_buf: Vec::with_capacity(indexer.hydro_count),
+            lag_matrix_buf: Vec::with_capacity(indexer.max_par_order * indexer.hydro_count),
+            par_inflow_buf: Vec::with_capacity(indexer.hydro_count),
+            eta_floor_buf: Vec::with_capacity(indexer.hydro_count),
+            zero_targets_buf: vec![0.0_f64; indexer.hydro_count],
+            load_rhs_buf: Vec::new(),
+            row_lower_buf: Vec::new(),
         }
     }
 
@@ -1180,6 +1271,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1244,6 +1339,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1319,6 +1418,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1639,6 +1742,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .map(|_| ())
     }
@@ -1774,6 +1881,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1800,6 +1911,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1869,6 +1984,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1911,6 +2030,480 @@ mod tests {
             "total solve count {total_solves} must equal n_scenarios * num_stages = {}",
             n_scenarios * num_stages
         );
+    }
+
+    // ── Truncation unit tests ────────────────────────────────────────────────
+
+    /// Build a `StochasticContext` for 1 hydro and 1 stage with the given
+    /// `mean_m3s` and `std_m3s`. Used by truncation tests.
+    #[allow(clippy::too_many_lines)]
+    fn make_stochastic_1h_1s(mean_m3s: f64, std_m3s: f64) -> StochasticContext {
+        use std::collections::BTreeMap;
+
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{
+            CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        };
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(1),
+            name: "H1".to_string(),
+            bus_id: EntityId(0),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let inflow_model = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s,
+            std_m3s,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "g1".to_string(),
+                    entities: vec![CorrelationEntity {
+                        entity_type: "inflow".to_string(),
+                        id: EntityId(1),
+                    }],
+                    matrix: vec![vec![1.0]],
+                }],
+            },
+        );
+        let correlation = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(vec![stage])
+            .inflow_models(vec![inflow_model])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(&system, 42, &[]).unwrap()
+    }
+
+    /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
+    /// row at position `base_row_idx`.
+    ///
+    /// This is a two-row template:
+    /// - Row 0: storage fixing row (not used as water-balance)
+    /// - Row 1: water-balance row (`base_rows`[t] = 1)
+    ///
+    /// `row_lower[1]` encodes the deterministic inflow base (ζ * `mean_m3s`).
+    fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
+        StageTemplate {
+            num_cols: 3,
+            num_rows: 2,
+            num_nz: 1,
+            col_starts: vec![0_i32, 0, 1, 1],
+            row_indices: vec![0_i32],
+            values: vec![1.0],
+            col_lower: vec![0.0, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            objective: vec![0.0, 0.0, 1.0],
+            row_lower: vec![0.0, base_rhs],
+            row_upper: vec![0.0, base_rhs],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 1,
+            n_hydro: 1,
+            max_par_order: 0,
+        }
+    }
+
+    /// Helper that runs `run_forward_pass` with 1 scenario, 1 stage, and returns
+    /// the `noise_buf` from the workspace after the call.
+    fn run_single_stage_forward(
+        stochastic: &StochasticContext,
+        inflow_method: &InflowNonNegativityMethod,
+        base_rhs: f64,
+        noise_scale_val: f64,
+    ) -> Vec<f64> {
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 0.0, indexer.theta, 0.0);
+        let solver = MockSolver::always_ok(solution);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let template = minimal_template_1_0_with_base(base_rhs);
+        let templates = vec![template];
+        // base_rows[t] = 1: the water-balance row is at row index 1.
+        let base_rows = vec![1usize];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut records = empty_records(1);
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(1, 1);
+        let noise_scale = vec![noise_scale_val];
+
+        let _ = run_forward_pass(
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            stochastic,
+            1,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            inflow_method,
+            &noise_scale,
+            1,
+            0,
+            &[],
+            &[],
+            &[1usize],
+        )
+        .unwrap();
+
+        ws.noise_buf.clone()
+    }
+
+    /// AC: truncation clamps negative inflow noise.
+    ///
+    /// Set up a 1-hydro, 1-stage system where the PAR mean is very large
+    /// negative (`mean_m3s = -1000.0`) and sigma is small (`std_m3s = 1.0`)
+    /// so that the deterministic base alone produces a hugely negative inflow.
+    /// Any sampled noise value will produce a negative inflow without truncation.
+    ///
+    /// With truncation active: the noise buffer entry must be >= 0.0 because
+    /// `noise_buf[h] = base_rhs + noise_scale * clamped_eta`
+    /// = `zeta * (mean + sigma * eta_min)` = `zeta * 0.0` = 0.0 (or near it).
+    ///
+    /// Concretely: `noise_buf[0] = base_rhs + noise_scale * clamped_eta`
+    /// where `base_rhs = zeta * (-1000)` and `noise_scale = zeta * 1`.
+    /// After clamping: `clamped_eta = max(eta, (0 - (-1000)) / 1) = 1000`.
+    /// So `noise_buf[0] = zeta * (-1000) + zeta * 1000 = 0`.
+    ///
+    /// The actual PAR inflow = `mean + sigma * clamped_eta = -1000 + 1 * 1000 = 0 >= 0`.
+    #[test]
+    fn truncation_clamps_negative_inflow_noise() {
+        // Deterministic base = -1000 m³/s (always produces negative inflow).
+        // sigma = 1.0. For AR(0): zeta * mean = base_rhs, zeta * sigma = noise_scale.
+        // Use zeta = 1.0 for simplicity (noise_scale = sigma).
+        let mean_m3s = -1000.0_f64;
+        let sigma = 1.0_f64;
+        let zeta = 1.0_f64; // simplified for test: treat zeta=1
+        let base_rhs = zeta * mean_m3s;
+        let noise_scale_val = zeta * sigma;
+
+        let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
+
+        let noise_buf_truncation = run_single_stage_forward(
+            &stochastic,
+            &InflowNonNegativityMethod::Truncation,
+            base_rhs,
+            noise_scale_val,
+        );
+
+        assert_eq!(noise_buf_truncation.len(), 1, "noise_buf must have 1 entry");
+        // After truncation: noise_buf[0] = base_rhs + noise_scale * eta_clamped.
+        // eta_clamped = max(eta, eta_min) where eta_min = (0 - mean) / sigma = 1000.
+        // noise_buf[0] = -1000 + 1 * 1000 = 0.0 (exactly, no rounding).
+        assert!(
+            noise_buf_truncation[0] >= 0.0,
+            "after truncation, noise_buf[0] must be >= 0 (inflow cannot be negative), got {}",
+            noise_buf_truncation[0]
+        );
+    }
+
+    /// AC: truncation does not clamp when inflow is positive.
+    ///
+    /// With a very large positive mean (`mean_m3s = 1000.0`) and small sigma,
+    /// the PAR inflow is always positive for any sampled noise. The noise buffer
+    /// must be identical to the no-truncation path.
+    #[test]
+    fn truncation_no_clamp_when_inflow_positive() {
+        let mean_m3s = 1000.0_f64;
+        let sigma = 1.0_f64;
+        let zeta = 1.0_f64;
+        let base_rhs = zeta * mean_m3s;
+        let noise_scale_val = zeta * sigma;
+
+        let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
+
+        let noise_buf_truncation = run_single_stage_forward(
+            &stochastic,
+            &InflowNonNegativityMethod::Truncation,
+            base_rhs,
+            noise_scale_val,
+        );
+        let noise_buf_none = run_single_stage_forward(
+            &stochastic,
+            &InflowNonNegativityMethod::None,
+            base_rhs,
+            noise_scale_val,
+        );
+
+        assert_eq!(noise_buf_truncation.len(), 1);
+        assert_eq!(noise_buf_none.len(), 1);
+        assert_eq!(
+            noise_buf_truncation[0].to_bits(),
+            noise_buf_none[0].to_bits(),
+            "when inflow is positive, truncation must not alter the noise buffer (expected identical bits)"
+        );
+    }
+
+    /// AC: `InflowNonNegativityMethod::None` produces unchanged behavior when
+    /// truncation code is present in the same function.
+    ///
+    /// Uses the existing 3-stage fixture to verify no regression.
+    #[test]
+    fn none_method_unchanged_with_truncation_code_present() {
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let config = TrainingConfig {
+            forward_passes: 2,
+            max_iterations: 100,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+        };
+        let horizon = HorizonMode::Finite { num_stages: 3 };
+        let templates = vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ];
+        let base_rows = vec![1usize, 1, 1];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut records = empty_records(2 * 3);
+        let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
+
+        let result = run_forward_pass(
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            config.forward_passes as usize,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
+        )
+        .unwrap();
+
+        // Regression guard: same assertions as `ac_two_scenarios_three_stages_fixed_solution`.
+        assert_eq!(result.scenario_count, 2.0);
+        for (i, record) in records.iter().enumerate() {
+            assert_eq!(
+                record.stage_cost, 70.0,
+                "none_method: record[{i}].stage_cost should be 70.0 (objective - theta)"
+            );
+        }
+    }
+
+    // ── Load noise test helpers ─────────────────────────────────────────────
+
+    /// Build a `StochasticContext` with 1 hydro and 1 stochastic load bus over
+    /// a single stage.
+    ///
+    /// `mean_mw` and `std_mw` control the load bus noise model.  An empty
+    /// correlation model is used so the two noise entities are treated as
+    /// independent standard normals.
+    #[allow(clippy::too_many_lines)]
+    fn make_stochastic_context_1_hydro_1_load_bus(mean_mw: f64, std_mw: f64) -> StochasticContext {
+        let bus0 = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let bus1 = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(10),
+            name: "H10".to_string(),
+            bus_id: EntityId(0),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: cobre_core::entities::hydro::HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let inflow_model = InflowModel {
+            hydro_id: EntityId(10),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let load_model = LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw,
+            std_mw,
+        };
+        // No correlation profile: entities are treated as independent.
+        let correlation = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles: std::collections::BTreeMap::new(),
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus0, bus1])
+            .hydros(vec![hydro])
+            .stages(vec![stage])
+            .inflow_models(vec![inflow_model])
+            .load_models(vec![load_model])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -1974,6 +2567,10 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            &[],
+            &[],
+            &[1usize, 1, 1],
         );
 
         // Worker 1's partition: partition(10, 4, 1) → start_m=3.
@@ -2000,5 +2597,244 @@ mod tests {
             Err(other) => panic!("expected SddpError::Infeasible, got: {other:?}"),
             Ok(_) => panic!("expected Err(SddpError::Infeasible), got Ok"),
         }
+    }
+
+    // ── Load noise wiring tests ──────────────────────────────────────────────
+
+    /// Verify that the load balance row is patched to a positive value when
+    /// `mean_mw + std_mw * eta > 0`.
+    ///
+    /// With `mean_mw = 300.0` and `std_mw = 30.0`, any standard-normal draw `eta`
+    /// satisfying `|eta| <= 10` produces a positive realization, which holds with
+    /// overwhelming probability.  After a single-scenario forward pass the
+    /// `load_rhs_buf` must contain a positive value equal to
+    /// `max(0, 300 + 30 * eta) * block_factor`.  Since no load factors file is
+    /// supplied, `block_factor = 1.0`, so `load_rhs_buf[0] = max(0, 300 + 30 * eta)`.
+    #[test]
+    fn forward_pass_load_noise_positive_realization() {
+        let n_load_buses = 1usize;
+        let stochastic = make_stochastic_context_1_hydro_1_load_bus(300.0, 30.0);
+        let indexer = StageIndexer::new(1, 0);
+        let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
+        let mut ws = SolverWorkspace {
+            solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
+            patch_buf,
+            current_state: Vec::with_capacity(indexer.n_state),
+            noise_buf: Vec::with_capacity(1),
+            inflow_m3s_buf: Vec::with_capacity(1),
+            lag_matrix_buf: Vec::with_capacity(0),
+            par_inflow_buf: Vec::with_capacity(1),
+            eta_floor_buf: Vec::with_capacity(1),
+            zero_targets_buf: vec![0.0_f64; 1],
+            load_rhs_buf: Vec::with_capacity(n_load_buses),
+            row_lower_buf: Vec::new(),
+        };
+
+        let templates = vec![minimal_template_1_0_with_base(100.0)];
+        let base_rows = vec![1usize];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut records = empty_records(1);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let mut basis_store = BasisStore::new(1, 1);
+        let load_balance_row_starts = vec![10usize];
+        let load_bus_indices = vec![0usize];
+        let block_counts_per_stage = vec![1usize];
+
+        let _fwd = run_forward_pass(
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            1,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[1.0],
+            1,
+            n_load_buses,
+            &load_balance_row_starts,
+            &load_bus_indices,
+            &block_counts_per_stage,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ws.load_rhs_buf.len(),
+            n_load_buses,
+            "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
+        );
+        assert!(
+            ws.load_rhs_buf[0] > 0.0,
+            "load realization must be positive with mean=300, std=30: got {}",
+            ws.load_rhs_buf[0]
+        );
+
+        let cat4_start = 2;
+        assert_eq!(
+            ws.patch_buf.lower[cat4_start], ws.load_rhs_buf[0],
+            "patch_buf lower must equal load_rhs_buf[0]"
+        );
+        assert_eq!(
+            ws.patch_buf.upper[cat4_start], ws.load_rhs_buf[0],
+            "patch_buf upper must equal load_rhs_buf[0] (equality constraint)"
+        );
+        assert_eq!(
+            ws.patch_buf.indices[cat4_start], 10,
+            "patch index must be load_balance_row_starts[0] + 0 * n_blks"
+        );
+    }
+
+    /// Verify that a load realization that would be negative is clamped to zero.
+    ///
+    /// With `mean_mw = -1000.0` and `std_mw = 1.0`, any standard-normal draw
+    /// (bounded to roughly +-5 in practice) produces `mean + std * eta ~= -1000`,
+    /// which must be clamped to `0.0` before block factor scaling.
+    #[test]
+    fn forward_pass_load_noise_clamped_to_zero() {
+        let n_load_buses = 1usize;
+        let stochastic = make_stochastic_context_1_hydro_1_load_bus(-1000.0, 1.0);
+        let indexer = StageIndexer::new(1, 0);
+        let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
+        let mut ws = SolverWorkspace {
+            solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
+            patch_buf,
+            current_state: Vec::with_capacity(indexer.n_state),
+            noise_buf: Vec::with_capacity(1),
+            inflow_m3s_buf: Vec::with_capacity(1),
+            lag_matrix_buf: Vec::with_capacity(0),
+            par_inflow_buf: Vec::with_capacity(1),
+            eta_floor_buf: Vec::with_capacity(1),
+            zero_targets_buf: vec![0.0_f64; 1],
+            load_rhs_buf: Vec::with_capacity(n_load_buses),
+            row_lower_buf: Vec::new(),
+        };
+
+        let templates = vec![minimal_template_1_0_with_base(100.0)];
+        let base_rows = vec![1usize];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut records = empty_records(1);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let mut basis_store = BasisStore::new(1, 1);
+        let load_balance_row_starts = vec![10usize];
+        let load_bus_indices = vec![0usize];
+        let block_counts_per_stage = vec![1usize];
+
+        let _fwd = run_forward_pass(
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            1,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[1.0],
+            1,
+            n_load_buses,
+            &load_balance_row_starts,
+            &load_bus_indices,
+            &block_counts_per_stage,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ws.load_rhs_buf.len(),
+            n_load_buses,
+            "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
+        );
+        assert_eq!(
+            ws.load_rhs_buf[0], 0.0,
+            "realization with mean=-1000 must be clamped to 0.0, got {}",
+            ws.load_rhs_buf[0]
+        );
+
+        let cat4_start = 2;
+        assert_eq!(
+            ws.patch_buf.lower[cat4_start], 0.0,
+            "patch lower must be 0.0 (clamped)"
+        );
+        assert_eq!(
+            ws.patch_buf.upper[cat4_start], 0.0,
+            "patch upper must be 0.0 (clamped)"
+        );
+    }
+
+    /// Verify that when `n_load_buses == 0` no load patches are applied and
+    /// `forward_patch_count()` equals `N*(2+L)`.
+    ///
+    /// With N=1 hydro, L=0 PAR order, and no load buses the patch count must be
+    /// exactly `1 * (2 + 0) = 2`.
+    #[test]
+    fn forward_pass_no_load_buses_unchanged() {
+        // Use the existing 1-hydro-3-stage context that has no load buses.
+        let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let indexer = StageIndexer::new(1, 0);
+        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let mut ws = single_workspace(MockSolver::always_ok(solution), &indexer);
+
+        let templates = vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ];
+        let base_rows = vec![1usize, 1, 1];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut records = empty_records(3); // 1 scenario * 3 stages
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 10, 0);
+        let horizon = HorizonMode::Finite { num_stages: 3 };
+        let mut basis_store = BasisStore::new(1, 3);
+
+        let _fwd = run_forward_pass(
+            std::slice::from_mut(&mut ws),
+            &mut basis_store,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            1,
+            0,
+            &horizon,
+            &initial_state,
+            &mut records,
+            &indexer,
+            0,
+            &InflowNonNegativityMethod::None,
+            &[],        // noise_scale empty when n_hydros=0
+            0,          // n_hydros = 0: skip inflow noise loop (minimal_template_1_0 has 1 row)
+            0,          // n_load_buses = 0: no load patches
+            &[],        // load_balance_row_starts
+            &[],        // load_bus_indices
+            &[1, 1, 1], // block_counts_per_stage
+        )
+        .unwrap();
+
+        // With n_load_buses=0, active_load_patches stays 0.
+        // forward_patch_count = N*(2+L) = 1*(2+0) = 2.
+        // The PatchBuffer was constructed for 1 hydro (single_workspace uses indexer.hydro_count=1).
+        assert_eq!(
+            ws.patch_buf.forward_patch_count(),
+            2,
+            "forward_patch_count must be N*(2+L)=2 when n_load_buses=0, got {}",
+            ws.patch_buf.forward_patch_count()
+        );
+        // load_rhs_buf must remain empty (never pushed to).
+        assert!(
+            ws.load_rhs_buf.is_empty(),
+            "load_rhs_buf must be empty when n_load_buses=0"
+        );
     }
 }

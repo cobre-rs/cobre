@@ -244,6 +244,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     inflow_method: &InflowNonNegativityMethod,
     noise_scale: &[f64],
     n_hydros: usize,
+    n_load_buses: usize,
+    max_blocks: usize,
+    load_balance_row_starts: &[usize],
+    load_bus_indices: &[usize],
+    block_counts_per_stage: &[usize],
 ) -> Result<TrainingResult, SddpError> {
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
@@ -277,6 +282,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         indexer.hydro_count,
         indexer.max_par_order,
         n_state,
+        n_load_buses,
+        max_blocks,
         solver_factory,
     )
     .map_err(SddpError::Solver)?;
@@ -290,7 +297,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Standalone patch buffer for the lower bound evaluation which uses the
     // single `solver` argument directly. The backward pass uses the workspace
     // pool's per-thread solvers and patch buffers instead.
-    let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
+    let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
     let mut convergence_monitor = ConvergenceMonitor::new(stopping_rules);
     let mut exchange_bufs = ExchangeBuffers::new(n_state, max_local_fwd, num_ranks);
     let mut cut_sync_bufs =
@@ -354,6 +361,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             inflow_method,
             noise_scale,
             n_hydros,
+            n_load_buses,
+            load_balance_row_starts,
+            load_bus_indices,
+            block_counts_per_stage,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -404,6 +415,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             my_fwd_offset,
             noise_scale,
             n_hydros,
+            n_load_buses,
+            load_balance_row_starts,
+            load_bus_indices,
+            block_counts_per_stage,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
@@ -971,7 +986,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     fn make_fcf(
@@ -1044,6 +1059,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1103,6 +1123,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         );
 
         assert!(
@@ -1171,6 +1196,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1284,6 +1314,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1342,6 +1377,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         );
 
         assert!(result.is_ok(), "train with no event_sender must not panic");
@@ -1398,6 +1438,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1461,6 +1506,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1537,6 +1587,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1632,6 +1687,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 
@@ -1716,6 +1776,11 @@ mod tests {
             &InflowNonNegativityMethod::None,
             &[],
             0,
+            0,
+            1,
+            &[],
+            &[],
+            &[1usize, 1],
         )
         .unwrap();
 

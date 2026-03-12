@@ -344,6 +344,43 @@ impl System {
         &self.scenario_source
     }
 
+    /// Replace the scenario models and correlation on this `System`, returning a new
+    /// `System` with updated fields and all other fields preserved.
+    ///
+    /// This is the only supported way to update `inflow_models` and `correlation`
+    /// after a `System` has been constructed — the fields are not public outside
+    /// this crate. All entity collections, topology, stages, penalties, bounds, and
+    /// study state are preserved unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cobre_core::{EntityId, SystemBuilder};
+    /// use cobre_core::scenario::{InflowModel, CorrelationModel};
+    ///
+    /// let system = SystemBuilder::new().build().expect("valid system");
+    /// let model = InflowModel {
+    ///     hydro_id: EntityId(1),
+    ///     stage_id: 0,
+    ///     mean_m3s: 100.0,
+    ///     std_m3s: 10.0,
+    ///     ar_coefficients: vec![],
+    ///     residual_std_ratio: 1.0,
+    /// };
+    /// let updated = system.with_scenario_models(vec![model], CorrelationModel::default());
+    /// assert_eq!(updated.inflow_models().len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_scenario_models(
+        mut self,
+        inflow_models: Vec<InflowModel>,
+        correlation: CorrelationModel,
+    ) -> Self {
+        self.inflow_models = inflow_models;
+        self.correlation = correlation;
+        self
+    }
+
     /// Rebuild all O(1) lookup indices from the entity collections.
     ///
     /// Required after deserialization: the `HashMap` lookup indices are not serialized

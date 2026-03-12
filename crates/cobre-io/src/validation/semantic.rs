@@ -42,6 +42,11 @@
 //! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
 //! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
+//! |17  | Each `block_factors[j].block_id` matches a `Block.index` in its stage  | `scenarios/load_factors.json`                  | `BusinessRuleViolation`  |
+//! |18  | Load-factors entry for `(bus_id, stage_id)` with `std_mw == 0.0`       | `scenarios/load_factors.json`                  | `ModelQuality` (warning) |
+//! |19  | `season_definitions` required in `stages.json` when estimating          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
+//! |20  | Minimum observations per `(hydro, season)` group for estimation         | `scenarios/inflow_history.parquet`             | `ModelQuality` (warning) |
+//! |21  | All hydros in `hydros.json` must have observations in history           | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
 
 use std::collections::{HashMap, HashSet};
 
@@ -423,7 +428,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 /// Performs Layer 5b semantic validation: stage structure, penalty ordering,
 /// and scenario model rules.
 ///
-/// All 16 rules are checked regardless of failures in earlier rules — every
+/// All 21 rules are checked regardless of failures in earlier rules — every
 /// violation is collected before returning.  This function is infallible; it
 /// never returns a `Result`.  Errors are pushed to `ctx` as
 /// [`ErrorKind::InvalidValue`] or [`ErrorKind::BusinessRuleViolation`] entries;
@@ -438,6 +443,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 ///
 /// Rules 12-13 are only checked when `data.inflow_seasonal_stats` is non-empty.
 /// Rules 14-16 are only checked when `data.correlation` is `Some`.
+/// Rules 17-18 are only checked when `data.load_factors` is non-empty.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_stages_penalties_scenarios(
     data: &ParsedData,
@@ -448,6 +454,8 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_fpha_penalty_rule(data, ctx);
     check_scenario_models(data, ctx);
     check_correlation_matrices(data, ctx);
+    check_load_factor_consistency(data, ctx);
+    check_estimation_prerequisites(data, ctx);
 }
 
 // ── Tolerances ────────────────────────────────────────────────────────────────
@@ -951,6 +959,201 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
+// ── Rules 17-18: Load factor consistency ─────────────────────────────────────
+
+/// Validates cross-file consistency between `load_factors.json` and
+/// `load_seasonal_stats.parquet`.
+///
+/// Rule 17: For every `LoadFactorEntry`, each `block_factors[j].block_id` must
+/// match a `Block.index` in the corresponding stage's `blocks` array.
+///
+/// Rule 18: A `LoadFactorEntry` for a `(bus_id, stage_id)` pair where
+/// `load_seasonal_stats` has `std_mw == 0.0` (deterministic load) produces a
+/// `ModelQuality` warning because block factors have no effect on deterministic
+/// loads.
+///
+/// Silently skips when `data.load_factors` is empty.
+fn check_load_factor_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
+    if data.load_factors.is_empty() {
+        return;
+    }
+
+    // Build a map from stage_id to the set of valid block indices for that stage.
+    let stage_block_indices: HashMap<i32, HashSet<usize>> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| {
+            let indices: HashSet<usize> = s.blocks.iter().map(|b| b.index).collect();
+            (s.id, indices)
+        })
+        .collect();
+
+    // Build a map from (bus_id, stage_id) to std_mw for deterministic-load detection.
+    let load_std: HashMap<(i32, i32), f64> = data
+        .load_seasonal_stats
+        .iter()
+        .map(|row| ((row.bus_id.0, row.stage_id), row.std_mw))
+        .collect();
+
+    for (i, entry) in data.load_factors.iter().enumerate() {
+        // Rule 17: each block_id must match a Block.index in the entry's stage.
+        if let Some(valid_indices) = stage_block_indices.get(&entry.stage_id) {
+            for bf in &entry.block_factors {
+                let block_idx = usize::try_from(bf.block_id).unwrap_or(usize::MAX);
+                if !valid_indices.contains(&block_idx) {
+                    let sorted: Vec<usize> = {
+                        let mut v: Vec<usize> = valid_indices.iter().copied().collect();
+                        v.sort_unstable();
+                        v
+                    };
+                    ctx.add_error(
+                        ErrorKind::BusinessRuleViolation,
+                        "scenarios/load_factors.json",
+                        Some(format!("LoadFactorEntry[{i}]")),
+                        format!(
+                            "LoadFactorEntry[{i}] has block_id {} which is not in the block set \
+                             {sorted:?} for stage {}",
+                            bf.block_id, entry.stage_id
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Rule 18: warn when the (bus_id, stage_id) pair has std_mw == 0.0.
+        let key = (entry.bus_id.0, entry.stage_id);
+        if let Some(&std_mw) = load_std.get(&key) {
+            if std_mw == 0.0 {
+                ctx.add_warning(
+                    ErrorKind::ModelQuality,
+                    "scenarios/load_factors.json",
+                    Some(format!("LoadFactorEntry[{i}]")),
+                    format!(
+                        "LoadFactorEntry[{i}] (bus {}, stage {}) references a deterministic load \
+                         (std_mw == 0.0); block factors have no effect on deterministic loads",
+                        entry.bus_id.0, entry.stage_id
+                    ),
+                );
+            }
+        }
+    }
+}
+
+// ── Rules 19-21: Estimation prerequisites ─────────────────────────────────────
+
+/// Validates prerequisites for the history-based PAR(p) estimation path.
+///
+/// Runs only when `inflow_history.parquet` is present and
+/// `inflow_seasonal_stats.parquet` is absent — i.e., when the estimation path
+/// will be triggered (same condition used by the estimation pipeline).
+///
+/// Rule 19: `season_definitions` must be present in `stages.json` so that
+/// observations can be grouped by season.
+///
+/// Rule 20: Each `(hydro_id, season_id)` group must have at least
+/// `config.estimation.min_observations_per_season` observations.
+///
+/// Rule 21: Every hydro in the system must have at least one observation in
+/// `inflow_history.parquet`; missing hydros cannot be estimated.
+fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext) {
+    // Detect the estimation path: history present AND stats absent.
+    let estimation_active =
+        !data.inflow_history.is_empty() && data.inflow_seasonal_stats.is_empty();
+
+    if !estimation_active {
+        return;
+    }
+
+    // Rule 19: season_definitions (season_map) must be present.
+    if data.stages.policy_graph.season_map.is_none() {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "scenarios/inflow_history.parquet",
+            None::<&str>,
+            "season_definitions is required in stages.json when estimating from \
+             inflow_history.parquet; add a season_definitions section to stages.json",
+        );
+    }
+
+    // Rule 21: every hydro must have at least one observation.
+    let hydro_ids_in_history: HashSet<i32> =
+        data.inflow_history.iter().map(|r| r.hydro_id.0).collect();
+    let mut missing_hydros: Vec<i32> = data
+        .hydros
+        .iter()
+        .filter(|h| !hydro_ids_in_history.contains(&h.id.0))
+        .map(|h| h.id.0)
+        .collect();
+    missing_hydros.sort_unstable();
+    for id in missing_hydros {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "scenarios/inflow_history.parquet",
+            Some(format!("Hydro {id}")),
+            format!(
+                "hydro {id} has no observations in inflow_history.parquet but estimation \
+                 is required; add historical inflow data for this hydro"
+            ),
+        );
+    }
+
+    // Rule 20: warn for (hydro, season) groups with fewer than the minimum
+    // observations.  Only possible when season_map is Some; if it is None,
+    // Rule 19 already emitted an error — skip to avoid a confusing cascade.
+    if let Some(_season_map) = &data.stages.policy_graph.season_map {
+        let min_obs = data.config.estimation.min_observations_per_season as usize;
+
+        // Build a stage index: (start_date, end_date, season_id) in canonical order.
+        // Stages are already sorted by id (canonical order), which matches date order.
+        let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data
+            .stages
+            .stages
+            .iter()
+            .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, sid)))
+            .collect();
+
+        // Count observations per (hydro_id, season_id).
+        let mut counts: HashMap<(i32, usize), usize> = HashMap::new();
+        for row in &data.inflow_history {
+            // Find the season for this observation's date.
+            let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
+            let season_id = if pos > 0 {
+                let (_, end_date, sid) = stage_index[pos - 1];
+                if row.date < end_date { Some(sid) } else { None }
+            } else {
+                None
+            };
+
+            if let Some(sid) = season_id {
+                *counts.entry((row.hydro_id.0, sid)).or_insert(0) += 1;
+            }
+        }
+
+        // Emit a warning for each (hydro, season) below the minimum.
+        let mut violations: Vec<(i32, usize, usize)> = counts
+            .iter()
+            .filter(|&(_, n)| *n < min_obs)
+            .map(|(&(hid, sid), &n)| (hid, sid, n))
+            .collect();
+        // Sort for deterministic output order.
+        violations.sort_unstable_by_key(|&(hid, sid, _)| (hid, sid));
+        for (hid, sid, n) in violations {
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "scenarios/inflow_history.parquet",
+                Some(format!("Hydro {hid}")),
+                format!(
+                    "hydro {hid} season {sid} has {n} observations \
+                     (minimum recommended: {min_obs}); estimation accuracy may be \
+                     insufficient with so few observations"
+                ),
+            );
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -958,7 +1161,10 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
     clippy::unwrap_used,
     clippy::panic,
     clippy::too_many_lines,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 mod tests {
     use super::*;
@@ -1948,7 +2154,10 @@ mod tests {
 
     // ── Tests for validate_semantic_stages_penalties_scenarios ────────────────
 
-    use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
+    use crate::scenarios::{
+        BlockFactor, InflowArCoefficientRow, InflowSeasonalStatsRow, LoadFactorEntry,
+        LoadSeasonalStatsRow,
+    };
     use cobre_core::{
         entities::DeficitSegment,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
@@ -2831,6 +3040,436 @@ mod tests {
             !ctx.has_errors(),
             "empty correlation and inflow should produce no errors, got: {:?}",
             ctx.errors()
+        );
+    }
+
+    // ── Rules 17-18: Load factor consistency ─────────────────────────────────
+
+    /// Build a `StagesData` with one stage that has one block (index = 0).
+    fn make_stages_with_block(stage_id: i32) -> StagesData {
+        let mut stage = make_stage(stage_id);
+        stage.blocks = vec![Block {
+            index: 0,
+            name: "FLAT".to_string(),
+            duration_hours: 744.0,
+        }];
+        StagesData {
+            stages: vec![stage],
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: None,
+            },
+            scenario_source: ScenarioSource {
+                sampling_scheme: SamplingScheme::InSample,
+                seed: Some(42),
+                selection_mode: None,
+            },
+        }
+    }
+
+    /// `LoadFactorEntry` with a `block_id` not present in the stage's blocks
+    /// produces 1 `BusinessRuleViolation` error.
+    #[test]
+    fn test_5b_load_factors_invalid_block_id() {
+        let mut data = make_data_5b(
+            vec![],
+            make_stages_with_block(0),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // Stage 0 has block index 0 only; block_id=99 is invalid.
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 99,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected 1 BusinessRuleViolation, got: {errors:?}"
+        );
+        assert!(
+            errors[0].file.to_string_lossy().contains("load_factors"),
+            "error should reference load_factors.json"
+        );
+        assert!(
+            errors[0].message.contains("99"),
+            "message should mention invalid block_id 99"
+        );
+    }
+
+    /// `LoadFactorEntry` for a `(bus_id, stage_id)` where `load_seasonal_stats`
+    /// has `std_mw == 0.0` produces 1 `ModelQuality` warning.
+    #[test]
+    fn test_5b_load_factors_deterministic_bus_warning() {
+        let mut data = make_data_5b(
+            vec![],
+            make_stages_with_block(0),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // Bus 1, stage 0 with std_mw == 0.0 (deterministic load).
+        data.load_seasonal_stats = vec![LoadSeasonalStatsRow {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "deterministic load warning should not produce an error, got: {:?}",
+            ctx.errors()
+        );
+        let warnings = ctx.warnings();
+        let relevant: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality)
+            .filter(|w| w.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        assert_eq!(
+            relevant.len(),
+            1,
+            "expected 1 ModelQuality warning for load_factors.json, got: {warnings:?}"
+        );
+    }
+
+    /// Empty `load_factors` produces zero load-related diagnostics.
+    #[test]
+    fn test_5b_load_factors_empty_no_errors() {
+        let data = make_data_5b(
+            vec![],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        // load_factors is already empty in make_data_5b
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let load_factor_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        let load_factor_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| w.file.to_string_lossy().contains("load_factors"))
+            .collect();
+        assert!(
+            load_factor_errors.is_empty() && load_factor_warnings.is_empty(),
+            "empty load_factors should produce no load-related diagnostics; \
+             errors: {load_factor_errors:?}, warnings: {load_factor_warnings:?}"
+        );
+    }
+
+    // ── Estimation prerequisites tests (Rules 19-21) ──────────────────────────
+
+    use cobre_core::temporal::{SeasonCycleType, SeasonDefinition, SeasonMap};
+
+    use crate::scenarios::InflowHistoryRow;
+
+    /// Build a monthly `SeasonMap` with 12 seasons (January=0 .. December=11).
+    fn make_monthly_season_map() -> SeasonMap {
+        let seasons = (0..12u32)
+            .map(|m| SeasonDefinition {
+                id: m as usize,
+                label: format!("Month{m}"),
+                month_start: m + 1,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        }
+    }
+
+    /// Build `n_obs` `InflowHistoryRow` records for `hydro_id`, one per calendar
+    /// month starting from January 2000, dated the 15th so they fall within a
+    /// monthly stage's `[1st, 1st-of-next-month)` window.
+    fn make_history_rows(hydro_id: i32, n_obs: usize) -> Vec<InflowHistoryRow> {
+        let mut rows = Vec::with_capacity(n_obs);
+        for i in 0..n_obs {
+            let year = 2000 + (i / 12) as i32;
+            let month = (i % 12) as u32 + 1;
+            let date = chrono::NaiveDate::from_ymd_opt(year, month, 15).unwrap();
+            rows.push(InflowHistoryRow {
+                hydro_id: EntityId::from(hydro_id),
+                date,
+                value_m3s: 100.0,
+            });
+        }
+        rows
+    }
+
+    /// Build a `StagesData` whose stages cover `n_months` monthly periods
+    /// starting from January 2000, each with `season_id = month_index % 12`.
+    /// The policy graph includes a `SeasonMap` when `with_season_map` is `true`.
+    fn make_stages_with_seasons(n_months: usize, with_season_map: bool) -> StagesData {
+        let mut stages = Vec::with_capacity(n_months);
+        for i in 0..n_months {
+            let year = 2000 + (i / 12) as i32;
+            let month = (i % 12) as u32 + 1;
+            let start_date = chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+            let (end_year, end_month) = if month == 12 {
+                (year + 1, 1u32)
+            } else {
+                (year, month + 1)
+            };
+            let end_date = chrono::NaiveDate::from_ymd_opt(end_year, end_month, 1).unwrap();
+            let season_id = i % 12;
+            stages.push(Stage {
+                index: i,
+                id: i as i32,
+                start_date,
+                end_date,
+                season_id: Some(season_id),
+                blocks: vec![],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            });
+        }
+        let season_map = if with_season_map {
+            Some(make_monthly_season_map())
+        } else {
+            None
+        };
+        StagesData {
+            stages,
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map,
+            },
+            scenario_source: ScenarioSource {
+                sampling_scheme: SamplingScheme::InSample,
+                seed: Some(42),
+                selection_mode: None,
+            },
+        }
+    }
+
+    /// Build `ParsedData` for estimation prerequisite tests.
+    ///
+    /// `inflow_history` rows are provided directly; `inflow_seasonal_stats` is
+    /// empty (triggering the estimation path when history is non-empty).
+    fn make_data_estimation(
+        hydros: Vec<Hydro>,
+        stages: StagesData,
+        inflow_history: Vec<InflowHistoryRow>,
+    ) -> ParsedData {
+        ParsedData {
+            config: minimal_config(),
+            penalties: minimal_global_penalties(),
+            stages,
+            initial_conditions: cobre_core::initial_conditions::InitialConditions {
+                storage: vec![],
+                filling_storage: vec![],
+            },
+            buses: vec![Bus {
+                id: EntityId::from(1),
+                name: "BUS_1".to_string(),
+                deficit_segments: vec![],
+                excess_cost: 100.0,
+            }],
+            thermals: vec![],
+            hydros,
+            lines: vec![],
+            non_controllable_sources: vec![],
+            pumping_stations: vec![],
+            energy_contracts: vec![],
+            hydro_geometry: vec![],
+            production_models: vec![],
+            fpha_hyperplanes: vec![],
+            inflow_history,
+            inflow_seasonal_stats: vec![], // empty → estimation path active
+            inflow_ar_coefficients: vec![],
+            external_scenarios: vec![],
+            load_seasonal_stats: vec![],
+            load_factors: vec![],
+            correlation: None,
+            thermal_bounds: vec![],
+            hydro_bounds: vec![],
+            line_bounds: vec![],
+            pumping_bounds: vec![],
+            contract_bounds: vec![],
+            exchange_factors: vec![],
+            generic_constraints: vec![],
+            generic_constraint_bounds: vec![],
+            penalty_overrides_bus: vec![],
+            penalty_overrides_line: vec![],
+            penalty_overrides_hydro: vec![],
+            penalty_overrides_ncs: vec![],
+        }
+    }
+
+    /// Given `inflow_history` present, `inflow_seasonal_stats` absent, and
+    /// `stages.json` WITHOUT `season_definitions`, validation produces a
+    /// `BusinessRuleViolation` mentioning "season_definitions is required".
+    #[test]
+    fn test_estimation_requires_season_definitions() {
+        let history = make_history_rows(1, 12);
+        let stages = make_stages_with_seasons(12, /*with_season_map=*/ false);
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let matching: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("season_definitions is required")
+            })
+            .collect();
+        assert!(
+            !matching.is_empty(),
+            "expected a BusinessRuleViolation about season_definitions, got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Given `inflow_history` with only 3 observations for one (hydro, season),
+    /// validation produces a `ModelQuality` warning containing "has 3 observations".
+    #[test]
+    fn test_estimation_warns_low_observations() {
+        // 3 observations for hydro 1: one per January (season 0) over 3 years.
+        let history: Vec<InflowHistoryRow> = (0..3)
+            .map(|y| InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2000 + y, 1, 15).unwrap(),
+                value_m3s: 100.0,
+            })
+            .collect();
+
+        // 3 years × 12 months = 36 stages, with season_map present.
+        let stages = make_stages_with_seasons(36, true);
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let matching: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality && w.message.contains("has 3 observations")
+            })
+            .collect();
+        assert!(
+            !matching.is_empty(),
+            "expected a ModelQuality warning about 3 observations, got warnings: {:?}",
+            ctx.warnings()
+        );
+    }
+
+    /// Given `inflow_history` with observations for hydro 1 only, but `hydros`
+    /// containing hydro 1 and hydro 2, validation produces a
+    /// `BusinessRuleViolation` for hydro 2.
+    #[test]
+    fn test_estimation_error_missing_hydro() {
+        let history = make_history_rows(1, 36); // only hydro 1
+        let stages = make_stages_with_seasons(36, true);
+        let hydros = vec![make_hydro(1, None), make_hydro(2, None)];
+        let data = make_data_estimation(hydros, stages, history);
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let matching: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("hydro 2 has no observations")
+            })
+            .collect();
+        assert!(
+            !matching.is_empty(),
+            "expected a BusinessRuleViolation for hydro 2, got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// When `inflow_seasonal_stats` is non-empty (explicit stats path),
+    /// no estimation-related errors or warnings are produced.
+    #[test]
+    fn test_no_estimation_when_stats_present() {
+        use crate::scenarios::InflowSeasonalStatsRow;
+
+        let history = make_history_rows(1, 12);
+        let stages = make_stages_with_seasons(12, false); // no season_map
+
+        // Provide a non-empty inflow_seasonal_stats — this deactivates estimation.
+        let stats = vec![InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            mean_m3s: 500.0,
+            std_m3s: 50.0,
+        }];
+
+        let mut data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+        data.inflow_seasonal_stats = stats;
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        // No estimation errors — the estimation path is not active.
+        let estimation_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.file.to_string_lossy().contains("inflow_history.parquet"))
+            .collect();
+        let estimation_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| w.file.to_string_lossy().contains("inflow_history.parquet"))
+            .collect();
+        assert!(
+            estimation_errors.is_empty() && estimation_warnings.is_empty(),
+            "stats present should disable estimation checks; \
+             errors: {estimation_errors:?}, warnings: {estimation_warnings:?}"
         );
     }
 }

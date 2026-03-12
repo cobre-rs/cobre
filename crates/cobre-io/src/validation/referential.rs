@@ -1,7 +1,7 @@
 //! Layer 3 — Referential integrity validation.
 //!
 //! Verifies that every cross-entity reference in `ParsedData` resolves to an
-//! existing entity in the corresponding registry.  All 30 rules are checked
+//! existing entity in the corresponding registry.  All 32 rules are checked
 //! regardless of errors found in earlier rules — every dangling reference is
 //! collected before returning.
 //!
@@ -15,7 +15,7 @@ use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 /// Performs Layer 3 referential integrity validation on the parsed data.
 ///
-/// For each of the 30 cross-reference rules, checks that the referenced entity
+/// For each of the 32 cross-reference rules, checks that the referenced entity
 /// ID exists in the target registry.  Any dangling reference adds one
 /// [`ErrorKind::InvalidReference`] entry to `ctx` with the message:
 ///
@@ -549,6 +549,44 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+
+    // ── Rules 31-32: LoadFactorEntry -> bus and stage references ─────────────
+
+    let study_stage_ids: HashSet<i32> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+
+    for (i, entry) in data.load_factors.iter().enumerate() {
+        // Rule 31: bus_id must exist in the bus registry.
+        if !bus_ids.contains(&entry.bus_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/load_factors.json",
+                Some(format!("LoadFactorEntry[{i}]")),
+                format!(
+                    "LoadFactorEntry[{i}] references non-existent Bus {} via field 'bus_id'",
+                    entry.bus_id.0
+                ),
+            );
+        }
+
+        // Rule 32: stage_id must match a study stage id (id >= 0).
+        if !study_stage_ids.contains(&entry.stage_id) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/load_factors.json",
+                Some(format!("LoadFactorEntry[{i}]")),
+                format!(
+                    "LoadFactorEntry[{i}] references non-existent Stage {} via field 'stage_id'",
+                    entry.stage_id
+                ),
+            );
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -581,7 +619,7 @@ mod tests {
             NcsPenaltyOverrideRow, ThermalBoundsRow,
         },
         extensions::HydroGeometryRow,
-        scenarios::{InflowSeasonalStatsRow, LoadSeasonalStatsRow},
+        scenarios::{BlockFactor, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow},
         validation::{
             schema::{ParsedData, validate_schema},
             structural::validate_structure,
@@ -1408,5 +1446,103 @@ mod tests {
         let mut ctx = ValidationContext::new();
         validate_referential_integrity(&data, &mut ctx);
         assert!(!ctx.has_errors(), "valid NCS ref should not produce errors");
+    }
+
+    // ── Rules 31-32: LoadFactorEntry referential checks ───────────────────────
+
+    /// `LoadFactorEntry` with a non-existent `bus_id` produces 1
+    /// `InvalidReference` error for `scenarios/load_factors.json`.
+    #[test]
+    fn test_load_factors_invalid_bus_ref() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        // bus 999 does not exist
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(999),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidReference)
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("999"));
+        assert!(inv[0].message.contains("bus_id"));
+        assert!(
+            inv[0]
+                .entity
+                .as_deref()
+                .unwrap_or("")
+                .contains("LoadFactorEntry")
+        );
+    }
+
+    /// `LoadFactorEntry` with a non-existent `stage_id` produces 1
+    /// `InvalidReference` error for `scenarios/load_factors.json`.
+    #[test]
+    fn test_load_factors_invalid_stage_ref() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        // stage 999 does not exist; bus 1 does exist (added by make_minimal_case)
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 999,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidReference)
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("999"));
+        assert!(inv[0].message.contains("stage_id"));
+        assert!(
+            inv[0]
+                .entity
+                .as_deref()
+                .unwrap_or("")
+                .contains("LoadFactorEntry")
+        );
+    }
+
+    /// `LoadFactorEntry` with valid `bus_id` and `stage_id` produces no
+    /// `InvalidReference` errors from the load-factors rules.
+    #[test]
+    fn test_load_factors_valid_refs_no_error() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        // bus 1 and stage 0 both exist in the minimal case
+        data.load_factors = vec![LoadFactorEntry {
+            bus_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid load_factors refs should produce no errors"
+        );
     }
 }

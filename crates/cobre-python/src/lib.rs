@@ -83,6 +83,8 @@ fn results_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_function(wrap_pyfunction!(results::load_results, m)?)?;
     m.add_function(wrap_pyfunction!(results::load_convergence, m)?)?;
+    m.add_function(wrap_pyfunction!(results::load_simulation, m)?)?;
+    m.add_function(wrap_pyfunction!(results::load_policy, m)?)?;
     Ok(())
 }
 

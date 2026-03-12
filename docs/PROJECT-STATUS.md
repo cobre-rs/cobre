@@ -156,7 +156,7 @@ Features added after the release blockers were resolved, before tagging v0.1.0:
 
 - **Schema hosting**: Generated `.schema.json` files committed to `book/src/schemas/` and
   referenced from the book's Schemas reference page. Input JSON files include `$schema`
-  URLs pointing to `https://cobre-rs.github.io/cobre/schemas/`.
+  URLs pointing to `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/`.
 
 - **Input format cleanup**: Removed the `version` field from `config.json`; schema
   versioning via `$schema` URL replaces it. All input file types accept an optional

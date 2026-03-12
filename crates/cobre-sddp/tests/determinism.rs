@@ -391,7 +391,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42).unwrap()
+    build_stochastic_context(&system, 42, &[]).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
@@ -558,6 +558,11 @@ fn run_training(
                 &InflowNonNegativityMethod::None,
                 &[],
                 0,
+                0,
+                1,
+                &[],
+                &[],
+                &[1usize; 5],
             )
         })
         .unwrap();
@@ -598,9 +603,12 @@ fn run_simulation(
         .map(|_| {
             SolverWorkspace::new(
                 MockSolver3H::new(100.0),
-                PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+                PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
                 fx.indexer.n_state,
                 fx.indexer.hydro_count,
+                fx.indexer.max_par_order,
+                0,
+                0,
             )
         })
         .collect();
@@ -640,6 +648,10 @@ fn run_simulation(
                 &InflowNonNegativityMethod::None,
                 &[],
                 0,
+                0,
+                &[],
+                &[],
+                &[],
                 &[],
                 &[],
                 None,

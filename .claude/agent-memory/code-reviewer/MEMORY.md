@@ -203,6 +203,65 @@ u32, f64, Vec<f64>)>` that is immediately re-mapped to `Vec<(u32, u32, u32, f64,
 - `config.simulation.io_channel_capacity` is `u32` in cobre-io; cast via `as usize` in run.rs (not via
   `usize::try_from`) — safe on all 64-bit platforms, minor stylistic inconsistency.
 
+### Phase v0.1.1 stochastic-foundation key facts
+
+- `evaluate_par_inflows` and `solve_par_noises` are new public exports from `cobre-stochastic::par::evaluate`.
+  Infrastructure crate — confirmed zero SDDP references.
+- Truncation path in `forward.rs` (training): lag state is transposed from hydro-major
+  (`current_state[inflow_lags.start + h * max_par_order + l]`) to lag-major
+  (`lag_matrix_buf[l * n_hydros + h]`) before calling `evaluate_par_inflows`. Correct transposition.
+- Simulation pipeline (`simulation/pipeline.rs`) keeps `_inflow_method` as unused pre-declaration.
+  Truncation is NOT applied in simulation — only in training forward pass. Pre-existing limitation.
+- `SolverWorkspace::new` signature changed to include `max_par_order` parameter (public API break).
+- `WelfordAccumulator` in the main-thread post-parallel loop (`acc` at line 443) accumulates costs
+  but its values are never used. Dead code after refactor. The `#[allow(dead_code)]` on the struct's
+  `impl` block documents intent for future `SimulationFinished` event enrichment.
+- `simulate()` signature changed from `event_sender: Option<&Sender<T>>` to `Option<Sender<T>>` (owned).
+  Workers clone the sender; the original is used for `SimulationFinished` after the parallel region.
+- Python `run.rs`: `sim_event_tx` is cloned from `event_tx` before training. Both training and simulation
+  events are sent to the same `event_rx` channel. After training, events are drained; after simulation,
+  remaining simulation events in `event_rx` are dropped silently at function exit. No deadlock.
+- `cobre summary` subcommand added: reads `training/_manifest.json` (required),
+  `training/convergence.parquet` (optional, fallback to zeroed summary), and
+  `simulation/_manifest.json` (optional). Prints the same summary as `cobre run`.
+- `ConvergenceSummary` reads all batches and sums `lp_solves` + `time_total_ms`;
+  takes bound/gap fields from the last row of the last batch.
+- `read_optional_simulation_manifest` returns `Ok(None)` on `ErrorKind::NotFound`, propagates other errors.
+- `SimulationProgress` stats (`mean_cost`, `std_cost`, `ci_95_half_width`) are per-worker
+  (from `worker_acc`), not global. This is intentional — a global atomic accumulator across threads
+  would require a Mutex. The progress bar shows per-worker running statistics, not the true global mean.
+- `validate_semantic_stages_penalties_scenarios` doc comment says "All 18 rules" but the function
+  now enforces 21 rules (17–21 added in v0.1.1). Comment was not updated.
+- `estimate_correlation` in `fitting.rs` line 1075: `pairs.sort_unstable_by(partial_cmp)` sorts by
+  residual value, not by date. Comment says "Sort by date" but is wrong. Since Pearson correlation
+  is sum-based (order-invariant), this doesn't affect correctness but is misleading.
+- `find_season_for_date` is duplicated: identical private fn in both `fitting.rs` and `estimation.rs`.
+- `hydro_ids.contains` in `estimate_ar_coefficients` and `estimate_ar_with_aic` is O(n) per observation.
+  Not on the training hot path, but scales poorly for very large observation sets.
+- `active_load_patches` in `PatchBuffer` is never reset to 0. After `fill_load_patches` is called
+  for a stage with `n_blocks`, the value persists until the next `fill_load_patches` call. This is
+  safe because `forward_patch_count()` is always called AFTER `fill_load_patches` in all code paths.
+
+### v0.1.1 review findings (confidence >= 75, confirmed)
+
+- **CRITICAL BUG**: `estimate_ar_coefficients` (fitting.rs ~line 722) does NOT clamp autocorrelations
+  to `[-1.0, 1.0]` before passing to `levinson_durbin`. The AIC path helper `compute_autocorrelations`
+  (line 396) does clamp. When `|rho| > 1` (possible from floating-point rounding in cross-covariance),
+  `sigma2_next = sigma2 * (1 - kappa^2)` goes negative. The near-singularity guard fires on
+  `sigma2 <= f64::EPSILON` (positive threshold only), so negative sigma2 passes through and garbage
+  coefficients propagate into the PAR model. Fix: add `.clamp(-1.0, 1.0)` on line 722.
+- **ERROR HANDLING GAP**: `estimate_from_history` (estimation.rs lines 89-90) calls `validate_structure`
+  into a `ValidationContext` that is never checked. Structural errors are silently discarded. If the
+  partial manifest has `scenarios_inflow_history_parquet == true` despite errors, estimation proceeds
+  on invalid data. Fix: check `ctx.into_result()` before using the manifest.
+- **STANDARDS**: `PrecomputedNormalLp::mean`, `std`, and `block_factor` accessors use `assert!` (not
+  `debug_assert!`) for bounds checking. Called in forward/backward pass hot paths. Pattern is inconsistent
+  with all other hot-path precondition checks in this codebase. Fix: change to `debug_assert!`.
+- **AIC BIAS**: `select_order_aic` in `estimate_ar_with_aic` (estimation.rs line 319) is called with
+  `n_obs = pair_obs.len()` (all season observations) but autocorrelations are computed from a smaller
+  effective sample (observations with lag predecessors). AIC penalty is underweighted, biasing toward
+  higher-order models. Fix: use `pair_obs.len().saturating_sub(actual_order)` as approximation.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

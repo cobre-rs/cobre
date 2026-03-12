@@ -21,7 +21,9 @@ use std::path::PathBuf;
 use clap::Args;
 use serde::Serialize;
 
-use cobre_io::{SimulationManifest, TrainingManifest, TrainingMetadata};
+use cobre_io::{
+    OutputError, SimulationManifest, TrainingManifest, TrainingMetadata, read_training_manifest,
+};
 
 use crate::error::CliError;
 
@@ -90,16 +92,15 @@ pub fn execute(args: ReportArgs) -> Result<(), CliError> {
     // training/_manifest.json is required; absence is an error.
     let training_manifest_path = results_dir.join("training/_manifest.json");
     let training: TrainingManifest =
-        read_json_file(&training_manifest_path, "training/_manifest.json")?;
+        read_training_manifest(&training_manifest_path).map_err(CliError::from)?;
 
     // training/metadata.json is optional.
     let metadata_path = results_dir.join("training/metadata.json");
-    let metadata: Option<TrainingMetadata> = read_optional_json_file(&metadata_path)?;
+    let metadata: Option<TrainingMetadata> = read_optional_manifest(&metadata_path)?;
 
     // simulation/_manifest.json is optional (absent when --skip-simulation).
     let simulation_manifest_path = results_dir.join("simulation/_manifest.json");
-    let simulation: Option<SimulationManifest> =
-        read_optional_json_file(&simulation_manifest_path)?;
+    let simulation: Option<SimulationManifest> = read_optional_manifest(&simulation_manifest_path)?;
 
     // Canonicalize the output directory path to an absolute form. Fall back to
     // the display string when canonicalization fails (e.g., path is a symlink
@@ -129,32 +130,17 @@ pub fn execute(args: ReportArgs) -> Result<(), CliError> {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Read and deserialize a required JSON file.
+/// Read and deserialize an optional manifest file from `path`.
 ///
-/// Returns [`CliError::Io`] when the file cannot be read and
-/// [`CliError::Internal`] when the JSON is malformed.
-fn read_json_file<T>(path: &std::path::Path, description: &str) -> Result<T, CliError>
+/// Returns `Ok(None)` when the file does not exist (file-not-found
+/// [`OutputError::IoError`]). Propagates all other [`OutputError`] variants
+/// as [`CliError`] via the existing [`From<OutputError>`] implementation.
+fn read_optional_manifest<T>(path: &std::path::Path) -> Result<Option<T>, CliError>
 where
     T: serde::de::DeserializeOwned,
 {
-    let content = std::fs::read_to_string(path).map_err(|e| CliError::Io {
-        source: e,
-        context: description.to_string(),
-    })?;
-
-    serde_json::from_str(&content).map_err(|e| CliError::Internal {
-        message: format!("malformed JSON in {description}: {e}"),
-    })
-}
-
-/// Read and deserialize an optional JSON file.
-///
-/// Returns `Ok(None)` when the file does not exist. Returns
-/// [`CliError::Internal`] when the file exists but contains malformed JSON.
-fn read_optional_json_file<T>(path: &std::path::Path) -> Result<Option<T>, CliError>
-where
-    T: serde::de::DeserializeOwned,
-{
+    // Deserialize via serde_json directly, mirroring the pattern used by the
+    // manifest readers, but treating file-not-found as an absent optional.
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let value: T = serde_json::from_str(&content).map_err(|e| CliError::Internal {
@@ -163,10 +149,7 @@ where
             Ok(Some(value))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(CliError::Io {
-            source: e,
-            context: path.display().to_string(),
-        }),
+        Err(e) => Err(CliError::from(OutputError::io(path, e))),
     }
 }
 
@@ -325,12 +308,12 @@ mod tests {
         );
     }
 
-    // ── read_optional_json_file helper ─────────────────────────────────────
+    // ── read_optional_manifest helper ─────────────────────────────────────
 
     #[test]
     fn read_optional_returns_none_for_nonexistent_file() {
         let result: Result<Option<serde_json::Value>, CliError> =
-            read_optional_json_file(std::path::Path::new("/nonexistent/file.json"));
+            read_optional_manifest(std::path::Path::new("/nonexistent/file.json"));
         assert!(result.is_ok(), "nonexistent file must return Ok(None)");
         assert!(result.unwrap().is_none());
     }
@@ -342,7 +325,7 @@ mod tests {
         writeln!(file, r#"{{"key": "value"}}"#).unwrap();
 
         let result: Result<Option<serde_json::Value>, CliError> =
-            read_optional_json_file(file.path());
+            read_optional_manifest(file.path());
         assert!(result.is_ok(), "existing file must return Ok(Some(...))");
         let value = result.unwrap().unwrap();
         assert_eq!(value["key"].as_str(), Some("value"));
@@ -355,35 +338,22 @@ mod tests {
         writeln!(file, "{{not valid json").unwrap();
 
         let result: Result<Option<serde_json::Value>, CliError> =
-            read_optional_json_file(file.path());
+            read_optional_manifest(file.path());
         assert!(
             matches!(result, Err(CliError::Internal { .. })),
             "malformed JSON must return CliError::Internal"
         );
     }
 
-    // ── read_json_file helper ──────────────────────────────────────────────
+    // ── cobre-io reader integration ────────────────────────────────────────
 
     #[test]
-    fn read_json_file_returns_io_error_for_missing_file() {
-        let result: Result<serde_json::Value, CliError> =
-            read_json_file(std::path::Path::new("/nonexistent/file.json"), "test file");
+    fn read_training_manifest_returns_io_error_for_missing_file() {
+        let result = read_training_manifest(std::path::Path::new("/nonexistent/_manifest.json"))
+            .map_err(CliError::from);
         assert!(
             matches!(result, Err(CliError::Io { .. })),
-            "missing required file must return CliError::Io"
-        );
-    }
-
-    #[test]
-    fn read_json_file_returns_internal_error_for_malformed_json() {
-        use std::io::Write;
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        writeln!(file, "{{not valid json").unwrap();
-
-        let result: Result<serde_json::Value, CliError> = read_json_file(file.path(), "test file");
-        assert!(
-            matches!(result, Err(CliError::Internal { .. })),
-            "malformed JSON must return CliError::Internal"
+            "missing required file must map to CliError::Io"
         );
     }
 }

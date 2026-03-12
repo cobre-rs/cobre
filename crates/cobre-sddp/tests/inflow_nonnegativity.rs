@@ -333,7 +333,7 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42).unwrap()
+    build_stochastic_context(&system, 42, &[]).unwrap()
 }
 
 /// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
@@ -430,7 +430,12 @@ fn build_fixture() -> Fixture {
     )
     .unwrap();
 
-    let stage_templates = build_stage_templates(&system, &inflow_method, &par_lp);
+    let stage_templates = build_stage_templates(
+        &system,
+        &inflow_method,
+        &par_lp,
+        &cobre_stochastic::normal::precompute::PrecomputedNormalLp::default(),
+    );
     let stochastic = build_stochastic();
     let opening_tree = build_opening_tree();
 
@@ -491,6 +496,15 @@ fn train_fixture(
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
     let comm = StubComm;
 
+    let _n_stages = fx.stage_templates.templates.len();
+    let block_counts: Vec<usize> = fx
+        .stage_templates
+        .block_hours_per_stage
+        .iter()
+        .map(Vec::len)
+        .collect();
+    let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
+
     train(
         &mut solver,
         TrainingConfig {
@@ -521,6 +535,11 @@ fn train_fixture(
         &fx.inflow_method,
         &fx.stage_templates.noise_scale,
         fx.stage_templates.n_hydros,
+        fx.stage_templates.n_load_buses,
+        max_blocks,
+        &fx.stage_templates.load_balance_row_starts,
+        &fx.stage_templates.load_bus_indices,
+        &block_counts,
     )
 }
 
@@ -540,11 +559,21 @@ fn simulate_fixture(
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
         HighsSolver::new().expect("HighsSolver::new must succeed"),
-        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
         fx.indexer.hydro_count,
+        fx.indexer.max_par_order,
+        0,
+        0,
     )];
     let comm = StubComm;
+
+    let block_counts_sim: Vec<usize> = fx
+        .stage_templates
+        .block_hours_per_stage
+        .iter()
+        .map(Vec::len)
+        .collect();
 
     simulate(
         &mut sim_workspaces,
@@ -565,6 +594,10 @@ fn simulate_fixture(
         &fx.inflow_method,
         &fx.stage_templates.noise_scale,
         fx.stage_templates.n_hydros,
+        fx.stage_templates.n_load_buses,
+        &fx.stage_templates.load_balance_row_starts,
+        &fx.stage_templates.load_bus_indices,
+        &block_counts_sim,
         &fx.stage_templates.zeta_per_stage,
         &fx.stage_templates.block_hours_per_stage,
         None,

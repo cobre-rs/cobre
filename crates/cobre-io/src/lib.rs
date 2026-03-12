@@ -55,7 +55,7 @@ pub mod system;
 pub mod validation;
 
 pub use broadcast::{deserialize_system, serialize_system};
-pub use config::{Config, parse_config};
+pub use config::{Config, EstimationConfig, OrderSelectionMethod, parse_config};
 pub use constraints::{
     BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry,
     GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow,
@@ -77,16 +77,19 @@ pub use extensions::{
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use output::policy::{
-    PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
-    serialize_stage_basis, serialize_stage_cuts, write_policy_checkpoint,
+    OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord, PolicyCheckpoint,
+    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, StageCutsReadResult,
+    deserialize_stage_basis, deserialize_stage_cuts, read_policy_checkpoint, serialize_stage_basis,
+    serialize_stage_cuts, write_policy_checkpoint,
 };
 pub use output::{
-    CutStatistics, IterationRecord, ManifestChecksum, ManifestConvergence, ManifestCuts,
-    ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
+    ConvergenceSummary, CutStatistics, IterationRecord, ManifestChecksum, ManifestConvergence,
+    ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
     MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
     MetadataProblemDimensions, MetadataRunInfo, OutputError, ParquetWriterConfig,
     SimulationManifest, SimulationOutput, TrainingManifest, TrainingMetadata, TrainingOutput,
-    TrainingParquetWriter, write_dictionaries, write_metadata, write_results,
+    TrainingParquetWriter, read_convergence_summary, read_simulation_manifest,
+    read_training_manifest, write_dictionaries, write_metadata, write_results,
     write_simulation_manifest, write_training_manifest,
 };
 pub use penalties::parse_penalties;
@@ -101,7 +104,7 @@ pub use scenarios::{
     parse_external_scenarios, parse_inflow_ar_coefficients, parse_inflow_history,
     parse_inflow_seasonal_stats, parse_load_factors, parse_load_seasonal_stats,
 };
-pub use stages::{StagesData, parse_stages};
+pub use stages::{StagesData, build_season_stage_map, parse_stages};
 pub use system::{
     load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
     parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,

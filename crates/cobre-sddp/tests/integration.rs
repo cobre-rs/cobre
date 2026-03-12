@@ -414,7 +414,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42).unwrap()
+    build_stochastic_context(&system, 42, &[]).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -536,6 +536,11 @@ fn train_converges_with_mock_solver() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -601,6 +606,11 @@ fn train_deterministic_with_same_seed() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -636,6 +646,11 @@ fn train_deterministic_with_same_seed() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -700,6 +715,11 @@ fn train_lb_monotonically_nondecreasing() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -771,6 +791,11 @@ fn train_emits_correct_event_sequence() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -855,6 +880,11 @@ fn train_stops_at_iteration_limit() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -916,6 +946,11 @@ fn train_stops_on_graceful_shutdown() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     )
     .unwrap();
 
@@ -967,6 +1002,11 @@ fn train_propagates_infeasible_error() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &[1usize, 1],
     );
 
     assert!(

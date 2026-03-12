@@ -11,7 +11,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre.dev/schemas/v2/energy_contracts.schema.json",
+//!   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/energy_contracts.schema.json",
 //!   "contracts": [
 //!     {
 //!       "id": 0,
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn test_parse_valid_contracts() {
         let json = r#"{
-          "$schema": "https://cobre.dev/schemas/v2/energy_contracts.schema.json",
+          "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/energy_contracts.schema.json",
           "contracts": [
             {
               "id": 0,

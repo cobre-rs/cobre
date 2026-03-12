@@ -12,7 +12,7 @@
       },
       "outflow": {
         "min_outflow_m3s": 0.0,
-        "max_outflow_m3s": 999999.0
+        "max_outflow_m3s": null
       },
       "generation": {
         "model": "constant_productivity",
@@ -34,7 +34,7 @@
       },
       "outflow": {
         "min_outflow_m3s": 0.0,
-        "max_outflow_m3s": 999999.0
+        "max_outflow_m3s": null
       },
       "generation": {
         "model": "constant_productivity",
@@ -56,7 +56,7 @@
       },
       "outflow": {
         "min_outflow_m3s": 0.0,
-        "max_outflow_m3s": 999999.0
+        "max_outflow_m3s": null
       },
       "generation": {
         "model": "constant_productivity",
@@ -78,7 +78,7 @@
       },
       "outflow": {
         "min_outflow_m3s": 0.0,
-        "max_outflow_m3s": 999999.0
+        "max_outflow_m3s": null
       },
       "generation": {
         "model": "constant_productivity",

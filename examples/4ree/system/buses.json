@@ -40,6 +40,16 @@
           "cost": 1420.34
         }
       ]
+    },
+    {
+      "id": 4,
+      "name": "NOFICT1",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1420.34
+        }
+      ]
     }
   ]
 }

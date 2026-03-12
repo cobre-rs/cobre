@@ -2,12 +2,12 @@
 //!
 //! This module provides two public facilities:
 //!
-//! - [`PatchBuffer`]: pre-allocates the three parallel arrays consumed by
+//! - [`PatchBuffer`]: pre-allocates the parallel arrays consumed by
 //!   `SolverInterface::set_row_bounds` and fills them with scenario-dependent
 //!   values before each LP solve.  Allocating once at training start and
 //!   reusing the same buffer across all iterations and stages is critical for
-//!   hot-path performance: the training loop calls `fill_forward_patches` or
-//!   `fill_state_patches` millions of times.
+//!   hot-path performance: the training loop calls `fill_forward_patches`,
+//!   `fill_load_patches`, or `fill_state_patches` millions of times.
 //!
 //! - [`build_stage_templates`]: constructs a `Vec<StageTemplate>` from a
 //!   loaded `System` — one template per study stage.  The template encodes
@@ -52,7 +52,8 @@
 //!
 //! ## Patch sequence (Training Loop SS4.2a)
 //!
-//! Each forward-pass solve requires exactly `N*(2+L)` row-bound patches:
+//! Each forward-pass solve requires up to `N*(2+L) + M*K` row-bound patches
+//! (where M is the number of stochastic load buses and K is the block count):
 //!
 //! ```text
 //! Category 1 — storage fixing    rows [0, N)
@@ -64,10 +65,15 @@
 //!
 //! Category 3 — noise innovation   N rows in the static non-dual region
 //!     patch ar_dynamics_row(base_row, h) = noise[h]   for h in [0, N)
+//!
+//! Category 4 — load balance patches   M*K rows (optional, stochastic load)
+//!     patch load_row_start + bus_pos[i]*K + blk = load_rhs[i*K + blk]
+//!     for i in [0, M), blk in [0, K)
 //! ```
 //!
 //! The backward pass uses only categories 1 and 2 (`N*(1+L)` patches); noise
 //! innovations are drawn from the fixed opening tree by the caller.
+//! When `n_load_buses == 0`, Category 4 is empty and has no effect.
 //!
 //! ## Row index types
 //!
@@ -97,6 +103,7 @@
 use cobre_core::System;
 use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_solver::StageTemplate;
+use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
 use cobre_stochastic::par::precompute::PrecomputedParLp;
 
 use crate::indexer::StageIndexer;
@@ -106,38 +113,46 @@ use crate::inflow_method::InflowNonNegativityMethod;
 ///
 /// Holds three parallel `Vec`s of equal length ready for a single
 /// `SolverInterface::set_row_bounds` call.  The buffer is sized for
-/// `N*(2+L)` patches at construction and reused across all iterations.
+/// `N*(2+L) + M*B` patches at construction and reused across all iterations,
+/// where `M` is the number of stochastic load buses and `B` is the maximum
+/// block count across stages.
 ///
 /// # Memory layout
 ///
-/// The `N*(2+L)` entries are written in category order:
+/// Entries are written in category order:
 ///
-/// | Entry range           | Category                           |
-/// | --------------------- | ---------------------------------- |
-/// | `[0, N)`              | Storage-fixing (Category 1)        |
-/// | `[N, N*(1+L))`        | AR lag-fixing (Category 2)         |
-/// | `[N*(1+L), N*(2+L))`  | AR dynamics / noise (Category 3)   |
+/// | Entry range                         | Category                                |
+/// | ----------------------------------- | --------------------------------------- |
+/// | `[0, N)`                            | Storage-fixing (Category 1)             |
+/// | `[N, N*(1+L))`                      | AR lag-fixing (Category 2)              |
+/// | `[N*(1+L), N*(2+L))`               | AR dynamics / noise (Category 3)        |
+/// | `[N*(2+L), N*(2+L) + M*B_active)`  | Load balance row patches (Category 4)   |
 ///
 /// [`fill_state_patches`](PatchBuffer::fill_state_patches) writes only
-/// `[0, N*(1+L))` (Categories 1 and 2).  The Category 3 slice is left as
-/// the previous iteration's values, which is safe because the caller passes
-/// only `&self.indices[..active_len]` to `set_row_bounds`.
+/// `[0, N*(1+L))` (Categories 1 and 2).  Category 3 is left from the
+/// previous iteration, which is safe because the caller passes only
+/// `&self.indices[..active_len]` to `set_row_bounds`.
+///
+/// [`fill_load_patches`](PatchBuffer::fill_load_patches) writes Category 4
+/// and records `active_load_patches` for the current stage's block count.
+/// When `n_load_buses == 0`, Category 4 is empty and `forward_patch_count`
+/// returns `N*(2+L)` unchanged.
 #[derive(Debug, Clone)]
 pub struct PatchBuffer {
     /// Row indices to patch.
     ///
-    /// Length `N*(2+L)`.  Entries are `usize` to match the
+    /// Length `N*(2+L) + M*max_blocks`.  Entries are `usize` to match the
     /// `set_row_bounds(&[usize], ...)` interface directly.
     pub indices: Vec<usize>,
 
     /// New lower bounds for each patched row.
     ///
-    /// Length `N*(2+L)`.  For equality constraints, `lower[i] == upper[i]`.
+    /// Length `N*(2+L) + M*max_blocks`.  For equality constraints, `lower[i] == upper[i]`.
     pub lower: Vec<f64>,
 
     /// New upper bounds for each patched row.
     ///
-    /// Length `N*(2+L)`.  For equality constraints, `upper[i] == lower[i]`.
+    /// Length `N*(2+L) + M*max_blocks`.  For equality constraints, `upper[i] == lower[i]`.
     pub upper: Vec<f64>,
 
     /// Number of operating hydro plants (N).
@@ -145,47 +160,82 @@ pub struct PatchBuffer {
 
     /// Maximum PAR order across all operating hydros (L).
     max_par_order: usize,
+
+    /// Number of buses with stochastic load noise (M).
+    load_bus_count: usize,
+
+    /// Maximum block count across all stages.
+    ///
+    /// Determines the Category 4 capacity: `load_bus_count * max_blocks`.
+    max_blocks: usize,
+
+    /// Number of load patches written by the most recent [`fill_load_patches`] call.
+    ///
+    /// Equals `load_bus_count * n_blocks` for the stage solved most recently.
+    /// Zero when `fill_load_patches` has not yet been called or when
+    /// `load_bus_count == 0`.
+    ///
+    /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
+    active_load_patches: usize,
 }
 
 impl PatchBuffer {
-    /// Construct a [`PatchBuffer`] pre-allocated for `N*(2+L)` patches.
+    /// Construct a [`PatchBuffer`] pre-allocated for `N*(2+L) + M*B` patches.
     ///
-    /// `hydro_count` is the number of operating hydro plants (N).
-    /// `max_par_order` is the maximum PAR order across all operating hydros (L).
+    /// - `hydro_count` — number of operating hydro plants (N).
+    /// - `max_par_order` — maximum PAR order across all operating hydros (L).
+    /// - `n_load_buses` — number of buses with stochastic load noise (M).
+    ///   Pass `0` when there is no stochastic load.
+    /// - `max_blocks` — maximum block count across all stages (B).
+    ///   Pass `0` when there is no stochastic load.
     ///
     /// The buffer's `indices`, `lower`, and `upper` vectors are sized to
-    /// `N*(2+L)` and zero-initialised.  Call [`fill_forward_patches`] or
-    /// [`fill_state_patches`] to populate them before each LP solve.
+    /// `N*(2+L) + M*B` and zero-initialised.  Call [`fill_forward_patches`],
+    /// [`fill_load_patches`], or [`fill_state_patches`] to populate them
+    /// before each LP solve.
     ///
     /// # Examples
     ///
     /// ```
     /// use cobre_sddp::PatchBuffer;
     ///
-    /// // 3-hydro AR(2) system from spec SS4.2a worked example
-    /// let buf = PatchBuffer::new(3, 2);
-    /// assert_eq!(buf.indices.len(), 12); // 3*(2+2)
+    /// // 3-hydro AR(2) system, no stochastic load
+    /// let buf = PatchBuffer::new(3, 2, 0, 0);
+    /// assert_eq!(buf.indices.len(), 12); // 3*(2+2) + 0*0
     ///
-    /// // Production scale: N = 160, L = 12
-    /// let big = PatchBuffer::new(160, 12);
+    /// // 3-hydro AR(2) system with 2 stochastic load buses, up to 3 blocks
+    /// let buf_load = PatchBuffer::new(3, 2, 2, 3);
+    /// assert_eq!(buf_load.indices.len(), 18); // 3*(2+2) + 2*3
+    ///
+    /// // Production scale: N = 160, L = 12, no stochastic load
+    /// let big = PatchBuffer::new(160, 12, 0, 0);
     /// assert_eq!(big.indices.len(), 2240); // 160*(2+12)
     ///
     /// // Edge case: no lags (L = 0) — only storage + noise patches
-    /// let no_lag = PatchBuffer::new(5, 0);
+    /// let no_lag = PatchBuffer::new(5, 0, 0, 0);
     /// assert_eq!(no_lag.indices.len(), 10); // 5*(2+0)
     /// ```
     ///
     /// [`fill_forward_patches`]: PatchBuffer::fill_forward_patches
     /// [`fill_state_patches`]: PatchBuffer::fill_state_patches
+    /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
     #[must_use]
-    pub fn new(hydro_count: usize, max_par_order: usize) -> Self {
-        let capacity = hydro_count * (2 + max_par_order);
+    pub fn new(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
+    ) -> Self {
+        let capacity = hydro_count * (2 + max_par_order) + n_load_buses * max_blocks;
         Self {
             indices: vec![0; capacity],
             lower: vec![0.0; capacity],
             upper: vec![0.0; capacity],
             hydro_count,
             max_par_order,
+            load_bus_count: n_load_buses,
+            max_blocks,
+            active_load_patches: 0,
         }
     }
 
@@ -333,15 +383,98 @@ impl PatchBuffer {
         // [0..state_patch_count()] before passing to set_row_bounds.
     }
 
-    /// Number of active patches after [`fill_forward_patches`]: `N*(2+L)`.
+    /// Fill Category 4 load balance row patches for a forward-pass solve.
     ///
-    /// Use this to pass the full buffer to `set_row_bounds`.
+    /// Writes `n_load_buses * n_blocks` equality patches into the Category 4
+    /// region starting at offset `N*(2+L)`.  Each patch targets the exact load
+    /// balance row for bus `bus_positions[i]` and block `blk`:
+    ///
+    /// ```text
+    /// row = load_row_start + bus_positions[i] * n_blocks + blk
+    /// ```
+    ///
+    /// The `load_rhs` slice is laid out as `[bus0_blk0, bus0_blk1, …, bus1_blk0, …]`
+    /// (bus-major, block-minor), matching `bus_positions` order.
+    ///
+    /// After this call, [`forward_patch_count`] returns `N*(2+L) + n_load_buses * n_blocks`
+    /// so that the correct slice is passed to `set_row_bounds`.
+    ///
+    /// # Arguments
+    ///
+    /// - `load_row_start` — first row index of the load-balance block in the LP.
+    /// - `n_blocks` — number of time blocks for this stage.
+    /// - `load_rhs` — patched RHS values; length must equal
+    ///   `self.load_bus_count * n_blocks`.
+    /// - `bus_positions` — LP bus position for each stochastic load bus;
+    ///   length must equal `self.load_bus_count`.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if:
+    /// - `load_rhs.len() != self.load_bus_count * n_blocks`
+    /// - `bus_positions.len() != self.load_bus_count`
+    /// - `n_blocks > self.max_blocks`
+    ///
+    /// [`forward_patch_count`]: PatchBuffer::forward_patch_count
+    pub fn fill_load_patches(
+        &mut self,
+        load_row_start: usize,
+        n_blocks: usize,
+        load_rhs: &[f64],
+        bus_positions: &[usize],
+    ) {
+        debug_assert_eq!(
+            load_rhs.len(),
+            self.load_bus_count * n_blocks,
+            "load_rhs length {got} != load_bus_count*n_blocks {expected}",
+            got = load_rhs.len(),
+            expected = self.load_bus_count * n_blocks,
+        );
+        debug_assert_eq!(
+            bus_positions.len(),
+            self.load_bus_count,
+            "bus_positions length {got} != load_bus_count {expected}",
+            got = bus_positions.len(),
+            expected = self.load_bus_count,
+        );
+        debug_assert!(
+            n_blocks <= self.max_blocks,
+            "n_blocks {n_blocks} exceeds max_blocks {mb}",
+            mb = self.max_blocks,
+        );
+
+        let cat4_start = self.hydro_count * (2 + self.max_par_order);
+        let mut slot = cat4_start;
+
+        for (i, &bus_pos) in bus_positions.iter().enumerate() {
+            for blk in 0..n_blocks {
+                let row = load_row_start + bus_pos * n_blocks + blk;
+                let rhs = load_rhs[i * n_blocks + blk];
+                self.indices[slot] = row;
+                self.lower[slot] = rhs;
+                self.upper[slot] = rhs;
+                slot += 1;
+            }
+        }
+
+        self.active_load_patches = self.load_bus_count * n_blocks;
+    }
+
+    /// Number of active patches after [`fill_forward_patches`] and (optionally)
+    /// [`fill_load_patches`]: `N*(2+L) + active_load_patches`.
+    ///
+    /// When no [`fill_load_patches`] call has been made (or `n_load_buses == 0`),
+    /// `active_load_patches` is zero and this returns `N*(2+L)`, preserving the
+    /// behaviour from before Category 4 was added.
+    ///
+    /// Use this to pass the full forward-pass buffer to `set_row_bounds`.
     ///
     /// [`fill_forward_patches`]: PatchBuffer::fill_forward_patches
+    /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
     #[must_use]
     #[inline]
     pub fn forward_patch_count(&self) -> usize {
-        self.hydro_count * (2 + self.max_par_order)
+        self.hydro_count * (2 + self.max_par_order) + self.active_load_patches
     }
 
     /// Number of active patches after [`fill_state_patches`]: `N*(1+L)`.
@@ -433,6 +566,26 @@ pub struct StageTemplates {
     pub block_hours_per_stage: Vec<Vec<f64>>,
     /// Number of hydro plants (N) used to stride into `noise_scale`.
     pub n_hydros: usize,
+    /// Per-stage row index of the first load-balance constraint.
+    ///
+    /// `load_balance_row_starts[s]` equals `row_water_balance_start + n_hydros`
+    /// for stage `s`.  Length equals `templates.len()`.  Used by the forward,
+    /// backward, and simulation passes to locate load-balance rows for
+    /// stochastic load patching.
+    pub load_balance_row_starts: Vec<usize>,
+    /// Number of buses with stochastic load noise (i.e. with `std_mw > 0`).
+    ///
+    /// Equals `normal_lp.n_entities()`.  Tells the forward and backward passes
+    /// how many load-noise components to extract from the opening tree noise
+    /// vector, which carries load noise in indices `[n_hydros, n_hydros + n_load_buses)`.
+    pub n_load_buses: usize,
+    /// Position in the `buses` slice for each stochastic load bus.
+    ///
+    /// Length equals `n_load_buses`.  Bus IDs are sorted by [`cobre_core::EntityId`] for
+    /// declaration-order invariance.  The forward and backward passes use
+    /// `load_bus_indices[i]` to compute the base row index of bus `i` in the
+    /// load-balance region: `row = load_balance_row_start + load_bus_indices[i] * n_blks + blk`.
+    pub load_bus_indices: Vec<usize>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -511,8 +664,9 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// let system = SystemBuilder::new().buses(vec![bus]).build().expect("valid");
 /// let method = InflowNonNegativityMethod::None;
 /// let par_lp = PrecomputedParLp::build(&[], &[], &[]).expect("empty ok");
+/// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormalLp::default();
 /// // No stages → empty result.
-/// let result = build_stage_templates(&system, &method, &par_lp);
+/// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp);
 /// assert!(result.templates.is_empty());
 /// ```
 #[must_use]
@@ -521,6 +675,7 @@ pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
     par_lp: &PrecomputedParLp,
+    normal_lp: &PrecomputedNormalLp,
 ) -> StageTemplates {
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -543,6 +698,9 @@ pub fn build_stage_templates(
             zeta_per_stage: Vec::new(),
             block_hours_per_stage: Vec::new(),
             n_hydros,
+            load_balance_row_starts: Vec::new(),
+            n_load_buses: 0,
+            load_bus_indices: Vec::new(),
         };
     }
     let n_thermals = thermals.len();
@@ -570,11 +728,45 @@ pub fn build_stage_templates(
     let n_study_stages = study_stages.len();
     let mut templates = Vec::with_capacity(n_study_stages);
     let mut base_rows = Vec::with_capacity(n_study_stages);
+    let mut load_balance_row_starts = Vec::with_capacity(n_study_stages);
 
     // Determine whether the penalty method adds inflow slack columns.
     // Active when the method has slack columns and there is at least one hydro.
     // No slack columns are added for n_hydros == 0.
     let has_penalty = n_hydros > 0 && inflow_method.has_slack_columns();
+
+    // Collect stochastic load bus indices: buses with std_mw > 0 for any stage,
+    // sorted by EntityId for declaration-order invariance, mapped to their
+    // position in the buses slice.
+    //
+    // `n_load_buses` equals `normal_lp.n_entities()` in a consistent system
+    // (the two are derived from the same source of truth: buses with std_mw > 0
+    // in the load models).  We derive it from the system directly so that
+    // `load_bus_indices` and `n_load_buses` are always mutually consistent.
+    let load_bus_indices: Vec<usize> = {
+        let mut ids: Vec<cobre_core::EntityId> = system
+            .load_models()
+            .iter()
+            .filter(|m| m.std_mw > 0.0)
+            .map(|m| m.bus_id)
+            .collect();
+        ids.sort_unstable_by_key(|id| id.0);
+        ids.dedup();
+        ids.iter()
+            .filter_map(|id| bus_pos.get(id).copied())
+            .collect()
+    };
+    let n_load_buses = load_bus_indices.len();
+    // Consistency gate: n_load_buses derived from the system must agree with
+    // n_entities() in the PrecomputedNormalLp when the latter is non-empty.
+    // A default (empty) PrecomputedNormalLp is accepted for call sites that
+    // have not yet wired the stochastic context (e.g. unit tests without load noise).
+    debug_assert!(
+        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
+        "PrecomputedNormalLp has {} entities but system has {} stochastic load buses",
+        normal_lp.n_entities(),
+        n_load_buses
+    );
 
     for (stage_idx, stage) in study_stages.iter().enumerate() {
         let n_blks = stage.blocks.len();
@@ -599,6 +791,7 @@ pub fn build_stage_templates(
         let row_water_balance_start = n_dual_relevant;
         let row_load_balance_start = row_water_balance_start + n_hydros;
         let num_rows = row_load_balance_start + n_buses * n_blks;
+        load_balance_row_starts.push(row_load_balance_start);
 
         let n_h = n_hydros;
         let n_b = n_buses;
@@ -939,7 +1132,6 @@ pub fn build_stage_templates(
     // forward/backward passes. The caller multiplies raw η by noise_scale to
     // obtain ζ*σ*η, which is then added to ζ*base (encoded in row_lower) to
     // form the complete water-balance RHS patch value.
-    let n_study_stages = study_stages.len();
     let mut noise_scale = vec![0.0_f64; n_study_stages * n_hydros];
     let mut zeta_per_stage = Vec::with_capacity(n_study_stages);
     let mut block_hours_per_stage = Vec::with_capacity(n_study_stages);
@@ -965,6 +1157,9 @@ pub fn build_stage_templates(
         zeta_per_stage,
         block_hours_per_stage,
         n_hydros,
+        load_balance_row_starts,
+        n_load_buses,
+        load_bus_indices,
     }
 }
 
@@ -980,8 +1175,8 @@ mod tests {
 
     #[test]
     fn new_3_2_sizes_to_12() {
-        // Spec acceptance criterion: PatchBuffer::new(3, 2) → 12 = 3*(2+2)
-        let buf = PatchBuffer::new(3, 2);
+        // Spec acceptance criterion: PatchBuffer::new(3, 2, 0, 0) → 12 = 3*(2+2)
+        let buf = PatchBuffer::new(3, 2, 0, 0);
         assert_eq!(buf.indices.len(), 12);
         assert_eq!(buf.lower.len(), 12);
         assert_eq!(buf.upper.len(), 12);
@@ -989,8 +1184,8 @@ mod tests {
 
     #[test]
     fn new_160_12_sizes_to_2240() {
-        // Spec acceptance criterion: PatchBuffer::new(160, 12) → 2240 = 160*(2+12)
-        let buf = PatchBuffer::new(160, 12);
+        // Spec acceptance criterion: PatchBuffer::new(160, 12, 0, 0) → 2240 = 160*(2+12)
+        let buf = PatchBuffer::new(160, 12, 0, 0);
         assert_eq!(buf.indices.len(), 2240);
         assert_eq!(buf.lower.len(), 2240);
         assert_eq!(buf.upper.len(), 2240);
@@ -999,19 +1194,19 @@ mod tests {
     #[test]
     fn new_zero_lags_sizes_to_2n() {
         // Edge case: L = 0 → N*(2+0) = 2*N patches
-        let buf = PatchBuffer::new(5, 0);
+        let buf = PatchBuffer::new(5, 0, 0, 0);
         assert_eq!(buf.indices.len(), 10); // 5*(2+0)
     }
 
     #[test]
     fn new_zero_hydros_sizes_to_zero() {
-        let buf = PatchBuffer::new(0, 0);
+        let buf = PatchBuffer::new(0, 0, 0, 0);
         assert_eq!(buf.indices.len(), 0);
     }
 
     #[test]
     fn forward_patch_count_matches_buffer_len() {
-        let buf = PatchBuffer::new(3, 2);
+        let buf = PatchBuffer::new(3, 2, 0, 0);
         assert_eq!(buf.forward_patch_count(), buf.indices.len());
         assert_eq!(buf.forward_patch_count(), 12);
     }
@@ -1019,14 +1214,14 @@ mod tests {
     #[test]
     fn state_patch_count_is_n_times_one_plus_l() {
         // N*(1+L) = 3*(1+2) = 9 for the spec worked example
-        let buf = PatchBuffer::new(3, 2);
+        let buf = PatchBuffer::new(3, 2, 0, 0);
         assert_eq!(buf.state_patch_count(), 9);
     }
 
     #[test]
     fn state_patch_count_zero_lags() {
         // L = 0 → N*(1+0) = N = 4
-        let buf = PatchBuffer::new(4, 0);
+        let buf = PatchBuffer::new(4, 0, 0, 0);
         assert_eq!(buf.state_patch_count(), 4);
     }
 
@@ -1045,7 +1240,7 @@ mod tests {
     #[test]
     fn fill_forward_patches_category1_indices() {
         // First 3 patches correspond to storage fixing rows 0, 1, 2
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1061,7 +1256,7 @@ mod tests {
         // Row index formula: N + ℓ·N + h
         // ℓ=0: 3+0=3, 3+1=4, 3+2=5
         // ℓ=1: 6+0=6, 6+1=7, 6+2=8
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1078,7 +1273,7 @@ mod tests {
     fn fill_forward_patches_category3_indices() {
         // Last 3 patches correspond to AR dynamics rows
         // base_row = 50 → rows 50, 51, 52
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1091,7 +1286,7 @@ mod tests {
     #[test]
     fn fill_forward_patches_category1_values() {
         // Category 1: lower == upper == state[h]
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1107,7 +1302,7 @@ mod tests {
     #[test]
     fn fill_forward_patches_category2_values() {
         // Category 2: lower == upper == state[N + ℓ·N + h]
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1131,7 +1326,7 @@ mod tests {
     #[test]
     fn fill_forward_patches_category3_values() {
         // Category 3: lower == upper == noise[h]
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1147,7 +1342,7 @@ mod tests {
     #[test]
     fn fill_forward_patches_all_equality_constraints() {
         // Every patch must satisfy lower == upper (equality constraint)
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
         buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
@@ -1166,7 +1361,7 @@ mod tests {
     #[test]
     fn fill_state_patches_count_is_n_times_one_plus_l() {
         // Backward pass: N*(1+L) patches, no noise
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         buf.fill_state_patches(&idx(3, 2), &state);
 
@@ -1176,7 +1371,7 @@ mod tests {
 
     #[test]
     fn fill_state_patches_category1_correct() {
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         buf.fill_state_patches(&idx(3, 2), &state);
 
@@ -1193,7 +1388,7 @@ mod tests {
 
     #[test]
     fn fill_state_patches_category2_correct() {
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         buf.fill_state_patches(&idx(3, 2), &state);
 
@@ -1208,7 +1403,7 @@ mod tests {
 
     #[test]
     fn fill_state_patches_equality_constraints_in_active_range() {
-        let mut buf = PatchBuffer::new(3, 2);
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         buf.fill_state_patches(&idx(3, 2), &state);
 
@@ -1228,7 +1423,7 @@ mod tests {
     fn forward_patches_zero_lags_only_storage_and_noise() {
         // L=0: N*(2+0) = 2*N patches: N storage + N noise, zero lag
         let n = 2;
-        let mut buf = PatchBuffer::new(n, 0);
+        let mut buf = PatchBuffer::new(n, 0, 0, 0);
         let state = [5.0, 7.0]; // n_state = 2*(1+0) = 2
         let noise = [0.5, 0.6];
         buf.fill_forward_patches(&idx(n, 0), &state, &noise, 10);
@@ -1255,7 +1450,7 @@ mod tests {
     fn state_patches_zero_lags_only_storage() {
         // L=0: N*(1+0) = N patches (storage only)
         let n = 3;
-        let mut buf = PatchBuffer::new(n, 0);
+        let mut buf = PatchBuffer::new(n, 0, 0, 0);
         let state = [1.0, 2.0, 3.0]; // n_state = 3
         buf.fill_state_patches(&idx(n, 0), &state);
 
@@ -1272,7 +1467,7 @@ mod tests {
     #[test]
     fn production_scale_forward_patch_count() {
         // Spec acceptance criterion: 160*(2+12) = 2240
-        let buf = PatchBuffer::new(160, 12);
+        let buf = PatchBuffer::new(160, 12, 0, 0);
         assert_eq!(buf.forward_patch_count(), 2240);
         assert_eq!(buf.indices.len(), 2240);
     }
@@ -1282,7 +1477,7 @@ mod tests {
     fn production_scale_fill_forward_patches_smoke() {
         let n = 160;
         let l = 12;
-        let mut buf = PatchBuffer::new(n, l);
+        let mut buf = PatchBuffer::new(n, l, 0, 0);
         let n_state = n * (1 + l);
         let state: Vec<f64> = (0..n_state).map(|i| i as f64).collect();
         let noise: Vec<f64> = (0..n).map(|h| h as f64 * 0.01).collect();
@@ -1306,12 +1501,132 @@ mod tests {
 
     #[test]
     fn clone_and_debug() {
-        let buf = PatchBuffer::new(3, 2);
+        let buf = PatchBuffer::new(3, 2, 0, 0);
         let cloned = buf.clone();
         assert_eq!(cloned.indices.len(), buf.indices.len());
 
         let s = format!("{buf:?}");
         assert!(s.contains("PatchBuffer"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Category 4 (load balance) unit tests
+    // -------------------------------------------------------------------------
+
+    /// AC: `PatchBuffer::new(2, 1, 1, 3)` → capacity = 2*(2+1) + 1*3 = 9.
+    #[test]
+    fn new_with_load_allocates_correct_capacity() {
+        let buf = PatchBuffer::new(2, 1, 1, 3);
+        assert_eq!(buf.indices.len(), 9); // 2*(2+1) + 1*3
+        assert_eq!(buf.lower.len(), 9);
+        assert_eq!(buf.upper.len(), 9);
+    }
+
+    /// Category 4 row indices follow `row = load_row_start + bus_positions[i] * n_blocks + blk`.
+    ///
+    /// With `n_load_buses=2, n_blocks=2, bus_positions=[0,1], load_row_start=100`:
+    /// - bus 0, blk 0 → 100 + 0*2 + 0 = 100
+    /// - bus 0, blk 1 → 100 + 0*2 + 1 = 101
+    /// - bus 1, blk 0 → 100 + 1*2 + 0 = 102
+    /// - bus 1, blk 1 → 100 + 1*2 + 1 = 103
+    #[test]
+    fn fill_load_patches_correct_indices() {
+        // N=0, L=0, M=2, B=2 → capacity = 0 + 2*2 = 4
+        let mut buf = PatchBuffer::new(0, 0, 2, 2);
+        let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
+        let bus_positions = [0_usize, 1];
+        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions);
+
+        assert_eq!(buf.indices[0], 100); // bus 0, blk 0
+        assert_eq!(buf.indices[1], 101); // bus 0, blk 1
+        assert_eq!(buf.indices[2], 102); // bus 1, blk 0
+        assert_eq!(buf.indices[3], 103); // bus 1, blk 1
+    }
+
+    /// Category 4 lower and upper bounds equal the corresponding `load_rhs` value.
+    #[test]
+    fn fill_load_patches_correct_values() {
+        let mut buf = PatchBuffer::new(0, 0, 2, 2);
+        let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
+        let bus_positions = [0_usize, 1];
+        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions);
+
+        assert_eq!(buf.lower[0], 300.0);
+        assert_eq!(buf.upper[0], 300.0);
+        assert_eq!(buf.lower[1], 280.0);
+        assert_eq!(buf.upper[1], 280.0);
+        assert_eq!(buf.lower[2], 500.0);
+        assert_eq!(buf.upper[2], 500.0);
+        assert_eq!(buf.lower[3], 450.0);
+        assert_eq!(buf.upper[3], 450.0);
+    }
+
+    /// Every load patch must be an equality constraint: `lower[i] == upper[i]`.
+    #[test]
+    fn fill_load_patches_equality_constraints() {
+        let mut buf = PatchBuffer::new(3, 2, 2, 3);
+        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let noise = [0.1, 0.2, 0.3];
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+
+        let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
+        let bus_positions = [0_usize, 1];
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+
+        let count = buf.forward_patch_count();
+        for i in 0..count {
+            assert_eq!(
+                buf.lower[i],
+                buf.upper[i],
+                "patch {i}: lower {lo} != upper {up}",
+                lo = buf.lower[i],
+                up = buf.upper[i],
+            );
+        }
+    }
+
+    /// `forward_patch_count` includes Category 4 after `fill_load_patches`.
+    ///
+    /// N=3, L=2 → base = 3*(2+2) = 12; M=2, `n_blocks=3` → load = 6; total = 18.
+    #[test]
+    fn forward_patch_count_includes_load() {
+        let mut buf = PatchBuffer::new(3, 2, 2, 3);
+        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let noise = [0.1, 0.2, 0.3];
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+
+        let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
+        let bus_positions = [0_usize, 1];
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+
+        assert_eq!(buf.forward_patch_count(), 18); // 12 + 6
+    }
+
+    /// `state_patch_count` is unaffected by Category 4 — no lag structure for load.
+    #[test]
+    fn state_patch_count_excludes_load() {
+        let mut buf = PatchBuffer::new(3, 2, 2, 3);
+        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        buf.fill_state_patches(&idx(3, 2), &state);
+
+        let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
+        let bus_positions = [0_usize, 1];
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+
+        // state_patch_count must be N*(1+L) = 3*3 = 9, not 18
+        assert_eq!(buf.state_patch_count(), 9);
+    }
+
+    /// When `n_load_buses == 0`, `forward_patch_count` equals `N*(2+L)` unchanged.
+    #[test]
+    fn zero_load_buses_no_category4() {
+        let mut buf = PatchBuffer::new(3, 2, 0, 0);
+        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let noise = [0.1, 0.2, 0.3];
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+
+        // No fill_load_patches call: active_load_patches stays 0
+        assert_eq!(buf.forward_patch_count(), 12); // 3*(2+2) only
     }
 
     // -------------------------------------------------------------------------
@@ -1325,6 +1640,7 @@ mod tests {
         HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
         PumpingStageBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder, ThermalStageBounds,
     };
+    use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
     use cobre_stochastic::par::precompute::PrecomputedParLp;
 
     /// Method with no penalty — used in structural tests that check exact
@@ -1649,8 +1965,12 @@ mod tests {
     fn empty_stages_returns_empty() {
         // A system with no study stages returns empty StageTemplates.
         let system = one_bus_system(0);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         assert!(result.templates.is_empty());
         assert!(result.base_rows.is_empty());
     }
@@ -1659,8 +1979,12 @@ mod tests {
     fn one_stage_one_template() {
         // One study stage produces exactly one template and one base_row.
         let system = one_bus_system(1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         assert_eq!(result.templates.len(), 1);
         assert_eq!(result.base_rows.len(), 1);
     }
@@ -1672,8 +1996,12 @@ mod tests {
         //          = 0*2+1 + 0 + 0 + 0 + 1*1*2 = 3
         // (0 state + 0 lags + 0 storage_in + 1 theta) + (0 turb + 0 spill) + (0 thermal) + (0 lines) + (1 def + 1 exc)
         let system = one_bus_system(1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         // theta + deficit + excess = 1 + 1 + 1 = 3
         assert_eq!(t.num_cols, 3, "num_cols mismatch for no-entity system");
@@ -1686,8 +2014,12 @@ mod tests {
         // Decision: turbine[1] + spillage[1] + deficit[1] + excess[1] = 4
         // Total: 7
         let system = one_hydro_system(1, 0);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 7, "num_cols mismatch for N=1 L=0");
     }
@@ -1699,8 +2031,12 @@ mod tests {
         // Decision: turbine[1] + spillage[1] + deficit[1] + excess[1] = 4
         // Total: 9
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=2");
     }
@@ -1711,8 +2047,12 @@ mod tests {
         // fixing rows: 0, water balance: 0, load balance: 1*1 = 1
         // num_rows = 0 + 0 + 1 = 1
         let system = one_bus_system(1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 1, "num_rows mismatch for no-hydro system");
     }
@@ -1724,8 +2064,12 @@ mod tests {
         // fixing rows = 1, water balance = 1, load balance = 1
         // num_rows = 3
         let system = one_hydro_system(1, 0);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 3, "num_rows mismatch for N=1 L=0");
     }
@@ -1737,8 +2081,12 @@ mod tests {
         // fixing rows = 3, water balance = 1, load balance = 1
         // num_rows = 5
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 5, "num_rows mismatch for N=1 L=2");
     }
@@ -1747,8 +2095,12 @@ mod tests {
     fn n_state_matches_indexer() {
         // n_state must equal StageIndexer::new(N, L).n_state
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         let expected = StageIndexer::new(1, 2).n_state;
         assert_eq!(t.n_state, expected, "n_state must match StageIndexer");
@@ -1758,8 +2110,12 @@ mod tests {
     fn n_transfer_is_n_times_lag_order() {
         // n_transfer = N*L = 1*2 = 2
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
     }
@@ -1768,8 +2124,12 @@ mod tests {
     fn n_dual_relevant_equals_n_state_for_constant_productivity() {
         // For v0.1.0 with no FPHA, n_dual_relevant = n_state.
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(
             t.n_dual_relevant, t.n_state,
@@ -1781,8 +2141,12 @@ mod tests {
     fn base_row_is_n_dual_relevant() {
         // base_rows[s] = n_dual_relevant = n_state for the no-FPHA case.
         let system = one_hydro_system(2, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
             assert_eq!(
                 br, t.n_dual_relevant,
@@ -1795,8 +2159,12 @@ mod tests {
     fn csc_col_starts_monotone_nondecreasing() {
         // CSC validity: col_starts must be monotone non-decreasing.
         let system = one_hydro_system(1, 1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         for w in t.col_starts.windows(2) {
             assert!(w[0] <= w[1], "col_starts not monotone: {} > {}", w[0], w[1]);
@@ -1810,8 +2178,12 @@ mod tests {
     fn csc_row_indices_in_range() {
         // All row_indices must be in [0, num_rows).
         let system = one_hydro_system(1, 1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         for &r in &t.row_indices {
             assert!(
@@ -1827,8 +2199,12 @@ mod tests {
     fn csc_nz_count_matches_col_starts() {
         // num_nz == col_starts[num_cols]
         let system = one_hydro_system(1, 1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         assert_eq!(
             t.num_nz,
@@ -1848,8 +2224,12 @@ mod tests {
         // The theta column (index = N*(2+L)) must have objective coefficient = 1.0.
         let lag_order = 2;
         let system = one_hydro_system(1, lag_order);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
@@ -1863,8 +2243,12 @@ mod tests {
         // The spillage column should carry a non-zero objective when spillage_cost > 0.
         // Hydro has spillage_cost = 0.01, block duration = 744h.
         let system = one_hydro_system(1, 0);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         // spillage col for h=0, blk=0: col_spillage_start + 0 = N*(2+L)+1 + N*K
         // With N=1, L=0, K=1: theta=2, decision_start=3, turbine_start=3, spill_start=4
@@ -1879,8 +2263,12 @@ mod tests {
     fn load_balance_rhs_matches_load_model_mean_mw() {
         // The load balance row RHS must equal the mean_mw from LoadModel (100.0 in fixture).
         let system = one_bus_system(1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
         let load_row = 0;
@@ -1898,8 +2286,12 @@ mod tests {
     fn multiple_stages_produce_same_count_templates_and_base_rows() {
         // A 3-stage system yields 3 templates and 3 base_rows.
         let system = one_hydro_system(3, 1);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         assert_eq!(result.templates.len(), 3);
         assert_eq!(result.base_rows.len(), 3);
     }
@@ -1907,8 +2299,12 @@ mod tests {
     #[test]
     fn stage_templates_clone_and_debug() {
         let system = one_hydro_system(1, 0);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let cloned = result.clone();
         assert_eq!(cloned.templates.len(), result.templates.len());
         let s = format!("{result:?}");
@@ -1924,12 +2320,17 @@ mod tests {
     #[test]
     fn test_penalty_columns_added() {
         let system = one_hydro_system(1, 0);
-        let without =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let without = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let with_p = build_stage_templates(
             &system,
             &penalty_config(1000.0),
             &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
         );
         assert_eq!(
             with_p.templates[0].num_cols,
@@ -1951,9 +2352,14 @@ mod tests {
             &system,
             &penalty_config(1000.0),
             &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
         );
-        let without =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let without = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         assert_eq!(
             with_p.templates[0].num_cols, without.templates[0].num_cols,
             "no slack columns when n_hydros == 0, even with penalty config"
@@ -1967,7 +2373,12 @@ mod tests {
     fn test_penalty_objective_coefficient() {
         let system = one_hydro_system(1, 0);
         let config = penalty_config(1000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6, slack=7
         let slack_col = t.num_cols - 1; // last column
@@ -1984,8 +2395,12 @@ mod tests {
     #[test]
     fn test_no_penalty_columns_when_none() {
         let system = one_hydro_system(1, 2);
-        let result =
-            build_stage_templates(&system, &no_penalty_config(), &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4; total = 9
         assert_eq!(t.num_cols, 9, "method=none must not add extra columns");
@@ -2000,7 +2415,12 @@ mod tests {
     fn test_penalty_slack_in_water_balance() {
         let system = one_hydro_system(1, 0);
         let config = penalty_config(1000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
 
         // Locate the slack column (last column, index = num_cols - 1).
@@ -2029,7 +2449,12 @@ mod tests {
     fn test_penalty_slack_bounds() {
         let system = one_hydro_system(1, 0);
         let config = penalty_config(1000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
         let slack_col = t.num_cols - 1;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
@@ -2054,7 +2479,12 @@ mod tests {
     fn test_penalty_water_balance_coefficient_value() {
         let system = one_hydro_system(1, 0);
         let config = penalty_config(1000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let t = &result.templates[0];
 
         let slack_col = t.num_cols - 1;
@@ -2086,7 +2516,12 @@ mod tests {
     fn test_penalty_multi_stage_consistent() {
         let system = one_hydro_system(3, 1);
         let config = penalty_config(2000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         assert_eq!(result.templates.len(), 3);
         let base_cols = result.templates[0].num_cols;
         for t in &result.templates {
@@ -2119,7 +2554,12 @@ mod tests {
 
         let system = one_hydro_system(1, 0);
         let config = penalty_config(1000.0);
-        let result = build_stage_templates(&system, &config, &PrecomputedParLp::default());
+        let result = build_stage_templates(
+            &system,
+            &config,
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
         let template = &result.templates[0];
 
         // The inflow slack is the last column.
@@ -2177,6 +2617,297 @@ mod tests {
             view.objective > 0.0,
             "objective must include a positive penalty contribution, got {}",
             view.objective
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // ticket-024: load balance row starts, n_load_buses, load_bus_indices
+    // -------------------------------------------------------------------------
+
+    /// Build a two-bus system with N hydros and K blocks per stage.
+    /// Bus B1 (EntityId=10) has `std_mw` = 0 (no load noise).
+    /// Bus B2 (EntityId=20) has `std_mw` > 0 (stochastic load).
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn two_bus_system_with_stochastic_load(
+        n_stages: usize,
+        n_hydros_in_system: usize,
+        n_blocks: usize,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        // B1 (EntityId(10)): no noise, B2 (EntityId(20)): stochastic.
+        let bus1 = Bus {
+            id: EntityId(10),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let bus2 = Bus {
+            id: EntityId(20),
+            name: "B2".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let blocks: Vec<_> = (0..n_blocks)
+            .map(|b| Block {
+                index: b,
+                name: format!("B{b}"),
+                duration_hours: 240.0,
+            })
+            .collect();
+
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: blocks.clone(),
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: false,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let hydros: Vec<Hydro> = (0..n_hydros_in_system)
+            .map(|h| Hydro {
+                id: EntityId((h + 100) as i32),
+                name: format!("H{h}"),
+                bus_id: EntityId(10),
+                downstream_id: None,
+                entry_stage_id: None,
+                exit_stage_id: None,
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                generation_model: HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s: 1.0,
+                },
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 50.0,
+                min_generation_mw: 0.0,
+                max_generation_mw: 50.0,
+                tailrace: None,
+                hydraulic_losses: None,
+                efficiency: None,
+                evaporation_coefficients_mm: None,
+                diversion: None,
+                filling: None,
+                penalties: HydroPenalties {
+                    spillage_cost: 0.0,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 0.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = hydros
+            .iter()
+            .flat_map(|h| {
+                (0..n_stages).map(move |s| InflowModel {
+                    hydro_id: h.id,
+                    stage_id: s as i32,
+                    mean_m3s: 50.0,
+                    std_m3s: 10.0,
+                    ar_coefficients: vec![],
+                    residual_std_ratio: 1.0,
+                })
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .flat_map(|s| {
+                [
+                    LoadModel {
+                        bus_id: EntityId(10),
+                        stage_id: s as i32,
+                        mean_mw: 80.0,
+                        std_mw: 0.0, // B1: no noise
+                    },
+                    LoadModel {
+                        bus_id: EntityId(20),
+                        stage_id: s as i32,
+                        mean_mw: 120.0,
+                        std_mw: 15.0, // B2: stochastic
+                    },
+                ]
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+        let bounds = ResolvedBounds::new(
+            n_hydros_in_system,
+            0,
+            0,
+            0,
+            0,
+            n_st,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            n_hydros_in_system,
+            2,
+            0,
+            0,
+            n_st,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let mut builder = SystemBuilder::new()
+            .buses(vec![bus1, bus2])
+            .stages(stages)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties);
+        if !hydros.is_empty() {
+            builder = builder.hydros(hydros).inflow_models(inflow_models);
+        }
+        builder.build().expect("two_bus_system: valid")
+    }
+
+    // AC-1: load_balance_row_starts[0] == row_water_balance_start + n_hydros
+    // for a 2-bus, 2-hydro, 3-block system.
+    #[test]
+    fn stage_templates_load_balance_row_starts_correct() {
+        // N=2 hydros, B=2 buses, L=0 lags.
+        // StageIndexer: n_state = N*(1+L) = 2, n_dual_relevant = 2.
+        // row_water_balance_start = 2, row_load_balance_start = 2 + 2 = 4.
+        let system = two_bus_system_with_stochastic_load(2, 2, 3);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
+
+        assert_eq!(
+            result.load_balance_row_starts.len(),
+            result.templates.len(),
+            "load_balance_row_starts length must match templates length"
+        );
+
+        // For N=2 hydros, L=0: n_state = 2*(1+0) = 2, so row_water_balance_start = 2,
+        // row_load_balance_start = 2 + 2 = 4.
+        let expected_row_start = result.base_rows[0] + 2; // base_rows[0] = row_water_balance_start
+        assert_eq!(
+            result.load_balance_row_starts[0], expected_row_start,
+            "load_balance_row_starts[0] must equal row_water_balance_start + n_hydros"
+        );
+        // Both stages should have the same row start (same topology across stages).
+        assert_eq!(
+            result.load_balance_row_starts[0], result.load_balance_row_starts[1],
+            "identical stages share the same load balance row start"
+        );
+    }
+
+    // AC-2: n_load_buses and load_bus_indices populated for stochastic buses.
+    #[test]
+    fn stage_templates_n_load_buses_matches_stochastic_buses() {
+        // B2 (EntityId(20)) has std_mw > 0; B1 (EntityId(10)) does not.
+        // The system has buses in order [B1(10), B2(20)], so B2 is at index 1.
+        let system = two_bus_system_with_stochastic_load(1, 0, 1);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
+
+        assert_eq!(
+            result.n_load_buses, 1,
+            "only B2 has std_mw > 0 → n_load_buses must be 1"
+        );
+        assert_eq!(
+            result.load_bus_indices.len(),
+            1,
+            "load_bus_indices must have exactly one entry"
+        );
+        assert_eq!(
+            result.load_bus_indices[0], 1,
+            "B2 is at buses slice index 1 (buses are [B1(10), B2(20)])"
+        );
+    }
+
+    // AC-3: no load buses when no load models have std_mw > 0.
+    #[test]
+    fn stage_templates_no_load_buses_gives_zero() {
+        // one_bus_system uses std_mw = 0 for all load models.
+        let system = one_bus_system(2);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
+
+        assert_eq!(
+            result.n_load_buses, 0,
+            "system with std_mw = 0 everywhere must give n_load_buses = 0"
+        );
+        assert!(
+            result.load_bus_indices.is_empty(),
+            "load_bus_indices must be empty when n_load_buses = 0"
+        );
+        assert_eq!(
+            result.load_balance_row_starts.len(),
+            result.templates.len(),
+            "load_balance_row_starts length must always match templates length"
         );
     }
 }

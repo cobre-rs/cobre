@@ -448,8 +448,12 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("stochastic context error: {e}"),
         })?;
 
-    let stage_templates =
-        build_stage_templates(&system, &bcast_config.inflow_method, stochastic.par_lp());
+    let stage_templates = build_stage_templates(
+        &system,
+        &bcast_config.inflow_method,
+        stochastic.par_lp(),
+        stochastic.normal_lp(),
+    );
     if stage_templates.templates.is_empty() {
         return Err(CliError::Validation {
             report: "system has no study stages — cannot train".to_string(),
@@ -520,6 +524,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         ))
     };
 
+    let n_load_buses = stage_templates.n_load_buses;
+    let max_blocks = block_hours_per_stage
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
+    let block_counts_per_stage: Vec<usize> = block_hours_per_stage.iter().map(Vec::len).collect();
+    let load_balance_row_starts = &stage_templates.load_balance_row_starts;
+    let load_bus_indices = &stage_templates.load_bus_indices;
+
     let training_result = match train(
         &mut solver,
         training_config,
@@ -541,6 +555,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &bcast_config.inflow_method,
         noise_scale,
         n_hydros_lp,
+        n_load_buses,
+        max_blocks,
+        load_balance_row_starts,
+        load_bus_indices,
+        &block_counts_per_stage,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -616,6 +635,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             indexer.hydro_count,
             indexer.max_par_order,
             indexer.n_state,
+            n_load_buses,
+            max_blocks,
             HighsSolver::new,
         )
         .map_err(|e| CliError::Solver {
@@ -659,6 +680,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &bcast_config.inflow_method,
             noise_scale,
             n_hydros_lp,
+            n_load_buses,
+            load_balance_row_starts,
+            load_bus_indices,
+            &block_counts_per_stage,
             zeta_per_stage,
             block_hours_per_stage,
             Some(sim_event_tx),

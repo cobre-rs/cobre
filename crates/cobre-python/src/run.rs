@@ -523,7 +523,12 @@ fn run_inner(
         .map_err(|e| format!("stochastic context error: {e}"))?;
 
     // Build LP templates.
-    let stage_templates = build_stage_templates(&system, &inflow_method, stochastic.par_lp());
+    let stage_templates = build_stage_templates(
+        &system,
+        &inflow_method,
+        stochastic.par_lp(),
+        stochastic.normal_lp(),
+    );
     if stage_templates.templates.is_empty() {
         return Err("system has no study stages — cannot train".to_string());
     }
@@ -580,6 +585,16 @@ fn run_inner(
 
     let comm = LocalBackend;
 
+    let n_load_buses = stage_templates.n_load_buses;
+    let max_blocks = block_hours_per_stage
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
+    let block_counts_per_stage: Vec<usize> = block_hours_per_stage.iter().map(Vec::len).collect();
+    let load_balance_row_starts = &stage_templates.load_balance_row_starts;
+    let load_bus_indices = &stage_templates.load_bus_indices;
+
     let training_result = train(
         &mut solver,
         training_config,
@@ -601,6 +616,11 @@ fn run_inner(
         &inflow_method,
         noise_scale,
         n_hydros_lp,
+        n_load_buses,
+        max_blocks,
+        load_balance_row_starts,
+        load_bus_indices,
+        &block_counts_per_stage,
     )
     .map_err(|e| format!("training error: {e}"))?;
 
@@ -641,6 +661,8 @@ fn run_inner(
             indexer.hydro_count,
             indexer.max_par_order,
             indexer.n_state,
+            0,
+            0,
             HighsSolver::new,
         )
         .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;

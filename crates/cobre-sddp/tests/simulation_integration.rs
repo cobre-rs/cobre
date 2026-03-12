@@ -574,6 +574,7 @@ fn train_simulate_write_cycle() {
         event_sender: Some(tx),
     };
 
+    let block_counts_per_stage = vec![1usize; fx.n_stages];
     let result = train(
         &mut solver,
         training_config,
@@ -595,6 +596,11 @@ fn train_simulate_write_cycle() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        1,
+        &[],
+        &[],
+        &block_counts_per_stage,
     )
     .expect("train must succeed");
 
@@ -708,10 +714,12 @@ fn train_simulate_write_cycle() {
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
         sim_solver,
-        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
+        PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
         fx.indexer.hydro_count,
         fx.indexer.max_par_order,
+        0,
+        0,
     )];
 
     simulate(
@@ -730,6 +738,10 @@ fn train_simulate_write_cycle() {
         &InflowNonNegativityMethod::None,
         &[],
         0,
+        0,
+        &[],
+        &[],
+        &[],
         &[],
         &[],
         None,

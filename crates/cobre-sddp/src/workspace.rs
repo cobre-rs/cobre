@@ -32,13 +32,26 @@ pub struct SolverWorkspace<S: SolverInterface> {
     pub(crate) eta_floor_buf: Vec<f64>,
     /// Zero-filled scratch buffer for `solve_par_noises` targets (inflow truncation).
     pub(crate) zero_targets_buf: Vec<f64>,
+    /// Scratch buffer for stochastic load RHS values (forward pass).
+    ///
+    /// Sized to `n_load_buses * max_blocks`. Built per stage by the forward pass
+    /// before calling [`PatchBuffer::fill_load_patches`].
+    pub(crate) load_rhs_buf: Vec<f64>,
+    /// Scratch buffer for patched `row_lower` values (simulation extraction).
+    ///
+    /// Sized to the maximum template `row_lower.len()` across stages.
+    /// The simulation pipeline clones the template's `row_lower` into this
+    /// buffer and overwrites load balance rows with stochastic realizations
+    /// before passing to [`extract_stage_result`].
+    pub(crate) row_lower_buf: Vec<f64>,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
     /// `hydro_count` and `max_par_order` determine the capacities of internal
-    /// scratch buffers for the inflow truncation path.
+    /// scratch buffers for the inflow truncation path.  `n_load_buses` and
+    /// `max_blocks` determine the capacity of the load RHS scratch buffer.
     #[must_use]
     pub fn new(
         solver: S,
@@ -46,6 +59,8 @@ impl<S: SolverInterface> SolverWorkspace<S> {
         n_state: usize,
         hydro_count: usize,
         max_par_order: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
     ) -> Self {
         Self {
             solver,
@@ -57,6 +72,8 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             par_inflow_buf: Vec::with_capacity(hydro_count),
             eta_floor_buf: Vec::with_capacity(hydro_count),
             zero_targets_buf: vec![0.0_f64; hydro_count],
+            load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+            row_lower_buf: Vec::new(),
         }
     }
 }
@@ -78,18 +95,24 @@ impl<S: SolverInterface> WorkspacePool<S> {
     ///
     /// Each workspace receives a fresh solver instance, patch buffer, and state buffer.
     /// `solver_factory` is called once per thread.
+    ///
+    /// `n_load_buses` and `max_blocks` size the load RHS scratch buffer and the
+    /// Category 4 region of each workspace's [`PatchBuffer`].  Pass `0` for both
+    /// when there is no stochastic load.
     #[must_use]
     pub fn new(
         n_threads: usize,
         hydro_count: usize,
         max_par_order: usize,
         n_state: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
         solver_factory: impl Fn() -> S,
     ) -> Self {
         let workspaces = (0..n_threads)
             .map(|_| SolverWorkspace {
                 solver: solver_factory(),
-                patch_buf: PatchBuffer::new(hydro_count, max_par_order),
+                patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
                 noise_buf: Vec::with_capacity(hydro_count),
                 inflow_m3s_buf: Vec::with_capacity(hydro_count),
@@ -97,6 +120,8 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 par_inflow_buf: Vec::with_capacity(hydro_count),
                 eta_floor_buf: Vec::with_capacity(hydro_count),
                 zero_targets_buf: vec![0.0_f64; hydro_count],
+                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+                row_lower_buf: Vec::new(),
             })
             .collect();
         Self { workspaces }
@@ -115,6 +140,10 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// - `hydro_count`: number of operating hydro plants (N in the LP layout).
     /// - `max_par_order`: maximum PAR order across all hydros (L in the layout).
     /// - `n_state`: capacity for the `current_state` scratch buffer.
+    /// - `n_load_buses`: number of buses with stochastic load noise (M).
+    ///   Pass `0` when there is no stochastic load.
+    /// - `max_blocks`: maximum block count across all stages.
+    ///   Pass `0` when there is no stochastic load.
     /// - `solver_factory`: called once per thread; returns `Result<S, E>`.
     ///
     /// # Errors
@@ -125,13 +154,15 @@ impl<S: SolverInterface> WorkspacePool<S> {
         hydro_count: usize,
         max_par_order: usize,
         n_state: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
         solver_factory: impl Fn() -> Result<S, E>,
     ) -> Result<Self, E> {
         let mut workspaces = Vec::with_capacity(n_threads);
         for _ in 0..n_threads {
             workspaces.push(SolverWorkspace {
                 solver: solver_factory()?,
-                patch_buf: PatchBuffer::new(hydro_count, max_par_order),
+                patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
                 noise_buf: Vec::with_capacity(hydro_count),
                 inflow_m3s_buf: Vec::with_capacity(hydro_count),
@@ -139,6 +170,8 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 par_inflow_buf: Vec::with_capacity(hydro_count),
                 eta_floor_buf: Vec::with_capacity(hydro_count),
                 zero_targets_buf: vec![0.0_f64; hydro_count],
+                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+                row_lower_buf: Vec::new(),
             });
         }
         Ok(Self { workspaces })
@@ -301,8 +334,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.
@@ -345,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_size() {
-        let pool = WorkspacePool::new(4, 3, 2, 9, || MockSolver);
+        let pool = WorkspacePool::new(4, 3, 2, 9, 0, 0, || MockSolver);
         assert_eq!(pool.workspaces.len(), 4);
     }
 
@@ -353,7 +386,7 @@ mod tests {
     fn test_workspace_buffer_dimensions() {
         // N=3, L=2 → patch_buf length = 3*(2+2) = 12
         // n_state=9 → current_state capacity = 9
-        let pool = WorkspacePool::new(4, 3, 2, 9, || MockSolver);
+        let pool = WorkspacePool::new(4, 3, 2, 9, 0, 0, || MockSolver);
         for ws in &pool.workspaces {
             assert_eq!(ws.patch_buf.indices.len(), 12, "patch_buf length");
             assert_eq!(ws.current_state.capacity(), 9, "current_state capacity");
@@ -363,13 +396,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_zero_threads() {
-        let pool = WorkspacePool::new(0, 3, 2, 9, || MockSolver);
+        let pool = WorkspacePool::new(0, 3, 2, 9, 0, 0, || MockSolver);
         assert_eq!(pool.workspaces.len(), 0);
     }
 
     #[test]
     fn test_workspace_pool_single_thread() {
-        let pool = WorkspacePool::new(1, 0, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(1, 0, 0, 0, 0, 0, || MockSolver);
         assert_eq!(pool.workspaces.len(), 1);
         assert_eq!(pool.workspaces[0].patch_buf.indices.len(), 0);
     }
@@ -379,7 +412,7 @@ mod tests {
         // Factory is called n_threads times; each workspace gets its own instance.
         // Verify by checking pool size matches factory call expectation.
         let n = 6;
-        let pool = WorkspacePool::new(n, 1, 0, 1, || MockSolver);
+        let pool = WorkspacePool::new(n, 1, 0, 1, 0, 0, || MockSolver);
         assert_eq!(pool.workspaces.len(), n);
     }
 

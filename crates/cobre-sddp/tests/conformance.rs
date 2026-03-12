@@ -784,7 +784,7 @@ mod lb_conformance {
         let template = minimal_template();
         let fcf = make_fcf(2, indexer.n_state);
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order);
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
         let opening_tree = simple_opening_tree(2);
         let rm = RiskMeasure::Expectation;
         let comm = LocalComm;

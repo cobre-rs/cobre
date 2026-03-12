@@ -30,7 +30,7 @@
 //! where `ρ(0) = 1` (normalised autocorrelation). The Levinson-Durbin
 //! recursion solves this in O(p²) without forming the full Toeplitz matrix.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
@@ -232,11 +232,11 @@ pub fn estimate_seasonal_stats(
 ///
 /// `stage_index` must be sorted by `start_date`. Returns `None` when `date`
 /// falls outside every stage's `[start_date, end_date)` range.
-fn find_season_for_date(
+#[must_use]
+pub fn find_season_for_date(
     stage_index: &[(NaiveDate, NaiveDate, i32, usize)],
     date: NaiveDate,
 ) -> Option<usize> {
-    // Find the rightmost stage whose start_date <= date.
     let pos = stage_index.partition_point(|(start, _, _, _)| *start <= date);
     if pos == 0 {
         return None;
@@ -585,9 +585,10 @@ pub fn estimate_ar_coefficients(
     // Step 4: Group observations by (entity_id, season_id), recording only
     // the date and value (for lag lookups we use the entity_obs position map).
     // -----------------------------------------------------------------------
+    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
     let mut group_obs: HashMap<(EntityId, usize), Vec<(NaiveDate, f64)>> = HashMap::new();
     for &(entity_id, date, value) in observations {
-        if !hydro_ids.contains(&entity_id) {
+        if !entity_set.contains(&entity_id) {
             continue;
         }
         let Some(season_id) = find_season_for_date(&stage_index, date) else {

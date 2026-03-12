@@ -23,7 +23,7 @@
 //! best order and truncates the AR coefficient vector accordingly.
 //! This avoids changing `ArCoefficientEstimate`'s public API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -36,8 +36,9 @@ use cobre_io::{
 };
 use cobre_stochastic::{
     par::fitting::{
-        estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats, levinson_durbin,
-        select_order_aic, ArCoefficientEstimate, SeasonalStats,
+        estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats,
+        find_season_for_date, levinson_durbin, select_order_aic, ArCoefficientEstimate,
+        SeasonalStats,
     },
     StochasticError,
 };
@@ -237,9 +238,10 @@ fn estimate_ar_with_aic(
         .collect();
 
     // Group observations by (entity_id, season_id) for autocorrelation.
+    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
     let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
     for &(entity_id, date, value) in observations {
-        if !hydro_ids.contains(&entity_id) {
+        if !entity_set.contains(&entity_id) {
             continue;
         }
         let Some(season_id) = find_season_for_date(&stage_index, date) else {
@@ -467,23 +469,6 @@ fn ar_estimates_to_rows(
     rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id, r.lag));
 
     rows
-}
-
-/// Find the `season_id` for a date by binary-searching the stage index.
-fn find_season_for_date(
-    stage_index: &[(NaiveDate, NaiveDate, i32, usize)],
-    date: NaiveDate,
-) -> Option<usize> {
-    let pos = stage_index.partition_point(|(start, _, _, _)| *start <= date);
-    if pos == 0 {
-        return None;
-    }
-    let (_, end_date, _, season_id) = stage_index[pos - 1];
-    if date < end_date {
-        Some(season_id)
-    } else {
-        None
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

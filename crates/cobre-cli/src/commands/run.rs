@@ -443,9 +443,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let bcast_config = bcast_config_result?;
 
     let seed = bcast_config.seed;
-    let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
-        message: format!("stochastic context error: {e}"),
-    })?;
+    let stochastic =
+        build_stochastic_context(&system, seed, &[]).map_err(|e| CliError::Internal {
+            message: format!("stochastic context error: {e}"),
+        })?;
 
     let stage_templates =
         build_stage_templates(&system, &bcast_config.inflow_method, stochastic.par_lp());

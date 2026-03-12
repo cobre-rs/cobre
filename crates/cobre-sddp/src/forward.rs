@@ -1043,7 +1043,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -2091,7 +2091,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance

@@ -801,7 +801,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

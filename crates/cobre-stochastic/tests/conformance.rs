@@ -188,7 +188,7 @@ fn shared_fixture() -> cobre_core::System {
 #[test]
 fn pipeline_builds_with_correct_dimensions() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42)
+    let ctx = build_stochastic_context(&system, 42, &[])
         .expect("build_stochastic_context must succeed for the shared fixture");
 
     assert_eq!(ctx.dim(), 2, "expected dim=2 (two hydros)");
@@ -215,7 +215,7 @@ fn pipeline_builds_with_correct_dimensions() {
 #[test]
 fn par_lp_coefficients_match_hand_computed() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42)
+    let ctx = build_stochastic_context(&system, 42, &[])
         .expect("build_stochastic_context must succeed for the shared fixture");
 
     let par = ctx.par_lp();
@@ -279,7 +279,7 @@ fn par_lp_coefficients_match_hand_computed() {
 #[test]
 fn opening_tree_structure_correct() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42)
+    let ctx = build_stochastic_context(&system, 42, &[])
         .expect("build_stochastic_context must succeed for the shared fixture");
 
     let tree = ctx.opening_tree();
@@ -306,7 +306,7 @@ fn opening_tree_structure_correct() {
 #[test]
 fn sample_forward_returns_valid_output() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42)
+    let ctx = build_stochastic_context(&system, 42, &[])
         .expect("build_stochastic_context must succeed for the shared fixture");
 
     let view = ctx.tree_view();
@@ -374,7 +374,7 @@ fn opening_tree_marginal_statistics() {
         .build()
         .expect("system build must succeed for marginal statistics test");
 
-    let ctx = build_stochastic_context(&system, 42)
+    let ctx = build_stochastic_context(&system, 42, &[])
         .expect("build_stochastic_context must succeed for marginal statistics test");
 
     let tree = ctx.opening_tree();

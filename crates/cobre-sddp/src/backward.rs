@@ -828,7 +828,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42).unwrap()
+        build_stochastic_context(&system, 42, &[]).unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────

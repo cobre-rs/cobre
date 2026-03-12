@@ -519,7 +519,7 @@ fn run_inner(
     let max_iterations = max_iterations_from_rules(&stopping_rules);
 
     // Build stochastic context.
-    let stochastic = build_stochastic_context(&system, seed)
+    let stochastic = build_stochastic_context(&system, seed, &[])
         .map_err(|e| format!("stochastic context error: {e}"))?;
 
     // Build LP templates.

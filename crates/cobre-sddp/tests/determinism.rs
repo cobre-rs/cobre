@@ -391,7 +391,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42).unwrap()
+    build_stochastic_context(&system, 42, &[]).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.

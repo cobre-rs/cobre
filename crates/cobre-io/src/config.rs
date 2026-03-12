@@ -852,7 +852,9 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(
             cfg.schema.as_deref(),
-            Some("https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json"),
+            Some(
+                "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json"
+            ),
             "schema field should be stored when present in JSON"
         );
     }

@@ -289,7 +289,8 @@ mod tests {
         };
         assert!(execute(args).is_ok());
 
-        let base = "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/";
+        let base =
+            "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/";
 
         let checks: &[(&str, &str)] = &[
             ("system/buses.json", "buses.schema.json"),

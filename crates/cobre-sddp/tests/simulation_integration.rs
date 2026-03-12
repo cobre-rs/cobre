@@ -312,7 +312,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42).unwrap()
+    build_stochastic_context(&system, 42, &[]).unwrap()
 }
 
 fn minimal_template() -> StageTemplate {

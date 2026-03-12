@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{scenario::LoadModel, temporal::Stage, EntityId};
+use cobre_core::{EntityId, scenario::LoadModel, temporal::Stage};
 
 use crate::StochasticError;
 
@@ -350,12 +350,12 @@ impl Default for PrecomputedNormalLp {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::LoadModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
 
     use super::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};

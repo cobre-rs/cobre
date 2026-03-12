@@ -24,9 +24,9 @@ pub mod validation;
 
 pub use evaluate::{evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises};
 pub use fitting::{
+    AicSelectionResult, ArCoefficientEstimate, LevinsonDurbinResult, SeasonalStats,
     estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats, find_season_for_date,
-    levinson_durbin, select_order_aic, AicSelectionResult, ArCoefficientEstimate,
-    LevinsonDurbinResult, SeasonalStats,
+    levinson_durbin, select_order_aic,
 };
 pub use precompute::PrecomputedParLp;
-pub use validation::{validate_par_parameters, ParValidationReport, ParWarning};
+pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

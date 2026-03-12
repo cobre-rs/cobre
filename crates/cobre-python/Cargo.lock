@@ -372,6 +372,7 @@ dependencies = [
 name = "cobre-sddp"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "cobre-comm",
  "cobre-core",
  "cobre-io",
@@ -394,6 +395,7 @@ dependencies = [
 name = "cobre-stochastic"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "cobre-core",
  "rand",
  "rand_distr",

@@ -31,12 +31,26 @@ fn cobre() -> Command {
 
 /// Minimal `config.json` with `forward_passes` and `stopping_rules`.
 /// Uses a single iteration limit so tests run fast.
+/// `training.seed` is absent, so the CLI will use the default seed (42) and
+/// emit a warning to stderr.
 const CONFIG_JSON: &str = r#"{
     "training": {
         "forward_passes": 1,
         "stopping_rules": [
             { "type": "iteration_limit", "limit": 2 }
         ]
+    }
+}"#;
+
+/// Variant of `CONFIG_JSON` with an explicit `training.seed`.
+/// The CLI must not emit the "no random seed specified" warning.
+const CONFIG_WITH_SEED_JSON: &str = r#"{
+    "training": {
+        "forward_passes": 1,
+        "stopping_rules": [
+            { "type": "iteration_limit", "limit": 2 }
+        ],
+        "seed": 99
     }
 }"#;
 
@@ -305,4 +319,61 @@ fn test_run_no_banner_flag_suppresses_banner() {
         .success()
         .stderr(predicate::str::contains("COBRE v").not())
         .stderr(predicate::str::contains("Training complete in"));
+}
+
+/// Write a valid case directory using the supplied `config.json` content.
+fn make_valid_case_with_config(dir: &TempDir, config_content: &str) {
+    let root = dir.path();
+    write_file(root, "config.json", config_content);
+    write_file(root, "penalties.json", PENALTIES_JSON);
+    write_file(root, "stages.json", STAGES_JSON);
+    write_file(root, "initial_conditions.json", INITIAL_CONDITIONS_JSON);
+    write_file(root, "system/buses.json", BUSES_JSON);
+    write_file(root, "system/lines.json", LINES_JSON);
+    write_file(root, "system/hydros.json", HYDROS_JSON);
+    write_file(root, "system/thermals.json", THERMALS_JSON);
+}
+
+// ---- Seed-warning tests --------------------------------------------------
+
+/// AC: When `training.seed` is absent, stderr contains "no random seed specified"
+/// and the run exits 0.
+#[test]
+fn no_seed_in_config_emits_warning_on_stderr() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case_with_config(&dir, CONFIG_JSON);
+    let out = TempDir::new().unwrap();
+
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--skip-simulation",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no random seed specified"));
+}
+
+/// AC: When `training.seed` is explicitly set, stderr does NOT contain the
+/// "no random seed specified" warning.
+#[test]
+fn explicit_seed_in_config_suppresses_warning() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case_with_config(&dir, CONFIG_WITH_SEED_JSON);
+    let out = TempDir::new().unwrap();
+
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--skip-simulation",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no random seed specified").not());
 }

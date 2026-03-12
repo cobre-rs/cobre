@@ -34,35 +34,22 @@ use cobre_io::output::simulation_writer::{
     NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
     StageWritePayload, ThermalWriteRecord,
 };
-use cobre_io::{ParquetWriterConfig, write_results};
+use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationBusResult, SimulationConfig, SimulationContractResult, SimulationCostResult,
-    SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
-    SimulationInflowLagResult, SimulationNonControllableResult, SimulationPumpingResult,
-    SimulationScenarioResult, SimulationStageResult, SimulationThermalResult, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
-    build_stage_templates, build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationBusResult,
+    SimulationConfig, SimulationContractResult, SimulationCostResult, SimulationExchangeResult,
+    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
+    SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
+    SimulationStageResult, SimulationThermalResult, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
 
-// ---------------------------------------------------------------------------
-// Constants (mirror CLI defaults)
-// ---------------------------------------------------------------------------
-
-/// Default number of forward-pass trajectories when not specified in config.
 const DEFAULT_FORWARD_PASSES: u32 = 1;
-
-/// Default maximum iterations when no stopping rule specifies an iteration limit.
 const DEFAULT_MAX_ITERATIONS: u64 = 100;
-
-/// Default random seed for stochastic scenario generation.
 const DEFAULT_SEED: u64 = 42;
-
-// ---------------------------------------------------------------------------
-// Result summary types (plain Rust, converted to Python dict after GIL re-acquired)
-// ---------------------------------------------------------------------------
 
 /// Summary returned by [`run_inner`] on success.
 struct RunSummary {
@@ -76,17 +63,11 @@ struct RunSummary {
     simulation: Option<SimSummary>,
 }
 
-/// Simulation sub-summary.
 struct SimSummary {
     n_scenarios: u32,
     completed: u32,
 }
 
-// ---------------------------------------------------------------------------
-// Rayon initialisation helper
-// ---------------------------------------------------------------------------
-
-/// Resolve and configure the rayon global thread pool (silently ignoring if already initialized).
 fn init_rayon(threads: Option<u32>) {
     let n = threads.map_or(1, |t| t as usize);
     rayon::ThreadPoolBuilder::new()
@@ -196,194 +177,170 @@ fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn convert_cost(s: SimulationCostResult) -> CostWriteRecord {
-    CostWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        total_cost: s.total_cost,
-        immediate_cost: s.immediate_cost,
-        future_cost: s.future_cost,
-        discount_factor: s.discount_factor,
-        thermal_cost: s.thermal_cost,
-        contract_cost: s.contract_cost,
-        deficit_cost: s.deficit_cost,
-        excess_cost: s.excess_cost,
-        storage_violation_cost: s.storage_violation_cost,
-        filling_target_cost: s.filling_target_cost,
-        hydro_violation_cost: s.hydro_violation_cost,
-        inflow_penalty_cost: s.inflow_penalty_cost,
-        generic_violation_cost: s.generic_violation_cost,
-        spillage_cost: s.spillage_cost,
-        fpha_turbined_cost: s.fpha_turbined_cost,
-        curtailment_cost: s.curtailment_cost,
-        exchange_cost: s.exchange_cost,
-        pumping_cost: s.pumping_cost,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_hydro(s: SimulationHydroResult) -> HydroWriteRecord {
-    HydroWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        hydro_id: s.hydro_id,
-        turbined_m3s: s.turbined_m3s,
-        spillage_m3s: s.spillage_m3s,
-        evaporation_m3s: s.evaporation_m3s,
-        diverted_inflow_m3s: s.diverted_inflow_m3s,
-        diverted_outflow_m3s: s.diverted_outflow_m3s,
-        incremental_inflow_m3s: s.incremental_inflow_m3s,
-        inflow_m3s: s.inflow_m3s,
-        storage_initial_hm3: s.storage_initial_hm3,
-        storage_final_hm3: s.storage_final_hm3,
-        generation_mw: s.generation_mw,
-        productivity_mw_per_m3s: s.productivity_mw_per_m3s,
-        spillage_cost: s.spillage_cost,
-        water_value_per_hm3: s.water_value_per_hm3,
-        storage_binding_code: s.storage_binding_code,
-        operative_state_code: s.operative_state_code,
-        turbined_slack_m3s: s.turbined_slack_m3s,
-        outflow_slack_below_m3s: s.outflow_slack_below_m3s,
-        outflow_slack_above_m3s: s.outflow_slack_above_m3s,
-        generation_slack_mw: s.generation_slack_mw,
-        storage_violation_below_hm3: s.storage_violation_below_hm3,
-        filling_target_violation_hm3: s.filling_target_violation_hm3,
-        evaporation_violation_m3s: s.evaporation_violation_m3s,
-        inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_thermal(s: SimulationThermalResult) -> ThermalWriteRecord {
-    ThermalWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        thermal_id: s.thermal_id,
-        generation_mw: s.generation_mw,
-        generation_cost: s.generation_cost,
-        is_gnl: s.is_gnl,
-        gnl_committed_mw: s.gnl_committed_mw,
-        gnl_decision_mw: s.gnl_decision_mw,
-        operative_state_code: s.operative_state_code,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_exchange(s: SimulationExchangeResult) -> ExchangeWriteRecord {
-    ExchangeWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        line_id: s.line_id,
-        direct_flow_mw: s.direct_flow_mw,
-        reverse_flow_mw: s.reverse_flow_mw,
-        exchange_cost: s.exchange_cost,
-        operative_state_code: s.operative_state_code,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_bus(s: SimulationBusResult) -> BusWriteRecord {
-    BusWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        bus_id: s.bus_id,
-        load_mw: s.load_mw,
-        deficit_mw: s.deficit_mw,
-        excess_mw: s.excess_mw,
-        spot_price: s.spot_price,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_pumping(s: SimulationPumpingResult) -> PumpingWriteRecord {
-    PumpingWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        pumping_station_id: s.pumping_station_id,
-        pumped_flow_m3s: s.pumped_flow_m3s,
-        power_consumption_mw: s.power_consumption_mw,
-        pumping_cost: s.pumping_cost,
-        operative_state_code: s.operative_state_code,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_contract(s: SimulationContractResult) -> ContractWriteRecord {
-    ContractWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        contract_id: s.contract_id,
-        power_mw: s.power_mw,
-        price_per_mwh: s.price_per_mwh,
-        total_cost: s.total_cost,
-        operative_state_code: s.operative_state_code,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_non_controllable(s: SimulationNonControllableResult) -> NonControllableWriteRecord {
-    NonControllableWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        non_controllable_id: s.non_controllable_id,
-        generation_mw: s.generation_mw,
-        available_mw: s.available_mw,
-        curtailment_mw: s.curtailment_mw,
-        curtailment_cost: s.curtailment_cost,
-        operative_state_code: s.operative_state_code,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_inflow_lag(s: SimulationInflowLagResult) -> InflowLagWriteRecord {
-    InflowLagWriteRecord {
-        stage_id: s.stage_id,
-        hydro_id: s.hydro_id,
-        lag_index: s.lag_index,
-        inflow_m3s: s.inflow_m3s,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn convert_generic_violation(s: SimulationGenericViolationResult) -> GenericViolationWriteRecord {
-    GenericViolationWriteRecord {
-        stage_id: s.stage_id,
-        block_id: s.block_id,
-        constraint_id: s.constraint_id,
-        slack_value: s.slack_value,
-        slack_cost: s.slack_cost,
-    }
-}
+// Conversions from simulation result types to write record types.
 
 fn convert_stage(src: SimulationStageResult) -> StageWritePayload {
     StageWritePayload {
         stage_id: src.stage_id,
-        costs: src.costs.into_iter().map(convert_cost).collect(),
-        hydros: src.hydros.into_iter().map(convert_hydro).collect(),
-        thermals: src.thermals.into_iter().map(convert_thermal).collect(),
-        exchanges: src.exchanges.into_iter().map(convert_exchange).collect(),
-        buses: src.buses.into_iter().map(convert_bus).collect(),
+        costs: src
+            .costs
+            .into_iter()
+            .map(|s| CostWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                total_cost: s.total_cost,
+                immediate_cost: s.immediate_cost,
+                future_cost: s.future_cost,
+                discount_factor: s.discount_factor,
+                thermal_cost: s.thermal_cost,
+                contract_cost: s.contract_cost,
+                deficit_cost: s.deficit_cost,
+                excess_cost: s.excess_cost,
+                storage_violation_cost: s.storage_violation_cost,
+                filling_target_cost: s.filling_target_cost,
+                hydro_violation_cost: s.hydro_violation_cost,
+                inflow_penalty_cost: s.inflow_penalty_cost,
+                generic_violation_cost: s.generic_violation_cost,
+                spillage_cost: s.spillage_cost,
+                fpha_turbined_cost: s.fpha_turbined_cost,
+                curtailment_cost: s.curtailment_cost,
+                exchange_cost: s.exchange_cost,
+                pumping_cost: s.pumping_cost,
+            })
+            .collect(),
+        hydros: src
+            .hydros
+            .into_iter()
+            .map(|s| HydroWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                hydro_id: s.hydro_id,
+                turbined_m3s: s.turbined_m3s,
+                spillage_m3s: s.spillage_m3s,
+                evaporation_m3s: s.evaporation_m3s,
+                diverted_inflow_m3s: s.diverted_inflow_m3s,
+                diverted_outflow_m3s: s.diverted_outflow_m3s,
+                incremental_inflow_m3s: s.incremental_inflow_m3s,
+                inflow_m3s: s.inflow_m3s,
+                storage_initial_hm3: s.storage_initial_hm3,
+                storage_final_hm3: s.storage_final_hm3,
+                generation_mw: s.generation_mw,
+                productivity_mw_per_m3s: s.productivity_mw_per_m3s,
+                spillage_cost: s.spillage_cost,
+                water_value_per_hm3: s.water_value_per_hm3,
+                storage_binding_code: s.storage_binding_code,
+                operative_state_code: s.operative_state_code,
+                turbined_slack_m3s: s.turbined_slack_m3s,
+                outflow_slack_below_m3s: s.outflow_slack_below_m3s,
+                outflow_slack_above_m3s: s.outflow_slack_above_m3s,
+                generation_slack_mw: s.generation_slack_mw,
+                storage_violation_below_hm3: s.storage_violation_below_hm3,
+                filling_target_violation_hm3: s.filling_target_violation_hm3,
+                evaporation_violation_m3s: s.evaporation_violation_m3s,
+                inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
+            })
+            .collect(),
+        thermals: src
+            .thermals
+            .into_iter()
+            .map(|s| ThermalWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                thermal_id: s.thermal_id,
+                generation_mw: s.generation_mw,
+                generation_cost: s.generation_cost,
+                is_gnl: s.is_gnl,
+                gnl_committed_mw: s.gnl_committed_mw,
+                gnl_decision_mw: s.gnl_decision_mw,
+                operative_state_code: s.operative_state_code,
+            })
+            .collect(),
+        exchanges: src
+            .exchanges
+            .into_iter()
+            .map(|s| ExchangeWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                line_id: s.line_id,
+                direct_flow_mw: s.direct_flow_mw,
+                reverse_flow_mw: s.reverse_flow_mw,
+                exchange_cost: s.exchange_cost,
+                operative_state_code: s.operative_state_code,
+            })
+            .collect(),
+        buses: src
+            .buses
+            .into_iter()
+            .map(|s| BusWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                bus_id: s.bus_id,
+                load_mw: s.load_mw,
+                deficit_mw: s.deficit_mw,
+                excess_mw: s.excess_mw,
+                spot_price: s.spot_price,
+            })
+            .collect(),
         pumping_stations: src
             .pumping_stations
             .into_iter()
-            .map(convert_pumping)
+            .map(|s| PumpingWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                pumping_station_id: s.pumping_station_id,
+                pumped_flow_m3s: s.pumped_flow_m3s,
+                power_consumption_mw: s.power_consumption_mw,
+                pumping_cost: s.pumping_cost,
+                operative_state_code: s.operative_state_code,
+            })
             .collect(),
-        contracts: src.contracts.into_iter().map(convert_contract).collect(),
+        contracts: src
+            .contracts
+            .into_iter()
+            .map(|s| ContractWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                contract_id: s.contract_id,
+                power_mw: s.power_mw,
+                price_per_mwh: s.price_per_mwh,
+                total_cost: s.total_cost,
+                operative_state_code: s.operative_state_code,
+            })
+            .collect(),
         non_controllables: src
             .non_controllables
             .into_iter()
-            .map(convert_non_controllable)
+            .map(|s| NonControllableWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                non_controllable_id: s.non_controllable_id,
+                generation_mw: s.generation_mw,
+                available_mw: s.available_mw,
+                curtailment_mw: s.curtailment_mw,
+                curtailment_cost: s.curtailment_cost,
+                operative_state_code: s.operative_state_code,
+            })
             .collect(),
         inflow_lags: src
             .inflow_lags
             .into_iter()
-            .map(convert_inflow_lag)
+            .map(|s| InflowLagWriteRecord {
+                stage_id: s.stage_id,
+                hydro_id: s.hydro_id,
+                lag_index: s.lag_index,
+                inflow_m3s: s.inflow_m3s,
+            })
             .collect(),
         generic_violations: src
             .generic_violations
             .into_iter()
-            .map(convert_generic_violation)
+            .map(|s| GenericViolationWriteRecord {
+                stage_id: s.stage_id,
+                block_id: s.block_id,
+                constraint_id: s.constraint_id,
+                slack_value: s.slack_value,
+                slack_cost: s.slack_cost,
+            })
             .collect(),
     }
 }
@@ -409,8 +366,8 @@ fn write_policy_checkpoint(
     seed: u64,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
-        write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyBasisRecord,
+        PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
     };
 
     let n_stages = fcf.pools.len();
@@ -719,7 +676,7 @@ fn run_inner(
             n_hydros_lp,
             zeta_per_stage,
             block_hours_per_stage,
-            Some(&sim_event_tx),
+            Some(sim_event_tx),
         )
         .map_err(|e| format!("simulation error: {e}"));
 
@@ -790,52 +747,9 @@ fn run_inner(
 }
 
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
-///
-/// This function replicates the `cobre run` lifecycle but for single-process
-/// Python use. The GIL is released for the entire Rust computation so Python
-/// threads can run concurrently.
-///
-/// # Arguments
-///
-/// * `case_dir` — path to the case directory (`str` or `pathlib.Path`).
-/// * `output_dir` — output directory; defaults to `<case_dir>/output/`.
-/// * `threads` — rayon thread count; defaults to 1.
-/// * `skip_simulation` — skip simulation phase; defaults to `False`.
-///
-/// # Returns
-///
-/// A dict with the following keys:
-///
-/// * `"converged"` (`bool`) — whether training converged.
-/// * `"iterations"` (`int`) — number of training iterations completed.
-/// * `"lower_bound"` (`float`) — final lower bound.
-/// * `"upper_bound"` (`float | None`) — final upper bound (when available).
-/// * `"gap_percent"` (`float | None`) — relative gap as a percentage.
-/// * `"total_time_ms"` (`int`) — total wall-clock time in milliseconds.
-/// * `"output_dir"` (`str`) — absolute path of the output directory.
-/// * `"simulation"` (`dict | None`) — simulation summary with `"n_scenarios"`
-///   and `"completed"` keys, or `None` when simulation was skipped.
-///
-/// # Raises
-///
-/// * `OSError` — case directory is missing or a required file cannot be read.
-/// * `RuntimeError` — solver initialisation failed, training failed, or
-///   simulation failed.
-/// * `OSError` — output directory creation or Parquet write failed.
-///
-/// # Note: Ctrl-C / SIGINT behaviour
-///
-/// While the GIL is released, Python cannot deliver `SIGINT`. Pressing Ctrl-C
-/// queues the interrupt, which is delivered only after the current iteration
-/// completes and control returns to the Python interpreter.
-///
-/// # Examples
-///
-/// ```python
-/// import cobre.run
-/// result = cobre.run.run("examples/1dtoy", output_dir="/tmp/out", threads=2)
-/// print(result["converged"], result["iterations"])
-/// ```
+/// GIL is released for the entire Rust computation.
+/// Returns a dict with keys: "converged", "iterations", "lower_bound", "upper_bound",
+/// "gap_percent", "total_time_ms", "output_dir", "simulation".
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -846,8 +760,6 @@ pub fn run(
     threads: Option<u32>,
     skip_simulation: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
-    // Validate case_dir before releasing the GIL so we can raise OSError
-    // immediately with no overhead from trying to acquire the GIL later.
     if !case_dir.exists() {
         return Err(PyOSError::new_err(format!(
             "case directory does not exist: {}",
@@ -858,11 +770,9 @@ pub fn run(
     let resolved_output = output_dir.unwrap_or_else(|| case_dir.join("output"));
     let skip = skip_simulation.unwrap_or(false);
 
-    // Release the GIL for the entire Rust computation.
     let result: Result<RunSummary, String> =
         py.detach(move || run_inner(&case_dir, resolved_output, threads, skip));
 
-    // Re-acquire the GIL here; convert the result to a Python dict.
     match result {
         Ok(summary) => {
             let dict = PyDict::new(py);
@@ -886,7 +796,6 @@ pub fn run(
             Ok(dict.into())
         }
         Err(msg) => {
-            // Map error string prefix to the appropriate exception type.
             if msg.as_str().starts_with("output write error")
                 || msg.as_str().starts_with("policy checkpoint error")
             {

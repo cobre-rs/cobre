@@ -15,19 +15,11 @@
 //!
 //! ## Work distribution
 //!
-//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using a
-//! two-level distribution (fat/lean). Each rank processes its assigned range
-//! independently; MPI aggregation is performed by the caller.
-//!
-//! Within a rank, scenarios are further distributed across [`SolverWorkspace`]
-//! instances using the same static partitioning as the training forward pass.
-//! Each workspace owns its solver, patch buffer, and current-state buffer
-//! exclusively. A per-worker `Vec<Option<Basis>>` is used for warm-starting
-//! across consecutive scenarios within the same worker.
-//! Rayon's `par_iter_mut` drives the scenario loop; results are sorted by
-//! `scenario_id` after the parallel region to ensure deterministic MPI
-//! aggregation regardless of thread
-//! scheduling order.
+//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
+//! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
+//! distributes scenarios across [`SolverWorkspace`] instances. Per-worker basis
+//! caches enable warm-starting across consecutive scenarios. Results are sorted
+//! by `scenario_id` for deterministic MPI aggregation.
 //!
 //! ## Seed domain separation
 //!
@@ -46,17 +38,17 @@
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_stochastic::{sample_forward, StochasticContext};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
     forward::{build_cut_row_batch, partition},
     simulation::{
         config::SimulationConfig,
@@ -66,6 +58,7 @@ use crate::{
         types::{ScenarioCategoryCosts, SimulationScenarioResult},
     },
     workspace::SolverWorkspace,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -99,6 +92,7 @@ struct WelfordAccumulator {
     m2: f64,
 }
 
+#[allow(dead_code)] // Methods retained for future SimulationFinished event emission.
 impl WelfordAccumulator {
     /// Create a new accumulator with no observations.
     fn new() -> Self {
@@ -158,29 +152,6 @@ impl WelfordAccumulator {
     }
 }
 
-/// Emit a [`TrainingEvent::SimulationProgress`] event if a sender is present.
-///
-/// Channel send failures are silently ignored: progress reporting is
-/// best-effort and must never interfere with the simulation result.
-fn emit_simulation_progress(
-    sender: Option<&Sender<TrainingEvent>>,
-    scenarios_complete: u32,
-    scenarios_total: u32,
-    elapsed_ms: u64,
-    acc: &WelfordAccumulator,
-) {
-    if let Some(s) = sender {
-        let _ = s.send(TrainingEvent::SimulationProgress {
-            scenarios_complete,
-            scenarios_total,
-            elapsed_ms,
-            mean_cost: acc.mean(),
-            std_cost: acc.std_dev(),
-            ci_95_half_width: acc.ci_95_half_width(),
-        });
-    }
-}
-
 /// Evaluate the trained SDDP policy on this rank's assigned scenarios.
 ///
 /// Distributes locally assigned scenarios across worker threads using the same
@@ -227,6 +198,7 @@ fn emit_simulation_progress(
 /// - `initial_state.len() != indexer.n_state`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::needless_pass_by_value)] // owned Option<Sender> required for worker clone pattern
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     templates: &[StageTemplate],
@@ -245,7 +217,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     n_hydros: usize,
     zeta_per_stage: &[f64],
     block_hours_per_stage: &[Vec<f64>],
-    event_sender: Option<&Sender<TrainingEvent>>,
+    event_sender: Option<Sender<TrainingEvent>>,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
@@ -273,8 +245,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         expected = indexer.n_state,
     );
 
-    // Build one cut RowBatch per stage before the scenario loop.
-    // Cuts are the same for all scenarios — build once, reuse many times.
+    // Build cut batches once (same for all scenarios).
     let cut_batches: Vec<RowBatch> = (0..num_stages)
         .map(|t| build_cut_row_batch(fcf, t, indexer))
         .collect();
@@ -290,26 +261,15 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
 
     let n_workers = workspaces.len().max(1);
 
-    // Start the wall-clock timer for simulation progress events.
-    // Only instantiated here; the Instant is cheaply created regardless of
-    // whether event_sender is Some or None.
     let sim_start = Instant::now();
-
-    // Execute the scenario loop in parallel over workspaces using static
-    // partitioning. Each worker processes a contiguous sub-range of the
-    // locally assigned scenarios and accumulates its own cost buffer entries.
-    // Worker-local WorkerCosts are returned as Ok values; the first error from
-    // any worker short-circuits the collect.
+    let scenarios_complete = AtomicU32::new(0);
     let worker_results: Vec<Result<WorkerCosts, SimulationError>> = workspaces
         .par_iter_mut()
         .enumerate()
         .map(|(w, ws)| {
             let (start_local, end_local) = partition(local_count, n_workers, w);
 
-            // Per-worker, per-stage basis cache for warm-starting across scenarios.
-            // Simulation has no cross-scenario backward pass, so a simple
-            // local Vec suffices: basis[t] is reused from one scenario to the
-            // next within this worker.
+            let worker_sender: Option<Sender<TrainingEvent>> = event_sender.clone();
             let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
 
             let mut worker_costs: Vec<(u32, f64, ScenarioCategoryCosts)> =
@@ -319,11 +279,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 #[allow(clippy::cast_possible_truncation)]
                 let scenario_id = (scenario_start + local_idx) as u32;
 
-                // Simulation seed domain separation: place simulation seeds in a
-                // disjoint region from training seeds (SipHash-1-3 domain).
                 let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
-
-                // Initialize current state for this scenario.
                 ws.current_state.clear();
                 ws.current_state.extend_from_slice(initial_state);
 
@@ -336,21 +292,15 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     imputed_cost: 0.0,
                 };
 
-                // Collect per-stage results for the scenario result payload.
                 let mut stage_results = Vec::with_capacity(num_stages);
 
-                // Inner loop: one LP solve per stage.
                 for t in 0..num_stages {
-                    // Cast indices to u32 for the sampling API (SipHash-1-3 seed
-                    // derivation uses u32 fields). Bounded by u32::MAX; truncation safe.
                     #[allow(clippy::cast_possible_truncation)]
                     let stage_id_u32 = t as u32;
 
                     let (_opening_idx, raw_noise) =
                         sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
 
-                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-                    // RHS patch (same transformation as the training forward pass).
                     ws.noise_buf.clear();
                     let stage_offset = t * n_hydros;
                     for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
@@ -359,7 +309,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                             .push(base_rhs + noise_scale[stage_offset + h] * eta);
                     }
 
-                    // LP rebuild sequence: template → cuts → scenario-specific row bounds.
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
 
@@ -397,12 +346,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         }
                     })?;
 
-                    // Stage cost = LP objective minus theta (future cost variable).
                     let stage_cost = view.objective - view.primal[indexer.theta];
                     total_cost += stage_cost;
 
-                    // Convert water-balance RHS (hm³) back to inflow (m³/s)
-                    // for output reporting.
                     ws.inflow_m3s_buf.clear();
                     if let Some(&zeta) = zeta_per_stage.get(t) {
                         if zeta > 0.0 {
@@ -412,7 +358,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         }
                     }
 
-                    // Extract per-entity typed result for this stage.
                     let blk_hrs = block_hours_per_stage
                         .get(t)
                         .map_or(&[][..], |v| v.as_slice());
@@ -429,19 +374,16 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         blk_hrs,
                     );
 
-                    // Accumulate per-category costs for this stage.
                     for cost_entry in &stage_result.costs {
                         accumulate_category_costs(cost_entry, &mut category_costs);
                     }
 
                     stage_results.push(stage_result);
 
-                    // Advance state to the outgoing storage + lags from this stage.
                     ws.current_state.clear();
                     ws.current_state
                         .extend_from_slice(&view.primal[..indexer.n_state]);
 
-                    // Update local basis cache for warm-starting the next scenario.
                     if let Some(rb) = &mut basis_cache[t] {
                         ws.solver.get_basis(rb);
                     } else {
@@ -451,29 +393,19 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     }
                 }
 
-                // Build the scenario result and send through the bounded channel.
-                // SyncSender is thread-safe: all workers share the same sender.
+                let compact_category = ScenarioCategoryCosts {
+                    resource_cost: category_costs.resource_cost,
+                    recourse_cost: category_costs.recourse_cost,
+                    violation_cost: category_costs.violation_cost,
+                    regularization_cost: category_costs.regularization_cost,
+                    imputed_cost: category_costs.imputed_cost,
+                };
+
                 let scenario_result = SimulationScenarioResult {
                     scenario_id,
                     total_cost,
-                    per_category_costs: ScenarioCategoryCosts {
-                        resource_cost: category_costs.resource_cost,
-                        recourse_cost: category_costs.recourse_cost,
-                        violation_cost: category_costs.violation_cost,
-                        regularization_cost: category_costs.regularization_cost,
-                        imputed_cost: category_costs.imputed_cost,
-                    },
+                    per_category_costs: category_costs,
                     stages: stage_results,
-                };
-
-                // Retain the compact entry for MPI aggregation before consuming
-                // `scenario_result` through the channel send.
-                let compact_category = ScenarioCategoryCosts {
-                    resource_cost: scenario_result.per_category_costs.resource_cost,
-                    recourse_cost: scenario_result.per_category_costs.recourse_cost,
-                    violation_cost: scenario_result.per_category_costs.violation_cost,
-                    regularization_cost: scenario_result.per_category_costs.regularization_cost,
-                    imputed_cost: scenario_result.per_category_costs.imputed_cost,
                 };
 
                 result_tx
@@ -481,42 +413,35 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     .map_err(|_| SimulationError::ChannelClosed)?;
 
                 worker_costs.push((scenario_id, total_cost, compact_category));
+
+                // Emit a progress event from within the parallel region so
+                // the progress bar animates in real time.
+                let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(ref sender) = worker_sender {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let elapsed_ms = sim_start.elapsed().as_millis() as u64;
+                    let _ = sender.send(TrainingEvent::SimulationProgress {
+                        scenarios_complete: completed,
+                        scenarios_total: config.n_scenarios,
+                        elapsed_ms,
+                        mean_cost: total_cost,
+                        std_cost: 0.0,
+                        ci_95_half_width: 0.0,
+                    });
+                }
             }
 
             Ok(worker_costs)
         })
         .collect();
 
-    // Flatten worker cost buffers and sort by scenario_id for deterministic
-    // MPI aggregation regardless of thread completion order.
-    //
-    // While flattening, accumulate per-scenario total costs into the Welford
-    // accumulator and emit one progress event per scenario. The parallel
-    // region is already complete at this point, so the accumulator runs
-    // single-threaded on the main thread after `collect()` returns. Emitting
-    // per-scenario (rather than per-worker-batch) ensures the progress bar
-    // animates in real-time regardless of thread count, including the common
-    // single-threaded case where there is only one worker batch.
+    // Flatten and sort for deterministic MPI aggregation.
     let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
     let mut acc = WelfordAccumulator::new();
     for result in worker_results {
         let batch = result?;
         for &(_, total_cost, _) in &batch {
             acc.update(total_cost);
-            // Emit a progress event after each scenario.
-            // `scenarios_complete` reflects this rank's locally accumulated count.
-            #[allow(clippy::cast_possible_truncation)]
-            let scenarios_complete = acc.count as u32;
-            let elapsed_ms = sim_start.elapsed().as_millis();
-            #[allow(clippy::cast_possible_truncation)]
-            let elapsed_ms_u64 = elapsed_ms as u64;
-            emit_simulation_progress(
-                event_sender,
-                scenarios_complete,
-                config.n_scenarios,
-                elapsed_ms_u64,
-                &acc,
-            );
         }
         all_costs.extend(batch);
     }
@@ -538,9 +463,9 @@ mod tests {
 
     use super::simulate;
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::SolverWorkspace,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1557,12 +1482,9 @@ mod tests {
             0,
             &[],
             &[],
-            Some(&event_tx),
+            Some(event_tx),
         );
         assert!(result.is_ok(), "simulate returned error: {result:?}");
-
-        // Drop the sender so the channel drains cleanly.
-        drop(event_tx);
 
         let events: Vec<TrainingEvent> = event_rx.iter().collect();
 
@@ -1657,6 +1579,84 @@ mod tests {
             cost_buffer.len(),
             4,
             "cost buffer must have 4 entries when event_sender is None"
+        );
+    }
+
+    /// Acceptance criterion (ticket-017): `SimulationProgress` events are
+    /// received in the channel BEFORE `simulate()` returns (during the
+    /// parallel region).
+    ///
+    /// With a single workspace (serial rayon execution), the worker emits
+    /// progress events as each scenario completes. Because events are sent
+    /// from the closure rather than the post-collect loop, the receiver
+    /// contains events by the time `simulate()` returns.
+    #[test]
+    fn simulate_progress_events_received_before_return() {
+        use cobre_core::TrainingEvent;
+
+        let n_stages = 1;
+        let n_scenarios = 10;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 32,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (result_tx, _result_rx) = mpsc::sync_channel(32);
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+
+        let mut workspaces = single_workspace(solver);
+        simulate(
+            &mut workspaces,
+            &templates,
+            &base_rows,
+            &fcf,
+            &stochastic,
+            &config,
+            &horizon,
+            &initial_state,
+            &indexer,
+            &entity_counts,
+            &comm,
+            &result_tx,
+            &InflowNonNegativityMethod::None,
+            &[],
+            0,
+            &[],
+            &[],
+            Some(event_tx),
+        )
+        .unwrap();
+
+        // Because the sender was moved into simulate() and dropped when it
+        // returns, the channel is now closed. Collect all events.
+        let events: Vec<TrainingEvent> = event_rx.iter().collect();
+        let progress_count = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .count();
+
+        assert!(
+            progress_count > 0,
+            "expected SimulationProgress events in channel after simulate() returns, got 0"
+        );
+        assert_eq!(
+            progress_count, n_scenarios as usize,
+            "expected {n_scenarios} SimulationProgress events (one per scenario), got {progress_count}"
         );
     }
 }

@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -121,6 +121,12 @@ impl BroadcastConfig {
     fn from_config(config: &cobre_io::Config, skip_simulation: bool) -> Self {
         use cobre_io::config::StoppingRuleConfig;
 
+        if config.training.seed.is_none() {
+            eprintln!(
+                "warning: no random seed specified in config.json (training.seed); \
+                 using default seed 42. Set training.seed for reproducible results."
+            );
+        }
         let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
 
         let forward_passes = config
@@ -278,21 +284,12 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
 
 /// Broadcast a serializable value from rank 0 to all ranks.
 ///
-/// Rank 0 serializes the value with postcard, broadcasts the byte length (as
-/// `[u64; 1]`), then broadcasts the bytes. Other ranks receive the length,
-/// allocate a buffer, receive the bytes, and deserialize. A length of 0 is
-/// used to signal a failure on rank 0, causing all ranks to return an error.
-///
-/// Root rank keeps its original value (no round-trip deserialization on root)
-/// for efficiency; postcard round-trips are exact so both paths produce
-/// identical values.
+/// Serializes on rank 0, broadcasts length and bytes. Non-rank-0 deserializes.
+/// A length of 0 signals failure on rank 0, allowing all ranks to participate.
 ///
 /// # Errors
 ///
-/// - [`CliError::Internal`] with "serialization error" if postcard serialization fails.
-/// - [`CliError::Internal`] with "broadcast error" if the communicator broadcast fails.
-/// - [`CliError::Internal`] with "deserialization error" if postcard deserialization fails.
-/// - [`CliError::Internal`] with "rank 0 signaled broadcast failure" if length 0 is received.
+/// Returns [`CliError::Internal`] on serialization, broadcast, or deserialization failure.
 fn broadcast_value<T, C>(value: Option<T>, comm: &C) -> Result<T, CliError>
 where
     T: serde::Serialize + serde::de::DeserializeOwned,
@@ -300,10 +297,6 @@ where
 {
     let is_root = comm.rank() == 0;
 
-    // Serialize on root; non-root gets an empty placeholder.
-    // When root passes None, we broadcast length 0 as a sentinel so that all
-    // ranks participate in the collective before returning Err. This prevents
-    // MPI deadlocks when rank 0 encounters an error before the broadcast.
     let serialized: Vec<u8> = if is_root {
         match value {
             Some(ref v) => postcard::to_allocvec(v).map_err(|e| CliError::Internal {
@@ -315,10 +308,6 @@ where
         Vec::new()
     };
 
-    // Broadcast length so all ranks can allocate the receive buffer.
-    // The length is stored as u64 (MPI-compatible) and converted to usize for
-    // buffer allocation. usize is at least 32 bits on all supported targets;
-    // payloads exceeding usize::MAX bytes are not realistically possible.
     let raw_len = serialized.len();
     #[allow(clippy::cast_possible_truncation)]
     let mut len_buf = [raw_len as u64];
@@ -331,21 +320,17 @@ where
         message: format!("broadcast error (length conversion): {e}"),
     })?;
     if len == 0 {
-        // Rank 0 broadcasts length 0 to signal a failure before the data broadcast.
         return Err(CliError::Internal {
             message: "rank 0 signaled broadcast failure (length 0)".to_string(),
         });
     }
 
-    // Broadcast the payload bytes.
     let mut bytes = if is_root { serialized } else { vec![0u8; len] };
     comm.broadcast(&mut bytes, 0)
         .map_err(|e| CliError::Internal {
             message: format!("broadcast error (data): {e}"),
         })?;
 
-    // Root keeps the original value; non-root deserializes from received bytes.
-    // On root, value is guaranteed Some (checked above in the serialization branch).
     if is_root {
         value.ok_or_else(|| CliError::Internal {
             message: "broadcast_value: root value disappeared after serialization".to_string(),
@@ -429,11 +414,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         crate::banner::print_banner(&stderr);
     }
 
-    // Resolve thread count and initialize parallelism infrastructure.
-    //
-    // Resolution order: --threads CLI flag > COBRE_THREADS > 1.
     let n_threads = resolve_thread_count(args.threads);
-    // build_global returns Err only if called more than once; ignore gracefully.
     rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
         .build_global()
@@ -441,23 +422,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
 
-    // Rank 0 loads from disk; all ranks receive via broadcast.
-    //
-    // Only rank 0 accesses the filesystem. Non-root ranks may not have the
-    // case directory mounted (e.g., on cluster nodes without NFS access to the
-    // head node's filesystem).
-    //
-    // The raw Config is NOT broadcast: cobre_io::config::StoppingRuleConfig
-    // uses #[serde(tag = "type")] (internally-tagged enum) which postcard
-    // cannot deserialize (it refuses deserialize_any). Instead, rank 0
-    // converts Config into a BroadcastConfig — a postcard-safe struct holding
-    // only the fields every rank needs — and broadcasts that.
-    // Rank 0 retains `root_config` for the output-writing paths.
-    // Rank 0 loads data inside a closure that returns Result so that any
-    // failure is captured rather than causing an early return from execute().
-    // This ensures rank 0 always reaches the broadcast_value calls below;
-    // on failure it passes None, which broadcast_value converts to a
-    // zero-length sentinel so all ranks terminate cleanly.
+    // Only rank 0 accesses the filesystem. Config is converted to BroadcastConfig
+    // (postcard-safe) and broadcast. Root config stays on rank 0 for output writing.
     let (raw_system, raw_bcast_config, root_config, load_err) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
             Ok((system, bcast, config)) => (Some(system), Some(bcast), Some(config), None),
@@ -467,31 +433,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         (None, None, None, None)
     };
 
-    // Broadcast system and config to all ranks. When root had a load error,
-    // these calls broadcast length-0 sentinels so all ranks participate in
-    // the collectives (preventing MPI deadlocks). The sentinel causes
-    // broadcast_value to return Err, which we suppress on root in favour of
-    // the original load error.
     let system_result = broadcast_value(raw_system, &comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
 
-    // Propagate the original load error if present (preserves the correct
-    // exit code and error message). Otherwise propagate any broadcast error.
     if let Some(e) = load_err {
         return Err(e);
     }
     let system = system_result?;
     let bcast_config = bcast_config_result?;
 
-    // Build stochastic context first so par_lp is available for LP template construction.
     let seed = bcast_config.seed;
     let stochastic = build_stochastic_context(&system, seed).map_err(|e| CliError::Internal {
         message: format!("stochastic context error: {e}"),
     })?;
 
-    // Build LP templates on all ranks. The par_lp from the stochastic context
-    // supplies PAR coefficients that are embedded in the static LP row bounds
-    // and in the noise_scale pre-computation.
     let stage_templates =
         build_stage_templates(&system, &bcast_config.inflow_method, stochastic.par_lp());
     if stage_templates.templates.is_empty() {
@@ -506,10 +461,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let block_hours_per_stage = &stage_templates.block_hours_per_stage;
     let n_hydros_lp = stage_templates.n_hydros;
 
-    // Build the full indexer with equipment column ranges.
-    // Assumption: all stages have the same block count (uniform horizon).
-    // The 1dtoy example has 1 block per stage; heterogeneous block counts
-    // would require a per-stage indexer (deferred).
     let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
     let has_inflow_penalty =
         bcast_config.inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
@@ -529,9 +480,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let n_stages = stage_templates_ref.len();
     let max_iterations = max_iterations_from_rules(&stopping_rules);
 
-    // The FCF slot stride is the user's total forward_passes. The training
-    // loop distributes work among ranks (base/remainder), so each rank's
-    // forward_pass_index uses a global offset to map to unique FCF slots.
     let fcf_capacity_iterations = max_iterations.saturating_add(1);
     let mut fcf = FutureCostFunction::new(
         n_stages,
@@ -559,9 +507,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         event_sender: Some(event_tx),
     };
 
-    // Non-root ranks take the quiet path: drain events without spawning a
-    // progress bar thread. The derived `quiet` flag (args.quiet || !is_root)
-    // ensures non-root ranks always enter the silent branch.
     let quiet_rx: Option<mpsc::Receiver<TrainingEvent>>;
     let progress_handle = if quiet {
         quiet_rx = Some(event_rx);
@@ -598,9 +543,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     ) {
         Ok(result) => result,
         Err(e) => {
-            // event_tx was moved into TrainingConfig and is now dropped, which
-            // causes the progress thread to exit its recv loop. Join before
-            // returning to avoid orphaned threads.
             if let Some(handle) = progress_handle {
                 let _ = handle.join();
             }
@@ -615,10 +557,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     };
     let training_output = build_training_output(&training_result, &events, &fcf);
 
-    // Aggregate per-rank LP solve counts across all ranks so that the reported
-    // total is invariant regardless of the parallel configuration (single-process
-    // vs MPI vs threaded). Each rank computes its local total from the per-iteration
-    // events, then allreduce(Sum) produces the program-wide total on every rank.
     let local_lp_solves: u64 = training_output
         .convergence_records
         .iter()
@@ -631,9 +569,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         })?;
     let global_lp_solves = global_lp_solves[0];
 
-    // Barrier: ensure all ranks have finished training before rank 0 writes
-    // the policy checkpoint. Without this, rank 0 could write stale cut data
-    // while other ranks are still computing.
     comm.barrier().map_err(|e| CliError::Internal {
         message: format!("post-training barrier error: {e}"),
     })?;
@@ -661,14 +596,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         crate::summary::print_training_summary(&stderr, &training_summary);
     }
 
-    // should_simulate was resolved on rank 0 and included in BroadcastConfig,
-    // so all ranks agree on whether to run the simulation phase.
     let should_simulate = bcast_config.should_simulate;
-
-    // Resolve output_dir once: only rank 0 ever uses it, but we need the
-    // `PathBuf` to be available in all branches so borrows of `args` are
-    // consistent. Non-root ranks compute a meaningless default but never
-    // access the filesystem with it.
     let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     if should_simulate {
@@ -682,9 +610,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
         let entity_counts = build_entity_counts(&system);
 
-        // Build a workspace pool for simulation. The pool uses the same resolved
-        // thread count as the training forward pass so that the simulation phase
-        // matches the training parallelism configuration.
         let mut sim_pool = WorkspacePool::try_new(
             n_threads,
             indexer.hydro_count,
@@ -696,9 +621,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("HiGHS initialisation failed for simulation pool: {e}"),
         })?;
 
-        // Create a dedicated event channel for simulation progress. The
-        // training channel was already consumed by the progress thread join
-        // above, so simulation needs its own sender/receiver pair.
         let (sim_event_tx, sim_event_rx) = mpsc::channel::<TrainingEvent>();
         let sim_progress_handle = if quiet {
             drop(sim_event_rx);
@@ -710,27 +632,14 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             ))
         };
 
-        // All ranks create the channel: simulate() sends results through
-        // result_tx regardless of rank. Each rank collects its own subset of
-        // scenario results from the channel.
-        //
-        // The channel is bounded at io_capacity. To prevent deadlock when
-        // num_scenarios > io_capacity, a background thread drains result_rx
-        // concurrently with simulate(). Without concurrent draining, simulate()
-        // would block on the 65th send (default capacity 64) while the main
-        // thread waits for simulate() to return — a classic bounded-channel
-        // deadlock.
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
-        // Spawn the drain thread before calling simulate() so it is ready to
-        // consume items as soon as the first scenario result is sent.
         let drain_handle = std::thread::spawn(move || {
             result_rx
                 .into_iter()
                 .collect::<Vec<cobre_sddp::SimulationScenarioResult>>()
         });
 
-        // ── Simulation (LP solves) ───────────────────────────────────────
         let sim_start = std::time::Instant::now();
 
         let sim_result = simulate(
@@ -751,24 +660,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             n_hydros_lp,
             zeta_per_stage,
             block_hours_per_stage,
-            Some(&sim_event_tx),
+            Some(sim_event_tx),
         )
         .map_err(CliError::from);
-
-        // Drop sim_event_tx so the simulation progress thread can exit.
-        drop(sim_event_tx);
         if let Some(handle) = sim_progress_handle {
             let _ = handle.join();
         }
 
-        // Drop result_tx before joining drain_handle. The background thread's
-        // into_iter() loop terminates only when the sender is closed; dropping
-        // here ensures the join below does not deadlock regardless of whether
-        // simulate() succeeded or failed.
         drop(result_tx);
 
-        // Join the drain thread to collect results. A panic in the drain
-        // thread is a programming error, not a recoverable condition.
         #[allow(clippy::expect_used)]
         let local_results = drain_handle.join().expect("drain thread panicked");
 
@@ -777,16 +677,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         #[allow(clippy::cast_possible_truncation)]
         let sim_time_ms = sim_start.elapsed().as_millis() as u64;
 
-        // ── MPI gather ───────────────────────────────────────────────────
-
-        // Serialize local results with postcard for MPI transfer.
         let local_bytes =
             postcard::to_allocvec(&local_results).map_err(|e| CliError::Internal {
                 message: format!("simulation result serialization error: {e}"),
             })?;
 
-        // Exchange per-rank byte lengths via allgatherv so every rank knows
-        // how many bytes each rank will contribute.
         let n_ranks = comm.size();
         #[allow(clippy::cast_possible_truncation)]
         let send_len = [local_bytes.len() as u64];
@@ -798,9 +693,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 message: format!("simulation result length exchange error: {e}"),
             })?;
 
-        // Compute displacements and total buffer size for the byte gather.
-        // u64 byte lengths are converted to usize; payloads exceeding usize::MAX
-        // are not possible in practice on supported targets.
         let recv_counts: Vec<usize> = all_lens
             .iter()
             .map(|&l| {
@@ -819,15 +711,12 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             .collect();
         let total_bytes: usize = recv_counts.iter().sum();
 
-        // Gather all serialized scenario bytes from all ranks.
         let mut all_bytes = vec![0u8; total_bytes];
         comm.allgatherv(&local_bytes, &mut all_bytes, &recv_counts, &recv_displs)
             .map_err(|e| CliError::Internal {
                 message: format!("simulation result gather error: {e}"),
             })?;
 
-        // Barrier: ensure all ranks have completed the gather before rank 0
-        // proceeds to write results.
         comm.barrier().map_err(|e| CliError::Internal {
             message: format!("post-simulation barrier error: {e}"),
         })?;
@@ -845,11 +734,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             );
         }
 
-        // ── Write all output files ───────────────────────────────────────
-        // Only rank 0 deserializes gathered results, writes simulation
-        // Parquet, policy checkpoint, training Parquet, manifest, and
-        // metadata. All I/O is under this block so the user sees
-        // "Writing outputs..." for the entire duration.
         if is_root {
             let config = root_config.ok_or_else(|| CliError::Internal {
                 message: "root_config was None on rank 0 — internal invariant violated".to_string(),
@@ -861,8 +745,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             }
             let write_start = std::time::Instant::now();
 
-            // Deserialize each rank's portion from the gathered byte buffer
-            // and combine into a single contiguous result set.
             let mut all_results: Vec<cobre_sddp::SimulationScenarioResult> =
                 Vec::with_capacity(n_scenarios as usize);
             let mut offset = 0;
@@ -877,7 +759,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 offset += count;
             }
 
-            // Write simulation Parquet files.
             let parquet_config = cobre_io::ParquetWriterConfig::default();
             let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
                 &output_dir,
@@ -897,7 +778,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize();
             sim_output.failed = failed;
 
-            // Write the policy checkpoint (cuts + basis as FlatBuffers).
             let policy_dir = output_dir.join(&bcast_config.policy_path);
             crate::policy_io::write_checkpoint(
                 &policy_dir,
@@ -910,7 +790,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 },
             )?;
 
-            // Write training Parquet, manifest, and metadata.
             write_results(
                 &output_dir,
                 &training_output,
@@ -925,39 +804,35 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 crate::summary::print_output_path(&stderr, &output_dir, write_secs);
             }
         }
-    } else {
-        // ── No simulation: write policy + training outputs only ──────────
-        if is_root {
-            let config = root_config.ok_or_else(|| CliError::Internal {
-                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-            })?;
-            if !quiet {
-                use std::io::Write;
-                let _ = stderr.write_line("Writing outputs...");
-                let _ = std::io::stderr().flush();
-            }
-            let write_start = std::time::Instant::now();
+    } else if is_root {
+        let config = root_config.ok_or_else(|| CliError::Internal {
+            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+        })?;
+        if !quiet {
+            use std::io::Write;
+            let _ = stderr.write_line("Writing outputs...");
+            let _ = std::io::stderr().flush();
+        }
+        let write_start = std::time::Instant::now();
 
-            // Write the policy checkpoint (cuts + basis as FlatBuffers).
-            let policy_dir = output_dir.join(&bcast_config.policy_path);
-            crate::policy_io::write_checkpoint(
-                &policy_dir,
-                &fcf,
-                &training_result,
-                &crate::policy_io::CheckpointParams {
-                    max_iterations,
-                    forward_passes,
-                    seed,
-                },
-            )?;
+        let policy_dir = output_dir.join(&bcast_config.policy_path);
+        crate::policy_io::write_checkpoint(
+            &policy_dir,
+            &fcf,
+            &training_result,
+            &crate::policy_io::CheckpointParams {
+                max_iterations,
+                forward_passes,
+                seed,
+            },
+        )?;
 
-            write_results(&output_dir, &training_output, None, &system, &config)
-                .map_err(CliError::from)?;
+        write_results(&output_dir, &training_output, None, &system, &config)
+            .map_err(CliError::from)?;
 
-            if !quiet {
-                let write_secs = write_start.elapsed().as_secs_f64();
-                crate::summary::print_output_path(&stderr, &output_dir, write_secs);
-            }
+        if !quiet {
+            let write_secs = write_start.elapsed().as_secs_f64();
+            crate::summary::print_output_path(&stderr, &output_dir, write_secs);
         }
     }
 

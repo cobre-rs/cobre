@@ -127,8 +127,32 @@ sections are optional and fall back to documented defaults when absent.
 | `training.stopping_rules`  | array           | **required** | At least one stopping rule entry; must include an `iteration_limit` rule                        |
 | `training.stopping_mode`   | string          | `"any"`      | How multiple rules combine: `"any"` (stop when any triggers) or `"all"` (stop when all trigger) |
 | `training.enabled`         | boolean         | `true`       | When `false`, skip training and proceed directly to simulation                                  |
-| `training.seed`            | integer or null | `null`       | Random seed for reproducible scenario generation                                                |
+| `training.seed`            | integer or null | `null`       | Random seed for reproducible noise generation (see [Seed resolution](#seed-resolution))         |
 | `training.cut_formulation` | string or null  | `null`       | Cut type: `"single"` or `"multi"`                                                               |
+
+#### Seed resolution
+
+`training.seed` in `config.json` is the **only** seed that controls noise generation
+at runtime. It governs both the training forward pass and the post-training simulation.
+
+- When `training.seed` is a non-null integer, the CLI uses `|seed|` (unsigned absolute
+  value) as the base seed for deterministic SipHash-1-3 noise generation. Results are
+  bit-for-bit reproducible across runs with the same seed.
+- When `training.seed` is absent or `null`, the CLI applies a **default seed of 42**
+  and prints a warning to stderr:
+
+  ```
+  warning: no random seed specified in config.json (training.seed); using default seed 42. Set training.seed for reproducible results.
+  ```
+
+  Runs will be reproducible (same output every time) but the seed value is arbitrary.
+  Set `training.seed` explicitly to make the choice intentional and visible to other
+  users of the case directory.
+
+`scenario_source.seed` in `stages.json` is a separate field that is loaded and stored
+in the `System` but is **not used at runtime** for training or simulation noise.
+It is reserved for future out-of-sample and external sampling schemes. Do not rely on
+it to control reproducibility.
 
 **`training.stopping_rules` entries:**
 

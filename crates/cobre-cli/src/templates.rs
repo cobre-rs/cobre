@@ -41,10 +41,7 @@ pub(crate) struct Template {
 static DTOY1_FILES: &[TemplateFile] = &[
     TemplateFile {
         relative_path: "config.json",
-        content: include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/templates/1dtoy/config.json"
-        )),
+        content: include_bytes!(concat!(env!("OUT_DIR"), "/templates/1dtoy/config.json")),
         description: "Algorithm configuration: training (forward passes, stopping rules) and simulation settings",
     },
     TemplateFile {
@@ -57,18 +54,12 @@ static DTOY1_FILES: &[TemplateFile] = &[
     },
     TemplateFile {
         relative_path: "penalties.json",
-        content: include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/templates/1dtoy/penalties.json"
-        )),
+        content: include_bytes!(concat!(env!("OUT_DIR"), "/templates/1dtoy/penalties.json")),
         description: "Global penalty costs for constraint violations (deficit, excess, spillage, storage bounds, etc.)",
     },
     TemplateFile {
         relative_path: "stages.json",
-        content: include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/templates/1dtoy/stages.json"
-        )),
+        content: include_bytes!(concat!(env!("OUT_DIR"), "/templates/1dtoy/stages.json")),
         description: "Planning horizon definition: policy graph type, discount rate, stage dates, time blocks, and scenario counts",
     },
     TemplateFile {

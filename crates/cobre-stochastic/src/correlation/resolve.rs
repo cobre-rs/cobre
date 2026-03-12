@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{CorrelationModel, EntityId};
 
-use crate::{correlation::cholesky::CholeskyFactor, StochasticError};
+use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
 
 /// Maximum group dimension for stack-allocated buffers in `apply_correlation`.
 /// Groups with more entities than this threshold use heap-allocated buffers.
@@ -317,11 +317,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
+        EntityId,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             CorrelationScheduleEntry,
         },
-        EntityId,
     };
 
     use super::*;

@@ -876,6 +876,10 @@ mod tests {
             current_state: Vec::with_capacity(1),
             noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
         }]
     }
 
@@ -1381,6 +1385,10 @@ mod tests {
                 current_state: Vec::with_capacity(1),
                 noise_buf: Vec::new(),
                 inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
             })
             .collect();
         let costs_4 = simulate(

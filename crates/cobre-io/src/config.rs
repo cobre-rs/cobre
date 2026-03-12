@@ -76,7 +76,7 @@ pub struct ModelingConfig {
 #[serde(default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InflowNonNegativityConfig {
-    /// Method: `"none"` or `"penalty"`.
+    /// Method: `"none"`, `"penalty"`, or `"truncation"`.
     pub method: String,
 
     /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"`.
@@ -514,12 +514,8 @@ pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
 
 /// Extract a field name hint from a `serde_json` error message.
 ///
-/// `serde_json` error messages follow patterns such as:
-/// - `"missing field 'forward_passes' at line 1 column 2"`
-/// - `"unknown variant 'foo', expected one of …"`
-///
-/// This helper extracts the identifier between backticks, returning a best-effort
-/// field name or `"<unknown>"` when no match is found.
+/// Extracts the identifier between backticks, returning a best-effort field name
+/// or `"<unknown>"` when no match is found.
 fn extract_field_from_serde_msg(msg: &str) -> String {
     if let Some(start) = msg.find('`') {
         if let Some(end) = msg[start + 1..].find('`') {
@@ -531,10 +527,7 @@ fn extract_field_from_serde_msg(msg: &str) -> String {
 
 /// Post-deserialization validation for mandatory fields.
 ///
-/// serde can only detect missing mandatory fields when they have no `Option`
-/// wrapper and no `#[serde(default)]`. We model mandatory fields as
-/// `Option<T>` so that the rest of the struct still deserializes on partial
-/// input, then validate presence here for better error messages.
+/// Checks that `forward_passes` and `stopping_rules` are present in the config.
 fn validate_config(config: &Config, path: &Path) -> Result<(), LoadError> {
     if config.training.forward_passes.is_none() {
         return Err(LoadError::SchemaError {
@@ -881,5 +874,34 @@ mod tests {
         // Must parse successfully — backward compatibility for existing case dirs.
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(cfg.training.forward_passes, Some(1));
+    }
+
+    /// AC (ticket-007): `"truncation"` is accepted as a method string and
+    /// round-trips correctly through `parse_config`. The `penalty_cost` field
+    /// falls back to its default (1000.0) when absent from the JSON.
+    #[test]
+    fn test_truncation_method_accepted() {
+        let f = write_config(
+            r#"{
+            "modeling": {
+                "inflow_non_negativity": {
+                    "method": "truncation"
+                }
+            },
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(
+            cfg.modeling.inflow_non_negativity.method, "truncation",
+            "method field should round-trip as 'truncation'"
+        );
+        assert!(
+            (cfg.modeling.inflow_non_negativity.penalty_cost - 1000.0).abs() < f64::EPSILON,
+            "penalty_cost should be the default 1000.0 when absent from JSON"
+        );
     }
 }

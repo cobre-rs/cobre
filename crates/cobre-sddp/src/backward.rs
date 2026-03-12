@@ -644,6 +644,10 @@ mod tests {
             current_state: Vec::with_capacity(n_state),
             noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
         }]
     }
 
@@ -1845,6 +1849,10 @@ mod tests {
             current_state: Vec::with_capacity(n_state),
             noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let _ = run_backward_pass(
@@ -1876,6 +1884,10 @@ mod tests {
                 current_state: Vec::with_capacity(n_state),
                 noise_buf: Vec::new(),
                 inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);

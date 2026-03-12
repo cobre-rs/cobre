@@ -1,81 +1,8 @@
 //! Per-thread solver workspace, workspace pool, and per-scenario basis store.
 //!
-//! This module provides three facilities:
-//!
-//! - [`SolverWorkspace`]: bundles all mutable per-thread resources needed for
-//!   one LP solve sequence — a solver instance, a patch buffer, and a
-//!   current-state buffer. Each worker thread owns exactly one workspace
-//!   for the duration of a parallel loop, eliminating contention on shared
-//!   mutable state.
-//!
-//! - [`WorkspacePool`]: a collection of `N` independently allocated workspaces,
-//!   one per worker thread. Created once at algorithm startup and reused across
-//!   iterations.
-//!
-//! - [`BasisStore`]: per-scenario, per-stage basis storage for warm-starting LP
-//!   solves. Indexed as `store[scenario][stage]`. The forward pass writes each
-//!   scenario's optimal basis at each stage; the backward pass reads the basis
-//!   for the matching forward scenario to warm-start the LP at that stage.
-//!
-//! ## Design
-//!
-//! LP solvers backed by C libraries (`HiGHS`, CLP) maintain mutable internal
-//! state — factorization workspace, working arrays — that is not thread-safe.
-//! Concurrent access to a single solver instance causes data corruption. The
-//! standard pattern for parallelizing solver loops is to give each thread its
-//! own solver instance and patch buffer. This module codifies that pattern.
-//!
-//! The `BasisStore` replaces the previous per-worker per-stage basis cache,
-//! which was incorrect: when a worker processes multiple forward scenarios it
-//! overwrote the basis at each stage, losing prior scenarios' bases. The
-//! backward pass trial point `m` must warm-start from the exact basis that was
-//! optimal for forward scenario `m` at that stage, which requires a separate
-//! slot per `(scenario, stage)` pair.
-//!
-//! ## Thread safety
-//!
-//! [`SolverWorkspace<S>`] is `Send` whenever `S: Send`. The `Send` bound is
-//! required on [`SolverInterface`] itself, so all concrete solver backends
-//! satisfy it. No `Arc` or `Mutex` is used: the pool owns all workspaces
-//! outright, and callers distribute them via exclusive mutable references.
-//!
-//! [`BasisStoreSliceMut`] slices are produced by [`BasisStore::split_workers_mut`]
-//! and cover disjoint scenario ranges. Each slice carries only its own
-//! sub-slice of the underlying storage, so parallel workers can hold multiple
-//! slices simultaneously without violating Rust's aliasing rules.
-//!
-//! ## Example
-//!
-//! ```rust
-//! use cobre_sddp::workspace::{SolverWorkspace, WorkspacePool};
-//! use cobre_solver::{Basis, SolverInterface, SolutionView, SolverError, SolverStatistics};
-//! use cobre_solver::types::{RowBatch, StageTemplate};
-//!
-//! struct NullSolver;
-//!
-//! impl SolverInterface for NullSolver {
-//!     fn load_model(&mut self, _t: &StageTemplate) {}
-//!     fn add_rows(&mut self, _r: &RowBatch) {}
-//!     fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-//!     fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-//!     fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
-//!         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-//!     }
-//!     fn reset(&mut self) {}
-//!     fn get_basis(&mut self, _out: &mut Basis) {}
-//!     fn solve_with_basis(&mut self, _b: &Basis) -> Result<SolutionView<'_>, SolverError> {
-//!         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-//!     }
-//!     fn statistics(&self) -> SolverStatistics { SolverStatistics::default() }
-//!     fn name(&self) -> &'static str { "Null" }
-//! }
-//!
-//! // 4 threads, 3 hydros, AR(2), 9-element state
-//! let pool = WorkspacePool::new(4, 3, 2, 9, || NullSolver);
-//! assert_eq!(pool.workspaces.len(), 4);
-//! assert_eq!(pool.workspaces[0].patch_buf.indices.len(), 12); // 3*(2+2)
-//! assert_eq!(pool.workspaces[0].current_state.capacity(), 9);
-//! ```
+//! [`SolverWorkspace`] bundles all mutable per-thread resources needed for one LP solve sequence.
+//! [`WorkspacePool`] allocates one workspace per worker thread.
+//! [`BasisStore`] provides per-scenario, per-stage basis storage for warm-starting LP solves.
 
 use cobre_solver::{Basis, SolverInterface};
 
@@ -83,82 +10,53 @@ use crate::lp_builder::PatchBuffer;
 
 /// All per-thread mutable resources required for one LP solve sequence.
 ///
-/// Bundle one of these per worker thread. Each field is exclusively owned by
-/// the thread — there is no shared state between workspaces. When a parallel
-/// loop distributes work across `N` threads, each thread is given a mutable
-/// reference to its own workspace from a [`WorkspacePool`].
-///
-/// # Fields
-///
-/// - `solver`: the LP solver instance for this thread. Not thread-safe; must
-///   not be shared between threads.
-/// - `patch_buf`: pre-allocated row-bound patch buffer. Reused across all
-///   solves in the thread to avoid per-solve allocation on the hot path.
-/// - `current_state`: scratch buffer for the current state vector. Pre-allocated
-///   to avoid hot-path allocation.
-/// - `noise_buf`: scratch buffer for transformed noise values `ζ*base + ζ*σ*η`.
-///   Pre-allocated to hydro count; cleared and refilled at each stage solve.
-/// - `inflow_m3s_buf`: scratch buffer for inflow in m³/s (`noise_buf` / ζ).
-///   Used by the simulation pipeline to pass inflow values to result extraction.
+/// Each field is exclusively owned by the thread — there is no shared state
+/// between workspaces. Distributed to worker threads via mutable references
+/// from a [`WorkspacePool`].
 pub struct SolverWorkspace<S: SolverInterface> {
     /// LP solver instance owned exclusively by this workspace.
     pub solver: S,
-    /// Pre-allocated row-bound patch buffer for scenario-dependent RHS updates.
+    /// Pre-allocated row-bound patch buffer.
     pub patch_buf: PatchBuffer,
-    /// Scratch buffer for the current state vector. Capacity equals `n_state`.
+    /// Scratch buffer for the current state vector.
     pub current_state: Vec<f64>,
-    /// Scratch buffer for transformed noise: `ζ*base + ζ*σ*η` per hydro.
-    /// Capacity equals `hydro_count`.
+    /// Scratch buffer for transformed noise per hydro.
     pub(crate) noise_buf: Vec<f64>,
-    /// Scratch buffer for inflow in m³/s, derived from `noise_buf / ζ`.
-    /// Used by the simulation pipeline for output reporting.
+    /// Scratch buffer for inflow in m³/s (used by simulation pipeline).
     pub(crate) inflow_m3s_buf: Vec<f64>,
+    /// Scratch buffer for lag state in lag-major layout (used by inflow truncation).
+    pub(crate) lag_matrix_buf: Vec<f64>,
+    /// Scratch buffer for evaluated PAR inflows (used by inflow truncation).
+    pub(crate) par_inflow_buf: Vec<f64>,
+    /// Scratch buffer for solved noise floor (used by inflow truncation).
+    pub(crate) eta_floor_buf: Vec<f64>,
+    /// Zero-filled scratch buffer for `solve_par_noises` targets (inflow truncation).
+    pub(crate) zero_targets_buf: Vec<f64>,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
-    /// `hydro_count` determines the pre-allocated capacity of the internal
-    /// noise scratch buffer. Set to the number of hydro plants in the LP model.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cobre_sddp::workspace::SolverWorkspace;
-    /// use cobre_sddp::lp_builder::PatchBuffer;
-    /// use cobre_solver::{Basis, SolverInterface, SolutionView, SolverError, SolverStatistics};
-    /// use cobre_solver::types::{RowBatch, StageTemplate};
-    ///
-    /// struct NullSolver;
-    ///
-    /// impl SolverInterface for NullSolver {
-    ///     fn load_model(&mut self, _t: &StageTemplate) {}
-    ///     fn add_rows(&mut self, _r: &RowBatch) {}
-    ///     fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-    ///     fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-    ///     fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
-    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-    ///     }
-    ///     fn reset(&mut self) {}
-    ///     fn get_basis(&mut self, _out: &mut Basis) {}
-    ///     fn solve_with_basis(&mut self, _b: &Basis) -> Result<SolutionView<'_>, SolverError> {
-    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-    ///     }
-    ///     fn statistics(&self) -> SolverStatistics { SolverStatistics::default() }
-    ///     fn name(&self) -> &'static str { "Null" }
-    /// }
-    ///
-    /// let ws = SolverWorkspace::new(NullSolver, PatchBuffer::new(3, 2), 9, 3);
-    /// assert_eq!(ws.current_state.capacity(), 9);
-    /// ```
+    /// `hydro_count` and `max_par_order` determine the capacities of internal
+    /// scratch buffers for the inflow truncation path.
     #[must_use]
-    pub fn new(solver: S, patch_buf: PatchBuffer, n_state: usize, hydro_count: usize) -> Self {
+    pub fn new(
+        solver: S,
+        patch_buf: PatchBuffer,
+        n_state: usize,
+        hydro_count: usize,
+        max_par_order: usize,
+    ) -> Self {
         Self {
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
             noise_buf: Vec::with_capacity(hydro_count),
             inflow_m3s_buf: Vec::with_capacity(hydro_count),
+            lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+            par_inflow_buf: Vec::with_capacity(hydro_count),
+            eta_floor_buf: Vec::with_capacity(hydro_count),
+            zero_targets_buf: vec![0.0_f64; hydro_count],
         }
     }
 }
@@ -178,51 +76,8 @@ pub struct WorkspacePool<S: SolverInterface> {
 impl<S: SolverInterface> WorkspacePool<S> {
     /// Construct a pool of `n_threads` independently allocated workspaces.
     ///
-    /// Each workspace receives:
-    ///
-    /// - A fresh `S` instance from `solver_factory`.
-    /// - A [`PatchBuffer`] sized for `hydro_count` hydros and `max_par_order`
-    ///   AR lag order: `hydro_count * (2 + max_par_order)` patch slots.
-    /// - A `Vec<f64>` with capacity `n_state` and length zero.
-    ///
-    /// # Arguments
-    ///
-    /// - `n_threads`: number of worker threads (determines pool size).
-    /// - `hydro_count`: number of operating hydro plants (N in the LP layout).
-    /// - `max_par_order`: maximum PAR order across all hydros (L in the layout).
-    /// - `n_state`: capacity for the `current_state` scratch buffer.
-    /// - `solver_factory`: called once per thread to create an independent solver
-    ///   instance. Must not share mutable state between calls.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cobre_sddp::workspace::WorkspacePool;
-    /// use cobre_solver::{Basis, SolverInterface, SolutionView, SolverError, SolverStatistics};
-    /// use cobre_solver::types::{RowBatch, StageTemplate};
-    ///
-    /// struct NullSolver;
-    ///
-    /// impl SolverInterface for NullSolver {
-    ///     fn load_model(&mut self, _t: &StageTemplate) {}
-    ///     fn add_rows(&mut self, _r: &RowBatch) {}
-    ///     fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-    ///     fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-    ///     fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
-    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-    ///     }
-    ///     fn reset(&mut self) {}
-    ///     fn get_basis(&mut self, _out: &mut Basis) {}
-    ///     fn solve_with_basis(&mut self, _b: &Basis) -> Result<SolutionView<'_>, SolverError> {
-    ///         Err(SolverError::InternalError { message: "null".into(), error_code: None })
-    ///     }
-    ///     fn statistics(&self) -> SolverStatistics { SolverStatistics::default() }
-    ///     fn name(&self) -> &'static str { "Null" }
-    /// }
-    ///
-    /// let pool = WorkspacePool::new(2, 3, 2, 9, || NullSolver);
-    /// assert_eq!(pool.workspaces.len(), 2);
-    /// ```
+    /// Each workspace receives a fresh solver instance, patch buffer, and state buffer.
+    /// `solver_factory` is called once per thread.
     #[must_use]
     pub fn new(
         n_threads: usize,
@@ -238,6 +93,10 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 current_state: Vec::with_capacity(n_state),
                 noise_buf: Vec::with_capacity(hydro_count),
                 inflow_m3s_buf: Vec::with_capacity(hydro_count),
+                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+                par_inflow_buf: Vec::with_capacity(hydro_count),
+                eta_floor_buf: Vec::with_capacity(hydro_count),
+                zero_targets_buf: vec![0.0_f64; hydro_count],
             })
             .collect();
         Self { workspaces }
@@ -276,6 +135,10 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 current_state: Vec::with_capacity(n_state),
                 noise_buf: Vec::with_capacity(hydro_count),
                 inflow_m3s_buf: Vec::with_capacity(hydro_count),
+                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+                par_inflow_buf: Vec::with_capacity(hydro_count),
+                eta_floor_buf: Vec::with_capacity(hydro_count),
+                zero_targets_buf: vec![0.0_f64; hydro_count],
             });
         }
         Ok(Self { workspaces })
@@ -438,8 +301,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.

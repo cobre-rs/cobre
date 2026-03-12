@@ -20,4 +20,4 @@ pub mod validation;
 
 pub use evaluate::{evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises};
 pub use precompute::PrecomputedParLp;
-pub use validation::{validate_par_parameters, ParValidationReport, ParWarning};
+pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

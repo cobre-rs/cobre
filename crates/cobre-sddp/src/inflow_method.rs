@@ -5,50 +5,6 @@
 //! It is dispatched via `match` when constructing LP templates and extracting
 //! simulation results. Enum dispatch is used because the variant set is closed
 //! (see `docs/adr/002-enum-dispatch.md`).
-//!
-//! ## Variants
-//!
-//! | Variant            | Slack columns |
-//! | ------------------ | ------------- |
-//! | `None`             | No            |
-//! | `Penalty { cost }` | Yes           |
-//!
-//! The `None` variant leaves the LP unchanged: negative inflow can cause
-//! infeasibility when scenario noise is sufficiently negative.
-//!
-//! The `Penalty` variant appends `N` slack columns (`sigma_inf_h >= 0`) to the
-//! LP, one per hydro plant.  Each slack enters the water balance row for
-//! hydro `h` with a positive coefficient, acting as virtual inflow that
-//! prevents infeasibility.  The objective coefficient is
-//! `penalty_cost * total_stage_hours`.
-//!
-//! ## Deferred: truncation methods
-//!
-//! The truncation and truncation-with-penalty methods described in the
-//! literature (see `docs/deferred-truncation-design.md`) require external
-//! AR model evaluation before LP patching — the full inflow value must be
-//! computed outside the LP to determine whether truncation is needed.
-//! This is deferred to a post-v0.1.0 release.
-//!
-//! ## Conversion
-//!
-//! Convert from the cobre-io config type at the CLI boundary using the
-//! provided `From<&cobre_io::config::InflowNonNegativityConfig>` implementation.
-//! This avoids passing raw strings through the algorithm code.
-//!
-//! # Examples
-//!
-//! ```rust
-//! use cobre_sddp::InflowNonNegativityMethod;
-//!
-//! let method = InflowNonNegativityMethod::Penalty { cost: 500.0 };
-//! assert!(method.has_slack_columns());
-//! assert_eq!(method.penalty_cost(), Some(500.0));
-//!
-//! let none = InflowNonNegativityMethod::None;
-//! assert!(!none.has_slack_columns());
-//! assert_eq!(none.penalty_cost(), None);
-//! ```
 
 /// Inflow non-negativity treatment method.
 ///
@@ -74,6 +30,15 @@ pub enum InflowNonNegativityMethod {
     /// The LP does not include slack columns.  Negative inflow noise may cause
     /// LP infeasibility if the PAR(p) noise realisation is sufficiently negative.
     None,
+
+    /// Truncation-based enforcement: clamps negative PAR(p) inflows to zero
+    /// by modifying the noise vector before LP patching.
+    ///
+    /// Does not add slack columns to the LP.  Instead, the PAR(p) model is
+    /// evaluated outside the LP to obtain the full inflow value; if the result
+    /// is negative, the noise component is adjusted so that the inflow is zero.
+    /// This prevents LP infeasibility without perturbing the objective function.
+    Truncation,
 
     /// Penalty-based enforcement with objective cost `penalty_cost` per m³/s
     /// per stage-hour.
@@ -118,7 +83,7 @@ impl InflowNonNegativityMethod {
     pub fn penalty_cost(&self) -> Option<f64> {
         match self {
             InflowNonNegativityMethod::Penalty { cost } => Some(*cost),
-            InflowNonNegativityMethod::None => None,
+            InflowNonNegativityMethod::Truncation | InflowNonNegativityMethod::None => None,
         }
     }
 }
@@ -126,12 +91,14 @@ impl InflowNonNegativityMethod {
 impl From<&cobre_io::config::InflowNonNegativityConfig> for InflowNonNegativityMethod {
     /// Convert from the cobre-io config type.
     ///
-    /// Recognised method strings are `"penalty"` and `"none"`.  Any other value
-    /// is treated as `None`.  Method string validation is the responsibility of
-    /// the cobre-io loading pipeline (five-layer validation), so unrecognised
-    /// values indicate a programming error that should have been caught upstream.
+    /// Recognised method strings are `"none"`, `"truncation"`, and `"penalty"`.
+    /// Any other value is treated as `None`.  Method string validation is the
+    /// responsibility of the cobre-io loading pipeline (five-layer validation),
+    /// so unrecognised values indicate a programming error that should have been
+    /// caught upstream.
     fn from(cfg: &cobre_io::config::InflowNonNegativityConfig) -> Self {
         match cfg.method.as_str() {
+            "truncation" => InflowNonNegativityMethod::Truncation,
             "penalty" => InflowNonNegativityMethod::Penalty {
                 cost: cfg.penalty_cost,
             },
@@ -153,6 +120,11 @@ mod tests {
     }
 
     #[test]
+    fn truncation_has_no_slack_columns() {
+        assert!(!InflowNonNegativityMethod::Truncation.has_slack_columns());
+    }
+
+    #[test]
     fn penalty_has_slack_columns() {
         assert!(InflowNonNegativityMethod::Penalty { cost: 100.0 }.has_slack_columns());
     }
@@ -170,6 +142,11 @@ mod tests {
     #[test]
     fn penalty_cost_none_for_none_variant() {
         assert_eq!(InflowNonNegativityMethod::None.penalty_cost(), None);
+    }
+
+    #[test]
+    fn truncation_penalty_cost_is_none() {
+        assert_eq!(InflowNonNegativityMethod::Truncation.penalty_cost(), None);
     }
 
     // ── conversion from config ───────────────────────────────────────────────
@@ -195,6 +172,30 @@ mod tests {
         assert_eq!(
             InflowNonNegativityMethod::from(&cfg),
             InflowNonNegativityMethod::Penalty { cost: 500.0 }
+        );
+    }
+
+    #[test]
+    fn test_inflow_method_conversion_truncation() {
+        let cfg = InflowNonNegativityConfig {
+            method: "truncation".to_string(),
+            penalty_cost: 0.0,
+        };
+        assert_eq!(
+            InflowNonNegativityMethod::from(&cfg),
+            InflowNonNegativityMethod::Truncation
+        );
+    }
+
+    #[test]
+    fn test_truncation_ignores_penalty_cost() {
+        let cfg = InflowNonNegativityConfig {
+            method: "truncation".to_string(),
+            penalty_cost: 999.0,
+        };
+        assert_eq!(
+            InflowNonNegativityMethod::from(&cfg),
+            InflowNonNegativityMethod::Truncation
         );
     }
 

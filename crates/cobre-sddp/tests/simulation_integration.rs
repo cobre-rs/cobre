@@ -711,6 +711,7 @@ fn train_simulate_write_cycle() {
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order),
         fx.indexer.n_state,
         fx.indexer.hydro_count,
+        fx.indexer.max_par_order,
     )];
 
     simulate(

@@ -42,17 +42,17 @@ pub mod par;
 pub mod sampling;
 pub mod tree;
 
-pub use context::{build_stochastic_context, StochasticContext};
+pub use context::{StochasticContext, build_stochastic_context};
 pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
 pub use par::{
-    evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises,
-    validate_par_parameters, ParValidationReport, ParWarning, PrecomputedParLp,
+    ParValidationReport, ParWarning, PrecomputedParLp, evaluate_par_inflow, evaluate_par_inflows,
+    solve_par_noise, solve_par_noises, validate_par_parameters,
 };
 pub use sampling::insample::sample_forward;
-pub use tree::{generate_opening_tree, OpeningTree, OpeningTreeView};
+pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 
 #[cfg(test)]
 #[allow(unused_imports)]

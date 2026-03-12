@@ -8,7 +8,7 @@
 //!
 //! - `training/_manifest.json` — required; missing file returns [`CliError::Io`].
 //! - `training/convergence.parquet` — optional; missing file falls back to
-//!   zero-valued bounds (lp_solves and timing reported as 0).
+//!   zero-valued bounds (`lp_solves` and timing reported as 0).
 //! - `simulation/_manifest.json` — optional; missing file silently skips the
 //!   simulation section in the output.
 //!
@@ -104,7 +104,7 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
 /// Construct a zero-valued [`ConvergenceSummary`] that derives bounds from the
 /// manifest's `convergence.final_gap_percent` field.
 ///
-/// Used when `convergence.parquet` is missing or unreadable. The lp_solves and
+/// Used when `convergence.parquet` is missing or unreadable. The `lp_solves` and
 /// timing fields are set to 0; bounds are 0.0 since the manifest does not carry
 /// them separately.
 fn convergence_fallback(manifest: &TrainingManifest) -> ConvergenceSummary {
@@ -258,16 +258,16 @@ mod tests {
             summary.reason, "gap_tolerance",
             "reason must equal manifest.convergence.termination_reason"
         );
-        assert_eq!(
-            summary.lower_bound, 48_500.0,
+        assert!(
+            (summary.lower_bound - 48_500.0).abs() < f64::EPSILON,
             "lower_bound must come from convergence data"
         );
-        assert_eq!(
-            summary.upper_bound, 49_000.0,
+        assert!(
+            (summary.upper_bound - 49_000.0).abs() < f64::EPSILON,
             "upper_bound must come from convergence data"
         );
-        assert_eq!(
-            summary.upper_bound_std, 250.0,
+        assert!(
+            (summary.upper_bound_std - 250.0).abs() < f64::EPSILON,
             "upper_bound_std must come from convergence data"
         );
         assert!(
@@ -335,8 +335,8 @@ mod tests {
 
         let summary = build_training_summary(&manifest, &convergence);
 
-        assert_eq!(
-            summary.gap_percent, 0.0,
+        assert!(
+            summary.gap_percent.abs() < f64::EPSILON,
             "gap_percent must default to 0.0 when convergence summary has None"
         );
     }

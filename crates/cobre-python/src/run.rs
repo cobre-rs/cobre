@@ -37,11 +37,8 @@ use cobre_io::output::simulation_writer::{
 use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationBusResult,
-    SimulationConfig, SimulationContractResult, SimulationCostResult, SimulationExchangeResult,
-    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
-    SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
-    SimulationStageResult, SimulationThermalResult, StageIndexer, StoppingMode, StoppingRule,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode, StoppingRule,
     StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;

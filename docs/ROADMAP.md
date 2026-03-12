@@ -181,12 +181,6 @@ management and result queries to AI coding assistants. Runs as a
 single-process binary; does not use MPI. Depends only on `cobre-core` and
 `cobre-io`.
 
-### `cobre-python`
-
-PyO3-based Python bindings compiled as a `cdylib`. Will expose case loading,
-validation, training, and simulation to Python callers, enabling integration
-with data science workflows and Jupyter notebooks. Single-process; no MPI.
-
 ### `cobre-tui`
 
 A `ratatui`-based terminal UI library consumed by `cobre-cli`. Will provide
@@ -195,19 +189,6 @@ and solver timing during a run. Depends only on `cobre-core`; the rendering
 loop reads events published by `cobre-sddp`.
 
 ---
-
-## Algorithm Extensions
-
-The v0.1.0 solver uses the minimal variant set (Expectation risk measure,
-Level-1 cut selection, InSample sampling, finite horizon). Future algorithm
-extensions include:
-
-- **CVaR risk measure** -- Conditional Value-at-Risk for risk-averse dispatch
-  policies, as described in the cobre-docs methodology reference.
-- **Multi-cut variant** -- one cut per scenario per stage rather than an
-  averaged cut, for faster convergence on small scenario counts.
-- **Infinite horizon** -- cyclic stage chains with a terminal value function,
-  enabling long-run equilibrium studies.
 
 **Methodology reference**: `cobre-docs/src/roadmap/` for the full algorithm
 extension roadmap and theoretical grounding.

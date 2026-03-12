@@ -42,14 +42,17 @@ pub mod par;
 pub mod sampling;
 pub mod tree;
 
-pub use context::{StochasticContext, build_stochastic_context};
+pub use context::{build_stochastic_context, StochasticContext};
 pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
-pub use par::{ParValidationReport, ParWarning, PrecomputedParLp, validate_par_parameters};
+pub use par::{
+    compute_truncation_noise, compute_truncation_noises, evaluate_par_inflow, evaluate_par_inflows,
+    validate_par_parameters, ParValidationReport, ParWarning, PrecomputedParLp,
+};
 pub use sampling::insample::sample_forward;
-pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
+pub use tree::{generate_opening_tree, OpeningTree, OpeningTreeView};
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -69,6 +72,7 @@ mod tests {
         use crate::correlation::resolve as _;
         use crate::noise::rng as _;
         use crate::noise::seed as _;
+        use crate::par::evaluate as _;
         use crate::par::precompute as _;
         use crate::par::validation as _;
         use crate::sampling::insample as _;

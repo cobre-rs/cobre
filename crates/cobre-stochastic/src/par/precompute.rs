@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
+use cobre_core::{scenario::InflowModel, temporal::Stage, EntityId};
 
 use crate::StochasticError;
 
@@ -434,12 +434,12 @@ impl Default for PrecomputedParLp {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::PrecomputedParLp;

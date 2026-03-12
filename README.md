@@ -166,7 +166,7 @@ The minimal viable solver is built through an [8-phase implementation sequence](
 
 ### v0.2 — Ecosystem Hardening
 
-- [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
+- [x] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths (ships via maturin, excluded from workspace)
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
 - [ ] Benchmark suite with published results

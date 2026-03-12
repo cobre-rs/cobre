@@ -362,7 +362,7 @@ mod tests {
     }
 
     const VALID_JSON: &str = r#"{
-      "$schema": "https://cobre.dev/schemas/v2/penalties.schema.json",
+      "$schema": "https://cobre-rs.github.io/cobre/schemas/penalties.schema.json",
       "version": "1.0",
       "bus": {
         "deficit_segments": [

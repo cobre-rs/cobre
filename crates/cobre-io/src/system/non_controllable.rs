@@ -11,7 +11,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre.dev/schemas/v2/non_controllable_sources.schema.json",
+//!   "$schema": "https://cobre-rs.github.io/cobre/schemas/non_controllable_sources.schema.json",
 //!   "non_controllable_sources": [
 //!     {
 //!       "id": 0,

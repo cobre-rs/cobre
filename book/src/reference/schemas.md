@@ -34,11 +34,11 @@ Add a `json.schemas` entry to your workspace `.vscode/settings.json`:
   "json.schemas": [
     {
       "fileMatch": ["config.json"],
-      "url": "https://cobre.dev/schemas/v2/config.schema.json"
+      "url": "https://cobre-rs.github.io/cobre/schemas/config.schema.json"
     },
     {
       "fileMatch": ["system/hydros.json"],
-      "url": "https://cobre.dev/schemas/v2/hydros.schema.json"
+      "url": "https://cobre-rs.github.io/cobre/schemas/hydros.schema.json"
     }
   ]
 }
@@ -48,7 +48,7 @@ Alternatively, add a `$schema` key directly inside each JSON file:
 
 ```json
 {
-  "$schema": "https://cobre.dev/schemas/v2/config.schema.json",
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
   "training": {
     "forward_passes": 192,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]

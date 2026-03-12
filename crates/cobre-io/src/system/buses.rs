@@ -7,7 +7,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre.dev/schemas/v2/buses.schema.json",
+//!   "$schema": "https://cobre-rs.github.io/cobre/schemas/buses.schema.json",
 //!   "buses": [
 //!     { "id": 0, "name": "South" },
 //!     {
@@ -302,7 +302,7 @@ mod tests {
     /// Canonical valid `buses.json` with 2 buses: one with entity-level deficit
     /// overrides (id=1), one without (id=0).
     const VALID_JSON: &str = r#"{
-      "$schema": "https://cobre.dev/schemas/v2/buses.schema.json",
+      "$schema": "https://cobre-rs.github.io/cobre/schemas/buses.schema.json",
       "buses": [
         { "id": 0, "name": "South" },
         {

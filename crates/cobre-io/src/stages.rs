@@ -903,7 +903,7 @@ mod tests {
 
     /// Canonical minimal valid `stages.json` used as a baseline for error tests.
     const VALID_JSON: &str = r#"{
-      "$schema": "https://cobre.dev/schemas/v2/stages.schema.json",
+      "$schema": "https://cobre-rs.github.io/cobre/schemas/stages.schema.json",
       "policy_graph": {
         "type": "finite_horizon",
         "annual_discount_rate": 0.06,

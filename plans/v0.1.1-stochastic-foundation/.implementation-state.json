@@ -1,0 +1,1341 @@
+{
+  "plan": "v0.1.1-stochastic-foundation",
+  "last_updated": "2026-03-12T20:11:57Z",
+  "progressive": true,
+  "tickets": {
+    "ticket-001-rewrite-book-introduction.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-002-replace-cobre-dev-schema-urls.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        },
+        "quality": 0.91,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-003-check-off-cobre-python-readme.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "orchestrator"
+    },
+    "ticket-004-implement-evaluate-par-inflow.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-005-implement-compute-truncation-noise.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-006-add-truncation-variant.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-007-wire-truncation-config-cobre-io.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-008-integrate-truncation-forward-pass.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.96,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-009-defaults-cascade-integration-tests.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.98,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-010-audit-seed-handling.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.94,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-011-implement-manifest-convergence-readers.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-012-add-cobre-summary-subcommand.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.97,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-013-deduplicate-tutorial-guide-overlap.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.975,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-014-add-examples-section-to-book.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-015-record-multithread-speedup-vhs.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.96,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        },
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-016-validate-4ree-convergence.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 0.94,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.9,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.6
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-017-fix-simulation-progress-bar.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-018-fix-simulation-progress-statistics.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "workflow_step": null,
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.97,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 0.85,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-019-rerecord-vhs-gifs.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "workflow_step": null,
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "agent": "orchestrator"
+    },
+    "ticket-020-flatbuffers-policy-reader.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "workflow_step": null,
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 0.98,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-021-python-simulation-policy-readers.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "workflow_step": null,
+      "scores": {
+        "quality": 0.78,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
+        "readiness": 0.849,
+        "readiness_breakdown": {
+          "structure": 0.714,
+          "testability": 1.0,
+          "boundary": 0.7,
+          "dependency_clarity": 1.0,
+          "atomicity": 0.8
+        }
+      },
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-022-add-precomputed-normal-lp.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.913,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.75,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-023-extend-stochastic-context-load-noise.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-024-build-load-factor-lookup.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.95,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.5
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-025-extend-patchbuffer-load.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-026-wire-load-noise-forward.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.78,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-027-wire-load-noise-backward.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.9,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-028-wire-load-noise-simulation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.85,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-029-add-load-file-cross-validation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.96,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-030-stochastic-load-integration-tests.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.975,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 0.75
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-031-implement-levinson-durbin.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-032-implement-estimate-seasonal-stats.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.875,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.5,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-033-implement-estimate-ar-coefficients.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-034-implement-estimate-correlation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 0.9,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-035-add-season-map-estimation-config.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-036-wire-estimation-assembly-pipeline.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-037-add-history-estimation-validation.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-038-implement-aic-order-selection.md": {
+      "status": "completed",
+      "detail_level": "refined",
+      "scores": {
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        },
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "hpc-rust-developer"
+    },
+    "ticket-039-update-stochastic-modeling-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-040-update-crate-stochastic-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-041-update-crate-sddp-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-042-add-cobre-summary-cli-docs.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-043-update-crate-io-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-044-update-roadmap-page.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-045-update-inflow-nonnegativity-theory.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-046-add-stochastic-load-theory.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-047-update-par-model-estimation.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-048-update-scenario-generation-load.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-049-update-roadmap-stochastic-enhancements.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 0.75,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 0.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-050-rewrite-readme-roadmap.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-051-update-claude-md.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-052-update-python-readme.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    },
+    "ticket-053-cleanup-cobre-docs-stale-pages.md": {
+      "status": "completed",
+      "detail_level": "detailed",
+      "scores": {
+        "quality": 1.0,
+        "quality_breakdown": {
+          "conformance": 1.0,
+          "scope_adherence": 1.0,
+          "lint_cleanliness": 1.0,
+          "type_safety": 1.0,
+          "test_delta": 1.0
+        },
+        "readiness": 1.0,
+        "readiness_breakdown": {
+          "structure": 1.0,
+          "testability": 1.0,
+          "boundary": 1.0,
+          "dependency_clarity": 1.0,
+          "atomicity": 1.0
+        }
+      },
+      "workflow_step": null,
+      "agent": "open-source-documentation-writer"
+    }
+  },
+  "epics": {
+    "epic-01-immediate-fixes": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-02-par-model-simulation": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-03-inflow-truncation": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-04-scenario-pipeline-hardening": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-05-cobre-summary": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-06-book-documentation-polish": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-07-simulation-polish-python": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-08-load-noise-foundation": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-09-load-integration-sddp": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-10-load-validation-testing": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-11-par-fitting-module": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-12-estimation-pipeline-integration": {
+      "phase": "completed",
+      "learning_extracted": true
+    },
+    "epic-13-book-documentation-upgrade": {
+      "phase": "completed",
+      "learning_extracted": false
+    },
+    "epic-14-cobre-docs-spec-upgrade": {
+      "phase": "completed",
+      "learning_extracted": false
+    },
+    "epic-15-repo-docs-cleanup": {
+      "phase": "completed",
+      "learning_extracted": false
+    }
+  }
+}

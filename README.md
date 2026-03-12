@@ -35,15 +35,16 @@ Power system computation today is split between closed-source commercial tools a
 
 ## Crates
 
-| Crate                                          | Status                                                                                     | Description                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| [`cobre-core`](crates/cobre-core/)             | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Power system entity model — buses, hydros, thermals, lines, pumping stations, contracts         |
-| [`cobre-io`](crates/cobre-io/)                 | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline |
-| [`cobre-stochastic`](crates/cobre-stochastic/) | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | PAR(p) inflow models, correlated scenario generation, opening tree construction                 |
-| [`cobre-solver`](crates/cobre-solver/)         | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management |
-| [`cobre-comm`](crates/cobre-comm/)             | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends               |
-| [`cobre-sddp`](crates/cobre-sddp/)             | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management      |
-| [`cobre-cli`](crates/cobre-cli/)               | ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) | Command-line interface: `init`, `run`, `validate`, `report`, `version`                          |
+| Crate                                          | Status                                                                                     | Description                                                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, pumping stations, contracts                                |
+| [`cobre-io`](crates/cobre-io/)                 | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline                        |
+| [`cobre-stochastic`](crates/cobre-stochastic/) | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | PAR(p) inflow models, PAR(p) fitting, stochastic load noise, correlated scenario generation, opening tree construction |
+| [`cobre-solver`](crates/cobre-solver/)         | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management                        |
+| [`cobre-comm`](crates/cobre-comm/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends                                      |
+| [`cobre-sddp`](crates/cobre-sddp/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management, estimation pipeline        |
+| [`cobre-cli`](crates/cobre-cli/)               | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Command-line interface: `init`, `run`, `validate`, `report`, `summary`, `version`                                      |
+| [`cobre-python`](crates/cobre-python/)         | ![experimental](https://img.shields.io/badge/status-experimental-E74C3C?style=flat-square) | PyO3 bindings — case loading, validation, training, simulation, result inspection                                      |
 
 **Related:**
 
@@ -102,7 +103,7 @@ Key design decisions:
   <img src="recordings/quickstart.gif" alt="Quick Start Demo" width="800"/>
 </p>
 
-> **Warning:** Cobre v0.1 is experimental. The API and case format are not stable yet.
+> **Warning:** Cobre v0.1 is alpha software. The API and case format are not stable yet.
 
 ```bash
 # Install (requires Rust 1.85+ and HiGHS)
@@ -116,6 +117,9 @@ cobre run my-study/
 
 # Inspect results
 cobre report my-study/output/
+
+# Print summary statistics
+cobre summary my-study/output/
 ```
 
 A case directory follows a JSON + Parquet layout:
@@ -126,6 +130,8 @@ case/
 ├── stages.json          # Stage definitions and policy graph
 ├── system/              # Entity registries (buses.json, hydros.json, thermals.json…)
 ├── scenarios/           # Stochastic data (PAR coefficients, correlation — Parquet)
+│   ├── inflow_history.parquet   # (optional) Historical inflow series for PAR fitting
+│   └── load_factors.parquet     # (optional) Load factor time series
 └── constraints/         # Initial conditions and generic constraints (JSON)
 ```
 
@@ -148,25 +154,17 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 The minimal viable solver is built through an [8-phase implementation sequence](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html) defined in cobre-docs. Each phase produces a testable intermediate.
 
-### v0.1 — Minimal Viable SDDP Solver (current)
+### v0.1 — Minimal Viable SDDP Solver
 
-- [x] Complete SDDP specification corpus ([cobre-docs](https://github.com/cobre-rs/cobre-docs))
-- [x] Workspace scaffolding (all 11 crates)
-- [x] `cobre-core` — entity model, topology, validation, penalty resolution
-- [x] `cobre-io` — JSON/Parquet input, 5-layer validation pipeline
-- [x] `cobre-stochastic` — PAR(p) models, correlated scenario generation, opening trees
-- [x] `cobre-solver` — LP abstraction, HiGHS backend, warm-start basis management
-- [x] `cobre-comm` — communicator trait, MPI backend, local backend
-- [x] `cobre-sddp` — training loop, forward/backward pass, cut management, convergence monitoring
-- [x] `cobre-sddp` — simulation pipeline, policy output
-- [x] `cobre-io` — FlatBuffers policy output, Parquet result writing
-- [x] `cobre-cli` — `init`, `run`, `validate`, `report`, `version` subcommands
+**Complete.** 8 implementation phases covering the full training→simulation→output pipeline. 2,179 tests.
 
-> 1,955 tests pass across the workspace (8 crates implemented, all 8 phases complete).
+### v0.1.1 — Stochastic Foundation
+
+**Complete.** PAR model fitting from inflow history (Levinson-Durbin, AIC order selection), inflow truncation, stochastic load demand, estimation pipeline, `cobre summary` subcommand, load validation rules.
 
 ### v0.2 — Ecosystem Hardening
 
-- [x] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths (ships via maturin, excluded from workspace)
+- [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
 - [ ] Benchmark suite with published results

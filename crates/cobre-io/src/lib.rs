@@ -77,8 +77,10 @@ pub use extensions::{
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use output::policy::{
-    PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
-    serialize_stage_basis, serialize_stage_cuts, write_policy_checkpoint,
+    OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord, PolicyCheckpoint,
+    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, StageCutsReadResult,
+    deserialize_stage_basis, deserialize_stage_cuts, read_policy_checkpoint, serialize_stage_basis,
+    serialize_stage_cuts, write_policy_checkpoint,
 };
 pub use output::{
     ConvergenceSummary, CutStatistics, IterationRecord, ManifestChecksum, ManifestConvergence,

@@ -39,7 +39,7 @@ this ordering implicitly through the Benders cuts it generates.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
     "forward_passes": 1,
     "stopping_rules": [
@@ -80,7 +80,7 @@ For the full configuration schema, see [Configuration](../guide/configuration.md
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/stages.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
   "policy_graph": {
     "type": "finite_horizon",
     "annual_discount_rate": 0.12
@@ -117,7 +117,7 @@ in the `blocks` array.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/hydros.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
   "hydros": [
     {
       "id": 0,

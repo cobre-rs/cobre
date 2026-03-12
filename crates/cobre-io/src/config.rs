@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn test_parse_full_config() {
         let json = r#"{
-          "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+          "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
           "modeling": {
             "inflow_non_negativity": {
               "method": "penalty",
@@ -842,7 +842,7 @@ mod tests {
     fn test_schema_field_accepted() {
         let f = write_config(
             r#"{
-            "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+            "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
             "training": {
                 "forward_passes": 1,
                 "stopping_rules": [{"type": "iteration_limit", "limit": 10}]
@@ -852,7 +852,7 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(
             cfg.schema.as_deref(),
-            Some("https://cobre-rs.github.io/cobre/schemas/config.schema.json"),
+            Some("https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json"),
             "schema field should be stored when present in JSON"
         );
     }

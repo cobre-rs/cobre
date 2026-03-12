@@ -7,7 +7,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre-rs.github.io/cobre/schemas/hydros.schema.json",
+//!   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
 //!   "hydros": [{
 //!     "id": 0, "name": "FURNAS", "bus_id": 0,
 //!     "downstream_id": 2,
@@ -1666,7 +1666,7 @@ mod tests {
     #[test]
     fn test_schema_field_is_ignored() {
         let json = r#"{
-          "$schema": "https://cobre-rs.github.io/cobre/schemas/hydros.schema.json",
+          "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
           "hydros": [{
             "id": 0, "name": "H", "bus_id": 0,
             "downstream_id": null,

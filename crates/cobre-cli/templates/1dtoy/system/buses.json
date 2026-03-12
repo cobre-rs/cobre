@@ -1,5 +1,5 @@
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/buses.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/buses.schema.json",
   "buses": [
     {
       "id": 0,

@@ -228,7 +228,7 @@ Each entry has a `"type"` discriminator. Valid types:
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
     "forward_passes": 192,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]
@@ -269,7 +269,7 @@ have `depth_mw: null` (unbounded).
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/penalties.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/penalties.schema.json",
   "bus": {
     "deficit_segments": [
       { "depth_mw": 500.0, "cost": 1000.0 },

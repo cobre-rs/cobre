@@ -79,27 +79,27 @@ inline error highlighting.
 The URL pattern is:
 
 ```
-https://cobre-rs.github.io/cobre/schemas/<filename>.schema.json
+https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/<filename>.schema.json
 ```
 
 The available schema files are:
 
 | File                      | Schema URL                                                                |
 | ------------------------- | ------------------------------------------------------------------------- |
-| `config.json`             | `https://cobre-rs.github.io/cobre/schemas/config.schema.json`             |
-| `penalties.json`          | `https://cobre-rs.github.io/cobre/schemas/penalties.schema.json`          |
-| `stages.json`             | `https://cobre-rs.github.io/cobre/schemas/stages.schema.json`             |
-| `initial_conditions.json` | `https://cobre-rs.github.io/cobre/schemas/initial_conditions.schema.json` |
-| `system/buses.json`       | `https://cobre-rs.github.io/cobre/schemas/buses.schema.json`              |
-| `system/lines.json`       | `https://cobre-rs.github.io/cobre/schemas/lines.schema.json`              |
-| `system/hydros.json`      | `https://cobre-rs.github.io/cobre/schemas/hydros.schema.json`             |
-| `system/thermals.json`    | `https://cobre-rs.github.io/cobre/schemas/thermals.schema.json`           |
+| `config.json`             | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json`             |
+| `penalties.json`          | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/penalties.schema.json`          |
+| `stages.json`             | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json`             |
+| `initial_conditions.json` | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/initial_conditions.schema.json` |
+| `system/buses.json`       | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/buses.schema.json`              |
+| `system/lines.json`       | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json`              |
+| `system/hydros.json`      | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json`             |
+| `system/thermals.json`    | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/thermals.schema.json`           |
 
 Add the `$schema` field as the first key in each file to activate editor support:
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": { ... }
 }
 ```
@@ -126,7 +126,7 @@ mkdir system
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
     "forward_passes": 1,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 50 }]
@@ -141,7 +141,7 @@ when your case is working and you want dispatch results.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/stages.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
   "policy_graph": {
     "type": "finite_horizon",
     "annual_discount_rate": 0.0
@@ -186,7 +186,7 @@ when your case is working and you want dispatch results.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/penalties.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/penalties.schema.json",
   "bus": {
     "deficit_segments": [{ "depth_mw": null, "cost": 3000.0 }],
     "excess_cost": 100.0
@@ -233,7 +233,7 @@ be present.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/buses.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/buses.schema.json",
   "buses": [
     {
       "id": 0,
@@ -251,7 +251,7 @@ for this bus only.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/lines.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json",
   "lines": []
 }
 ```
@@ -262,7 +262,7 @@ An empty lines file is required. A single-bus case never needs lines.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/hydros.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
   "hydros": []
 }
 ```
@@ -271,7 +271,7 @@ An empty lines file is required. A single-bus case never needs lines.
 
 ```json
 {
-  "$schema": "https://cobre-rs.github.io/cobre/schemas/thermals.schema.json",
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/thermals.schema.json",
   "thermals": [
     {
       "id": 0,

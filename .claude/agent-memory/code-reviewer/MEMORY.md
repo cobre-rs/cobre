@@ -203,6 +203,31 @@ u32, f64, Vec<f64>)>` that is immediately re-mapped to `Vec<(u32, u32, u32, f64,
 - `config.simulation.io_channel_capacity` is `u32` in cobre-io; cast via `as usize` in run.rs (not via
   `usize::try_from`) — safe on all 64-bit platforms, minor stylistic inconsistency.
 
+### Phase v0.1.1 stochastic-foundation key facts
+
+- `evaluate_par_inflows` and `solve_par_noises` are new public exports from `cobre-stochastic::par::evaluate`.
+  Infrastructure crate — confirmed zero SDDP references.
+- Truncation path in `forward.rs` (training): lag state is transposed from hydro-major
+  (`current_state[inflow_lags.start + h * max_par_order + l]`) to lag-major
+  (`lag_matrix_buf[l * n_hydros + h]`) before calling `evaluate_par_inflows`. Correct transposition.
+- Simulation pipeline (`simulation/pipeline.rs`) keeps `_inflow_method` as unused pre-declaration.
+  Truncation is NOT applied in simulation — only in training forward pass. Pre-existing limitation.
+- `SolverWorkspace::new` signature changed to include `max_par_order` parameter (public API break).
+- `WelfordAccumulator` in the main-thread post-parallel loop (`acc` at line 443) accumulates costs
+  but its values are never used. Dead code after refactor. The `#[allow(dead_code)]` on the struct's
+  `impl` block documents intent for future `SimulationFinished` event enrichment.
+- `simulate()` signature changed from `event_sender: Option<&Sender<T>>` to `Option<Sender<T>>` (owned).
+  Workers clone the sender; the original is used for `SimulationFinished` after the parallel region.
+- Python `run.rs`: `sim_event_tx` is cloned from `event_tx` before training. Both training and simulation
+  events are sent to the same `event_rx` channel. After training, events are drained; after simulation,
+  remaining simulation events in `event_rx` are dropped silently at function exit. No deadlock.
+- `cobre summary` subcommand added: reads `training/_manifest.json` (required),
+  `training/convergence.parquet` (optional, fallback to zeroed summary), and
+  `simulation/_manifest.json` (optional). Prints the same summary as `cobre run`.
+- `ConvergenceSummary` reads all batches and sums `lp_solves` + `time_total_ms`;
+  takes bound/gap fields from the last row of the last batch.
+- `read_optional_simulation_manifest` returns `Ok(None)` on `ErrorKind::NotFound`, propagates other errors.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

@@ -7,7 +7,7 @@
 //!
 //! ```json
 //! {
-//!   "$schema": "https://cobre-rs.github.io/cobre/schemas/production_models.schema.json",
+//!   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/production_models.schema.json",
 //!   "production_models": [
 //!     {
 //!       "hydro_id": 0,

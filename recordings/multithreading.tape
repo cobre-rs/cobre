@@ -1,5 +1,6 @@
-# Cobre Quick Start Demo
-# Generates: quickstart.gif
+# Cobre Multi-threading Speedup Demo
+# Generates: multithreading.gif
+# Shows the wall-clock time difference between --threads 1 and --threads 4.
 
 Require cobre
 
@@ -16,7 +17,7 @@ Set WindowBar "Colorful"
 Set BorderRadius 8
 Set Padding 12
 
-Output quickstart.gif
+Output multithreading.gif
 
 Type "rm -rf demo/"
 Enter
@@ -26,12 +27,12 @@ Type "cobre init --template 1dtoy demo/"
 Enter
 Sleep 2s
 
-Type "cobre run demo/"
+Type "cobre run demo/ --threads 1"
 Enter
-Sleep 15s
+Sleep 20s
 
-Type "cobre report demo/output/"
+Type "cobre run demo/ --threads 4"
 Enter
-Sleep 3s
+Sleep 20s
 
 Sleep 2s

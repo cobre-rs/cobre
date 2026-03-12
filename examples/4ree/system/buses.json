@@ -1,0 +1,45 @@
+{
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/buses.schema.json",
+  "buses": [
+    {
+      "id": 0,
+      "name": "SUDESTE",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1420.34
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "SUL",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1420.34
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "NORDESTE",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1420.34
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "NORTE",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1420.34
+        }
+      ]
+    }
+  ]
+}

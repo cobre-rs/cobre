@@ -1,0 +1,887 @@
+{
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/thermals.schema.json",
+  "thermals": [
+    {
+      "id": 0,
+      "name": "1",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 640.0, "cost_per_mwh": 23.21 }],
+      "generation": { "min_mw": 0.0, "max_mw": 640.0 }
+    },
+    {
+      "id": 1,
+      "name": "2",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 1350.0, "cost_per_mwh": 20.12 }],
+      "generation": { "min_mw": 0.0, "max_mw": 1350.0 }
+    },
+    {
+      "id": 2,
+      "name": "3",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 344.0, "cost_per_mwh": 86.69 }],
+      "generation": { "min_mw": 0.0, "max_mw": 344.0 }
+    },
+    {
+      "id": 3,
+      "name": "4",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 36.0, "cost_per_mwh": 937.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 36.0 }
+    },
+    {
+      "id": 4,
+      "name": "5",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 157.0, "cost_per_mwh": 247.3 }],
+      "generation": { "min_mw": 0.0, "max_mw": 157.0 }
+    },
+    {
+      "id": 5,
+      "name": "6",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 59.0, "cost_per_mwh": 299.99 }],
+      "generation": { "min_mw": 0.0, "max_mw": 59.0 }
+    },
+    {
+      "id": 6,
+      "name": "7",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 28.0, "cost_per_mwh": 178.43 }],
+      "generation": { "min_mw": 0.0, "max_mw": 28.0 }
+    },
+    {
+      "id": 7,
+      "name": "8",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 529.0, "cost_per_mwh": 511.77 }],
+      "generation": { "min_mw": 0.0, "max_mw": 529.0 }
+    },
+    {
+      "id": 8,
+      "name": "9",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 44.0, "cost_per_mwh": 822.15 }],
+      "generation": { "min_mw": 0.0, "max_mw": 44.0 }
+    },
+    {
+      "id": 9,
+      "name": "10",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 255.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 255.0 }
+    },
+    {
+      "id": 10,
+      "name": "11",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 235.0, "cost_per_mwh": 142.82 }],
+      "generation": { "min_mw": 0.0, "max_mw": 235.0 }
+    },
+    {
+      "id": 11,
+      "name": "12",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 321.0, "cost_per_mwh": 220.92 }],
+      "generation": { "min_mw": 0.0, "max_mw": 321.0 }
+    },
+    {
+      "id": 12,
+      "name": "13",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 65.0, "cost_per_mwh": 300.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 65.0 }
+    },
+    {
+      "id": 13,
+      "name": "14",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 572.0, "cost_per_mwh": 399.02 }],
+      "generation": { "min_mw": 0.0, "max_mw": 572.0 }
+    },
+    {
+      "id": 14,
+      "name": "15",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 140.0, "cost_per_mwh": 877.87 }],
+      "generation": { "min_mw": 0.0, "max_mw": 140.0 }
+    },
+    {
+      "id": 15,
+      "name": "16",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 226.0, "cost_per_mwh": 299.99 }],
+      "generation": { "min_mw": 0.0, "max_mw": 226.0 }
+    },
+    {
+      "id": 16,
+      "name": "17",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 131.0, "cost_per_mwh": 645.3 }],
+      "generation": { "min_mw": 0.0, "max_mw": 131.0 }
+    },
+    {
+      "id": 17,
+      "name": "18",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 87.0, "cost_per_mwh": 213.84 }],
+      "generation": { "min_mw": 0.0, "max_mw": 87.0 }
+    },
+    {
+      "id": 18,
+      "name": "19",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 204.0, "cost_per_mwh": 216.1 }],
+      "generation": { "min_mw": 0.0, "max_mw": 204.0 }
+    },
+    {
+      "id": 19,
+      "name": "20",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 400.0, "cost_per_mwh": 37.8 }],
+      "generation": { "min_mw": 0.0, "max_mw": 400.0 }
+    },
+    {
+      "id": 20,
+      "name": "21",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 58.89 }],
+      "generation": { "min_mw": 0.0, "max_mw": 100.0 }
+    },
+    {
+      "id": 21,
+      "name": "22",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 200.0, "cost_per_mwh": 102.84 }],
+      "generation": { "min_mw": 0.0, "max_mw": 200.0 }
+    },
+    {
+      "id": 22,
+      "name": "23",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 127.0, "cost_per_mwh": 289.96 }],
+      "generation": { "min_mw": 0.0, "max_mw": 127.0 }
+    },
+    {
+      "id": 23,
+      "name": "24",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 176.0, "cost_per_mwh": 730.2 }],
+      "generation": { "min_mw": 0.0, "max_mw": 176.0 }
+    },
+    {
+      "id": 24,
+      "name": "25",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 200.0, "cost_per_mwh": 470.34 }],
+      "generation": { "min_mw": 0.0, "max_mw": 200.0 }
+    },
+    {
+      "id": 25,
+      "name": "26",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 30.0, "cost_per_mwh": 523.35 }],
+      "generation": { "min_mw": 0.0, "max_mw": 30.0 }
+    },
+    {
+      "id": 26,
+      "name": "27",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 436.0, "cost_per_mwh": 310.41 }],
+      "generation": { "min_mw": 0.0, "max_mw": 436.0 }
+    },
+    {
+      "id": 27,
+      "name": "28",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 500.0, "cost_per_mwh": 142.25 }],
+      "generation": { "min_mw": 0.0, "max_mw": 500.0 }
+    },
+    {
+      "id": 28,
+      "name": "29",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 134.0, "cost_per_mwh": 143.49 }],
+      "generation": { "min_mw": 0.0, "max_mw": 134.0 }
+    },
+    {
+      "id": 29,
+      "name": "30",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 216.0, "cost_per_mwh": 299.99 }],
+      "generation": { "min_mw": 0.0, "max_mw": 216.0 }
+    },
+    {
+      "id": 30,
+      "name": "31",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 340.0, "cost_per_mwh": 678.04 }],
+      "generation": { "min_mw": 0.0, "max_mw": 340.0 }
+    },
+    {
+      "id": 31,
+      "name": "32",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 929.0, "cost_per_mwh": 388.48 }],
+      "generation": { "min_mw": 0.0, "max_mw": 929.0 }
+    },
+    {
+      "id": 32,
+      "name": "33",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 770.0, "cost_per_mwh": 168.44 }],
+      "generation": { "min_mw": 0.0, "max_mw": 770.0 }
+    },
+    {
+      "id": 33,
+      "name": "34",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 266.0, "cost_per_mwh": 300.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 266.0 }
+    },
+    {
+      "id": 34,
+      "name": "35",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 10.0, "cost_per_mwh": 1047.38 }],
+      "generation": { "min_mw": 0.0, "max_mw": 10.0 }
+    },
+    {
+      "id": 35,
+      "name": "36",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 197.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 197.0 }
+    },
+    {
+      "id": 36,
+      "name": "37",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 175.0, "cost_per_mwh": 626.78 }],
+      "generation": { "min_mw": 0.0, "max_mw": 175.0 }
+    },
+    {
+      "id": 37,
+      "name": "38",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 206.0, "cost_per_mwh": 197.85 }],
+      "generation": { "min_mw": 0.0, "max_mw": 206.0 }
+    },
+    {
+      "id": 38,
+      "name": "39",
+      "bus_id": 0,
+      "cost_segments": [{ "capacity_mw": 54.0, "cost_per_mwh": 1148.68 }],
+      "generation": { "min_mw": 0.0, "max_mw": 54.0 }
+    },
+    {
+      "id": 39,
+      "name": "40",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 485.0, "cost_per_mwh": 490.3 }],
+      "generation": { "min_mw": 0.0, "max_mw": 485.0 }
+    },
+    {
+      "id": 40,
+      "name": "41",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 350.0, "cost_per_mwh": 64.08 }],
+      "generation": { "min_mw": 0.0, "max_mw": 350.0 }
+    },
+    {
+      "id": 41,
+      "name": "42",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 167.0, "cost_per_mwh": 698.14 }],
+      "generation": { "min_mw": 0.0, "max_mw": 167.0 }
+    },
+    {
+      "id": 42,
+      "name": "43",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 72.0, "cost_per_mwh": 196.16 }],
+      "generation": { "min_mw": 0.0, "max_mw": 72.0 }
+    },
+    {
+      "id": 43,
+      "name": "44",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 4.0, "cost_per_mwh": 229.17 }],
+      "generation": { "min_mw": 0.0, "max_mw": 4.0 }
+    },
+    {
+      "id": 44,
+      "name": "45",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 373.45 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 45,
+      "name": "46",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 234.31 }],
+      "generation": { "min_mw": 0.0, "max_mw": 100.0 }
+    },
+    {
+      "id": 46,
+      "name": "47",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 132.0, "cost_per_mwh": 176.85 }],
+      "generation": { "min_mw": 0.0, "max_mw": 132.0 }
+    },
+    {
+      "id": 47,
+      "name": "48",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 262.0, "cost_per_mwh": 176.67 }],
+      "generation": { "min_mw": 0.0, "max_mw": 262.0 }
+    },
+    {
+      "id": 48,
+      "name": "49",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 363.0, "cost_per_mwh": 145.71 }],
+      "generation": { "min_mw": 0.0, "max_mw": 363.0 }
+    },
+    {
+      "id": 49,
+      "name": "50",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 24.0, "cost_per_mwh": 780.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 24.0 }
+    },
+    {
+      "id": 50,
+      "name": "51",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 126.0, "cost_per_mwh": 115.9 }],
+      "generation": { "min_mw": 0.0, "max_mw": 126.0 }
+    },
+    {
+      "id": 51,
+      "name": "52",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 320.0, "cost_per_mwh": 115.9 }],
+      "generation": { "min_mw": 0.0, "max_mw": 320.0 }
+    },
+    {
+      "id": 52,
+      "name": "53",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 248.31 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 53,
+      "name": "54",
+      "bus_id": 1,
+      "cost_segments": [{ "capacity_mw": 640.0, "cost_per_mwh": 740.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 640.0 }
+    },
+    {
+      "id": 54,
+      "name": "55",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 13.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 13.0 }
+    },
+    {
+      "id": 55,
+      "name": "56",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 11.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 11.0 }
+    },
+    {
+      "id": 56,
+      "name": "57",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 31.0, "cost_per_mwh": 681.59 }],
+      "generation": { "min_mw": 0.0, "max_mw": 31.0 }
+    },
+    {
+      "id": 57,
+      "name": "58",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 11.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 11.0 }
+    },
+    {
+      "id": 58,
+      "name": "59",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 347.0, "cost_per_mwh": 915.17 }],
+      "generation": { "min_mw": 0.0, "max_mw": 347.0 }
+    },
+    {
+      "id": 59,
+      "name": "60",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 347.0, "cost_per_mwh": 732.99 }],
+      "generation": { "min_mw": 0.0, "max_mw": 347.0 }
+    },
+    {
+      "id": 60,
+      "name": "61",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 150.0, "cost_per_mwh": 775.66 }],
+      "generation": { "min_mw": 0.0, "max_mw": 150.0 }
+    },
+    {
+      "id": 61,
+      "name": "62",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 169.0, "cost_per_mwh": 626.79 }],
+      "generation": { "min_mw": 0.0, "max_mw": 169.0 }
+    },
+    {
+      "id": 62,
+      "name": "63",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 13.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 13.0 }
+    },
+    {
+      "id": 63,
+      "name": "64",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 15.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 15.0 }
+    },
+    {
+      "id": 64,
+      "name": "65",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 13.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 13.0 }
+    },
+    {
+      "id": 65,
+      "name": "66",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 15.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 15.0 }
+    },
+    {
+      "id": 66,
+      "name": "67",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 17.0, "cost_per_mwh": 60.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 17.0 }
+    },
+    {
+      "id": 67,
+      "name": "68",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 138.0, "cost_per_mwh": 299.99 }],
+      "generation": { "min_mw": 0.0, "max_mw": 138.0 }
+    },
+    {
+      "id": 68,
+      "name": "69",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 327.0, "cost_per_mwh": 118.51 }],
+      "generation": { "min_mw": 0.0, "max_mw": 327.0 }
+    },
+    {
+      "id": 69,
+      "name": "70",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 149.0, "cost_per_mwh": 706.01 }],
+      "generation": { "min_mw": 0.0, "max_mw": 149.0 }
+    },
+    {
+      "id": 70,
+      "name": "71",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 149.0, "cost_per_mwh": 706.01 }],
+      "generation": { "min_mw": 0.0, "max_mw": 149.0 }
+    },
+    {
+      "id": 71,
+      "name": "72",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 15.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 15.0 }
+    },
+    {
+      "id": 72,
+      "name": "73",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 15.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 15.0 }
+    },
+    {
+      "id": 73,
+      "name": "74",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 168.0, "cost_per_mwh": 608.7 }],
+      "generation": { "min_mw": 0.0, "max_mw": 168.0 }
+    },
+    {
+      "id": 74,
+      "name": "75",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 13.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 13.0 }
+    },
+    {
+      "id": 75,
+      "name": "76",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 152.0, "cost_per_mwh": 775.66 }],
+      "generation": { "min_mw": 0.0, "max_mw": 152.0 }
+    },
+    {
+      "id": 76,
+      "name": "77",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 13.0, "cost_per_mwh": 727.61 }],
+      "generation": { "min_mw": 0.0, "max_mw": 13.0 }
+    },
+    {
+      "id": 77,
+      "name": "78",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 720.0, "cost_per_mwh": 116.11 }],
+      "generation": { "min_mw": 0.0, "max_mw": 720.0 }
+    },
+    {
+      "id": 78,
+      "name": "79",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 365.0, "cost_per_mwh": 124.71 }],
+      "generation": { "min_mw": 0.0, "max_mw": 365.0 }
+    },
+    {
+      "id": 79,
+      "name": "80",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 94.0, "cost_per_mwh": 1063.46 }],
+      "generation": { "min_mw": 0.0, "max_mw": 94.0 }
+    },
+    {
+      "id": 80,
+      "name": "81",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 201.0, "cost_per_mwh": 538.85 }],
+      "generation": { "min_mw": 0.0, "max_mw": 201.0 }
+    },
+    {
+      "id": 81,
+      "name": "82",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 136.0, "cost_per_mwh": 851.01 }],
+      "generation": { "min_mw": 0.0, "max_mw": 136.0 }
+    },
+    {
+      "id": 82,
+      "name": "83",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 53.0, "cost_per_mwh": 959.24 }],
+      "generation": { "min_mw": 0.0, "max_mw": 53.0 }
+    },
+    {
+      "id": 83,
+      "name": "84",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 66.0, "cost_per_mwh": 959.23 }],
+      "generation": { "min_mw": 0.0, "max_mw": 66.0 }
+    },
+    {
+      "id": 84,
+      "name": "85",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 381.0, "cost_per_mwh": 638.54 }],
+      "generation": { "min_mw": 0.0, "max_mw": 381.0 }
+    },
+    {
+      "id": 85,
+      "name": "86",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 186.0, "cost_per_mwh": 279.04 }],
+      "generation": { "min_mw": 0.0, "max_mw": 186.0 }
+    },
+    {
+      "id": 86,
+      "name": "87",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 50.0, "cost_per_mwh": 619.14 }],
+      "generation": { "min_mw": 0.0, "max_mw": 50.0 }
+    },
+    {
+      "id": 87,
+      "name": "88",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 223.0, "cost_per_mwh": 239.76 }],
+      "generation": { "min_mw": 0.0, "max_mw": 223.0 }
+    },
+    {
+      "id": 88,
+      "name": "89",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 143.0, "cost_per_mwh": 1063.46 }],
+      "generation": { "min_mw": 0.0, "max_mw": 143.0 }
+    },
+    {
+      "id": 89,
+      "name": "90",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 171.0, "cost_per_mwh": 622.1 }],
+      "generation": { "min_mw": 0.0, "max_mw": 171.0 }
+    },
+    {
+      "id": 90,
+      "name": "91",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 171.0, "cost_per_mwh": 622.1 }],
+      "generation": { "min_mw": 0.0, "max_mw": 171.0 }
+    },
+    {
+      "id": 91,
+      "name": "92",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 533.0, "cost_per_mwh": 70.16 }],
+      "generation": { "min_mw": 0.0, "max_mw": 533.0 }
+    },
+    {
+      "id": 92,
+      "name": "93",
+      "bus_id": 2,
+      "cost_segments": [{ "capacity_mw": 368.0, "cost_per_mwh": 314.63 }],
+      "generation": { "min_mw": 0.0, "max_mw": 368.0 }
+    },
+    {
+      "id": 93,
+      "name": "94",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 166.0, "cost_per_mwh": 302.19 }],
+      "generation": { "min_mw": 0.0, "max_mw": 166.0 }
+    },
+    {
+      "id": 94,
+      "name": "95",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 926.82 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 95,
+      "name": "96",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 85.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 85.0 }
+    },
+    {
+      "id": 96,
+      "name": "97",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 19.0, "cost_per_mwh": 654.63 }],
+      "generation": { "min_mw": 0.0, "max_mw": 19.0 }
+    },
+    {
+      "id": 97,
+      "name": "98",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 19.0, "cost_per_mwh": 611.14 }],
+      "generation": { "min_mw": 0.0, "max_mw": 19.0 }
+    },
+    {
+      "id": 98,
+      "name": "99",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 18.0, "cost_per_mwh": 622.6 }],
+      "generation": { "min_mw": 0.0, "max_mw": 18.0 }
+    },
+    {
+      "id": 99,
+      "name": "100",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 30.0, "cost_per_mwh": 1165.12 }],
+      "generation": { "min_mw": 0.0, "max_mw": 30.0 }
+    },
+    {
+      "id": 100,
+      "name": "101",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 618.81 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 101,
+      "name": "102",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 636.82 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 102,
+      "name": "103",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 20.0, "cost_per_mwh": 631.82 }],
+      "generation": { "min_mw": 0.0, "max_mw": 20.0 }
+    },
+    {
+      "id": 103,
+      "name": "104",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 18.0, "cost_per_mwh": 639.79 }],
+      "generation": { "min_mw": 0.0, "max_mw": 18.0 }
+    },
+    {
+      "id": 104,
+      "name": "105",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 166.0, "cost_per_mwh": 626.77 }],
+      "generation": { "min_mw": 0.0, "max_mw": 166.0 }
+    },
+    {
+      "id": 105,
+      "name": "106",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 166.0, "cost_per_mwh": 626.77 }],
+      "generation": { "min_mw": 0.0, "max_mw": 166.0 }
+    },
+    {
+      "id": 106,
+      "name": "107",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 45.0, "cost_per_mwh": 654.56 }],
+      "generation": { "min_mw": 0.0, "max_mw": 45.0 }
+    },
+    {
+      "id": 107,
+      "name": "108",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 75.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 75.0 }
+    },
+    {
+      "id": 108,
+      "name": "109",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 67.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 67.0 }
+    },
+    {
+      "id": 109,
+      "name": "110",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 338.0, "cost_per_mwh": 131.44 }],
+      "generation": { "min_mw": 0.0, "max_mw": 338.0 }
+    },
+    {
+      "id": 110,
+      "name": "111",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 338.0, "cost_per_mwh": 131.44 }],
+      "generation": { "min_mw": 0.0, "max_mw": 338.0 }
+    },
+    {
+      "id": 111,
+      "name": "112",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 40.0, "cost_per_mwh": 844.72 }],
+      "generation": { "min_mw": 0.0, "max_mw": 40.0 }
+    },
+    {
+      "id": 112,
+      "name": "113",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 110.0, "cost_per_mwh": 411.92 }],
+      "generation": { "min_mw": 0.0, "max_mw": 110.0 }
+    },
+    {
+      "id": 113,
+      "name": "114",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 150.0, "cost_per_mwh": 449.98 }],
+      "generation": { "min_mw": 0.0, "max_mw": 150.0 }
+    },
+    {
+      "id": 114,
+      "name": "115",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 28.0, "cost_per_mwh": 616.42 }],
+      "generation": { "min_mw": 0.0, "max_mw": 28.0 }
+    },
+    {
+      "id": 115,
+      "name": "116",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 28.0, "cost_per_mwh": 590.42 }],
+      "generation": { "min_mw": 0.0, "max_mw": 28.0 }
+    },
+    {
+      "id": 116,
+      "name": "117",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 130.0, "cost_per_mwh": 657.05 }],
+      "generation": { "min_mw": 0.0, "max_mw": 130.0 }
+    },
+    {
+      "id": 117,
+      "name": "118",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 27.0, "cost_per_mwh": 659.1 }],
+      "generation": { "min_mw": 0.0, "max_mw": 27.0 }
+    },
+    {
+      "id": 118,
+      "name": "119",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 176.0, "cost_per_mwh": 171.19 }],
+      "generation": { "min_mw": 0.0, "max_mw": 176.0 }
+    },
+    {
+      "id": 119,
+      "name": "120",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 56.0, "cost_per_mwh": 69.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 56.0 }
+    },
+    {
+      "id": 120,
+      "name": "121",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 66.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 66.0 }
+    },
+    {
+      "id": 121,
+      "name": "122",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 360.0, "cost_per_mwh": 119.15 }],
+      "generation": { "min_mw": 0.0, "max_mw": 360.0 }
+    },
+    {
+      "id": 122,
+      "name": "123",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 30.0, "cost_per_mwh": 660.35 }],
+      "generation": { "min_mw": 0.0, "max_mw": 30.0 }
+    },
+    {
+      "id": 123,
+      "name": "124",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 18.0, "cost_per_mwh": 660.35 }],
+      "generation": { "min_mw": 0.0, "max_mw": 18.0 }
+    },
+    {
+      "id": 124,
+      "name": "125",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 255.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 255.0 }
+    },
+    {
+      "id": 125,
+      "name": "126",
+      "bus_id": 3,
+      "cost_segments": [{ "capacity_mw": 93.0, "cost_per_mwh": 0.0 }],
+      "generation": { "min_mw": 0.0, "max_mw": 93.0 }
+    }
+  ]
+}

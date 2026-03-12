@@ -43,7 +43,7 @@ asciinema records terminal sessions into `.cast` files.
 pip install asciinema
 ```
 
-### jq (for report.sh)
+### jq (for report.sh and validation-error.tape)
 
 ```sh
 # macOS
@@ -55,6 +55,24 @@ sudo apt-get install jq
 # Fedora
 sudo dnf install jq
 ```
+
+## Brand Theme
+
+All VHS tape files use the Cobre brand color palette instead of a named theme.
+The colors are set with individual `Set` directives at the top of each tape:
+
+| Directive            | Value              | Brand name |
+| -------------------- | ------------------ | ---------- |
+| `Set Background`     | `#0F1419`          | Midnight   |
+| `Set Foreground`     | `#C8C6C2`          | Body       |
+| `Set CursorColor`    | `#B87333`          | Copper     |
+| `Set SelectionColor` | `#1A2028`          | Surface    |
+| `Set FontFamily`     | `"JetBrains Mono"` | —          |
+| `Set WindowBar`      | `"Colorful"`       | —          |
+| `Set BorderRadius`   | `8`                | —          |
+| `Set Padding`        | `12`               | —          |
+
+The full brand palette is documented in `docs/internal/BRAND-GUIDELINES.md`.
 
 ## VHS Recordings
 
@@ -72,6 +90,10 @@ vhs recordings/validation.tape
 # Validation error demo (init → corrupt JSON with jq → validate showing errors)
 vhs recordings/validation-error.tape
 # Output: recordings/validation-error.gif
+
+# Multi-threading speedup demo (--threads 1 vs --threads 4, side-by-side timing)
+vhs recordings/multithreading.tape
+# Output: recordings/multithreading.gif
 ```
 
 The `validation-error.tape` uses `jq` to corrupt the 1dtoy case on the fly (no
@@ -84,6 +106,10 @@ pre-built broken directory is committed). It injects two distinct error categori
 
 Both errors appear in the `cobre validate` output with red `error:` labels and the
 command exits with a non-zero exit code.
+
+The `multithreading.tape` runs the same 1dtoy case twice in sequence — first with
+`--threads 1`, then with `--threads 4` — so the post-run summary timing lines appear
+back-to-back in the recording for a direct comparison.
 
 ## asciinema Recordings
 

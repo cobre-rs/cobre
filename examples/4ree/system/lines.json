@@ -1,0 +1,27 @@
+{
+  "$schema": "https://cobre-rs.github.io/cobre/schemas/lines.schema.json",
+  "lines": [
+    {
+      "id": 0,
+      "name": "SUDESTE_SUL",
+      "source_bus_id": 0,
+      "target_bus_id": 1,
+      "capacity": {
+        "direct_mw": 7500.0,
+        "reverse_mw": 5470.0
+      },
+      "exchange_cost": 0.1
+    },
+    {
+      "id": 1,
+      "name": "SUDESTE_NORDESTE",
+      "source_bus_id": 0,
+      "target_bus_id": 2,
+      "capacity": {
+        "direct_mw": 1000.0,
+        "reverse_mw": 600.0
+      },
+      "exchange_cost": 0.1
+    }
+  ]
+}

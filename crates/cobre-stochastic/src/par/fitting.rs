@@ -34,9 +34,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::Stage,
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -1071,7 +1071,7 @@ pub fn estimate_correlation(
                 continue;
             }
 
-            // Sort by date for determinism (pairs are collected from a HashMap).
+            // Sort for deterministic iteration across HashMap orderings.
             pairs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             #[allow(clippy::cast_precision_loss)]
@@ -1562,11 +1562,11 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -2170,7 +2170,7 @@ mod tests {
             let val = (i + 1) as f64;
             observations.push(obs(1, year, 1, val)); // Jan
             observations.push(obs(1, year, 2, val + 0.5)); // Feb ≈ Jan
-            // Other months: enough data to avoid InsufficientData.
+                                                           // Other months: enough data to avoid InsufficientData.
             for month in 3u32..=12 {
                 observations.push(obs(1, year, month, month as f64 * 5.0 + i as f64));
             }
@@ -2246,7 +2246,7 @@ mod tests {
     // estimate_correlation tests
     // -----------------------------------------------------------------------
 
-    use super::{ArCoefficientEstimate, SeasonalStats, estimate_correlation};
+    use super::{estimate_correlation, ArCoefficientEstimate, SeasonalStats};
 
     /// Helper: build a single-season study over `n_years` monthly stages.
     /// Season 0 covers month `month` of each year.

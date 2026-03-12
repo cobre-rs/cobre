@@ -428,7 +428,7 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 /// Performs Layer 5b semantic validation: stage structure, penalty ordering,
 /// and scenario model rules.
 ///
-/// All 18 rules are checked regardless of failures in earlier rules — every
+/// All 21 rules are checked regardless of failures in earlier rules — every
 /// violation is collected before returning.  This function is infallible; it
 /// never returns a `Result`.  Errors are pushed to `ctx` as
 /// [`ErrorKind::InvalidValue`] or [`ErrorKind::BusinessRuleViolation`] entries;

@@ -18,13 +18,13 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator, ReduceOp};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;

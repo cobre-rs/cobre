@@ -62,15 +62,15 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{evaluate_par_inflows, sample_forward, solve_par_noises, StochasticContext};
+use cobre_stochastic::{StochasticContext, evaluate_par_inflows, sample_forward, solve_par_noises};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
     TrajectoryRecord,
+    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -721,18 +721,18 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardResult, SyncResult,
+        ForwardResult, SyncResult, build_cut_row_batch, partition, run_forward_pass, sync_forward,
     };
     use crate::{
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────

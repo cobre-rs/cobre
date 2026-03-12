@@ -150,7 +150,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_color, ColorWhen};
+    use super::{ColorWhen, resolve_color};
 
     // Unit tests cover only `Always` and `Never` variants (safe without env var mutation).
     // Environment variable tests are in the integration suite (cli_color.rs).

@@ -34,12 +34,12 @@ use cobre_io::output::simulation_writer::{
     NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
     StageWritePayload, ThermalWriteRecord,
 };
-use cobre_io::{ParquetWriterConfig, write_results};
+use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool, build_stage_templates,
-    build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -173,8 +173,6 @@ fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
             .collect(),
     }
 }
-
-// Conversions from simulation result types to write record types.
 
 fn convert_stage(src: SimulationStageResult) -> StageWritePayload {
     StageWritePayload {
@@ -363,8 +361,8 @@ fn write_policy_checkpoint(
     seed: u64,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
-        write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyBasisRecord,
+        PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
     };
 
     let n_stages = fcf.pools.len();
@@ -517,6 +515,9 @@ fn run_inner(
         .unwrap_or(DEFAULT_FORWARD_PASSES);
     let stopping_rules = resolve_stopping_rules(&config);
     let max_iterations = max_iterations_from_rules(&stopping_rules);
+    let cut_selection_strategy =
+        cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
+            .map_err(|msg| format!("cut_selection config error: {msg}"))?;
 
     // Build stochastic context.
     let stochastic = build_stochastic_context(&system, seed, &[])
@@ -528,7 +529,8 @@ fn run_inner(
         &inflow_method,
         stochastic.par_lp(),
         stochastic.normal_lp(),
-    );
+    )
+    .map_err(|e| e.to_string())?;
     if stage_templates.templates.is_empty() {
         return Err("system has no study stages — cannot train".to_string());
     }
@@ -568,7 +570,12 @@ fn run_inner(
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
-    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+    let risk_measures: Vec<RiskMeasure> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| RiskMeasure::from(s.risk_config))
+        .collect();
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
 
@@ -608,7 +615,7 @@ fn run_inner(
         &horizon,
         &risk_measures,
         stopping_rules,
-        None,
+        cut_selection_strategy.as_ref(),
         None,
         &comm,
         n_threads,

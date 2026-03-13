@@ -42,8 +42,8 @@
 use cobre_comm::Communicator;
 
 use crate::{
-    FutureCostFunction, SddpError,
     cut::wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
+    FutureCostFunction, SddpError,
 };
 
 /// Pre-allocated byte buffers for gathering cut wire records across all MPI
@@ -365,11 +365,11 @@ mod tests {
 
     use super::CutSyncBuffers;
     use crate::{
-        SddpError,
         cut::{
             fcf::FutureCostFunction,
             wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
         },
+        SddpError,
     };
 
     // ── Unit tests ────────────────────────────────────────────────────────────

@@ -100,12 +100,13 @@
 //!
 //! Total: 12 = 3*(2+2) patches.
 
-use cobre_core::System;
 use cobre_core::entities::hydro::HydroGenerationModel;
+use cobre_core::System;
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
 use cobre_stochastic::par::precompute::PrecomputedParLp;
 
+use crate::error::SddpError;
 use crate::indexer::StageIndexer;
 use crate::inflow_method::InflowNonNegativityMethod;
 
@@ -644,8 +645,13 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 ///
 /// ## Errors
 ///
-/// Returns empty templates for a system with zero stages.  All entity counts
-/// may be zero (valid for degenerate test systems).
+/// Returns `Err(SddpError::Validation)` when any hydro plant uses
+/// `HydroGenerationModel::Fpha`, which is not yet implemented.  The error
+/// message includes the plant name and ID so the caller can surface a
+/// diagnostic to the user.
+///
+/// Returns `Ok` with empty templates for a system with zero stages.  All
+/// entity counts may be zero (valid for degenerate test systems).
 ///
 /// # Examples
 ///
@@ -666,17 +672,27 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// let par_lp = PrecomputedParLp::build(&[], &[], &[]).expect("empty ok");
 /// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormalLp::default();
 /// // No stages → empty result.
-/// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp);
+/// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp)
+///     .expect("no FPHA plants");
 /// assert!(result.templates.is_empty());
 /// ```
-#[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
     par_lp: &PrecomputedParLp,
     normal_lp: &PrecomputedNormalLp,
-) -> StageTemplates {
+) -> Result<StageTemplates, SddpError> {
+    // Validate: FPHA generation model is not yet implemented.
+    for hydro in system.hydros() {
+        if matches!(hydro.generation_model, HydroGenerationModel::Fpha) {
+            return Err(SddpError::Validation(format!(
+                "hydro plant '{}' (id={}) uses FPHA generation model which is not yet implemented",
+                hydro.name, hydro.id
+            )));
+        }
+    }
+
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -691,7 +707,7 @@ pub fn build_stage_templates(
     let n_hydros = hydros.len();
 
     if study_stages.is_empty() {
-        return StageTemplates {
+        return Ok(StageTemplates {
             templates: Vec::new(),
             base_rows: Vec::new(),
             noise_scale: Vec::new(),
@@ -701,7 +717,7 @@ pub fn build_stage_templates(
             load_balance_row_starts: Vec::new(),
             n_load_buses: 0,
             load_bus_indices: Vec::new(),
-        };
+        });
     }
     let n_thermals = thermals.len();
     let n_lines = lines.len();
@@ -1012,7 +1028,9 @@ pub fn build_stage_templates(
                 | HydroGenerationModel::LinearizedHead {
                     productivity_mw_per_m3s,
                 } => *productivity_mw_per_m3s,
-                HydroGenerationModel::Fpha => 0.0, // FPHA not supported in v0.1.0
+                HydroGenerationModel::Fpha => {
+                    unreachable!("FPHA validation guard at the top of build_stage_templates prevents reaching this arm")
+                }
             };
 
             if let Some(&b_idx) = bus_pos.get(&hydro.bus_id) {
@@ -1150,7 +1168,7 @@ pub fn build_stage_templates(
         }
     }
 
-    StageTemplates {
+    Ok(StageTemplates {
         templates,
         base_rows,
         noise_scale,
@@ -1160,12 +1178,12 @@ pub fn build_stage_templates(
         load_balance_row_starts,
         n_load_buses,
         load_bus_indices,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -1970,7 +1988,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert!(result.templates.is_empty());
         assert!(result.base_rows.is_empty());
     }
@@ -1984,7 +2003,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 1);
         assert_eq!(result.base_rows.len(), 1);
     }
@@ -2001,7 +2021,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         // theta + deficit + excess = 1 + 1 + 1 = 3
         assert_eq!(t.num_cols, 3, "num_cols mismatch for no-entity system");
@@ -2019,7 +2040,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 7, "num_cols mismatch for N=1 L=0");
     }
@@ -2036,7 +2058,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=2");
     }
@@ -2052,7 +2075,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 1, "num_rows mismatch for no-hydro system");
     }
@@ -2069,7 +2093,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 3, "num_rows mismatch for N=1 L=0");
     }
@@ -2086,7 +2111,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 5, "num_rows mismatch for N=1 L=2");
     }
@@ -2100,7 +2126,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         let expected = StageIndexer::new(1, 2).n_state;
         assert_eq!(t.n_state, expected, "n_state must match StageIndexer");
@@ -2115,7 +2142,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
     }
@@ -2129,7 +2157,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(
             t.n_dual_relevant, t.n_state,
@@ -2146,7 +2175,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
             assert_eq!(
                 br, t.n_dual_relevant,
@@ -2164,7 +2194,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         for w in t.col_starts.windows(2) {
             assert!(w[0] <= w[1], "col_starts not monotone: {} > {}", w[0], w[1]);
@@ -2183,7 +2214,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         for &r in &t.row_indices {
             assert!(
@@ -2204,7 +2236,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         assert_eq!(
             t.num_nz,
@@ -2229,7 +2262,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
@@ -2248,7 +2282,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         // spillage col for h=0, blk=0: col_spillage_start + 0 = N*(2+L)+1 + N*K
         // With N=1, L=0, K=1: theta=2, decision_start=3, turbine_start=3, spill_start=4
@@ -2268,7 +2303,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
         let load_row = 0;
@@ -2291,7 +2327,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 3);
         assert_eq!(result.base_rows.len(), 3);
     }
@@ -2304,11 +2341,205 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let cloned = result.clone();
         assert_eq!(cloned.templates.len(), result.templates.len());
         let s = format!("{result:?}");
         assert!(s.contains("StageTemplates"));
+    }
+
+    // -------------------------------------------------------------------------
+    // FPHA generation model validation tests
+    // -------------------------------------------------------------------------
+
+    /// AC: a system where a hydro plant uses `Fpha` must be rejected before any
+    /// LP construction work, with an error message that contains the plant name.
+    #[test]
+    fn test_fpha_model_rejected() {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(5),
+            name: "Tucurui".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::Fpha,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let stages: Vec<Stage> = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).expect("valid date"),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models: Vec<InflowModel> = vec![InflowModel {
+            hydro_id: EntityId(5),
+            stage_id: 0,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        }];
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            1,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = cobre_core::SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("test_fpha_model_rejected: valid system");
+
+        let err = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        )
+        .expect_err("FPHA plant must cause an error");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Tucurui"),
+            "error message must contain the hydro plant name 'Tucurui', got: {msg}"
+        );
+        assert!(
+            msg.to_lowercase().contains("fpha"),
+            "error message must mention 'FPHA', got: {msg}"
+        );
+    }
+
+    /// AC: a system where all hydro plants use `ConstantProductivity` must be
+    /// accepted, returning `Ok(StageTemplates { .. })`.
+    #[test]
+    fn test_constant_productivity_accepted() {
+        let system = one_hydro_system(1, 0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedParLp::default(),
+            &PrecomputedNormalLp::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "ConstantProductivity system must return Ok, got: {result:?}"
+        );
+        assert_eq!(
+            result.expect("accepted").templates.len(),
+            1,
+            "one study stage → one template"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -2325,13 +2556,15 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let with_p = build_stage_templates(
             &system,
             &penalty_config(1000.0),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert_eq!(
             with_p.templates[0].num_cols,
             without.templates[0].num_cols + 1,
@@ -2353,13 +2586,15 @@ mod tests {
             &penalty_config(1000.0),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let without = build_stage_templates(
             &system,
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert_eq!(
             with_p.templates[0].num_cols, without.templates[0].num_cols,
             "no slack columns when n_hydros == 0, even with penalty config"
@@ -2378,7 +2613,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6, slack=7
         let slack_col = t.num_cols - 1; // last column
@@ -2400,7 +2636,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4; total = 9
         assert_eq!(t.num_cols, 9, "method=none must not add extra columns");
@@ -2420,7 +2657,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
 
         // Locate the slack column (last column, index = num_cols - 1).
@@ -2454,7 +2692,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
         let slack_col = t.num_cols - 1;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
@@ -2484,7 +2723,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let t = &result.templates[0];
 
         let slack_col = t.num_cols - 1;
@@ -2521,7 +2761,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 3);
         let base_cols = result.templates[0].num_cols;
         for t in &result.templates {
@@ -2559,7 +2800,8 @@ mod tests {
             &config,
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
         let template = &result.templates[0];
 
         // The inflow slack is the last column.
@@ -2834,7 +3076,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
 
         assert_eq!(
             result.load_balance_row_starts.len(),
@@ -2867,7 +3110,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
 
         assert_eq!(
             result.n_load_buses, 1,
@@ -2894,7 +3138,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedParLp::default(),
             &PrecomputedNormalLp::default(),
-        );
+        )
+        .expect("no FPHA plants");
 
         assert_eq!(
             result.n_load_buses, 0,

@@ -75,12 +75,12 @@ use cobre_stochastic::StochasticContext;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
     forward::{build_cut_row_batch, partition},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
+    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -475,11 +475,11 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
-    use super::{BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardResult};
     use crate::{
+        workspace::{BasisStore, SolverWorkspace},
         ExchangeBuffers, FutureCostFunction, HorizonMode, RiskMeasure, StageIndexer,
         TrajectoryRecord,
-        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Stub communicator for tests (single-rank).
@@ -733,7 +733,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -742,6 +741,7 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::build_stochastic_context;
         use std::collections::BTreeMap;

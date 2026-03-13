@@ -36,6 +36,7 @@
 
 pub mod backward;
 pub mod config;
+pub mod context;
 pub mod convergence;
 pub mod cut;
 pub mod cut_selection;
@@ -48,6 +49,7 @@ pub mod indexer;
 pub mod inflow_method;
 pub mod lower_bound;
 pub mod lp_builder;
+pub(crate) mod noise;
 pub mod risk_measure;
 pub mod simulation;
 pub mod state_exchange;
@@ -59,6 +61,7 @@ pub mod workspace;
 
 pub use backward::{run_backward_pass, BackwardResult};
 pub use config::TrainingConfig;
+pub use context::StageContext;
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{

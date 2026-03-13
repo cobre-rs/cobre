@@ -25,7 +25,8 @@ use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
+    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -722,8 +723,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
         let sim_result = simulate(
             &mut sim_pool.workspaces,
-            stage_templates_ref,
-            base_rows,
+            &StageContext {
+                templates: stage_templates_ref,
+                base_rows,
+                noise_scale,
+                n_hydros: n_hydros_lp,
+                n_load_buses,
+                load_balance_row_starts,
+                load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
             &stochastic,
             &sim_config,
@@ -734,12 +743,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &comm,
             &result_tx,
             &bcast_config.inflow_method,
-            noise_scale,
-            n_hydros_lp,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            &block_counts_per_stage,
             zeta_per_stage,
             block_hours_per_stage,
             Some(sim_event_tx),

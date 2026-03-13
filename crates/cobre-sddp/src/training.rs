@@ -40,6 +40,7 @@ use cobre_stochastic::OpeningTree;
 
 use crate::{
     backward::run_backward_pass,
+    context::StageContext,
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
@@ -305,6 +306,20 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
     let start_time = Instant::now();
 
+    // Bundle the per-stage LP layout and noise scaling parameters into a
+    // single context struct. Constructed once here and passed by reference to
+    // the forward pass inside the iteration loop.
+    let stage_ctx = StageContext {
+        templates,
+        base_rows,
+        noise_scale,
+        n_hydros,
+        n_load_buses,
+        load_balance_row_starts,
+        load_bus_indices,
+        block_counts_per_stage,
+    };
+
     let TrainingConfig {
         forward_passes: config_forward_passes,
         max_iterations,
@@ -347,8 +362,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let forward_result = run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
-            templates,
-            base_rows,
+            &stage_ctx,
             fcf,
             stochastic,
             my_actual_fwd,
@@ -359,12 +373,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             indexer,
             my_fwd_offset,
             inflow_method,
-            noise_scale,
-            n_hydros,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            block_counts_per_stage,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -401,8 +409,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let backward_result = run_backward_pass(
             &mut fwd_pool.workspaces,
             &basis_store,
-            templates,
-            base_rows,
+            &stage_ctx,
             fcf,
             &exchange_bufs,
             stochastic,
@@ -413,12 +420,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             comm,
             my_actual_fwd,
             my_fwd_offset,
-            noise_scale,
-            n_hydros,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            block_counts_per_stage,
+            inflow_method,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;

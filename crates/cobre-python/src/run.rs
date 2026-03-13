@@ -38,8 +38,8 @@ use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, WorkspacePool,
+    SimulationScenarioResult, SimulationStageResult, StageContext, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -686,8 +686,16 @@ fn run_inner(
 
         let sim_result = simulate(
             &mut sim_pool.workspaces,
-            stage_templates_ref,
-            base_rows,
+            &StageContext {
+                templates: stage_templates_ref,
+                base_rows,
+                noise_scale,
+                n_hydros: n_hydros_lp,
+                n_load_buses,
+                load_balance_row_starts,
+                load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
             &stochastic,
             &sim_config,
@@ -698,12 +706,6 @@ fn run_inner(
             &comm,
             &result_tx,
             &inflow_method,
-            noise_scale,
-            n_hydros_lp,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            &block_counts_per_stage,
             zeta_per_stage,
             block_hours_per_stage,
             Some(sim_event_tx),

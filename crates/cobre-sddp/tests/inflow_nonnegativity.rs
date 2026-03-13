@@ -50,7 +50,8 @@ use cobre_core::{
 use cobre_sddp::{
     lp_builder::build_stage_templates, simulate, train, EntityCounts, FutureCostFunction,
     HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig,
-    SolverWorkspace, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -578,8 +579,16 @@ fn simulate_fixture(
 
     simulate(
         &mut sim_workspaces,
-        &fx.stage_templates.templates,
-        &fx.stage_templates.base_rows,
+        &StageContext {
+            templates: &fx.stage_templates.templates,
+            base_rows: &fx.stage_templates.base_rows,
+            noise_scale: &fx.stage_templates.noise_scale,
+            n_hydros: fx.stage_templates.n_hydros,
+            n_load_buses: fx.stage_templates.n_load_buses,
+            load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
+            load_bus_indices: &fx.stage_templates.load_bus_indices,
+            block_counts_per_stage: &block_counts_sim,
+        },
         fcf,
         &fx.stochastic,
         &SimulationConfig {
@@ -593,12 +602,6 @@ fn simulate_fixture(
         &comm,
         &result_tx,
         &fx.inflow_method,
-        &fx.stage_templates.noise_scale,
-        fx.stage_templates.n_hydros,
-        fx.stage_templates.n_load_buses,
-        &fx.stage_templates.load_balance_row_starts,
-        &fx.stage_templates.load_bus_indices,
-        &block_counts_sim,
         &fx.stage_templates.zeta_per_stage,
         &fx.stage_templates.block_hours_per_stage,
         None,

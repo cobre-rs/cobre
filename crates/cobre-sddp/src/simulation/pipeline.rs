@@ -44,12 +44,14 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{evaluate_par_inflows, sample_forward, solve_par_noises, StochasticContext};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_stochastic::{sample_forward, StochasticContext};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    context::StageContext,
     forward::{build_cut_row_batch, partition},
+    noise::{transform_inflow_noise, transform_load_noise},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
@@ -192,16 +194,15 @@ impl WelfordAccumulator {
 ///
 /// Panics if any of the following debug preconditions are violated:
 ///
-/// - `templates.len() != num_stages`
-/// - `base_rows.len() != num_stages`
+/// - `ctx.templates.len() != num_stages`
+/// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)] // owned Option<Sender> required for worker clone pattern
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
-    templates: &[StageTemplate],
-    base_rows: &[usize],
+    ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
     stochastic: &StochasticContext,
     config: &SimulationConfig,
@@ -212,16 +213,19 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     result_tx: &SyncSender<SimulationScenarioResult>,
     inflow_method: &InflowNonNegativityMethod,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
-    load_balance_row_starts: &[usize],
-    load_bus_indices: &[usize],
-    block_counts_per_stage: &[usize],
     zeta_per_stage: &[f64],
     block_hours_per_stage: &[Vec<f64>],
     event_sender: Option<Sender<TrainingEvent>>,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+    let templates = ctx.templates;
+    let base_rows = ctx.base_rows;
+    let noise_scale = ctx.noise_scale;
+    let n_hydros = ctx.n_hydros;
+    let n_load_buses = ctx.n_load_buses;
+    let load_balance_row_starts = ctx.load_balance_row_starts;
+    let load_bus_indices = ctx.load_bus_indices;
+    let block_counts_per_stage = ctx.block_counts_per_stage;
+
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
     let world_size = comm.size();
@@ -305,91 +309,43 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     let (_opening_idx, raw_noise) =
                         sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
 
-                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-                    // RHS patch. The static ζ*base part is already encoded in
-                    // the template row bounds; the patch value overwrites the
-                    // complete RHS, so the transformed value must include both
-                    // the deterministic base and the stochastic noise term.
-                    //
-                    // When truncation is active, η is clamped to the floor that
-                    // produces zero inflow so that the water-balance RHS never
-                    // drives the sampled inflow below zero.
-                    ws.noise_buf.clear();
+                    // Transform raw η → patched water-balance RHS values and
+                    // load-balance RHS values.  Delegates to shared functions
+                    // so the transformation (including truncation) is
+                    // identical across the forward pass, backward pass, and
+                    // simulation pipeline.
                     let stage_offset = t * n_hydros;
-                    match inflow_method {
-                        InflowNonNegativityMethod::Truncation => {
-                            let max_order = indexer.max_par_order;
-                            let lag_len = max_order * n_hydros;
-                            ws.lag_matrix_buf.clear();
-                            ws.lag_matrix_buf.resize(lag_len, 0.0);
-                            for h in 0..n_hydros {
-                                for l in 0..max_order {
-                                    ws.lag_matrix_buf[l * n_hydros + h] = ws.current_state
-                                        [indexer.inflow_lags.start + h * max_order + l];
-                                }
-                            }
-
-                            let par_lp = stochastic.par_lp();
-                            ws.par_inflow_buf.clear();
-                            ws.par_inflow_buf.resize(n_hydros, 0.0);
-                            evaluate_par_inflows(
-                                par_lp,
-                                t,
-                                &ws.lag_matrix_buf,
-                                raw_noise,
-                                &mut ws.par_inflow_buf,
-                            );
-
-                            let has_negative = ws.par_inflow_buf.iter().any(|&a| a < 0.0);
-                            if has_negative {
-                                ws.eta_floor_buf.clear();
-                                ws.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
-                                solve_par_noises(
-                                    par_lp,
-                                    t,
-                                    &ws.lag_matrix_buf,
-                                    &ws.zero_targets_buf[..n_hydros],
-                                    &mut ws.eta_floor_buf,
-                                );
-                            }
-
-                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                                let clamped_eta = if has_negative && ws.par_inflow_buf[h] < 0.0 {
-                                    eta.max(ws.eta_floor_buf[h])
-                                } else {
-                                    eta
-                                };
-                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                                ws.noise_buf
-                                    .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
-                            }
-                        }
-                        InflowNonNegativityMethod::None
-                        | InflowNonNegativityMethod::Penalty { .. } => {
-                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                                ws.noise_buf
-                                    .push(base_rhs + noise_scale[stage_offset + h] * eta);
-                            }
-                        }
-                    }
-
-                    // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
-                    ws.load_rhs_buf.clear();
-                    if n_load_buses > 0 {
-                        let load_lp = stochastic.normal_lp();
-                        let n_blks = block_counts_per_stage[t];
-                        for lb_idx in 0..n_load_buses {
-                            let eta = raw_noise[n_hydros + lb_idx];
-                            let mean = load_lp.mean(t, lb_idx);
-                            let std = load_lp.std(t, lb_idx);
-                            let realization = (mean + std * eta).max(0.0);
-                            for blk in 0..n_blks {
-                                let factor = load_lp.block_factor(t, lb_idx, blk);
-                                ws.load_rhs_buf.push(realization * factor);
-                            }
-                        }
-                    }
+                    transform_inflow_noise(
+                        raw_noise,
+                        inflow_method,
+                        noise_scale,
+                        stage_offset,
+                        n_hydros,
+                        base_rows[t],
+                        &templates[t].row_lower,
+                        stochastic,
+                        t,
+                        indexer,
+                        &ws.current_state,
+                        &mut ws.noise_buf,
+                        &mut ws.lag_matrix_buf,
+                        &mut ws.par_inflow_buf,
+                        &mut ws.eta_floor_buf,
+                        &ws.zero_targets_buf,
+                    );
+                    transform_load_noise(
+                        raw_noise,
+                        n_hydros,
+                        n_load_buses,
+                        stochastic,
+                        t,
+                        if n_load_buses > 0 {
+                            block_counts_per_stage[t]
+                        } else {
+                            0
+                        },
+                        &mut ws.load_rhs_buf,
+                    );
 
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
@@ -592,6 +548,7 @@ mod tests {
 
     use super::simulate;
     use crate::{
+        context::StageContext,
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::SolverWorkspace,
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
@@ -971,8 +928,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -983,12 +948,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1046,8 +1005,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1058,12 +1025,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1115,8 +1076,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1127,12 +1096,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1182,8 +1145,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1194,12 +1165,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1250,8 +1215,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1262,12 +1235,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1316,8 +1283,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1328,12 +1303,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1378,8 +1347,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1390,12 +1367,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1440,8 +1411,16 @@ mod tests {
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
         let costs_1 = simulate(
             &mut workspaces_1,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1452,12 +1431,6 @@ mod tests {
             &comm,
             &tx1,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1483,8 +1456,16 @@ mod tests {
             .collect();
         let costs_4 = simulate(
             &mut workspaces_4,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1495,12 +1476,6 @@ mod tests {
             &comm,
             &tx4,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1635,8 +1610,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1647,12 +1630,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             Some(event_tx),
@@ -1727,8 +1704,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1739,12 +1724,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             None,
@@ -1799,8 +1778,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1811,12 +1798,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             Some(event_tx),
@@ -1894,8 +1875,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1906,12 +1895,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             Some(event_tx),
@@ -1977,8 +1960,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -1989,12 +1980,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             Some(event_tx),
@@ -2082,8 +2067,16 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2094,12 +2087,6 @@ mod tests {
             &comm,
             &result_tx,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
             &[],
             &[],
             Some(event_tx),
@@ -2335,8 +2322,16 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2347,14 +2342,8 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &noise_scale,
-            1, // n_hydros
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
-            &[], // zeta_per_stage
-            &[], // block_hours_per_stage
+            &[],
+            &[],
             None,
         )
         .unwrap();
@@ -2452,8 +2441,16 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[1],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2464,14 +2461,8 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &[],  // noise_scale: empty (n_hydros=0 path)
-            0,    // n_hydros
-            0,    // n_load_buses = 0: no load patches
-            &[],  // load_balance_row_starts
-            &[],  // load_bus_indices
-            &[1], // block_counts_per_stage
-            &[],  // zeta_per_stage
-            &[],  // block_hours_per_stage
+            &[],
+            &[],
             None,
         )
         .unwrap();
@@ -2562,8 +2553,16 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2574,14 +2573,8 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &noise_scale,
-            1, // n_hydros
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
-            &[], // zeta_per_stage
-            &[], // block_hours_per_stage
+            &[],
+            &[],
             None,
         )
         .unwrap();
@@ -2835,8 +2828,16 @@ mod tests {
         let mut workspaces = single_workspace_with_hydros(solver, 1);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[n_stages],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2847,12 +2848,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::Truncation,
-            &noise_scale,
-            1,
-            0,
-            &[],
-            &[],
-            &[n_stages],
             &[],
             &[],
             None,
@@ -2916,8 +2911,16 @@ mod tests {
         let mut workspaces = single_workspace_with_hydros(solver, 1);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[n_stages],
+            },
             &fcf,
             &stochastic,
             &config,
@@ -2928,12 +2931,6 @@ mod tests {
             &comm,
             &tx,
             &InflowNonNegativityMethod::None,
-            &noise_scale,
-            1,
-            0,
-            &[],
-            &[],
-            &[n_stages],
             &[],
             &[],
             None,

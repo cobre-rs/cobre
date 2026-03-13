@@ -1029,7 +1029,9 @@ pub fn build_stage_templates(
                     productivity_mw_per_m3s,
                 } => *productivity_mw_per_m3s,
                 HydroGenerationModel::Fpha => {
-                    unreachable!("FPHA validation guard at the top of build_stage_templates prevents reaching this arm")
+                    unreachable!(
+                        "FPHA validation guard at the top of build_stage_templates prevents reaching this arm"
+                    )
                 }
             };
 

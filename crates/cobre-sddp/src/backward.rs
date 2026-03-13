@@ -70,17 +70,19 @@
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_solver::{Basis, SolverError, SolverInterface, StageTemplate};
+use cobre_solver::{Basis, SolverError, SolverInterface};
 use cobre_stochastic::StochasticContext;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    context::StageContext,
     forward::{build_cut_row_batch, partition},
+    noise::{transform_inflow_noise, transform_load_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
-    FutureCostFunction, HorizonMode, SddpError, StageIndexer,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -160,16 +162,15 @@ struct StagedCut {
 ///
 /// Panics if any of the following debug preconditions are violated:
 ///
-/// - `templates.len() != num_stages`
-/// - `base_rows.len() != num_stages`
+/// - `ctx.templates.len() != num_stages`
+/// - `ctx.base_rows.len() != num_stages`
 /// - `risk_measures.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &BasisStore,
-    templates: &[StageTemplate],
-    base_rows: &[usize],
+    ctx: &StageContext<'_>,
     fcf: &mut FutureCostFunction,
     exchange: &ExchangeBuffers,
     stochastic: &StochasticContext,
@@ -180,37 +181,23 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     local_work: usize,
     fwd_offset: usize,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
-    load_balance_row_starts: &[usize],
-    load_bus_indices: &[usize],
-    block_counts_per_stage: &[usize],
+    inflow_method: &InflowNonNegativityMethod,
 ) -> Result<BackwardResult, SddpError> {
+    let templates = ctx.templates;
+    let base_rows = ctx.base_rows;
+    let noise_scale = ctx.noise_scale;
+    let n_hydros = ctx.n_hydros;
+    let n_load_buses = ctx.n_load_buses;
+    let load_balance_row_starts = ctx.load_balance_row_starts;
+    let load_bus_indices = ctx.load_bus_indices;
+    let block_counts_per_stage = ctx.block_counts_per_stage;
+
     let num_stages = horizon.num_stages();
     let my_rank = comm.rank();
 
-    debug_assert_eq!(
-        templates.len(),
-        num_stages,
-        "templates.len() {got} != num_stages {expected}",
-        got = templates.len(),
-        expected = num_stages,
-    );
-    debug_assert_eq!(
-        base_rows.len(),
-        num_stages,
-        "base_rows.len() {got} != num_stages {expected}",
-        got = base_rows.len(),
-        expected = num_stages,
-    );
-    debug_assert_eq!(
-        risk_measures.len(),
-        num_stages,
-        "risk_measures.len() {got} != num_stages {expected}",
-        got = risk_measures.len(),
-        expected = num_stages,
-    );
+    debug_assert_eq!(templates.len(), num_stages);
+    debug_assert_eq!(base_rows.len(), num_stages);
+    debug_assert_eq!(risk_measures.len(), num_stages);
 
     let start = Instant::now();
 
@@ -283,32 +270,45 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                         ws.solver.load_model(&templates[successor]);
                         ws.solver.add_rows(&cut_batch);
 
-                        // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-                        // RHS patch (same transformation as the forward pass).
-                        ws.noise_buf.clear();
+                        // Transform raw η → patched water-balance RHS values
+                        // and load-balance RHS values.  Uses the shared
+                        // functions so that truncation is applied here (B5
+                        // fix: backward pass was previously missing
+                        // truncation).  The opening noise is sourced from the
+                        // deterministic opening tree rather than scenario
+                        // sampling; the transformation logic is identical.
                         let stage_offset = successor * n_hydros;
-                        for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                            let base_rhs = templates[successor].row_lower[base_rows[successor] + h];
-                            ws.noise_buf
-                                .push(base_rhs + noise_scale[stage_offset + h] * eta);
-                        }
-
-                        // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
-                        ws.load_rhs_buf.clear();
-                        if n_load_buses > 0 {
-                            let load_lp = stochastic.normal_lp();
-                            let n_blks = block_counts_per_stage[successor];
-                            for lb_idx in 0..n_load_buses {
-                                let eta = raw_noise[n_hydros + lb_idx];
-                                let mean = load_lp.mean(successor, lb_idx);
-                                let std = load_lp.std(successor, lb_idx);
-                                let realization = (mean + std * eta).max(0.0);
-                                for blk in 0..n_blks {
-                                    let factor = load_lp.block_factor(successor, lb_idx, blk);
-                                    ws.load_rhs_buf.push(realization * factor);
-                                }
-                            }
-                        }
+                        transform_inflow_noise(
+                            raw_noise,
+                            inflow_method,
+                            noise_scale,
+                            stage_offset,
+                            n_hydros,
+                            base_rows[successor],
+                            &templates[successor].row_lower,
+                            stochastic,
+                            successor,
+                            indexer,
+                            x_hat,
+                            &mut ws.noise_buf,
+                            &mut ws.lag_matrix_buf,
+                            &mut ws.par_inflow_buf,
+                            &mut ws.eta_floor_buf,
+                            &ws.zero_targets_buf,
+                        );
+                        transform_load_noise(
+                            raw_noise,
+                            n_hydros,
+                            n_load_buses,
+                            stochastic,
+                            successor,
+                            if n_load_buses > 0 {
+                                block_counts_per_stage[successor]
+                            } else {
+                                0
+                            },
+                            &mut ws.load_rhs_buf,
+                        );
 
                         ws.patch_buf.fill_forward_patches(
                             indexer,
@@ -334,30 +334,26 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                             &ws.patch_buf.upper[..patch_count],
                         );
 
-                        // For the first opening, warm-start from the forward
-                        // pass basis for this (scenario, successor) pair (read
-                        // from the shared read-only basis store). For subsequent
-                        // openings, warm-start from the previous opening's basis
-                        // stored in the worker-local `working_basis`.
-                        let warm_basis: Option<&Basis> = if omega == 0 {
-                            basis_store.get(m, successor)
-                        } else {
-                            working_basis.as_ref()
+                        let view = {
+                            let warm_basis = if omega == 0 {
+                                basis_store.get(m, successor)
+                            } else {
+                                working_basis.as_ref()
+                            };
+                            (if let Some(rb) = warm_basis {
+                                ws.solver.solve_with_basis(rb)
+                            } else {
+                                ws.solver.solve()
+                            })
+                            .map_err(|e| match e {
+                                SolverError::Infeasible => SddpError::Infeasible {
+                                    stage: t,
+                                    iteration,
+                                    scenario: fwd_offset + m,
+                                },
+                                other => SddpError::Solver(other),
+                            })?
                         };
-
-                        let view = (if let Some(rb) = warm_basis {
-                            ws.solver.solve_with_basis(rb)
-                        } else {
-                            ws.solver.solve()
-                        })
-                        .map_err(|e| match e {
-                            SolverError::Infeasible => SddpError::Infeasible {
-                                stage: t,
-                                iteration,
-                                scenario: fwd_offset + m,
-                            },
-                            other => SddpError::Solver(other),
-                        })?;
 
                         let objective = view.objective;
                         let coefficients: Vec<f64> = view.dual[..indexer.n_state].to_vec();
@@ -477,9 +473,10 @@ mod tests {
 
     use super::{run_backward_pass, BackwardResult};
     use crate::{
+        context::StageContext,
         workspace::{BasisStore, SolverWorkspace},
-        ExchangeBuffers, FutureCostFunction, HorizonMode, RiskMeasure, StageIndexer,
-        TrajectoryRecord,
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
     };
 
     /// Stub communicator for tests (single-rank).
@@ -950,8 +947,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -962,12 +967,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1011,8 +1011,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1023,12 +1031,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1072,24 +1075,27 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
-            2, // iteration=2
+            2,
             &horizon,
             &risk_measures,
             &indexer,
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1129,8 +1135,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1141,12 +1155,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1186,8 +1195,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1198,12 +1215,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1241,8 +1253,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1253,12 +1273,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         );
 
         assert!(
@@ -1340,8 +1355,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1352,12 +1375,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1417,8 +1435,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1429,12 +1455,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1499,8 +1520,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1511,12 +1540,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1568,8 +1592,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1580,12 +1612,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1646,24 +1673,27 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
-            2, // iteration=2
+            2,
             &horizon,
             &risk_measures,
             &indexer,
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1719,8 +1749,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1731,12 +1769,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1785,8 +1818,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1797,12 +1838,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1859,8 +1895,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -1871,12 +1915,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         );
 
         assert!(
@@ -1947,11 +1986,20 @@ mod tests {
             row_lower_buf: Vec::new(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+        };
         let _ = run_backward_pass(
             &mut workspaces_1,
             &basis_store_1,
-            &templates,
-            &base_rows,
+            &ctx,
             &mut fcf_1,
             &exchange,
             &stochastic,
@@ -1962,12 +2010,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1992,8 +2035,7 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces_4,
             &basis_store_4,
-            &templates,
-            &base_rows,
+            &ctx,
             &mut fcf_4,
             &exchange,
             &stochastic,
@@ -2004,12 +2046,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2288,8 +2325,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 1,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -2300,12 +2345,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &noise_scale,
-            1, // n_hydros
-            1, // n_load_buses
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2390,8 +2430,16 @@ mod tests {
         let _ = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[1_usize; 2],
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -2402,12 +2450,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &noise_scale,
-            1, // n_hydros
-            0, // n_load_buses = 0: no load patches
-            &[],
-            &[],
-            &[1_usize; 2], // block_counts_per_stage (unused since n_load_buses=0)
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2497,8 +2540,16 @@ mod tests {
         let result = run_backward_pass(
             &mut workspaces,
             &basis_store,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 1,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &mut fcf,
             &exchange,
             &stochastic,
@@ -2509,12 +2560,7 @@ mod tests {
             &comm,
             exchange.local_count(),
             0,
-            &noise_scale,
-            1, // n_hydros
-            1, // n_load_buses
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
+            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 

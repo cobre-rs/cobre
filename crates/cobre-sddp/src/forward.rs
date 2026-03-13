@@ -61,13 +61,15 @@
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{evaluate_par_inflows, sample_forward, solve_par_noises, StochasticContext};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_stochastic::{sample_forward, StochasticContext};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    context::StageContext,
+    noise::{transform_inflow_noise, transform_load_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
     TrajectoryRecord,
@@ -340,9 +342,10 @@ pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) 
 /// - `basis_store` — per-scenario, per-stage basis store pre-allocated by the
 ///   caller. The store is split into disjoint sub-views before the parallel
 ///   region; each worker writes the optimal basis for its own scenarios.
-/// - `templates` — one [`StageTemplate`] per stage (0-indexed); shared read-only.
-/// - `base_rows` — AR dynamics base row index per stage; indexed identically to
-///   `templates`.
+/// - `ctx` — per-stage LP layout and noise scaling parameters bundled into a
+///   single [`crate::context::StageContext`]. Contains: stage templates, base
+///   row indices, noise scale factors, hydro and load-bus counts, load-balance
+///   row starts, load-bus index mapping, and per-stage block counts.
 /// - `fcf` — Future Cost Function carrying the current Benders cut pools.
 /// - `stochastic` — pre-built stochastic pipeline (tree, seed, dim).
 /// - `local_forward_passes` — number of forward-pass scenarios assigned to this
@@ -383,15 +386,17 @@ pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) 
 ///
 /// - `records.len() != local_forward_passes * num_stages`
 /// - `initial_state.len() != indexer.n_state`
-/// - `templates.len() != num_stages`
-/// - `base_rows.len() != num_stages`
+/// - `ctx.templates.len() != num_stages`
+/// - `ctx.base_rows.len() != num_stages`
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
+// StageContext is pub(crate) by design — external callers cannot construct it.
+// The lint fires because run_forward_pass is pub, but this is intentional.
+#[allow(private_interfaces)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
-    templates: &[StageTemplate],
-    base_rows: &[usize],
+    ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
     stochastic: &StochasticContext,
     local_forward_passes: usize,
@@ -402,44 +407,26 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     indexer: &StageIndexer,
     fwd_offset: usize,
     inflow_method: &InflowNonNegativityMethod,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
-    load_balance_row_starts: &[usize],
-    load_bus_indices: &[usize],
-    block_counts_per_stage: &[usize],
 ) -> Result<ForwardResult, SddpError> {
+    let StageContext {
+        templates,
+        base_rows,
+        noise_scale,
+        n_hydros,
+        n_load_buses,
+        load_balance_row_starts,
+        load_bus_indices,
+        block_counts_per_stage,
+    } = ctx;
+    let n_hydros = *n_hydros;
+    let n_load_buses = *n_load_buses;
     let num_stages = horizon.num_stages();
     let forward_passes = local_forward_passes;
 
-    debug_assert_eq!(
-        records.len(),
-        forward_passes * num_stages,
-        "records.len() {got} != forward_passes * num_stages {expected}",
-        got = records.len(),
-        expected = forward_passes * num_stages,
-    );
-    debug_assert_eq!(
-        initial_state.len(),
-        indexer.n_state,
-        "initial_state.len() {got} != indexer.n_state {expected}",
-        got = initial_state.len(),
-        expected = indexer.n_state,
-    );
-    debug_assert_eq!(
-        templates.len(),
-        num_stages,
-        "templates.len() {got} != num_stages {expected}",
-        got = templates.len(),
-        expected = num_stages,
-    );
-    debug_assert_eq!(
-        base_rows.len(),
-        num_stages,
-        "base_rows.len() {got} != num_stages {expected}",
-        got = base_rows.len(),
-        expected = num_stages,
-    );
+    debug_assert_eq!(records.len(), forward_passes * num_stages);
+    debug_assert_eq!(initial_state.len(), indexer.n_state);
+    debug_assert_eq!(templates.len(), num_stages);
+    debug_assert_eq!(base_rows.len(), num_stages);
 
     let start = Instant::now();
 
@@ -523,91 +510,43 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         t,
                     );
 
-                    // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-                    // RHS patch. The static ζ*base part is already encoded in
-                    // the template row bounds; the patch value overwrites the
-                    // complete RHS, so the transformed value must include both
-                    // the deterministic base and the stochastic noise term.
-                    //
-                    // When truncation is active, η is clamped to the floor that
-                    // produces zero inflow so that the water-balance RHS never
-                    // drives the sampled inflow below zero.
-                    ws.noise_buf.clear();
+                    // Transform raw η → patched water-balance RHS values and
+                    // load-balance RHS values.  Shared functions handle both
+                    // the truncation logic and the load noise realization so
+                    // that all three call sites (forward, backward, simulation)
+                    // apply identical transformations.
                     let stage_offset = t * n_hydros;
-                    match inflow_method {
-                        InflowNonNegativityMethod::Truncation => {
-                            let max_order = indexer.max_par_order;
-                            let lag_len = max_order * n_hydros;
-                            ws.lag_matrix_buf.clear();
-                            ws.lag_matrix_buf.resize(lag_len, 0.0);
-                            for h in 0..n_hydros {
-                                for l in 0..max_order {
-                                    ws.lag_matrix_buf[l * n_hydros + h] = ws.current_state
-                                        [indexer.inflow_lags.start + h * max_order + l];
-                                }
-                            }
-
-                            let par_lp = stochastic.par_lp();
-                            ws.par_inflow_buf.clear();
-                            ws.par_inflow_buf.resize(n_hydros, 0.0);
-                            evaluate_par_inflows(
-                                par_lp,
-                                t,
-                                &ws.lag_matrix_buf,
-                                raw_noise,
-                                &mut ws.par_inflow_buf,
-                            );
-
-                            let has_negative = ws.par_inflow_buf.iter().any(|&a| a < 0.0);
-                            if has_negative {
-                                ws.eta_floor_buf.clear();
-                                ws.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
-                                solve_par_noises(
-                                    par_lp,
-                                    t,
-                                    &ws.lag_matrix_buf,
-                                    &ws.zero_targets_buf[..n_hydros],
-                                    &mut ws.eta_floor_buf,
-                                );
-                            }
-
-                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                                let clamped_eta = if has_negative && ws.par_inflow_buf[h] < 0.0 {
-                                    eta.max(ws.eta_floor_buf[h])
-                                } else {
-                                    eta
-                                };
-                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                                ws.noise_buf
-                                    .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
-                            }
-                        }
-                        InflowNonNegativityMethod::None
-                        | InflowNonNegativityMethod::Penalty { .. } => {
-                            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                                let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                                ws.noise_buf
-                                    .push(base_rhs + noise_scale[stage_offset + h] * eta);
-                            }
-                        }
-                    }
-
-                    // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
-                    ws.load_rhs_buf.clear();
-                    if n_load_buses > 0 {
-                        let load_lp = stochastic.normal_lp();
-                        let n_blks = block_counts_per_stage[t];
-                        for lb_idx in 0..n_load_buses {
-                            let eta = raw_noise[n_hydros + lb_idx];
-                            let mean = load_lp.mean(t, lb_idx);
-                            let std = load_lp.std(t, lb_idx);
-                            let realization = (mean + std * eta).max(0.0);
-                            for blk in 0..n_blks {
-                                let factor = load_lp.block_factor(t, lb_idx, blk);
-                                ws.load_rhs_buf.push(realization * factor);
-                            }
-                        }
-                    }
+                    transform_inflow_noise(
+                        raw_noise,
+                        inflow_method,
+                        noise_scale,
+                        stage_offset,
+                        n_hydros,
+                        base_rows[t],
+                        &templates[t].row_lower,
+                        stochastic,
+                        t,
+                        indexer,
+                        &ws.current_state,
+                        &mut ws.noise_buf,
+                        &mut ws.lag_matrix_buf,
+                        &mut ws.par_inflow_buf,
+                        &mut ws.eta_floor_buf,
+                        &ws.zero_targets_buf,
+                    );
+                    transform_load_noise(
+                        raw_noise,
+                        n_hydros,
+                        n_load_buses,
+                        stochastic,
+                        t,
+                        if n_load_buses > 0 {
+                            block_counts_per_stage[t]
+                        } else {
+                            0
+                        },
+                        &mut ws.load_rhs_buf,
+                    );
 
                     ws.solver.load_model(&templates[t]);
                     ws.solver.add_rows(&cut_batches[t]);
@@ -762,6 +701,7 @@ mod tests {
         build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardResult, SyncResult,
     };
     use crate::{
+        context::StageContext,
         workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
@@ -1254,11 +1194,20 @@ mod tests {
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             config.forward_passes as usize,
@@ -1269,12 +1218,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1322,11 +1265,20 @@ mod tests {
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             config.forward_passes as usize,
@@ -1337,12 +1289,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1401,11 +1347,20 @@ mod tests {
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             config.forward_passes as usize,
@@ -1416,12 +1371,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1725,11 +1674,20 @@ mod tests {
         let mut records = empty_records(3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         run_forward_pass(
             std::slice::from_mut(ws),
             basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             config.forward_passes as usize,
@@ -1740,12 +1698,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .map(|_| ())
     }
@@ -1860,6 +1812,17 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let n_scenarios = 10;
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
+
         // Run with 1 workspace.
         let mut ws1 = single_workspace(MockSolver::always_ok(solution.clone()), &indexer);
         let mut records1 = empty_records(n_scenarios * 3);
@@ -1867,8 +1830,7 @@ mod tests {
         let result1 = run_forward_pass(
             std::slice::from_mut(&mut ws1),
             &mut basis_store1,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             n_scenarios,
@@ -1879,12 +1841,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1897,8 +1853,7 @@ mod tests {
         let result4 = run_forward_pass(
             &mut workspaces4,
             &mut basis_store4,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             n_scenarios,
@@ -1909,12 +1864,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -1967,11 +1916,20 @@ mod tests {
         let mut records = empty_records(n_scenarios * num_stages);
         let mut basis_store = BasisStore::new(n_scenarios, num_stages);
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let _result = run_forward_pass(
             &mut workspaces,
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             n_scenarios,
@@ -1982,12 +1940,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -2210,11 +2162,20 @@ mod tests {
         let mut basis_store = BasisStore::new(1, 1);
         let noise_scale = vec![noise_scale_val];
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize],
+        };
         let _ = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             stochastic,
             1,
@@ -2225,12 +2186,6 @@ mod tests {
             &indexer,
             0,
             inflow_method,
-            &noise_scale,
-            1,
-            0,
-            &[],
-            &[],
-            &[1usize],
         )
         .unwrap();
 
@@ -2352,11 +2307,20 @@ mod tests {
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             config.forward_passes as usize,
@@ -2367,12 +2331,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         )
         .unwrap();
 
@@ -2550,11 +2508,20 @@ mod tests {
         let mut records = empty_records(n_scenarios * num_stages);
         let mut basis_store = BasisStore::new(n_scenarios, num_stages);
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1, 1],
+        };
         let result = run_forward_pass(
             &mut workspaces,
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             n_scenarios,
@@ -2565,12 +2532,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[1usize, 1, 1],
         );
 
         // Worker 1's partition: partition(10, 4, 1) → start_m=3.
@@ -2641,11 +2602,20 @@ mod tests {
         let load_bus_indices = vec![0usize];
         let block_counts_per_stage = vec![1usize];
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[1.0],
+            n_hydros: 1,
+            n_load_buses,
+            load_balance_row_starts: &load_balance_row_starts,
+            load_bus_indices: &load_bus_indices,
+            block_counts_per_stage: &block_counts_per_stage,
+        };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             1,
@@ -2656,12 +2626,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[1.0],
-            1,
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
         )
         .unwrap();
 
@@ -2727,11 +2691,20 @@ mod tests {
         let load_bus_indices = vec![0usize];
         let block_counts_per_stage = vec![1usize];
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[1.0],
+            n_hydros: 1,
+            n_load_buses,
+            load_balance_row_starts: &load_balance_row_starts,
+            load_bus_indices: &load_bus_indices,
+            block_counts_per_stage: &block_counts_per_stage,
+        };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             1,
@@ -2742,12 +2715,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[1.0],
-            1,
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
         )
         .unwrap();
 
@@ -2798,11 +2765,20 @@ mod tests {
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let mut basis_store = BasisStore::new(1, 3);
 
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[], // noise_scale empty when n_hydros=0
+            n_hydros: 0,      // skip inflow noise loop (minimal_template_1_0 has 1 row)
+            n_load_buses: 0,  // no load patches
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1, 1, 1],
+        };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
-            &templates,
-            &base_rows,
+            &ctx,
             &fcf,
             &stochastic,
             1,
@@ -2813,12 +2789,6 @@ mod tests {
             &indexer,
             0,
             &InflowNonNegativityMethod::None,
-            &[],        // noise_scale empty when n_hydros=0
-            0,          // n_hydros = 0: skip inflow noise loop (minimal_template_1_0 has 1 row)
-            0,          // n_load_buses = 0: no load patches
-            &[],        // load_balance_row_starts
-            &[],        // load_bus_indices
-            &[1, 1, 1], // block_counts_per_stage
         )
         .unwrap();
 

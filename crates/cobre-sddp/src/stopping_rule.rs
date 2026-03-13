@@ -200,7 +200,6 @@ impl StoppingRule {
     /// monitor is responsible for running simulations and storing results in
     /// `state.simulation_costs` before this method is called.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn evaluate(&self, state: &MonitorState) -> StoppingRuleResult {
         match self {
             Self::IterationLimit { limit } => {
@@ -229,102 +228,14 @@ impl StoppingRule {
             Self::BoundStalling {
                 tolerance,
                 iterations,
-            } => {
-                // Need at least `iterations` entries in history to compare.
-                // `iterations` is a config-validated u64 that fits in usize on
-                // any supported platform (validated <= u32::MAX at config load).
-                #[allow(clippy::cast_possible_truncation)]
-                let window = *iterations as usize;
-                if state.lower_bound_history.len() < window {
-                    return StoppingRuleResult {
-                        rule_name: RULE_BOUND_STALLING.to_string(),
-                        triggered: false,
-                        detail: format!(
-                            "insufficient history: {}/{} iterations",
-                            state.lower_bound_history.len(),
-                            window
-                        ),
-                    };
-                }
-
-                // lb_window_start is the lower bound from `iterations` steps ago.
-                let history_len = state.lower_bound_history.len();
-                let lb_window_start = state.lower_bound_history[history_len - window];
-                let lb_current = state.lower_bound;
-
-                // Δ = (lb_current - lb_window_start) / max(1.0, |lb_current|)
-                let denominator = lb_current.abs().max(1.0_f64);
-                let delta = (lb_current - lb_window_start) / denominator;
-
-                let triggered = delta.abs() < *tolerance;
-                let detail = format!(
-                    "relative improvement {:.6} / tolerance {:.6} over {} iterations",
-                    delta.abs(),
-                    tolerance,
-                    window
-                );
-                StoppingRuleResult {
-                    rule_name: RULE_BOUND_STALLING.to_string(),
-                    triggered,
-                    detail,
-                }
-            }
+            } => Self::evaluate_bound_stalling(state, *tolerance, *iterations),
 
             Self::SimulationBased {
                 period,
                 distance_tolerance,
                 replications: _,
                 bound_stability_window: _,
-            } => {
-                // Only evaluate at multiples of `period`.
-                if *period == 0 || state.iteration % period != 0 {
-                    return StoppingRuleResult {
-                        rule_name: RULE_SIMULATION_BASED.to_string(),
-                        triggered: false,
-                        detail: format!("not a check iteration ({}/{})", state.iteration, period),
-                    };
-                }
-
-                // Simulation costs must be available from the current evaluation.
-                // The convergence monitor populates `simulation_costs` if and only if
-                // the bound stability pre-filter passed and simulations were run.
-                let Some(ref current_costs) = state.simulation_costs else {
-                    return StoppingRuleResult {
-                        rule_name: RULE_SIMULATION_BASED.to_string(),
-                        triggered: false,
-                        detail: "no simulation results available (bound stability check failed or first check)"
-                            .to_string(),
-                    };
-                };
-
-                // `simulation_costs` carries the NEW costs; the convergence monitor
-                // stores the PREVIOUS costs externally. At this stage we only have
-                // one snapshot — triggered = false (requires two consecutive snapshots).
-                // Full two-snapshot comparison is wired in Epic 05.
-                // For now: if costs are available, compute distance against a zero
-                // baseline (conservative: never triggers on first evaluation).
-                // This stub is correct: the simulation cost comparison requires two
-                // consecutive snapshots; the convergence monitor is responsible for managing them.
-                let distance: f64 = current_costs
-                    .iter()
-                    .map(|&c| {
-                        let denom = c.abs().max(1.0_f64);
-                        let normalized = c / denom;
-                        normalized * normalized
-                    })
-                    .sum::<f64>()
-                    .sqrt();
-
-                let triggered = distance < *distance_tolerance;
-                let detail = format!(
-                    "simulation distance {distance:.6} / tolerance {distance_tolerance:.6}"
-                );
-                StoppingRuleResult {
-                    rule_name: RULE_SIMULATION_BASED.to_string(),
-                    triggered,
-                    detail,
-                }
-            }
+            } => Self::evaluate_simulation_based(state, *period, *distance_tolerance),
 
             Self::GracefulShutdown => {
                 let triggered = state.shutdown_requested;
@@ -339,6 +250,115 @@ impl StoppingRule {
                     detail,
                 }
             }
+        }
+    }
+
+    /// Evaluate the [`StoppingRule::BoundStalling`] condition.
+    ///
+    /// Computes the relative improvement in the lower bound over the last
+    /// `iterations` iterations and compares it against `tolerance`.
+    fn evaluate_bound_stalling(
+        state: &MonitorState,
+        tolerance: f64,
+        iterations: u64,
+    ) -> StoppingRuleResult {
+        // Need at least `iterations` entries in history to compare.
+        // `iterations` is a config-validated u64 that fits in usize on
+        // any supported platform (validated <= u32::MAX at config load).
+        #[allow(clippy::cast_possible_truncation)]
+        let window = iterations as usize;
+        if state.lower_bound_history.len() < window {
+            return StoppingRuleResult {
+                rule_name: RULE_BOUND_STALLING.to_string(),
+                triggered: false,
+                detail: format!(
+                    "insufficient history: {}/{} iterations",
+                    state.lower_bound_history.len(),
+                    window
+                ),
+            };
+        }
+
+        // lb_window_start is the lower bound from `iterations` steps ago.
+        let history_len = state.lower_bound_history.len();
+        let lb_window_start = state.lower_bound_history[history_len - window];
+        let lb_current = state.lower_bound;
+
+        // Δ = (lb_current - lb_window_start) / max(1.0, |lb_current|)
+        let denominator = lb_current.abs().max(1.0_f64);
+        let delta = (lb_current - lb_window_start) / denominator;
+
+        let triggered = delta.abs() < tolerance;
+        let detail = format!(
+            "relative improvement {:.6} / tolerance {:.6} over {} iterations",
+            delta.abs(),
+            tolerance,
+            window
+        );
+        StoppingRuleResult {
+            rule_name: RULE_BOUND_STALLING.to_string(),
+            triggered,
+            detail,
+        }
+    }
+
+    /// Evaluate the [`StoppingRule::SimulationBased`] condition.
+    ///
+    /// Checks that the current iteration is a check iteration (`iteration % period == 0`),
+    /// that simulation costs are available in the monitor state, and then computes
+    /// the normalised L2 distance of the cost vector against the zero baseline.
+    fn evaluate_simulation_based(
+        state: &MonitorState,
+        period: u64,
+        distance_tolerance: f64,
+    ) -> StoppingRuleResult {
+        // Only evaluate at multiples of `period`.
+        if period == 0 || state.iteration % period != 0 {
+            return StoppingRuleResult {
+                rule_name: RULE_SIMULATION_BASED.to_string(),
+                triggered: false,
+                detail: format!("not a check iteration ({}/{})", state.iteration, period),
+            };
+        }
+
+        // Simulation costs must be available from the current evaluation.
+        // The convergence monitor populates `simulation_costs` if and only if
+        // the bound stability pre-filter passed and simulations were run.
+        let Some(ref current_costs) = state.simulation_costs else {
+            return StoppingRuleResult {
+                rule_name: RULE_SIMULATION_BASED.to_string(),
+                triggered: false,
+                detail:
+                    "no simulation results available (bound stability check failed or first check)"
+                        .to_string(),
+            };
+        };
+
+        // `simulation_costs` carries the NEW costs; the convergence monitor
+        // stores the PREVIOUS costs externally. At this stage we only have
+        // one snapshot — triggered = false (requires two consecutive snapshots).
+        // Full two-snapshot comparison is wired in Epic 05.
+        // For now: if costs are available, compute distance against a zero
+        // baseline (conservative: never triggers on first evaluation).
+        // This stub is correct: the simulation cost comparison requires two
+        // consecutive snapshots; the convergence monitor is responsible for managing them.
+        let distance: f64 = current_costs
+            .iter()
+            .map(|&c| {
+                let denom = c.abs().max(1.0_f64);
+                let normalized = c / denom;
+                normalized * normalized
+            })
+            .sum::<f64>()
+            .sqrt();
+
+        let triggered = distance < distance_tolerance;
+        let detail =
+            format!("simulation distance {distance:.6} / tolerance {distance_tolerance:.6}");
+        StoppingRuleResult {
+            rule_name: RULE_SIMULATION_BASED.to_string(),
+            triggered,
+            detail,
         }
     }
 }

@@ -355,6 +355,12 @@ impl CutSelectionStrategy {
 /// enabled with invalid configuration (unknown method, `enabled = true` with no
 /// method, or `check_frequency = 0`). Defaults: `threshold = 0`,
 /// `check_frequency = 5`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `enabled = true` but no `method` is specified,
+/// when the `method` string is not a recognised variant, or when
+/// `check_frequency = 0`.
 pub fn parse_cut_selection_config(
     config: &cobre_io::config::CutSelectionConfig,
 ) -> Result<Option<CutSelectionStrategy>, String> {

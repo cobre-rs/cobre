@@ -38,25 +38,25 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
+    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
-    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
-    lp_builder::build_stage_templates, simulate, train, EntityCounts, FutureCostFunction,
-    HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig,
-    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, PrecomputedParLp, StochasticContext,
+    OpeningTree, PrecomputedParLp, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 // ===========================================================================
@@ -519,11 +519,14 @@ fn train_fixture(
         &mut fcf,
         &fx.stage_templates.templates,
         &fx.stage_templates.base_rows,
-        &fx.indexer,
-        &fx.initial_state,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &fx.inflow_method,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &fx.opening_tree,
-        &fx.stochastic,
-        &fx.horizon,
         &fx.risk_measures,
         StoppingRuleSet {
             rules: vec![StoppingRule::IterationLimit { limit: iterations }],
@@ -534,7 +537,6 @@ fn train_fixture(
         &comm,
         1,
         HighsSolver::new,
-        &fx.inflow_method,
         &fx.stage_templates.noise_scale,
         fx.stage_templates.n_hydros,
         fx.stage_templates.n_load_buses,
@@ -590,21 +592,25 @@ fn simulate_fixture(
             block_counts_per_stage: &block_counts_sim,
         },
         fcf,
-        &fx.stochastic,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &fx.inflow_method,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &SimulationConfig {
             n_scenarios: 20,
             io_channel_capacity: 32,
         },
-        &fx.horizon,
-        &fx.initial_state,
-        &fx.indexer,
-        &fx.entity_counts,
+        SimulationOutputSpec {
+            result_tx: &result_tx,
+            zeta_per_stage: &fx.stage_templates.zeta_per_stage,
+            block_hours_per_stage: &fx.stage_templates.block_hours_per_stage,
+            entity_counts: &fx.entity_counts,
+            event_sender: None,
+        },
         &comm,
-        &result_tx,
-        &fx.inflow_method,
-        &fx.stage_templates.zeta_per_stage,
-        &fx.stage_templates.block_hours_per_stage,
-        None,
     )?;
 
     drop(result_tx);

@@ -47,72 +47,14 @@ struct PartialRecord {
     cut_selection_allgatherv_ms: u64,
 }
 
-/// Convert a [`TrainingResult`] and collected event log into a [`TrainingOutput`].
+/// Accumulate per-iteration partial records from the event log.
 ///
-/// The caller passes the full event log received from the training loop's
-/// `mpsc::Receiver<TrainingEvent>`. Events from multiple lifecycle steps are
-/// correlated by their `iteration` field to produce one [`IterationRecord`] per
-/// completed iteration.
+/// Processes each [`TrainingEvent`] variant that carries per-iteration timing
+/// or convergence data, building a [`BTreeMap`] keyed by iteration number.
+/// Also tracks the peak active cut count observed in the log.
 ///
-/// # Parameters
-///
-/// - `result` — the [`TrainingResult`] returned by `train()`.
-/// - `events` — the complete event log collected via the event channel during
-///   the training run.
-/// - `fcf` — the [`FutureCostFunction`] as it stands after training completes,
-///   used to compute final cut statistics.
-///
-/// # Returns
-///
-/// A fully-populated [`TrainingOutput`] with one [`IterationRecord`] per
-/// [`TrainingEvent::IterationSummary`] found in `events`.
-///
-/// # Missing events
-///
-/// Fields that depend on events not present in the log for a given iteration
-/// (for example, no [`TrainingEvent::CutSyncComplete`]) default to zero.
-///
-/// # Examples
-///
-/// ```rust
-/// use cobre_sddp::{build_training_output, TrainingResult, FutureCostFunction};
-/// use cobre_core::TrainingEvent;
-///
-/// let result = TrainingResult {
-///     final_lb: 100.0,
-///     final_ub: 110.0,
-///     final_gap: 0.091,
-///     iterations: 1,
-///     reason: "iteration_limit".to_string(),
-///     total_time_ms: 500,
-///     basis_cache: Vec::new(),
-/// };
-///
-/// let events = vec![TrainingEvent::IterationSummary {
-///     iteration: 1,
-///     lower_bound: 100.0,
-///     upper_bound: 110.0,
-///     gap: 0.091,
-///     wall_time_ms: 500,
-///     iteration_time_ms: 500,
-///     forward_ms: 200,
-///     backward_ms: 250,
-///     lp_solves: 60,
-/// }];
-///
-/// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
-/// let output = build_training_output(&result, &events, &fcf);
-///
-/// assert_eq!(output.convergence_records.len(), 1);
-/// assert!(!output.converged);
-/// ```
-#[must_use]
-#[allow(clippy::too_many_lines)]
-pub fn build_training_output(
-    result: &TrainingResult,
-    events: &[TrainingEvent],
-    fcf: &FutureCostFunction,
-) -> TrainingOutput {
+/// Returns `(partials, peak_active)`.
+fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, PartialRecord>, u64) {
     let mut partials: BTreeMap<u64, PartialRecord> = BTreeMap::new();
     let mut peak_active: u64 = 0;
 
@@ -197,6 +139,112 @@ pub fn build_training_output(
         }
     }
 
+    (partials, peak_active)
+}
+
+/// Convert a single [`PartialRecord`] into an [`IterationRecord`].
+///
+/// Computes derived fields (gap percent, overhead) from the accumulated timing
+/// data and casts u64 iteration/solve counts to u32.
+fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationRecord {
+    let gap_percent = if partial.lower_bound > 0.0 {
+        Some(partial.gap * 100.0)
+    } else {
+        None
+    };
+
+    #[allow(clippy::cast_possible_truncation)]
+    let iteration_u32 = iter as u32;
+    #[allow(clippy::cast_possible_truncation)]
+    let lp_solves_u32 = partial.lp_solves as u32;
+
+    // Compute overhead as total minus the sum of all attributed phases.
+    // Saturating subtraction guards against floating-point or measurement
+    // inconsistencies that could cause the sum to exceed total.
+    let attributed_ms = partial
+        .forward_ms
+        .saturating_add(partial.backward_ms)
+        .saturating_add(partial.cut_selection_ms)
+        .saturating_add(partial.cut_selection_allgatherv_ms)
+        .saturating_add(partial.forward_sync_ms)
+        .saturating_add(partial.cut_sync_ms);
+    let overhead_ms = partial.iteration_time_ms.saturating_sub(attributed_ms);
+
+    IterationRecord {
+        iteration: iteration_u32,
+        lower_bound: partial.lower_bound,
+        upper_bound_mean: partial.upper_bound_mean,
+        upper_bound_std: partial.upper_bound_std,
+        gap_percent,
+        cuts_added: partial.cuts_added,
+        cuts_removed: partial.cuts_removed,
+        cuts_active: partial.cuts_active,
+        time_forward_ms: partial.forward_ms,
+        time_backward_ms: partial.backward_ms,
+        time_total_ms: partial.iteration_time_ms,
+        forward_passes: partial.forward_passes,
+        lp_solves: lp_solves_u32,
+        time_forward_solve_ms: partial.forward_ms,
+        time_forward_sample_ms: 0,
+        time_backward_solve_ms: partial.backward_ms,
+        time_backward_cut_ms: 0,
+        time_cut_selection_ms: partial.cut_selection_ms,
+        time_mpi_allreduce_ms: partial.forward_sync_ms,
+        time_mpi_broadcast_ms: partial.cut_sync_ms,
+        time_io_write_ms: 0,
+        time_overhead_ms: overhead_ms,
+    }
+}
+
+/// Convert a [`TrainingResult`] and collected event log into a [`TrainingOutput`].
+///
+/// The caller passes the full event log received from the training loop's
+/// `mpsc::Receiver<TrainingEvent>`. Events from multiple lifecycle steps are
+/// correlated by their `iteration` field to produce one [`IterationRecord`] per
+/// completed iteration.
+///
+/// # Examples
+///
+/// ```rust
+/// use cobre_sddp::{build_training_output, TrainingResult, FutureCostFunction};
+/// use cobre_core::TrainingEvent;
+///
+/// let result = TrainingResult {
+///     final_lb: 100.0,
+///     final_ub: 110.0,
+///     final_gap: 0.091,
+///     iterations: 1,
+///     reason: "iteration_limit".to_string(),
+///     total_time_ms: 500,
+///     basis_cache: Vec::new(),
+/// };
+///
+/// let events = vec![TrainingEvent::IterationSummary {
+///     iteration: 1,
+///     lower_bound: 100.0,
+///     upper_bound: 110.0,
+///     gap: 0.091,
+///     wall_time_ms: 500,
+///     iteration_time_ms: 500,
+///     forward_ms: 200,
+///     backward_ms: 250,
+///     lp_solves: 60,
+/// }];
+///
+/// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
+/// let output = build_training_output(&result, &events, &fcf);
+///
+/// assert_eq!(output.convergence_records.len(), 1);
+/// assert!(!output.converged);
+/// ```
+#[must_use]
+pub fn build_training_output(
+    result: &TrainingResult,
+    events: &[TrainingEvent],
+    fcf: &FutureCostFunction,
+) -> TrainingOutput {
+    let (partials, peak_active) = accumulate_partial_records(events);
+
     // Only include iterations that have an IterationSummary event.
     let summary_iterations: std::collections::BTreeSet<u64> = events
         .iter()
@@ -212,55 +260,7 @@ pub fn build_training_output(
     let convergence_records: Vec<IterationRecord> = partials
         .into_iter()
         .filter(|(iter, _)| summary_iterations.contains(iter))
-        .map(|(iter, partial)| {
-            let gap_percent = if partial.lower_bound > 0.0 {
-                Some(partial.gap * 100.0)
-            } else {
-                None
-            };
-
-            #[allow(clippy::cast_possible_truncation)]
-            let iteration_u32 = iter as u32;
-            #[allow(clippy::cast_possible_truncation)]
-            let lp_solves_u32 = partial.lp_solves as u32;
-
-            // Compute overhead as total minus the sum of all attributed phases.
-            // Saturating subtraction guards against floating-point or measurement
-            // inconsistencies that could cause the sum to exceed total.
-            let attributed_ms = partial
-                .forward_ms
-                .saturating_add(partial.backward_ms)
-                .saturating_add(partial.cut_selection_ms)
-                .saturating_add(partial.cut_selection_allgatherv_ms)
-                .saturating_add(partial.forward_sync_ms)
-                .saturating_add(partial.cut_sync_ms);
-            let overhead_ms = partial.iteration_time_ms.saturating_sub(attributed_ms);
-
-            IterationRecord {
-                iteration: iteration_u32,
-                lower_bound: partial.lower_bound,
-                upper_bound_mean: partial.upper_bound_mean,
-                upper_bound_std: partial.upper_bound_std,
-                gap_percent,
-                cuts_added: partial.cuts_added,
-                cuts_removed: partial.cuts_removed,
-                cuts_active: partial.cuts_active,
-                time_forward_ms: partial.forward_ms,
-                time_backward_ms: partial.backward_ms,
-                time_total_ms: partial.iteration_time_ms,
-                forward_passes: partial.forward_passes,
-                lp_solves: lp_solves_u32,
-                time_forward_solve_ms: partial.forward_ms,
-                time_forward_sample_ms: 0,
-                time_backward_solve_ms: partial.backward_ms,
-                time_backward_cut_ms: 0,
-                time_cut_selection_ms: partial.cut_selection_ms,
-                time_mpi_allreduce_ms: partial.forward_sync_ms,
-                time_mpi_broadcast_ms: partial.cut_sync_ms,
-                time_io_write_ms: 0,
-                time_overhead_ms: overhead_ms,
-            }
-        })
+        .map(|(iter, partial)| partial_to_iteration_record(iter, &partial))
         .collect();
 
     let cut_stats = CutStatistics {

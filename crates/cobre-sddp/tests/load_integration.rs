@@ -39,7 +39,7 @@ use cobre_core::{
 };
 use cobre_sddp::{
     HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction, train,
+    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -460,11 +460,14 @@ fn test_stochastic_load_training_completes() {
         &mut fcf,
         &templates,
         &base_rows,
-        &indexer,
-        &initial_state,
+        &TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+        },
         &opening_tree,
-        &stochastic,
-        &horizon,
         &risk_measures,
         iteration_limit(3),
         None,
@@ -472,7 +475,6 @@ fn test_stochastic_load_training_completes() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &InflowNonNegativityMethod::None,
         &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
         0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
         n_load_buses,
@@ -553,11 +555,14 @@ fn test_deterministic_load_training_matches_baseline() {
         &mut fcf,
         &templates,
         &base_rows,
-        &indexer,
-        &initial_state,
+        &TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+        },
         &opening_tree,
-        &stochastic,
-        &horizon,
         &risk_measures,
         iteration_limit(3),
         None,
@@ -565,7 +570,6 @@ fn test_deterministic_load_training_matches_baseline() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &InflowNonNegativityMethod::None,
         &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
         0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
         0,   // n_load_buses=0 (deterministic: std_mw=0.0 excluded bus from stochastic)
@@ -625,11 +629,14 @@ fn test_stochastic_load_seed_determinism() {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit(3),
             None,
@@ -637,7 +644,6 @@ fn test_stochastic_load_seed_determinism() {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
             0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
             n_load_buses,

@@ -18,15 +18,15 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator, ReduceOp};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    WorkspacePool,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SimulationConfig, SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspacePool, build_stage_templates,
+    build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -591,17 +591,22 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     )
     .into_strategy();
 
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &bcast_config.inflow_method,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+    };
+
     let training_result = match train(
         &mut solver,
         training_config,
         &mut fcf,
         stage_templates_ref,
         base_rows,
-        &indexer,
-        &initial_state,
+        &training_ctx,
         stochastic.opening_tree(),
-        &stochastic,
-        &horizon,
         &risk_measures,
         stopping_rules,
         cut_selection_strategy.as_ref(),
@@ -609,7 +614,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &comm,
         n_threads,
         HighsSolver::new,
-        &bcast_config.inflow_method,
         noise_scale,
         n_hydros_lp,
         n_load_buses,
@@ -734,18 +738,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 block_counts_per_stage: &block_counts_per_stage,
             },
             &fcf,
-            &stochastic,
+            &training_ctx,
             &sim_config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage,
+                block_hours_per_stage,
+                entity_counts: &entity_counts,
+                event_sender: Some(sim_event_tx),
+            },
             &comm,
-            &result_tx,
-            &bcast_config.inflow_method,
-            zeta_per_stage,
-            block_hours_per_stage,
-            Some(sim_event_tx),
         )
         .map_err(CliError::from);
         if let Some(handle) = sim_progress_handle {

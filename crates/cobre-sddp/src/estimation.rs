@@ -29,18 +29,18 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
+    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
-    validate_structure, Config, FileManifest, LoadError, ValidationContext,
+    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
+    validate_structure,
 };
 use cobre_stochastic::{
-    par::fitting::{
-        estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats,
-        find_season_for_date, levinson_durbin, select_order_aic, ArCoefficientEstimate,
-        SeasonalStats,
-    },
     StochasticError,
+    par::fitting::{
+        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_seasonal_stats, find_season_for_date, levinson_durbin, select_order_aic,
+    },
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -350,7 +350,6 @@ fn estimate_ar_with_aic(
 ///
 /// Returns a `Vec` whose length may be less than `max_order` when a required lag
 /// season has zero standard deviation or insufficient observations.
-#[allow(clippy::too_many_arguments)]
 fn compute_autocorrelations(
     hydro_id: EntityId,
     season_id: usize,
@@ -509,8 +508,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            scenario::{CorrelationModel, InflowModel},
             Bus, DeficitSegment,
+            scenario::{CorrelationModel, InflowModel},
         };
 
         let bus = Bus {

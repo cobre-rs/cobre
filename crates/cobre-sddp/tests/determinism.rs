@@ -29,24 +29,25 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId,
 };
 use cobre_sddp::{
-    simulate, train, EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace, StageContext, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    simulate, train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
+    OpeningTree, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 // ===========================================================================
@@ -247,9 +248,9 @@ fn make_opening_tree_3h(n_openings: usize) -> OpeningTree {
 /// Uses PAR(0) (no AR lags) and a single opening per stage so the fixture
 /// remains small while still exercising more code paths than a 1-hydro system.
 fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
+    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
-    use cobre_core::SystemBuilder;
 
     let zero_penalties = || HydroPenalties {
         spillage_cost: 0.0,
@@ -543,11 +544,14 @@ fn run_training(
                 &mut fcf,
                 &fx.templates,
                 &fx.base_rows,
-                &fx.indexer,
-                &fx.initial_state,
+                &TrainingContext {
+                    horizon: &fx.horizon,
+                    indexer: &fx.indexer,
+                    inflow_method: &InflowNonNegativityMethod::None,
+                    stochastic: &fx.stochastic,
+                    initial_state: &fx.initial_state,
+                },
                 &fx.opening_tree,
-                &fx.stochastic,
-                &fx.horizon,
                 &fx.risk_measures,
                 iteration_limit(n_iterations),
                 None,
@@ -555,7 +559,6 @@ fn run_training(
                 &comm,
                 n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
-                &InflowNonNegativityMethod::None,
                 &[],
                 0,
                 0,
@@ -645,18 +648,22 @@ fn run_simulation(
                     block_counts_per_stage: &[],
                 },
                 fcf,
-                &fx.stochastic,
+                &TrainingContext {
+                    horizon: &fx.horizon,
+                    indexer: &fx.indexer,
+                    inflow_method: &InflowNonNegativityMethod::None,
+                    stochastic: &fx.stochastic,
+                    initial_state: &fx.initial_state,
+                },
                 &sim_config,
-                &fx.horizon,
-                &fx.initial_state,
-                &fx.indexer,
-                &entity_counts,
+                SimulationOutputSpec {
+                    result_tx: &result_tx,
+                    zeta_per_stage: &[],
+                    block_hours_per_stage: &[],
+                    entity_counts: &entity_counts,
+                    event_sender: None,
+                },
                 &comm,
-                &result_tx,
-                &InflowNonNegativityMethod::None,
-                &[],
-                &[],
-                None,
             )
         })
         .unwrap();

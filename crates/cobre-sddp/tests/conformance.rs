@@ -768,7 +768,10 @@ mod convergence_conformance {
 mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
-    use cobre_sddp::{PatchBuffer, RiskMeasure, StageIndexer, lower_bound::evaluate_lower_bound};
+    use cobre_sddp::{
+        PatchBuffer, RiskMeasure, StageIndexer,
+        lower_bound::{LbEvalSpec, evaluate_lower_bound},
+    };
 
     use super::{LocalComm, MockSolver, make_fcf, minimal_template, simple_opening_tree};
 
@@ -789,20 +792,24 @@ mod lb_conformance {
         let rm = RiskMeasure::Expectation;
         let comm = LocalComm;
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
+
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
         let lb1 = evaluate_lower_bound(
             &mut solver1,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .expect("first evaluate_lower_bound must succeed");
@@ -814,16 +821,11 @@ mod lb_conformance {
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
         let lb2 = evaluate_lower_bound(
             &mut solver2,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .expect("second evaluate_lower_bound must succeed");

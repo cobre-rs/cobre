@@ -20,29 +20,30 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
-    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
+    OpeningTree, StochasticContext, build_stochastic_context,
+    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
 use cobre_io::{
-    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
-    SimulationOutput, StageCutsPayload,
+    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
+    write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
-    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    build_training_output, simulate, train,
 };
 
 /// Single-rank communicator for testing.
@@ -582,11 +583,14 @@ fn train_simulate_write_cycle() {
         &mut fcf,
         &fx.templates,
         &fx.base_rows,
-        &fx.indexer,
-        &fx.initial_state,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &fx.opening_tree,
-        &fx.stochastic,
-        &fx.horizon,
         &fx.risk_measures,
         iteration_limit(3),
         None,
@@ -594,7 +598,6 @@ fn train_simulate_write_cycle() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &InflowNonNegativityMethod::None,
         &[],
         0,
         0,
@@ -736,18 +739,22 @@ fn train_simulate_write_cycle() {
             block_counts_per_stage: &[],
         },
         &fcf,
-        &fx.stochastic,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &sim_config,
-        &fx.horizon,
-        &fx.initial_state,
-        &fx.indexer,
-        &entity_counts,
+        SimulationOutputSpec {
+            result_tx: &result_tx,
+            zeta_per_stage: &[],
+            block_hours_per_stage: &[],
+            entity_counts: &entity_counts,
+            event_sender: None,
+        },
         &sim_comm,
-        &result_tx,
-        &InflowNonNegativityMethod::None,
-        &[],
-        &[],
-        None,
     )
     .expect("simulate must succeed");
 
@@ -792,9 +799,11 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(output_dir
-        .join("training/timing/iterations.parquet")
-        .is_file());
+    assert!(
+        output_dir
+            .join("training/timing/iterations.parquet")
+            .is_file()
+    );
 
     let manifest_path = output_dir.join("training/_manifest.json");
     assert!(manifest_path.is_file());

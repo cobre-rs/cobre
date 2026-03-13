@@ -5,13 +5,17 @@
 //! into the stage LP before each solve.  Extracting them here eliminates the
 //! class of bugs where one call site receives a fix and others are forgotten.
 
-use cobre_stochastic::{evaluate_par_inflows, solve_par_noises, StochasticContext};
+use cobre_stochastic::{StochasticContext, evaluate_par_inflows, solve_par_noises};
 
-use crate::{InflowNonNegativityMethod, StageIndexer};
+use crate::{
+    InflowNonNegativityMethod,
+    context::{StageContext, TrainingContext},
+    workspace::ScratchBuffers,
+};
 
 /// Transform raw inflow noise `η` into patched water-balance RHS values.
 ///
-/// Writes one patched RHS value per hydro plant into `noise_buf`.  The
+/// Writes one patched RHS value per hydro plant into `scratch.noise_buf`.  The
 /// patched value is:
 ///
 /// ```text
@@ -31,96 +35,94 @@ use crate::{InflowNonNegativityMethod, StageIndexer};
 /// ## Allocation discipline
 ///
 /// No heap allocations are made inside this function.  All scratch work is
-/// done via the four pre-allocated buffers (`noise_buf`, `lag_matrix_buf`,
-/// `par_inflow_buf`, `eta_floor_buf`) which are cleared and resized in place.
-/// `zero_targets_buf` is read-only and must already have length `>= n_hydros`.
+/// done via pre-allocated buffers in `scratch` which are cleared and resized
+/// in place.
 ///
 /// ## Arguments
 ///
 /// - `raw_noise` — raw η sample (length `>= n_hydros`).
-/// - `inflow_method` — active inflow non-negativity strategy.
-/// - `noise_scale` — flattened scale array, layout `[stage * n_hydros + h]`.
-/// - `stage_offset` — `stage * n_hydros` (avoids a multiply on the hot path).
-/// - `n_hydros` — number of hydro plants.
-/// - `base_row` — row index of the first water-balance row in this stage's
-///   template.
-/// - `template_row_lower` — lower-bound vector of the stage LP template (used
-///   to read the deterministic base RHS).
-/// - `stochastic` — stochastic context providing the PAR LP.
-/// - `stage` — 0-based stage index (passed to `evaluate_par_inflows` /
-///   `solve_par_noises`).
-/// - `indexer` — stage indexer providing `max_par_order` and `inflow_lags`.
-/// - `current_state` — current state vector (used to extract inflow lags).
-/// - `noise_buf` — output buffer; cleared and populated with patched RHS values.
-/// - `lag_matrix_buf` — scratch buffer for the lag matrix.
-/// - `par_inflow_buf` — scratch buffer for evaluated PAR inflows.
-/// - `eta_floor_buf` — scratch buffer for the per-hydro η floors.
-/// - `zero_targets_buf` — pre-filled zero slice of length `>= n_hydros`.
-#[allow(clippy::too_many_arguments)]
+/// - `stage` — 0-based stage index.
+/// - `current_state` — current state vector (used to extract inflow lags for
+///   truncation).
+/// - `ctx` — stage LP layout: provides `noise_scale`, `n_hydros`, `base_rows`,
+///   and `templates`.
+/// - `training_ctx` — algorithm configuration: provides `inflow_method`,
+///   `stochastic`, and `indexer`.
+/// - `scratch` — pre-allocated scratch buffers; `noise_buf` receives the output.
 pub(crate) fn transform_inflow_noise(
     raw_noise: &[f64],
-    inflow_method: &InflowNonNegativityMethod,
-    noise_scale: &[f64],
-    stage_offset: usize,
-    n_hydros: usize,
-    base_row: usize,
-    template_row_lower: &[f64],
-    stochastic: &StochasticContext,
     stage: usize,
-    indexer: &StageIndexer,
     current_state: &[f64],
-    noise_buf: &mut Vec<f64>,
-    lag_matrix_buf: &mut Vec<f64>,
-    par_inflow_buf: &mut Vec<f64>,
-    eta_floor_buf: &mut Vec<f64>,
-    zero_targets_buf: &[f64],
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    scratch: &mut ScratchBuffers,
 ) {
-    noise_buf.clear();
+    let n_hydros = ctx.n_hydros;
+    let stage_offset = stage * n_hydros;
+    let base_row = ctx.base_rows[stage];
+    let template_row_lower = &ctx.templates[stage].row_lower;
+    let noise_scale = ctx.noise_scale;
+    let inflow_method = training_ctx.inflow_method;
+    let stochastic = training_ctx.stochastic;
+    let indexer = training_ctx.indexer;
+
+    scratch.noise_buf.clear();
     match inflow_method {
         InflowNonNegativityMethod::Truncation => {
             let max_order = indexer.max_par_order;
             let lag_len = max_order * n_hydros;
-            lag_matrix_buf.clear();
-            lag_matrix_buf.resize(lag_len, 0.0);
+            scratch.lag_matrix_buf.clear();
+            scratch.lag_matrix_buf.resize(lag_len, 0.0);
             for h in 0..n_hydros {
                 for l in 0..max_order {
-                    lag_matrix_buf[l * n_hydros + h] =
+                    scratch.lag_matrix_buf[l * n_hydros + h] =
                         current_state[indexer.inflow_lags.start + h * max_order + l];
                 }
             }
 
             let par_lp = stochastic.par_lp();
-            par_inflow_buf.clear();
-            par_inflow_buf.resize(n_hydros, 0.0);
-            evaluate_par_inflows(par_lp, stage, lag_matrix_buf, raw_noise, par_inflow_buf);
+            scratch.par_inflow_buf.clear();
+            scratch.par_inflow_buf.resize(n_hydros, 0.0);
+            evaluate_par_inflows(
+                par_lp,
+                stage,
+                &scratch.lag_matrix_buf,
+                raw_noise,
+                &mut scratch.par_inflow_buf,
+            );
 
-            let has_negative = par_inflow_buf.iter().any(|&a| a < 0.0);
+            let has_negative = scratch.par_inflow_buf.iter().any(|&a| a < 0.0);
             if has_negative {
-                eta_floor_buf.clear();
-                eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+                scratch.eta_floor_buf.clear();
+                scratch.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+                let zero_targets = &scratch.zero_targets_buf[..n_hydros];
                 solve_par_noises(
                     par_lp,
                     stage,
-                    lag_matrix_buf,
-                    &zero_targets_buf[..n_hydros],
-                    eta_floor_buf,
+                    &scratch.lag_matrix_buf,
+                    zero_targets,
+                    &mut scratch.eta_floor_buf,
                 );
             }
 
             for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                let clamped_eta = if has_negative && par_inflow_buf[h] < 0.0 {
-                    eta.max(eta_floor_buf[h])
+                let clamped_eta = if has_negative && scratch.par_inflow_buf[h] < 0.0 {
+                    eta.max(scratch.eta_floor_buf[h])
                 } else {
                     eta
                 };
                 let base_rhs = template_row_lower[base_row + h];
-                noise_buf.push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
+                scratch
+                    .noise_buf
+                    .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
             }
         }
         InflowNonNegativityMethod::None | InflowNonNegativityMethod::Penalty { .. } => {
             for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
                 let base_rhs = template_row_lower[base_row + h];
-                noise_buf.push(base_rhs + noise_scale[stage_offset + h] * eta);
+                scratch
+                    .noise_buf
+                    .push(base_rhs + noise_scale[stage_offset + h] * eta);
             }
         }
     }
@@ -195,17 +197,60 @@ mod tests {
         StageStateConfig,
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-    use cobre_stochastic::context::build_stochastic_context;
+    use cobre_solver::StageTemplate;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
     use std::collections::BTreeMap;
 
     use crate::{
+        HorizonMode, InflowNonNegativityMethod,
+        context::{StageContext, TrainingContext},
         indexer::StageIndexer,
         noise::{transform_inflow_noise, transform_load_noise},
-        InflowNonNegativityMethod,
+        workspace::ScratchBuffers,
     };
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// Build a minimal `StageTemplate` with just `row_lower` populated.
+    ///
+    /// Only `row_lower` is accessed by `transform_inflow_noise`.  All other
+    /// fields are set to their zero/empty defaults.
+    fn make_minimal_template(row_lower: Vec<f64>) -> StageTemplate {
+        let n = row_lower.len();
+        StageTemplate {
+            num_cols: 0,
+            num_rows: n,
+            num_nz: 0,
+            col_starts: vec![0_i32],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![],
+            col_upper: vec![],
+            objective: vec![],
+            row_lower,
+            row_upper: vec![0.0; n],
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+        }
+    }
+
+    /// Build a `ScratchBuffers` with the given pre-filled `zero_targets_buf`.
+    fn make_scratch(n_hydros: usize) -> ScratchBuffers {
+        ScratchBuffers {
+            noise_buf: Vec::with_capacity(n_hydros),
+            inflow_m3s_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            zero_targets_buf: vec![0.0_f64; n_hydros],
+            load_rhs_buf: Vec::new(),
+            row_lower_buf: Vec::new(),
+        }
+    }
 
     /// One-hydro, one-stage `StochasticContext` with AR(0) (white noise).
     ///
@@ -474,34 +519,42 @@ mod tests {
         // expected: 5.0 + 1.0 * (-3.0) = 2.0
         let raw_noise = vec![-3.0_f64];
         let noise_scale = vec![1.0_f64];
-        let template_row_lower = vec![0.0, 5.0]; // base_row = 1
-        let mut noise_buf = Vec::new();
-        let mut lag_matrix_buf = Vec::new();
-        let mut par_inflow_buf = Vec::new();
-        let mut eta_floor_buf = Vec::new();
-        let zero_targets_buf = vec![0.0_f64; 1];
+        // Template with row_lower = [0.0, 5.0]; base_row = 1.
+        let template = make_minimal_template(vec![0.0, 5.0]);
+        let templates = vec![template];
+        let base_rows = vec![1_usize];
+        let inflow_method = InflowNonNegativityMethod::None;
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1],
+        };
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &inflow_method,
+            stochastic: &stochastic,
+            initial_state: &current_state,
+        };
+        let mut scratch = make_scratch(1);
 
         transform_inflow_noise(
             &raw_noise,
-            &InflowNonNegativityMethod::None,
-            &noise_scale,
-            0, // stage_offset = 0 * 1 = 0
-            1,
-            1, // base_row = 1
-            &template_row_lower,
-            &stochastic,
             0,
-            &indexer,
             &current_state,
-            &mut noise_buf,
-            &mut lag_matrix_buf,
-            &mut par_inflow_buf,
-            &mut eta_floor_buf,
-            &zero_targets_buf,
+            &ctx,
+            &training_ctx,
+            &mut scratch,
         );
 
-        assert_eq!(noise_buf.len(), 1);
-        assert!((noise_buf[0] - 2.0).abs() < 1e-12);
+        assert_eq!(scratch.noise_buf.len(), 1);
+        assert!((scratch.noise_buf[0] - 2.0).abs() < 1e-12);
     }
 
     // ── transform_inflow_noise: Truncation ───────────────────────────────────
@@ -520,39 +573,47 @@ mod tests {
         // Very negative eta guarantees negative inflow (AR(0) with sigma=1).
         let raw_noise = vec![-5.0_f64];
         let noise_scale = vec![1.0_f64];
-        let template_row_lower = vec![0.0]; // base_row = 0
-        let mut noise_buf = Vec::new();
-        let mut lag_matrix_buf = Vec::new();
-        let mut par_inflow_buf = Vec::new();
-        let mut eta_floor_buf = Vec::new();
-        let zero_targets_buf = vec![0.0_f64; 1];
+        // Template with row_lower = [0.0]; base_row = 0.
+        let template = make_minimal_template(vec![0.0]);
+        let templates = vec![template];
+        let base_rows = vec![0_usize];
+        let inflow_method = InflowNonNegativityMethod::Truncation;
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1],
+        };
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &inflow_method,
+            stochastic: &stochastic,
+            initial_state: &current_state,
+        };
+        let mut scratch = make_scratch(1);
 
         transform_inflow_noise(
             &raw_noise,
-            &InflowNonNegativityMethod::Truncation,
-            &noise_scale,
             0,
-            1,
-            0,
-            &template_row_lower,
-            &stochastic,
-            0,
-            &indexer,
             &current_state,
-            &mut noise_buf,
-            &mut lag_matrix_buf,
-            &mut par_inflow_buf,
-            &mut eta_floor_buf,
-            &zero_targets_buf,
+            &ctx,
+            &training_ctx,
+            &mut scratch,
         );
 
-        assert_eq!(noise_buf.len(), 1);
+        assert_eq!(scratch.noise_buf.len(), 1);
         // The patched RHS = base_rhs + noise_scale * clamped_eta.
         // After clamping, the inflow contribution must be >= 0: RHS >= base_rhs = 0.
         assert!(
-            noise_buf[0] >= -1e-10,
+            scratch.noise_buf[0] >= -1e-10,
             "truncation must yield non-negative RHS, got {}",
-            noise_buf[0]
+            scratch.noise_buf[0]
         );
     }
 
@@ -566,38 +627,46 @@ mod tests {
         // eta = 3.0 → inflow = 1.0 * 3.0 = 3.0 > 0 → no clamping.
         let raw_noise = vec![3.0_f64];
         let noise_scale = vec![2.0_f64];
-        let template_row_lower = vec![5.0]; // base_row = 0
-        let mut noise_buf = Vec::new();
-        let mut lag_matrix_buf = Vec::new();
-        let mut par_inflow_buf = Vec::new();
-        let mut eta_floor_buf = Vec::new();
-        let zero_targets_buf = vec![0.0_f64; 1];
+        // Template with row_lower = [5.0]; base_row = 0.
+        let template = make_minimal_template(vec![5.0]);
+        let templates = vec![template];
+        let base_rows = vec![0_usize];
+        let inflow_method = InflowNonNegativityMethod::Truncation;
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1],
+        };
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &inflow_method,
+            stochastic: &stochastic,
+            initial_state: &current_state,
+        };
+        let mut scratch = make_scratch(1);
 
         transform_inflow_noise(
             &raw_noise,
-            &InflowNonNegativityMethod::Truncation,
-            &noise_scale,
             0,
-            1,
-            0,
-            &template_row_lower,
-            &stochastic,
-            0,
-            &indexer,
             &current_state,
-            &mut noise_buf,
-            &mut lag_matrix_buf,
-            &mut par_inflow_buf,
-            &mut eta_floor_buf,
-            &zero_targets_buf,
+            &ctx,
+            &training_ctx,
+            &mut scratch,
         );
 
-        assert_eq!(noise_buf.len(), 1);
+        assert_eq!(scratch.noise_buf.len(), 1);
         // Expected: 5.0 + 2.0 * 3.0 = 11.0 (no clamping).
         assert!(
-            (noise_buf[0] - 11.0).abs() < 1e-12,
+            (scratch.noise_buf[0] - 11.0).abs() < 1e-12,
             "expected 11.0, got {}",
-            noise_buf[0]
+            scratch.noise_buf[0]
         );
     }
 

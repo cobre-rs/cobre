@@ -62,17 +62,16 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{sample_forward, StochasticContext};
+use cobre_stochastic::sample_forward;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    context::StageContext,
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
+    context::{StageContext, TrainingContext},
     noise::{transform_inflow_noise, transform_load_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer,
-    TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass (reduced via `allreduce`).
@@ -305,6 +304,19 @@ pub fn build_cut_row_batch(
     }
 }
 
+/// Bundled scalar parameters for one forward pass invocation.
+///
+/// Groups the per-iteration, per-rank scalar arguments that are forwarded
+/// from [`crate::train`] into [`run_forward_pass`].
+pub struct ForwardPassBatch {
+    /// Number of forward-pass scenarios assigned to this rank.
+    pub local_forward_passes: usize,
+    /// Current training iteration (0-based; used for seed derivation).
+    pub iteration: u64,
+    /// Global index of this rank's first forward pass for seed derivation.
+    pub fwd_offset: usize,
+}
+
 /// Compute the scenario range `[start, end)` for worker `worker_id` when
 /// distributing `n_scenarios` scenarios across `n_workers` workers.
 ///
@@ -326,6 +338,141 @@ pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) 
     let start = base * worker_id + worker_id.min(remainder);
     let end = start + base + usize::from(worker_id < remainder);
     (start, end)
+}
+
+/// Per-stage solve context for one (stage, scenario) pair in the forward pass.
+///
+/// Passed to [`run_forward_stage`] to bundle scalar and slice parameters and
+/// keep the argument count within the clippy `too_many_arguments` threshold.
+struct StageKey<'a> {
+    /// 0-based stage index.
+    t: usize,
+    /// 0-based global scenario index (rank offset + local scenario index).
+    m: usize,
+    /// Local scenario index within this worker's partition.
+    local_m: usize,
+    /// Total number of stages in the horizon.
+    num_stages: usize,
+    /// Current training iteration (used in error context).
+    iteration: u64,
+    /// Raw noise sample for this (stage, scenario) pair.
+    raw_noise: &'a [f64],
+}
+
+/// Execute the stage-level LP solve for one (scenario, stage) pair.
+///
+/// Applies noise patches, warm-starts the solver, records the trajectory step,
+/// and updates the current state and basis store for the next stage.
+///
+/// Returns the stage cost on success, or propagates the solver error.
+///
+/// # Errors
+///
+/// Returns `Err(SddpError::Infeasible)` when the stage LP is infeasible, or
+/// `Err(SddpError::Solver)` for any other terminal solver failure.
+fn run_forward_stage<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    basis_slice: &mut BasisStoreSliceMut<'_>,
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    cut_batches: &[RowBatch],
+    key: &StageKey<'_>,
+    worker_records: &mut [TrajectoryRecord],
+) -> Result<f64, SddpError> {
+    let StageKey {
+        t,
+        m,
+        local_m,
+        num_stages,
+        iteration,
+        raw_noise,
+    } = *key;
+    let n_hydros = ctx.n_hydros;
+    let n_load_buses = ctx.n_load_buses;
+    let indexer = training_ctx.indexer;
+    let stochastic = training_ctx.stochastic;
+    let horizon = training_ctx.horizon;
+
+    // Split borrows: current_state and scratch are distinct fields of ws.
+    let (state_ref, scratch) = (&ws.current_state[..], &mut ws.scratch);
+    transform_inflow_noise(raw_noise, t, state_ref, ctx, training_ctx, scratch);
+    let blk = if n_load_buses > 0 {
+        ctx.block_counts_per_stage[t]
+    } else {
+        0
+    };
+    transform_load_noise(
+        raw_noise,
+        n_hydros,
+        n_load_buses,
+        stochastic,
+        t,
+        blk,
+        &mut ws.scratch.load_rhs_buf,
+    );
+
+    ws.solver.load_model(&ctx.templates[t]);
+    ws.solver.add_rows(&cut_batches[t]);
+    ws.patch_buf.fill_forward_patches(
+        indexer,
+        &ws.current_state,
+        &ws.scratch.noise_buf,
+        ctx.base_rows[t],
+    );
+    if n_load_buses > 0 {
+        ws.patch_buf.fill_load_patches(
+            ctx.load_balance_row_starts[t],
+            ctx.block_counts_per_stage[t],
+            &ws.scratch.load_rhs_buf,
+            ctx.load_bus_indices,
+        );
+    }
+    let pc = ws.patch_buf.forward_patch_count();
+    ws.solver.set_row_bounds(
+        &ws.patch_buf.indices[..pc],
+        &ws.patch_buf.lower[..pc],
+        &ws.patch_buf.upper[..pc],
+    );
+    if horizon.is_terminal(t + 1) {
+        ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
+    }
+
+    let view = match basis_slice.get(m, t) {
+        Some(rb) => ws.solver.solve_with_basis(rb),
+        None => ws.solver.solve(),
+    }
+    .map_err(|e| {
+        *basis_slice.get_mut(m, t) = None;
+        match e {
+            SolverError::Infeasible => SddpError::Infeasible {
+                stage: t,
+                iteration,
+                scenario: m,
+            },
+            other => SddpError::Solver(other),
+        }
+    })?;
+
+    let stage_cost = view.objective - view.primal[indexer.theta];
+    let rec = &mut worker_records[local_m * num_stages + t];
+    rec.primal.clear();
+    rec.primal.extend_from_slice(view.primal);
+    rec.dual.clear();
+    rec.dual.extend_from_slice(view.dual);
+    rec.stage_cost = stage_cost;
+    rec.state.clear();
+    rec.state.extend_from_slice(&view.primal[..indexer.n_state]);
+    ws.current_state.clear();
+    ws.current_state
+        .extend_from_slice(&view.primal[..indexer.n_state]);
+    if let Some(rb) = basis_slice.get_mut(m, t) {
+        ws.solver.get_basis(rb);
+    } else {
+        let mut rb = Basis::new(ctx.templates[t].num_cols, ctx.templates[t].num_rows);
+        ws.solver.get_basis(&mut rb);
+        *basis_slice.get_mut(m, t) = Some(rb);
+    }
+    Ok(stage_cost)
 }
 
 /// Execute the forward pass for one training iteration on this rank.
@@ -388,87 +535,54 @@ pub(crate) fn partition(n_scenarios: usize, n_workers: usize, worker_id: usize) 
 /// - `initial_state.len() != indexer.n_state`
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-// StageContext is pub(crate) by design — external callers cannot construct it.
-// The lint fires because run_forward_pass is pub, but this is intentional.
-#[allow(private_interfaces)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
     ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
-    stochastic: &StochasticContext,
-    local_forward_passes: usize,
-    iteration: u64,
-    horizon: &HorizonMode,
-    initial_state: &[f64],
+    training_ctx: &TrainingContext<'_>,
+    batch: &ForwardPassBatch,
     records: &mut [TrajectoryRecord],
-    indexer: &StageIndexer,
-    fwd_offset: usize,
-    inflow_method: &InflowNonNegativityMethod,
 ) -> Result<ForwardResult, SddpError> {
-    let StageContext {
-        templates,
-        base_rows,
-        noise_scale,
-        n_hydros,
-        n_load_buses,
-        load_balance_row_starts,
-        load_bus_indices,
-        block_counts_per_stage,
-    } = ctx;
-    let n_hydros = *n_hydros;
-    let n_load_buses = *n_load_buses;
+    let TrainingContext {
+        horizon,
+        indexer,
+        stochastic,
+        initial_state,
+        ..
+    } = training_ctx;
+    let ForwardPassBatch {
+        local_forward_passes,
+        iteration,
+        fwd_offset,
+    } = batch;
     let num_stages = horizon.num_stages();
-    let forward_passes = local_forward_passes;
+    let forward_passes = *local_forward_passes;
 
     debug_assert_eq!(records.len(), forward_passes * num_stages);
     debug_assert_eq!(initial_state.len(), indexer.n_state);
-    debug_assert_eq!(templates.len(), num_stages);
-    debug_assert_eq!(base_rows.len(), num_stages);
+    debug_assert_eq!(ctx.templates.len(), num_stages);
+    debug_assert_eq!(ctx.base_rows.len(), num_stages);
 
     let start = Instant::now();
-
-    // Build one cut RowBatch per stage outside the scenario loop — batch
-    // construction is O(num_cuts) and the cuts are the same for all scenarios
-    // within the same iteration.
     let cut_batches: Vec<RowBatch> = (0..num_stages)
         .map(|t| build_cut_row_batch(fcf, t, indexer))
         .collect();
-
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
-
     let n_workers = workspaces.len().max(1);
 
-    // Split `records` into disjoint per-worker sub-slices using iterative
-    // `split_at_mut`. Each worker `w` receives the contiguous records for
-    // its scenario range `[start_m, end_m)` — i.e., records in positions
-    // `[start_m * num_stages, end_m * num_stages)` of the flat slice.
-    //
-    // The split is performed outside the parallel region (no shared mutable
-    // reference to `records` inside rayon closures).
+    // Split `records` into disjoint per-worker sub-slices.
     let mut remaining: &mut [TrajectoryRecord] = records;
     let mut record_slices: Vec<&mut [TrajectoryRecord]> = Vec::with_capacity(n_workers);
     for w in 0..n_workers {
         let (start_m, end_m) = partition(forward_passes, n_workers, w);
-        let scenarios_for_w = end_m - start_m;
-        let (slice, rest) = remaining.split_at_mut(scenarios_for_w * num_stages);
+        let (slice, rest) = remaining.split_at_mut((end_m - start_m) * num_stages);
         record_slices.push(slice);
         remaining = rest;
     }
-
-    // Split the basis store into disjoint per-worker sub-views by scenario
-    // range. Each worker receives exclusive write access to its own scenario
-    // range; no two workers alias the same basis slot.
     let basis_slices: Vec<BasisStoreSliceMut<'_>> = basis_store.split_workers_mut(n_workers);
 
-    // Execute the scenario loop in parallel over workspaces. Each worker
-    // receives exclusive ownership of its workspace, its record sub-slice, and
-    // its basis store slice. Worker-local cost sums are returned as Ok values;
-    // the first infeasibility encountered by any worker short-circuits via
-    // collect::<Result<_,_>>().
     let worker_results: Vec<Result<(f64, f64, u64), SddpError>> = workspaces
         .par_iter_mut()
         .zip(record_slices.par_iter_mut())
@@ -481,160 +595,32 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let local_solve_count_before = ws.solver.statistics().solve_count;
 
             for (local_m, m) in (start_m..end_m).enumerate() {
-                // Global scenario index for deterministic seed derivation
-                // (SipHash-1-3 seeds for communication-free parallel noise).
-                // Uses the pre-computed offset rather than rank * forward_passes,
-                // because forward_passes may differ across ranks.
                 let global_scenario = fwd_offset + m;
-
-                // Initialise current state for this scenario.
                 ws.current_state.clear();
                 ws.current_state.extend_from_slice(initial_state);
-
                 let mut trajectory_cost = 0.0_f64;
 
                 for t in 0..num_stages {
-                    // Cast to u32 for the sampling API (SipHash-1-3 domain ID
-                    // derivation uses u32 fields). Indices bounded by u32::MAX
-                    // in practice; truncation is safe.
                     #[allow(clippy::cast_possible_truncation)]
-                    let (iter_u32, scenario_u32, stage_id_u32) =
-                        (iteration as u32, global_scenario as u32, t as u32);
-
-                    let (_opening_idx, raw_noise) = sample_forward(
-                        &tree_view,
-                        base_seed,
-                        iter_u32,
-                        scenario_u32,
-                        stage_id_u32,
+                    let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
+                    let (_, raw_noise) = sample_forward(&tree_view, base_seed, i32, s32, t32, t);
+                    let key = StageKey {
                         t,
-                    );
-
-                    // Transform raw η → patched water-balance RHS values and
-                    // load-balance RHS values.  Shared functions handle both
-                    // the truncation logic and the load noise realization so
-                    // that all three call sites (forward, backward, simulation)
-                    // apply identical transformations.
-                    let stage_offset = t * n_hydros;
-                    transform_inflow_noise(
+                        m,
+                        local_m,
+                        num_stages,
+                        iteration: *iteration,
                         raw_noise,
-                        inflow_method,
-                        noise_scale,
-                        stage_offset,
-                        n_hydros,
-                        base_rows[t],
-                        &templates[t].row_lower,
-                        stochastic,
-                        t,
-                        indexer,
-                        &ws.current_state,
-                        &mut ws.noise_buf,
-                        &mut ws.lag_matrix_buf,
-                        &mut ws.par_inflow_buf,
-                        &mut ws.eta_floor_buf,
-                        &ws.zero_targets_buf,
-                    );
-                    transform_load_noise(
-                        raw_noise,
-                        n_hydros,
-                        n_load_buses,
-                        stochastic,
-                        t,
-                        if n_load_buses > 0 {
-                            block_counts_per_stage[t]
-                        } else {
-                            0
-                        },
-                        &mut ws.load_rhs_buf,
-                    );
-
-                    ws.solver.load_model(&templates[t]);
-                    ws.solver.add_rows(&cut_batches[t]);
-
-                    ws.patch_buf.fill_forward_patches(
-                        indexer,
-                        &ws.current_state,
-                        &ws.noise_buf,
-                        base_rows[t],
-                    );
-
-                    if n_load_buses > 0 {
-                        let n_blks = block_counts_per_stage[t];
-                        ws.patch_buf.fill_load_patches(
-                            load_balance_row_starts[t],
-                            n_blks,
-                            &ws.load_rhs_buf,
-                            load_bus_indices,
-                        );
-                    }
-
-                    let patch_count = ws.patch_buf.forward_patch_count();
-                    ws.solver.set_row_bounds(
-                        &ws.patch_buf.indices[..patch_count],
-                        &ws.patch_buf.lower[..patch_count],
-                        &ws.patch_buf.upper[..patch_count],
-                    );
-
-                    // For the terminal stage in finite horizon, the future cost
-                    // is defined as zero (no successor stages). Fix theta to
-                    // [0, 0] so that HiGHS does not see an unbounded LP when
-                    // the cut pool is empty (iteration 1) or when the system
-                    // has no cuts for this stage. The 1-based stage index
-                    // matches the is_terminal API.
-                    if horizon.is_terminal(t + 1) {
-                        ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
-                    }
-
-                    // Warm-start from this scenario's prior basis at this stage
-                    // (populated on the previous iteration), or cold-start if no
-                    // basis exists yet. On error, invalidate the basis slot so
-                    // the next call at this (scenario, stage) cold-starts.
-                    let view = match basis_slice.get(m, t) {
-                        Some(rb) => ws.solver.solve_with_basis(rb),
-                        None => ws.solver.solve(),
-                    }
-                    .map_err(|e| {
-                        *basis_slice.get_mut(m, t) = None;
-                        match e {
-                            SolverError::Infeasible => SddpError::Infeasible {
-                                stage: t,
-                                iteration,
-                                scenario: m,
-                            },
-                            other => SddpError::Solver(other),
-                        }
-                    })?;
-
-                    // Stage cost = LP objective minus theta (future cost variable).
-                    let stage_cost = view.objective - view.primal[indexer.theta];
-
-                    let record_idx = local_m * num_stages + t;
-                    worker_records[record_idx].primal.clear();
-                    worker_records[record_idx]
-                        .primal
-                        .extend_from_slice(view.primal);
-                    worker_records[record_idx].dual.clear();
-                    worker_records[record_idx].dual.extend_from_slice(view.dual);
-                    worker_records[record_idx].stage_cost = stage_cost;
-                    worker_records[record_idx].state.clear();
-                    worker_records[record_idx]
-                        .state
-                        .extend_from_slice(&view.primal[..indexer.n_state]);
-
-                    trajectory_cost += stage_cost;
-                    ws.current_state.clear();
-                    ws.current_state
-                        .extend_from_slice(&view.primal[..indexer.n_state]);
-
-                    // Save the optimal basis for this (scenario, stage) pair so
-                    // the backward pass can warm-start from it.
-                    if let Some(rb) = basis_slice.get_mut(m, t) {
-                        ws.solver.get_basis(rb);
-                    } else {
-                        let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
-                        ws.solver.get_basis(&mut rb);
-                        *basis_slice.get_mut(m, t) = Some(rb);
-                    }
+                    };
+                    trajectory_cost += run_forward_stage(
+                        ws,
+                        &mut basis_slice,
+                        ctx,
+                        training_ctx,
+                        &cut_batches,
+                        &key,
+                        worker_records,
+                    )?;
                 }
 
                 local_cost_sum += trajectory_cost;
@@ -642,14 +628,10 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             }
 
             let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-
             Ok((local_cost_sum, local_cost_sum_sq, local_solves))
         })
         .collect();
 
-    // Aggregate worker-local results in worker order (= scenario order, because
-    // workers are assigned contiguous scenario ranges). This order must be
-    // deterministic regardless of rayon's thread scheduling.
     let mut cost_sum = 0.0_f64;
     let mut cost_sum_sq = 0.0_f64;
     let mut lp_solves = 0u64;
@@ -667,7 +649,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         cost_sum,
         cost_sum_sq,
         #[allow(clippy::cast_precision_loss)]
-        scenario_count: local_forward_passes as f64,
+        scenario_count: *local_forward_passes as f64,
         elapsed_ms,
         lp_solves,
     })
@@ -692,19 +674,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
-        context::StageContext,
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        context::{StageContext, TrainingContext},
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────
@@ -1151,14 +1134,16 @@ mod tests {
                 0,
             ),
             current_state: Vec::with_capacity(indexer.n_state),
-            noise_buf: Vec::with_capacity(indexer.hydro_count),
-            inflow_m3s_buf: Vec::with_capacity(indexer.hydro_count),
-            lag_matrix_buf: Vec::with_capacity(indexer.max_par_order * indexer.hydro_count),
-            par_inflow_buf: Vec::with_capacity(indexer.hydro_count),
-            eta_floor_buf: Vec::with_capacity(indexer.hydro_count),
-            zero_targets_buf: vec![0.0_f64; indexer.hydro_count],
-            load_rhs_buf: Vec::new(),
-            row_lower_buf: Vec::new(),
+            scratch: crate::workspace::ScratchBuffers {
+                noise_buf: Vec::with_capacity(indexer.hydro_count),
+                inflow_m3s_buf: Vec::with_capacity(indexer.hydro_count),
+                lag_matrix_buf: Vec::with_capacity(indexer.max_par_order * indexer.hydro_count),
+                par_inflow_buf: Vec::with_capacity(indexer.hydro_count),
+                eta_floor_buf: Vec::with_capacity(indexer.hydro_count),
+                zero_targets_buf: vec![0.0_f64; indexer.hydro_count],
+                load_rhs_buf: Vec::new(),
+                row_lower_buf: Vec::new(),
+            },
         }
     }
 
@@ -1209,15 +1194,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            config.forward_passes as usize,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: config.forward_passes as usize,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1280,15 +1269,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            config.forward_passes as usize,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: config.forward_passes as usize,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         );
 
         // AC: must return SddpError::Infeasible with stage=1, scenario=0.
@@ -1362,15 +1355,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            config.forward_passes as usize,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: config.forward_passes as usize,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1689,15 +1686,19 @@ mod tests {
             basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            config.forward_passes as usize,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: config.forward_passes as usize,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .map(|_| ())
     }
@@ -1832,15 +1833,19 @@ mod tests {
             &mut basis_store1,
             &ctx,
             &fcf,
-            &stochastic,
-            n_scenarios,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: n_scenarios,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records1,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1855,15 +1860,19 @@ mod tests {
             &mut basis_store4,
             &ctx,
             &fcf,
-            &stochastic,
-            n_scenarios,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: n_scenarios,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records4,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -1931,15 +1940,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            n_scenarios,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: n_scenarios,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2177,19 +2190,23 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            stochastic,
-            1,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method,
+                stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: 1,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            inflow_method,
         )
         .unwrap();
 
-        ws.noise_buf.clone()
+        ws.scratch.noise_buf.clone()
     }
 
     /// AC: truncation clamps negative inflow noise.
@@ -2322,15 +2339,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            config.forward_passes as usize,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: config.forward_passes as usize,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2523,15 +2544,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            n_scenarios,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: n_scenarios,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         );
 
         // Worker 1's partition: partition(10, 4, 1) → start_m=3.
@@ -2581,14 +2606,16 @@ mod tests {
             solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),
-            noise_buf: Vec::with_capacity(1),
-            inflow_m3s_buf: Vec::with_capacity(1),
-            lag_matrix_buf: Vec::with_capacity(0),
-            par_inflow_buf: Vec::with_capacity(1),
-            eta_floor_buf: Vec::with_capacity(1),
-            zero_targets_buf: vec![0.0_f64; 1],
-            load_rhs_buf: Vec::with_capacity(n_load_buses),
-            row_lower_buf: Vec::new(),
+            scratch: crate::workspace::ScratchBuffers {
+                noise_buf: Vec::with_capacity(1),
+                inflow_m3s_buf: Vec::with_capacity(1),
+                lag_matrix_buf: Vec::with_capacity(0),
+                par_inflow_buf: Vec::with_capacity(1),
+                eta_floor_buf: Vec::with_capacity(1),
+                zero_targets_buf: vec![0.0_f64; 1],
+                load_rhs_buf: Vec::with_capacity(n_load_buses),
+                row_lower_buf: Vec::new(),
+            },
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -2617,36 +2644,40 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            1,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: 1,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
         assert_eq!(
-            ws.load_rhs_buf.len(),
+            ws.scratch.load_rhs_buf.len(),
             n_load_buses,
             "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
         );
         assert!(
-            ws.load_rhs_buf[0] > 0.0,
+            ws.scratch.load_rhs_buf[0] > 0.0,
             "load realization must be positive with mean=300, std=30: got {}",
-            ws.load_rhs_buf[0]
+            ws.scratch.load_rhs_buf[0]
         );
 
         let cat4_start = 2;
         assert_eq!(
-            ws.patch_buf.lower[cat4_start], ws.load_rhs_buf[0],
+            ws.patch_buf.lower[cat4_start], ws.scratch.load_rhs_buf[0],
             "patch_buf lower must equal load_rhs_buf[0]"
         );
         assert_eq!(
-            ws.patch_buf.upper[cat4_start], ws.load_rhs_buf[0],
+            ws.patch_buf.upper[cat4_start], ws.scratch.load_rhs_buf[0],
             "patch_buf upper must equal load_rhs_buf[0] (equality constraint)"
         );
         assert_eq!(
@@ -2670,14 +2701,16 @@ mod tests {
             solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),
-            noise_buf: Vec::with_capacity(1),
-            inflow_m3s_buf: Vec::with_capacity(1),
-            lag_matrix_buf: Vec::with_capacity(0),
-            par_inflow_buf: Vec::with_capacity(1),
-            eta_floor_buf: Vec::with_capacity(1),
-            zero_targets_buf: vec![0.0_f64; 1],
-            load_rhs_buf: Vec::with_capacity(n_load_buses),
-            row_lower_buf: Vec::new(),
+            scratch: crate::workspace::ScratchBuffers {
+                noise_buf: Vec::with_capacity(1),
+                inflow_m3s_buf: Vec::with_capacity(1),
+                lag_matrix_buf: Vec::with_capacity(0),
+                par_inflow_buf: Vec::with_capacity(1),
+                eta_floor_buf: Vec::with_capacity(1),
+                zero_targets_buf: vec![0.0_f64; 1],
+                load_rhs_buf: Vec::with_capacity(n_load_buses),
+                row_lower_buf: Vec::new(),
+            },
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -2706,27 +2739,31 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            1,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: 1,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
         assert_eq!(
-            ws.load_rhs_buf.len(),
+            ws.scratch.load_rhs_buf.len(),
             n_load_buses,
             "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
         );
         assert_eq!(
-            ws.load_rhs_buf[0], 0.0,
+            ws.scratch.load_rhs_buf[0], 0.0,
             "realization with mean=-1000 must be clamped to 0.0, got {}",
-            ws.load_rhs_buf[0]
+            ws.scratch.load_rhs_buf[0]
         );
 
         let cat4_start = 2;
@@ -2780,15 +2817,19 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
-            &stochastic,
-            1,
-            0,
-            &horizon,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &ForwardPassBatch {
+                local_forward_passes: 1,
+                iteration: 0,
+                fwd_offset: 0,
+            },
             &mut records,
-            &indexer,
-            0,
-            &InflowNonNegativityMethod::None,
         )
         .unwrap();
 
@@ -2803,7 +2844,7 @@ mod tests {
         );
         // load_rhs_buf must remain empty (never pushed to).
         assert!(
-            ws.load_rhs_buf.is_empty(),
+            ws.scratch.load_rhs_buf.is_empty(),
             "load_rhs_buf must be empty when n_load_buses=0"
         );
     }

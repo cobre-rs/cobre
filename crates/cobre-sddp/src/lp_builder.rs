@@ -100,8 +100,13 @@
 //!
 //! Total: 12 = 3*(2+2) patches.
 
+use std::collections::HashMap;
+
 use cobre_core::entities::hydro::HydroGenerationModel;
-use cobre_core::System;
+use cobre_core::{
+    Bus, CascadeTopology, EntityId, Hydro, Line, LoadModel, ResolvedBounds, ResolvedPenalties,
+    Stage, System, Thermal,
+};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
 use cobre_stochastic::par::precompute::PrecomputedParLp;
@@ -598,6 +603,589 @@ pub struct StageTemplates {
 /// from the stage definition.
 const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 
+// ---------------------------------------------------------------------------
+// Per-stage template builder internals
+// ---------------------------------------------------------------------------
+
+/// System-level context shared across all stages during template construction.
+///
+/// Bundles the references extracted from a [`System`] before the per-stage
+/// loop begins. Constructed once in [`build_stage_templates`] and borrowed by
+/// [`build_single_stage_template`] for each study stage.
+struct TemplateBuildCtx<'a> {
+    hydros: &'a [Hydro],
+    thermals: &'a [Thermal],
+    lines: &'a [Line],
+    buses: &'a [Bus],
+    load_models: &'a [LoadModel],
+    cascade: &'a CascadeTopology,
+    bounds: &'a ResolvedBounds,
+    penalties: &'a ResolvedPenalties,
+    hydro_pos: HashMap<EntityId, usize>,
+    bus_pos: HashMap<EntityId, usize>,
+    inflow_method: &'a InflowNonNegativityMethod,
+    par_lp: &'a PrecomputedParLp,
+    n_hydros: usize,
+    n_thermals: usize,
+    n_lines: usize,
+    n_buses: usize,
+    max_par_order: usize,
+    has_penalty: bool,
+}
+
+/// Pre-computed column and row layout offsets for a single stage LP.
+///
+/// Centralises the arithmetic that derives column-start and row-start indices
+/// from entity counts and block count so that the filling helpers do not need
+/// to recompute them independently.
+struct StageLayout {
+    n_blks: usize,
+    n_h: usize,
+    n_b: usize,
+    lag_order: usize,
+    // Column regions
+    col_turbine_start: usize,
+    col_spillage_start: usize,
+    col_thermal_start: usize,
+    col_line_fwd_start: usize,
+    col_line_rev_start: usize,
+    col_deficit_start: usize,
+    col_excess_start: usize,
+    col_inflow_slack_start: usize,
+    num_cols: usize,
+    // Row regions
+    row_water_balance_start: usize,
+    row_load_balance_start: usize,
+    num_rows: usize,
+    // Template metadata
+    n_state: usize,
+    n_dual_relevant: usize,
+    // Scalar derived quantities used by row-bound and matrix helpers
+    zeta: f64,
+}
+
+impl StageLayout {
+    fn new(ctx: &TemplateBuildCtx<'_>, stage: &Stage) -> Self {
+        let n_blks = stage.blocks.len();
+        let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
+        let decision_start = idx.theta + 1;
+
+        let col_turbine_start = decision_start;
+        let col_spillage_start = col_turbine_start + ctx.n_hydros * n_blks;
+        let col_thermal_start = col_spillage_start + ctx.n_hydros * n_blks;
+        let col_line_fwd_start = col_thermal_start + ctx.n_thermals * n_blks;
+        let col_line_rev_start = col_line_fwd_start + ctx.n_lines * n_blks;
+        let col_deficit_start = col_line_rev_start + ctx.n_lines * n_blks;
+        let col_excess_start = col_deficit_start + ctx.n_buses * n_blks;
+        let col_excess_end = col_excess_start + ctx.n_buses * n_blks;
+        let col_inflow_slack_start = col_excess_end;
+        let n_slack_cols = if ctx.has_penalty { ctx.n_hydros } else { 0 };
+        let num_cols = col_excess_end + n_slack_cols;
+
+        let n_state = idx.n_state;
+        let n_dual_relevant = n_state;
+        let row_water_balance_start = n_dual_relevant;
+        let row_load_balance_start = row_water_balance_start + ctx.n_hydros;
+        let num_rows = row_load_balance_start + ctx.n_buses * n_blks;
+
+        let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let zeta = total_stage_hours * M3S_TO_HM3;
+
+        Self {
+            n_blks,
+            n_h: ctx.n_hydros,
+            n_b: ctx.n_buses,
+            lag_order: ctx.max_par_order,
+            col_turbine_start,
+            col_spillage_start,
+            col_thermal_start,
+            col_line_fwd_start,
+            col_line_rev_start,
+            col_deficit_start,
+            col_excess_start,
+            col_inflow_slack_start,
+            num_cols,
+            row_water_balance_start,
+            row_load_balance_start,
+            num_rows,
+            n_state,
+            n_dual_relevant,
+            zeta,
+        }
+    }
+}
+
+/// Fill column lower/upper bounds and objective coefficients for one stage.
+///
+/// Returns `(col_lower, col_upper, objective)` vectors of length `layout.num_cols`.
+fn fill_stage_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
+    let mut col_lower = vec![0.0_f64; layout.num_cols];
+    let mut col_upper = vec![f64::INFINITY; layout.num_cols];
+    let mut objective = vec![0.0_f64; layout.num_cols];
+
+    // Outgoing and incoming storage columns.
+    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        col_lower[h_idx] = hb.min_storage_hm3;
+        col_upper[h_idx] = hb.max_storage_hm3;
+        col_lower[idx.storage_in.start + h_idx] = f64::NEG_INFINITY;
+        col_upper[idx.storage_in.start + h_idx] = f64::INFINITY;
+    }
+
+    // AR lag columns: unconstrained (signed).
+    for lag_col in idx.inflow_lags.clone() {
+        col_lower[lag_col] = f64::NEG_INFINITY;
+        col_upper[lag_col] = f64::INFINITY;
+    }
+
+    // Theta: bounded below by zero so iteration-1 LPs with empty cut pools
+    // are bounded rather than unbounded.
+    col_lower[idx.theta] = 0.0;
+    col_upper[idx.theta] = f64::INFINITY;
+    objective[idx.theta] = 1.0;
+
+    // Turbine columns per hydro per block.
+    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        for blk in 0..layout.n_blks {
+            let col = layout.col_turbine_start + h_idx * layout.n_blks + blk;
+            col_lower[col] = hb.min_turbined_m3s;
+            col_upper[col] = hb.max_turbined_m3s;
+        }
+    }
+
+    // Spillage columns per hydro per block.
+    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        for blk in 0..layout.n_blks {
+            let col = layout.col_spillage_start + h_idx * layout.n_blks + blk;
+            col_upper[col] = f64::INFINITY;
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = hp.spillage_cost * block_hours;
+        }
+    }
+
+    // Thermal columns per thermal per block.
+    for (t_idx, thermal) in ctx.thermals.iter().enumerate() {
+        let tb = ctx.bounds.thermal_bounds(t_idx, stage_idx);
+        let marginal_cost_per_mwh = thermal
+            .cost_segments
+            .first()
+            .map_or(0.0, |seg| seg.cost_per_mwh);
+        for blk in 0..layout.n_blks {
+            let col = layout.col_thermal_start + t_idx * layout.n_blks + blk;
+            col_lower[col] = tb.min_generation_mw;
+            col_upper[col] = tb.max_generation_mw;
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = marginal_cost_per_mwh * block_hours;
+        }
+    }
+
+    // Line columns per line per block (forward and reverse).
+    for (l_idx, line) in ctx.lines.iter().enumerate() {
+        let lb = ctx.bounds.line_bounds(l_idx, stage_idx);
+        let lp = ctx.penalties.line_penalties(l_idx, stage_idx);
+        for blk in 0..layout.n_blks {
+            let col_fwd = layout.col_line_fwd_start + l_idx * layout.n_blks + blk;
+            let col_rev = layout.col_line_rev_start + l_idx * layout.n_blks + blk;
+            col_upper[col_fwd] = lb.direct_mw;
+            col_upper[col_rev] = lb.reverse_mw;
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col_fwd] = lp.exchange_cost * block_hours;
+            objective[col_rev] = lp.exchange_cost * block_hours;
+            let _ = line;
+        }
+    }
+
+    // Deficit and excess columns per bus per block.
+    for (b_idx, bus) in ctx.buses.iter().enumerate() {
+        let bp = ctx.penalties.bus_penalties(b_idx, stage_idx);
+        let deficit_cost = bus
+            .deficit_segments
+            .last()
+            .map_or(0.0, |seg| seg.cost_per_mwh);
+        for blk in 0..layout.n_blks {
+            let col_def = layout.col_deficit_start + b_idx * layout.n_blks + blk;
+            let col_exc = layout.col_excess_start + b_idx * layout.n_blks + blk;
+            col_upper[col_def] = f64::INFINITY;
+            col_upper[col_exc] = f64::INFINITY;
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col_def] = deficit_cost * block_hours;
+            objective[col_exc] = bp.excess_cost * block_hours;
+        }
+    }
+
+    // Inflow non-negativity slack columns (sigma_inf_h), one per hydro.
+    // Bounds [0, +inf) come from vec initialisation; only objective needs writing.
+    if ctx.has_penalty {
+        let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let penalty_cost = ctx.inflow_method.penalty_cost().unwrap_or(0.0);
+        let obj_coeff = penalty_cost * total_stage_hours;
+        for h_idx in 0..layout.n_h {
+            let col = layout.col_inflow_slack_start + h_idx;
+            objective[col] = obj_coeff;
+        }
+    }
+
+    (col_lower, col_upper, objective)
+}
+
+/// Fill row lower/upper bounds for one stage.
+///
+/// Returns `(row_lower, row_upper)` vectors of length `layout.num_rows`.
+fn fill_stage_rows(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut row_lower = vec![0.0_f64; layout.num_rows];
+    let mut row_upper = vec![0.0_f64; layout.num_rows];
+
+    // Water balance rows: static RHS = ζ * deterministic_base_h.
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_water_balance_start + h_idx;
+        let base = if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h {
+            ctx.par_lp.deterministic_base(stage_idx, h_idx)
+        } else {
+            0.0
+        };
+        row_lower[row] = layout.zeta * base;
+        row_upper[row] = layout.zeta * base;
+    }
+
+    // Load balance rows: static RHS = mean_mw from load model.
+    for (b_idx, bus) in ctx.buses.iter().enumerate() {
+        let mean_mw = ctx
+            .load_models
+            .iter()
+            .find(|lm| lm.bus_id == bus.id && lm.stage_id == stage.id)
+            .map_or(0.0, |lm| lm.mean_mw);
+        for blk in 0..layout.n_blks {
+            let row = layout.row_load_balance_start + b_idx * layout.n_blks + blk;
+            row_lower[row] = mean_mw;
+            row_upper[row] = mean_mw;
+        }
+    }
+
+    (row_lower, row_upper)
+}
+
+/// Build the CSC matrix entries for one stage.
+///
+/// Returns one `Vec<(row, value)>` per column. Entries within each column are
+/// sorted by row index before return (CSC invariant).
+/// Fill state-region and water-balance entries into `col_entries`.
+///
+/// Writes entries for storage-fixing rows, AR lag-fixing rows,
+/// and the water-balance rows (outgoing/incoming storage, turbine, spillage,
+/// upstream cascade, and AR lag dynamics).
+fn fill_state_and_water_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
+    let n_h = layout.n_h;
+    let n_blks = layout.n_blks;
+    let lag_order = layout.lag_order;
+    let zeta = layout.zeta;
+    let row_water = layout.row_water_balance_start;
+
+    // State rows: storage-fixing (incoming storage column → row h).
+    for h in 0..n_h {
+        let col = idx.storage_in.start + h;
+        col_entries[col].push((h, 1.0));
+    }
+
+    // State rows: lag-fixing (lag column → diagonal row).
+    for lag in 0..lag_order {
+        for h in 0..n_h {
+            let col = idx.inflow_lags.start + lag * n_h + h;
+            let row = n_h + lag * n_h + h;
+            col_entries[col].push((row, 1.0));
+        }
+    }
+
+    // Water balance: outgoing storage (+1), incoming storage (-1),
+    // turbine/spillage (+tau), upstream turbine/spillage (-tau),
+    // and AR lag dynamics (-ζ*ψ).
+    for h_idx in 0..n_h {
+        let hydro = &ctx.hydros[h_idx];
+        let row = row_water + h_idx;
+        col_entries[h_idx].push((row, 1.0));
+        col_entries[idx.storage_in.start + h_idx].push((row, -1.0));
+        for blk in 0..n_blks {
+            let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+            let col_turbine = layout.col_turbine_start + h_idx * n_blks + blk;
+            col_entries[col_turbine].push((row, tau_h));
+            let col_spillage = layout.col_spillage_start + h_idx * n_blks + blk;
+            col_entries[col_spillage].push((row, tau_h));
+            for &up_id in ctx.cascade.upstream(hydro.id) {
+                if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
+                    col_entries[layout.col_turbine_start + u_idx * n_blks + blk]
+                        .push((row, -tau_h));
+                    col_entries[layout.col_spillage_start + u_idx * n_blks + blk]
+                        .push((row, -tau_h));
+                }
+            }
+        }
+        if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == n_h {
+            let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
+            for (lag, &psi_val) in psi.iter().enumerate() {
+                if psi_val != 0.0 && lag < lag_order {
+                    let col = idx.inflow_lags.start + lag * n_h + h_idx;
+                    col_entries[col].push((row, -zeta * psi_val));
+                }
+            }
+        }
+    }
+
+    // Inflow non-negativity slack: sigma_inf_h enters water balance with -ζ.
+    if ctx.has_penalty {
+        for h_idx in 0..n_h {
+            let col = layout.col_inflow_slack_start + h_idx;
+            let row = row_water + h_idx;
+            col_entries[col].push((row, -zeta));
+        }
+    }
+}
+
+/// Fill load-balance entries into `col_entries`.
+///
+/// Writes entries for hydro turbine generation, thermal generation,
+/// line forward/reverse flows, and deficit/excess slacks.
+fn fill_load_balance_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let n_blks = layout.n_blks;
+    let row_load = layout.row_load_balance_start;
+
+    // Hydro turbine generation (rho * turbine_col).
+    for (h_idx, hydro) in ctx.hydros.iter().enumerate() {
+        let rho = match &hydro.generation_model {
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s,
+            }
+            | HydroGenerationModel::LinearizedHead {
+                productivity_mw_per_m3s,
+            } => *productivity_mw_per_m3s,
+            HydroGenerationModel::Fpha => unreachable!(
+                "FPHA validation guard at the top of build_stage_templates prevents reaching this arm"
+            ),
+        };
+        if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {
+            for blk in 0..n_blks {
+                let row = row_load + b_idx * n_blks + blk;
+                let col = layout.col_turbine_start + h_idx * n_blks + blk;
+                col_entries[col].push((row, rho));
+            }
+        }
+    }
+
+    // Thermal generation.
+    for (t_idx, thermal) in ctx.thermals.iter().enumerate() {
+        if let Some(&b_idx) = ctx.bus_pos.get(&thermal.bus_id) {
+            for blk in 0..n_blks {
+                let row = row_load + b_idx * n_blks + blk;
+                let col = layout.col_thermal_start + t_idx * n_blks + blk;
+                col_entries[col].push((row, 1.0));
+            }
+        }
+    }
+
+    // Line flows (+1 at target, -1 at source for forward; reversed for reverse).
+    for (l_idx, line) in ctx.lines.iter().enumerate() {
+        let src_idx = ctx.bus_pos.get(&line.source_bus_id).copied();
+        let tgt_idx = ctx.bus_pos.get(&line.target_bus_id).copied();
+        for blk in 0..n_blks {
+            let col_fwd = layout.col_line_fwd_start + l_idx * n_blks + blk;
+            let col_rev = layout.col_line_rev_start + l_idx * n_blks + blk;
+            if let Some(tgt) = tgt_idx {
+                let row = row_load + tgt * n_blks + blk;
+                col_entries[col_fwd].push((row, 1.0));
+                col_entries[col_rev].push((row, -1.0));
+            }
+            if let Some(src) = src_idx {
+                let row = row_load + src * n_blks + blk;
+                col_entries[col_fwd].push((row, -1.0));
+                col_entries[col_rev].push((row, 1.0));
+            }
+        }
+    }
+
+    // Deficit (+1) and excess (-1).
+    for b_idx in 0..layout.n_b {
+        for blk in 0..n_blks {
+            let row = row_load + b_idx * n_blks + blk;
+            let col_def = layout.col_deficit_start + b_idx * n_blks + blk;
+            let col_exc = layout.col_excess_start + b_idx * n_blks + blk;
+            col_entries[col_def].push((row, 1.0));
+            col_entries[col_exc].push((row, -1.0));
+        }
+    }
+}
+
+/// Build the CSC matrix entries for one stage.
+///
+/// Returns one `Vec<(row, value)>` per column. Entries within each column are
+/// sorted by row index before return (CSC invariant).
+fn build_stage_matrix_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+) -> Vec<Vec<(usize, f64)>> {
+    let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
+
+    fill_state_and_water_entries(ctx, stage, stage_idx, layout, &mut col_entries);
+    fill_load_balance_entries(ctx, layout, &mut col_entries);
+
+    // Sort each column's entries by row index (CSC invariant).
+    for entries in &mut col_entries {
+        entries.sort_unstable_by_key(|&(row, _)| row);
+    }
+
+    col_entries
+}
+
+/// Assemble CSC arrays from per-column entry lists.
+///
+/// Returns `(col_starts, row_indices, values)` in the format required by
+/// `SolverInterface::load_model`.
+fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<i32>, Vec<f64>) {
+    let num_cols = col_entries.len();
+    let total_nz: usize = col_entries.iter().map(Vec::len).sum();
+    let mut col_starts = Vec::with_capacity(num_cols + 1);
+    let mut row_indices = Vec::with_capacity(total_nz);
+    let mut values = Vec::with_capacity(total_nz);
+
+    let mut offset: i32 = 0;
+    for entries in col_entries {
+        col_starts.push(offset);
+        for &(row, val) in entries {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            row_indices.push(row as i32);
+            values.push(val);
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        {
+            offset += entries.len() as i32;
+        }
+    }
+    col_starts.push(offset);
+
+    (col_starts, row_indices, values)
+}
+
+/// Construct a [`StageTemplate`] for a single study stage.
+///
+/// Returns the template and the row index of the water-balance block
+/// (used as `base_row` by the [`PatchBuffer`] noise injection) and the
+/// row index of the load-balance block (used for load-noise patches).
+fn build_single_stage_template(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+) -> (StageTemplate, usize, usize) {
+    let layout = StageLayout::new(ctx, stage);
+    let stage_base_row = layout.row_water_balance_start;
+    let load_balance_row_start = layout.row_load_balance_start;
+
+    let (col_lower, col_upper, objective) = fill_stage_columns(ctx, stage, stage_idx, &layout);
+    let (row_lower, row_upper) = fill_stage_rows(ctx, stage, stage_idx, &layout);
+    let col_entries = build_stage_matrix_entries(ctx, stage, stage_idx, &layout);
+    let (col_starts, row_indices, values) = assemble_csc(&col_entries);
+
+    let n_transfer = ctx.n_hydros * ctx.max_par_order;
+    let total_nz = col_entries.iter().map(Vec::len).sum();
+
+    let template = StageTemplate {
+        num_cols: layout.num_cols,
+        num_rows: layout.num_rows,
+        num_nz: total_nz,
+        col_starts,
+        row_indices,
+        values,
+        col_lower,
+        col_upper,
+        objective,
+        row_lower,
+        row_upper,
+        n_state: layout.n_state,
+        n_transfer,
+        n_dual_relevant: layout.n_dual_relevant,
+        n_hydro: layout.n_h,
+        max_par_order: layout.lag_order,
+    };
+
+    (template, stage_base_row, load_balance_row_start)
+}
+
+/// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation.
+///
+/// Returns `(noise_scale, zeta_per_stage, block_hours_per_stage)`.  The
+/// `noise_scale` flat vector has layout `[s_idx * n_hydros + h_idx]` so that
+/// the forward pass can index it without branching.
+fn compute_noise_scale(
+    study_stages: &[&Stage],
+    n_hydros: usize,
+    par_lp: &PrecomputedParLp,
+) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
+    let n = study_stages.len();
+    let mut noise_scale = vec![0.0_f64; n * n_hydros];
+    let mut zeta_per_stage = Vec::with_capacity(n);
+    let mut block_hours_per_stage = Vec::with_capacity(n);
+
+    for (s_idx, stage) in study_stages.iter().enumerate() {
+        let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let zeta_s = total_hours * M3S_TO_HM3;
+        zeta_per_stage.push(zeta_s);
+        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
+        for h_idx in 0..n_hydros {
+            let sigma = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
+                par_lp.sigma(s_idx, h_idx)
+            } else {
+                0.0
+            };
+            noise_scale[s_idx * n_hydros + h_idx] = zeta_s * sigma;
+        }
+    }
+
+    (noise_scale, zeta_per_stage, block_hours_per_stage)
+}
+
+/// Collect the bus-slice positions of stochastic load buses.
+///
+/// Returns bus-position indices (into the buses slice) for every bus that has
+/// `std_mw > 0` in any load model, sorted by `EntityId` for declaration-order
+/// invariance.  Buses with duplicate IDs across stages are deduplicated.
+fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>) -> Vec<usize> {
+    // `n_load_buses` must equal `normal_lp.n_entities()` in a consistent
+    // system; both are derived from buses with std_mw > 0 in the load models.
+    let mut ids: Vec<EntityId> = system
+        .load_models()
+        .iter()
+        .filter(|m| m.std_mw > 0.0)
+        .map(|m| m.bus_id)
+        .collect();
+    ids.sort_unstable_by_key(|id| id.0);
+    ids.dedup();
+    ids.iter()
+        .filter_map(|id| bus_pos.get(id).copied())
+        .collect()
+}
+
 /// Build one [`StageTemplate`] per study stage from a fully loaded [`System`].
 ///
 /// The templates encode the complete structural LP for each SDDP subproblem
@@ -676,7 +1264,6 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 ///     .expect("no FPHA plants");
 /// assert!(result.templates.is_empty());
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
@@ -695,15 +1282,7 @@ pub fn build_stage_templates(
 
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-
     let hydros = system.hydros();
-    let thermals = system.thermals();
-    let lines = system.lines();
-    let buses = system.buses();
-    let cascade = system.cascade();
-    let bounds = system.bounds();
-    let penalties = system.penalties();
-
     let n_hydros = hydros.len();
 
     if study_stages.is_empty() {
@@ -719,12 +1298,24 @@ pub fn build_stage_templates(
             load_bus_indices: Vec::new(),
         });
     }
-    let n_thermals = thermals.len();
-    let n_lines = lines.len();
-    let n_buses = buses.len();
 
-    // Compute max PAR order across all hydros and study stages.
-    // All hydros use a uniform lag stride for SIMD alignment.
+    let buses = system.buses();
+    let hydro_pos: HashMap<EntityId, usize> =
+        hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
+    let bus_pos: HashMap<EntityId, usize> =
+        buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+
+    let load_bus_indices = collect_load_bus_indices(system, &bus_pos);
+    let n_load_buses = load_bus_indices.len();
+    // Consistency gate: a non-empty PrecomputedNormalLp must have the same
+    // entity count as the stochastic load buses derived from the system.
+    debug_assert!(
+        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
+        "PrecomputedNormalLp has {} entities but system has {} stochastic load buses",
+        normal_lp.n_entities(),
+        n_load_buses
+    );
+
     let max_par_order: usize = system
         .inflow_models()
         .iter()
@@ -733,442 +1324,41 @@ pub fn build_stage_templates(
         .max()
         .unwrap_or(0);
 
-    // Build a position map: hydro EntityId -> index in hydros slice.
-    let hydro_pos: std::collections::HashMap<cobre_core::EntityId, usize> =
-        hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
-
-    // Build a position map: bus EntityId -> index in buses slice.
-    let bus_pos: std::collections::HashMap<cobre_core::EntityId, usize> =
-        buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
-
-    let n_study_stages = study_stages.len();
-    let mut templates = Vec::with_capacity(n_study_stages);
-    let mut base_rows = Vec::with_capacity(n_study_stages);
-    let mut load_balance_row_starts = Vec::with_capacity(n_study_stages);
-
-    // Determine whether the penalty method adds inflow slack columns.
-    // Active when the method has slack columns and there is at least one hydro.
-    // No slack columns are added for n_hydros == 0.
-    let has_penalty = n_hydros > 0 && inflow_method.has_slack_columns();
-
-    // Collect stochastic load bus indices: buses with std_mw > 0 for any stage,
-    // sorted by EntityId for declaration-order invariance, mapped to their
-    // position in the buses slice.
-    //
-    // `n_load_buses` equals `normal_lp.n_entities()` in a consistent system
-    // (the two are derived from the same source of truth: buses with std_mw > 0
-    // in the load models).  We derive it from the system directly so that
-    // `load_bus_indices` and `n_load_buses` are always mutually consistent.
-    let load_bus_indices: Vec<usize> = {
-        let mut ids: Vec<cobre_core::EntityId> = system
-            .load_models()
-            .iter()
-            .filter(|m| m.std_mw > 0.0)
-            .map(|m| m.bus_id)
-            .collect();
-        ids.sort_unstable_by_key(|id| id.0);
-        ids.dedup();
-        ids.iter()
-            .filter_map(|id| bus_pos.get(id).copied())
-            .collect()
+    let ctx = TemplateBuildCtx {
+        hydros,
+        thermals: system.thermals(),
+        lines: system.lines(),
+        buses,
+        load_models: system.load_models(),
+        cascade: system.cascade(),
+        bounds: system.bounds(),
+        penalties: system.penalties(),
+        hydro_pos,
+        bus_pos,
+        inflow_method,
+        par_lp,
+        n_hydros,
+        n_thermals: system.thermals().len(),
+        n_lines: system.lines().len(),
+        n_buses: buses.len(),
+        max_par_order,
+        has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
     };
-    let n_load_buses = load_bus_indices.len();
-    // Consistency gate: n_load_buses derived from the system must agree with
-    // n_entities() in the PrecomputedNormalLp when the latter is non-empty.
-    // A default (empty) PrecomputedNormalLp is accepted for call sites that
-    // have not yet wired the stochastic context (e.g. unit tests without load noise).
-    debug_assert!(
-        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormalLp has {} entities but system has {} stochastic load buses",
-        normal_lp.n_entities(),
-        n_load_buses
-    );
 
+    let n_study = study_stages.len();
+    let mut templates = Vec::with_capacity(n_study);
+    let mut base_rows = Vec::with_capacity(n_study);
+    let mut load_balance_row_starts = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let n_blks = stage.blocks.len();
-        let idx = StageIndexer::new(n_hydros, max_par_order);
-        let decision_start = idx.theta + 1;
-
-        let col_turbine_start = decision_start;
-        let col_spillage_start = col_turbine_start + n_hydros * n_blks;
-        let col_thermal_start = col_spillage_start + n_hydros * n_blks;
-        let col_line_fwd_start = col_thermal_start + n_thermals * n_blks;
-        let col_line_rev_start = col_line_fwd_start + n_lines * n_blks;
-        let col_deficit_start = col_line_rev_start + n_lines * n_blks;
-        let col_excess_start = col_deficit_start + n_buses * n_blks;
-        let col_excess_end = col_excess_start + n_buses * n_blks;
-        // Inflow slack columns go after excess, only when penalty method is active.
-        let col_inflow_slack_start = col_excess_end;
-        let n_slack_cols = if has_penalty { n_hydros } else { 0 };
-        let num_cols = col_excess_end + n_slack_cols;
-
-        let n_state = idx.n_state;
-        let n_dual_relevant = n_state;
-        let row_water_balance_start = n_dual_relevant;
-        let row_load_balance_start = row_water_balance_start + n_hydros;
-        let num_rows = row_load_balance_start + n_buses * n_blks;
-        load_balance_row_starts.push(row_load_balance_start);
-
-        let n_h = n_hydros;
-        let n_b = n_buses;
-        let lag_order = max_par_order;
-
-        let stage_base_row = row_water_balance_start;
-
-        let mut col_lower = vec![0.0_f64; num_cols];
-        let mut col_upper = vec![f64::INFINITY; num_cols];
-        let mut objective = vec![0.0_f64; num_cols];
-
-        for (h_idx, hydro) in hydros.iter().enumerate() {
-            let hb = bounds.hydro_bounds(h_idx, stage_idx);
-            col_lower[h_idx] = hb.min_storage_hm3;
-            col_upper[h_idx] = hb.max_storage_hm3;
-            col_lower[idx.storage_in.start + h_idx] = f64::NEG_INFINITY;
-            col_upper[idx.storage_in.start + h_idx] = f64::INFINITY;
-            let _ = hydro;
-        }
-
-        for lag_col in idx.inflow_lags.clone() {
-            col_lower[lag_col] = f64::NEG_INFINITY;
-            col_upper[lag_col] = f64::INFINITY;
-        }
-
-        // Theta bounded below by zero: all penalties are non-negative, terminal
-        // stage value is zero. This ensures iteration 1 LPs with empty cut pools
-        // are bounded (return theta=0) rather than unbounded by HiGHS.
-        col_lower[idx.theta] = 0.0;
-        col_upper[idx.theta] = f64::INFINITY;
-        objective[idx.theta] = 1.0;
-
-        for (h_idx, hydro) in hydros.iter().enumerate() {
-            let hb = bounds.hydro_bounds(h_idx, stage_idx);
-            for blk in 0..n_blks {
-                let col = col_turbine_start + h_idx * n_blks + blk;
-                col_lower[col] = hb.min_turbined_m3s;
-                col_upper[col] = hb.max_turbined_m3s;
-                objective[col] = 0.0;
-                let _ = hydro;
-            }
-        }
-
-        for (h_idx, _hydro) in hydros.iter().enumerate() {
-            let hp = penalties.hydro_penalties(h_idx, stage_idx);
-            for blk in 0..n_blks {
-                let col = col_spillage_start + h_idx * n_blks + blk;
-                col_lower[col] = 0.0;
-                col_upper[col] = f64::INFINITY;
-                let block_hours = stage.blocks[blk].duration_hours;
-                objective[col] = hp.spillage_cost * block_hours;
-            }
-        }
-
-        for (t_idx, thermal) in thermals.iter().enumerate() {
-            let tb = bounds.thermal_bounds(t_idx, stage_idx);
-            let marginal_cost_per_mwh = thermal
-                .cost_segments
-                .first()
-                .map_or(0.0, |seg| seg.cost_per_mwh);
-            for blk in 0..n_blks {
-                let col = col_thermal_start + t_idx * n_blks + blk;
-                col_lower[col] = tb.min_generation_mw;
-                col_upper[col] = tb.max_generation_mw;
-                let block_hours = stage.blocks[blk].duration_hours;
-                objective[col] = marginal_cost_per_mwh * block_hours;
-            }
-        }
-
-        for (l_idx, line) in lines.iter().enumerate() {
-            let lb = bounds.line_bounds(l_idx, stage_idx);
-            let lp = penalties.line_penalties(l_idx, stage_idx);
-            for blk in 0..n_blks {
-                let col_fwd = col_line_fwd_start + l_idx * n_blks + blk;
-                let col_rev = col_line_rev_start + l_idx * n_blks + blk;
-                col_lower[col_fwd] = 0.0;
-                col_upper[col_fwd] = lb.direct_mw;
-                col_lower[col_rev] = 0.0;
-                col_upper[col_rev] = lb.reverse_mw;
-                let block_hours = stage.blocks[blk].duration_hours;
-                objective[col_fwd] = lp.exchange_cost * block_hours;
-                objective[col_rev] = lp.exchange_cost * block_hours;
-                let _ = line;
-            }
-        }
-
-        for (b_idx, bus) in buses.iter().enumerate() {
-            let bp = penalties.bus_penalties(b_idx, stage_idx);
-            let deficit_cost = bus
-                .deficit_segments
-                .last()
-                .map_or(0.0, |seg| seg.cost_per_mwh);
-            for blk in 0..n_blks {
-                let col_def = col_deficit_start + b_idx * n_blks + blk;
-                let col_exc = col_excess_start + b_idx * n_blks + blk;
-                col_lower[col_def] = 0.0;
-                col_upper[col_def] = f64::INFINITY;
-                col_lower[col_exc] = 0.0;
-                col_upper[col_exc] = f64::INFINITY;
-                let block_hours = stage.blocks[blk].duration_hours;
-                objective[col_def] = deficit_cost * block_hours;
-                objective[col_exc] = bp.excess_cost * block_hours;
-            }
-        }
-
-        // Inflow non-negativity slack columns (sigma_inf_h), one per hydro.
-        // Bounds: [0, +inf).  Objective: penalty_cost * total_stage_hours.
-        // These are already zero-lower / infinity-upper from the vec initialisation,
-        // so only the objective coefficient needs to be written.
-        if has_penalty {
-            let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
-            // penalty_cost() is always Some when has_penalty is true.
-            let penalty_cost = inflow_method.penalty_cost().unwrap_or(0.0);
-            let obj_coeff = penalty_cost * total_stage_hours;
-            for h_idx in 0..n_hydros {
-                let col = col_inflow_slack_start + h_idx;
-                // col_lower already 0.0, col_upper already f64::INFINITY
-                objective[col] = obj_coeff;
-            }
-        }
-
-        let mut row_lower = vec![0.0_f64; num_rows];
-        let mut row_upper = vec![0.0_f64; num_rows];
-
-        // Water balance rows: static RHS = ζ * deterministic_base_h.
-        // The dynamic part (ζ * σ * η) is applied per-scenario via PatchBuffer.
-        let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
-        let zeta = total_stage_hours * M3S_TO_HM3;
-        for h_idx in 0..n_h {
-            let row = row_water_balance_start + h_idx;
-            let base = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_h {
-                par_lp.deterministic_base(stage_idx, h_idx)
-            } else {
-                0.0
-            };
-            row_lower[row] = zeta * base;
-            row_upper[row] = zeta * base;
-        }
-
-        for (b_idx, bus) in buses.iter().enumerate() {
-            let load_models = system.load_models();
-            let mean_mw = load_models
-                .iter()
-                .find(|lm| lm.bus_id == bus.id && lm.stage_id == stage.id)
-                .map_or(0.0, |lm| lm.mean_mw);
-            for blk in 0..n_blks {
-                let row = row_load_balance_start + b_idx * n_blks + blk;
-                row_lower[row] = mean_mw;
-                row_upper[row] = mean_mw;
-            }
-        }
-
-        let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_cols];
-
-        macro_rules! add_entry {
-            ($col:expr, $row:expr, $val:expr) => {
-                col_entries[$col].push(($row, $val));
-            };
-        }
-
-        for h in 0..n_h {
-            let col = idx.storage_in.start + h;
-            add_entry!(col, h, 1.0);
-        }
-
-        for lag in 0..lag_order {
-            for h in 0..n_h {
-                let col = idx.inflow_lags.start + lag * n_h + h;
-                let row = n_h + lag * n_h + h;
-                add_entry!(col, row, 1.0);
-            }
-        }
-
-        for h_idx in 0..n_h {
-            let hydro = &hydros[h_idx];
-            let row = row_water_balance_start + h_idx;
-            // v_out enters with +1 (outgoing storage increases the balance).
-            add_entry!(h_idx, row, 1.0);
-            // v_in enters with -1 (incoming storage is subtracted).
-            add_entry!(idx.storage_in.start + h_idx, row, -1.0);
-            for blk in 0..n_blks {
-                let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
-                // Own turbine and spillage reduce storage (outflows).
-                let col_turbine = col_turbine_start + h_idx * n_blks + blk;
-                add_entry!(col_turbine, row, tau_h);
-                let col_spillage = col_spillage_start + h_idx * n_blks + blk;
-                add_entry!(col_spillage, row, tau_h);
-                // Upstream turbine and spillage add to storage (inflows from upstream).
-                let upstream_ids = cascade.upstream(hydro.id);
-                for &up_id in upstream_ids {
-                    if let Some(&u_idx) = hydro_pos.get(&up_id) {
-                        let col_upstream_turbine = col_turbine_start + u_idx * n_blks + blk;
-                        add_entry!(col_upstream_turbine, row, -tau_h);
-                        let col_upstream_spillage = col_spillage_start + u_idx * n_blks + blk;
-                        add_entry!(col_upstream_spillage, row, -tau_h);
-                    }
-                }
-            }
-            // AR lag dynamics: lag variable at lag ℓ for hydro h enters with
-            // coefficient -ζ * ψ_{h,ℓ} in the water balance row. This encodes
-            // the PAR model: a_h = base + Σ_ℓ ψ_ℓ * lag_ℓ + σ * η, where the
-            // lag terms move to the LHS of the equality constraint.
-            if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_h {
-                let psi = par_lp.psi_slice(stage_idx, h_idx);
-                for (lag, &psi_val) in psi.iter().enumerate() {
-                    if psi_val != 0.0 && lag < lag_order {
-                        let col = idx.inflow_lags.start + lag * n_h + h_idx;
-                        add_entry!(col, row, -zeta * psi_val);
-                    }
-                }
-            }
-        }
-        for (h_idx, hydro) in hydros.iter().enumerate() {
-            let rho = match &hydro.generation_model {
-                HydroGenerationModel::ConstantProductivity {
-                    productivity_mw_per_m3s,
-                }
-                | HydroGenerationModel::LinearizedHead {
-                    productivity_mw_per_m3s,
-                } => *productivity_mw_per_m3s,
-                HydroGenerationModel::Fpha => {
-                    unreachable!(
-                        "FPHA validation guard at the top of build_stage_templates prevents reaching this arm"
-                    )
-                }
-            };
-
-            if let Some(&b_idx) = bus_pos.get(&hydro.bus_id) {
-                for blk in 0..n_blks {
-                    let row = row_load_balance_start + b_idx * n_blks + blk;
-                    let col = col_turbine_start + h_idx * n_blks + blk;
-                    add_entry!(col, row, rho);
-                }
-            }
-        }
-
-        // Thermal generation contribution
-        for (t_idx, thermal) in thermals.iter().enumerate() {
-            if let Some(&b_idx) = bus_pos.get(&thermal.bus_id) {
-                for blk in 0..n_blks {
-                    let row = row_load_balance_start + b_idx * n_blks + blk;
-                    let col = col_thermal_start + t_idx * n_blks + blk;
-                    add_entry!(col, row, 1.0);
-                }
-            }
-        }
-
-        // Line forward flow (source→target): +1.0 at target bus, -1.0 at source bus
-        for (l_idx, line) in lines.iter().enumerate() {
-            let src_idx = bus_pos.get(&line.source_bus_id).copied();
-            let tgt_idx = bus_pos.get(&line.target_bus_id).copied();
-            for blk in 0..n_blks {
-                let col_fwd = col_line_fwd_start + l_idx * n_blks + blk;
-                let col_rev = col_line_rev_start + l_idx * n_blks + blk;
-                if let Some(tgt) = tgt_idx {
-                    let row = row_load_balance_start + tgt * n_blks + blk;
-                    add_entry!(col_fwd, row, 1.0); // fwd flow adds to target
-                    add_entry!(col_rev, row, -1.0); // rev flow takes from target
-                }
-                if let Some(src) = src_idx {
-                    let row = row_load_balance_start + src * n_blks + blk;
-                    add_entry!(col_fwd, row, -1.0); // fwd flow takes from source
-                    add_entry!(col_rev, row, 1.0); // rev flow adds to source
-                }
-            }
-        }
-
-        // Deficit and excess contributions
-        for b_idx in 0..n_b {
-            for blk in 0..n_blks {
-                let row = row_load_balance_start + b_idx * n_blks + blk;
-                let col_def = col_deficit_start + b_idx * n_blks + blk;
-                let col_exc = col_excess_start + b_idx * n_blks + blk;
-                add_entry!(col_def, row, 1.0); // deficit adds supply
-                add_entry!(col_exc, row, -1.0); // excess reduces net supply
-            }
-        }
-
-        // Inflow non-negativity slack: sigma_inf_h enters the water balance row
-        // for hydro h with coefficient -ζ (negative on the LHS). This is
-        // equivalent to adding ζ*sigma_inf_h of virtual inflow to the RHS,
-        // absorbing negative noise realisations and keeping the water balance
-        // feasible.
-        if has_penalty {
-            for h_idx in 0..n_h {
-                let col = col_inflow_slack_start + h_idx;
-                let row = row_water_balance_start + h_idx;
-                add_entry!(col, row, -zeta);
-            }
-        }
-
-        for entries in &mut col_entries {
-            entries.sort_unstable_by_key(|&(row, _)| row);
-        }
-
-        let total_nz: usize = col_entries.iter().map(Vec::len).sum();
-        let mut col_starts = Vec::with_capacity(num_cols + 1);
-        let mut row_indices = Vec::with_capacity(total_nz);
-        let mut values = Vec::with_capacity(total_nz);
-
-        let mut offset: i32 = 0;
-        for entries in &col_entries {
-            col_starts.push(offset);
-            for &(row, val) in entries {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                row_indices.push(row as i32);
-                values.push(val);
-            }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            {
-                offset += entries.len() as i32;
-            }
-        }
-        col_starts.push(offset);
-
-        let n_transfer = n_hydros * max_par_order;
-
-        let template = StageTemplate {
-            num_cols,
-            num_rows,
-            num_nz: total_nz,
-            col_starts,
-            row_indices,
-            values,
-            col_lower,
-            col_upper,
-            objective,
-            row_lower,
-            row_upper,
-            n_state,
-            n_transfer,
-            n_dual_relevant,
-            n_hydro: n_h,
-            max_par_order: lag_order,
-        };
-
+        let (template, stage_base_row, load_balance_row_start) =
+            build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
+        load_balance_row_starts.push(load_balance_row_start);
     }
 
-    // Pre-compute ζ * σ per (stage, hydro) for noise transformation in the
-    // forward/backward passes. The caller multiplies raw η by noise_scale to
-    // obtain ζ*σ*η, which is then added to ζ*base (encoded in row_lower) to
-    // form the complete water-balance RHS patch value.
-    let mut noise_scale = vec![0.0_f64; n_study_stages * n_hydros];
-    let mut zeta_per_stage = Vec::with_capacity(n_study_stages);
-    let mut block_hours_per_stage = Vec::with_capacity(n_study_stages);
-    for (s_idx, stage) in study_stages.iter().enumerate() {
-        let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
-        let zeta_s = total_hours * M3S_TO_HM3;
-        zeta_per_stage.push(zeta_s);
-        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
-        for h_idx in 0..n_hydros {
-            let sigma = if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
-                par_lp.sigma(s_idx, h_idx)
-            } else {
-                0.0
-            };
-            noise_scale[s_idx * n_hydros + h_idx] = zeta_s * sigma;
-        }
-    }
+    let (noise_scale, zeta_per_stage, block_hours_per_stage) =
+        compute_noise_scale(&study_stages, n_hydros, par_lp);
 
     Ok(StageTemplates {
         templates,
@@ -1185,7 +1375,7 @@ pub fn build_stage_templates(
 
 #[cfg(test)]
 mod tests {
-    use super::{ar_dynamics_row_offset, PatchBuffer};
+    use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -2358,6 +2548,7 @@ mod tests {
     /// AC: a system where a hydro plant uses `Fpha` must be rejected before any
     /// LP construction work, with an error message that contains the plant name.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_fpha_model_rejected() {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};

@@ -8,18 +8,12 @@ use cobre_solver::{Basis, SolverInterface};
 
 use crate::lp_builder::PatchBuffer;
 
-/// All per-thread mutable resources required for one LP solve sequence.
+/// Pre-allocated scratch buffers for noise transformation and simulation.
 ///
-/// Each field is exclusively owned by the thread — there is no shared state
-/// between workspaces. Distributed to worker threads via mutable references
-/// from a [`WorkspacePool`].
-pub struct SolverWorkspace<S: SolverInterface> {
-    /// LP solver instance owned exclusively by this workspace.
-    pub solver: S,
-    /// Pre-allocated row-bound patch buffer.
-    pub patch_buf: PatchBuffer,
-    /// Scratch buffer for the current state vector.
-    pub current_state: Vec<f64>,
+/// Grouped here for readability; individual fields are passed by `&mut`
+/// reference to noise transformation functions in `noise.rs`.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct ScratchBuffers {
     /// Scratch buffer for transformed noise per hydro.
     pub(crate) noise_buf: Vec<f64>,
     /// Scratch buffer for inflow in m³/s (used by simulation pipeline).
@@ -46,6 +40,22 @@ pub struct SolverWorkspace<S: SolverInterface> {
     pub(crate) row_lower_buf: Vec<f64>,
 }
 
+/// All per-thread mutable resources required for one LP solve sequence.
+///
+/// Each field is exclusively owned by the thread — there is no shared state
+/// between workspaces. Distributed to worker threads via mutable references
+/// from a [`WorkspacePool`].
+pub struct SolverWorkspace<S: SolverInterface> {
+    /// LP solver instance owned exclusively by this workspace.
+    pub solver: S,
+    /// Pre-allocated row-bound patch buffer.
+    pub patch_buf: PatchBuffer,
+    /// Scratch buffer for the current state vector.
+    pub current_state: Vec<f64>,
+    /// Pre-allocated scratch buffers for noise transformation and simulation.
+    pub(crate) scratch: ScratchBuffers,
+}
+
 impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
@@ -66,14 +76,16 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
-            noise_buf: Vec::with_capacity(hydro_count),
-            inflow_m3s_buf: Vec::with_capacity(hydro_count),
-            lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-            par_inflow_buf: Vec::with_capacity(hydro_count),
-            eta_floor_buf: Vec::with_capacity(hydro_count),
-            zero_targets_buf: vec![0.0_f64; hydro_count],
-            load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-            row_lower_buf: Vec::new(),
+            scratch: ScratchBuffers {
+                noise_buf: Vec::with_capacity(hydro_count),
+                inflow_m3s_buf: Vec::with_capacity(hydro_count),
+                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+                par_inflow_buf: Vec::with_capacity(hydro_count),
+                eta_floor_buf: Vec::with_capacity(hydro_count),
+                zero_targets_buf: vec![0.0_f64; hydro_count],
+                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+                row_lower_buf: Vec::new(),
+            },
         }
     }
 }
@@ -114,14 +126,16 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory(),
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
-                noise_buf: Vec::with_capacity(hydro_count),
-                inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                par_inflow_buf: Vec::with_capacity(hydro_count),
-                eta_floor_buf: Vec::with_capacity(hydro_count),
-                zero_targets_buf: vec![0.0_f64; hydro_count],
-                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                row_lower_buf: Vec::new(),
+                scratch: ScratchBuffers {
+                    noise_buf: Vec::with_capacity(hydro_count),
+                    inflow_m3s_buf: Vec::with_capacity(hydro_count),
+                    lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+                    par_inflow_buf: Vec::with_capacity(hydro_count),
+                    eta_floor_buf: Vec::with_capacity(hydro_count),
+                    zero_targets_buf: vec![0.0_f64; hydro_count],
+                    load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+                    row_lower_buf: Vec::new(),
+                },
             })
             .collect();
         Self { workspaces }
@@ -164,14 +178,16 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory()?,
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
-                noise_buf: Vec::with_capacity(hydro_count),
-                inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                par_inflow_buf: Vec::with_capacity(hydro_count),
-                eta_floor_buf: Vec::with_capacity(hydro_count),
-                zero_targets_buf: vec![0.0_f64; hydro_count],
-                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                row_lower_buf: Vec::new(),
+                scratch: ScratchBuffers {
+                    noise_buf: Vec::with_capacity(hydro_count),
+                    inflow_m3s_buf: Vec::with_capacity(hydro_count),
+                    lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+                    par_inflow_buf: Vec::with_capacity(hydro_count),
+                    eta_floor_buf: Vec::with_capacity(hydro_count),
+                    zero_targets_buf: vec![0.0_f64; hydro_count],
+                    load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+                    row_lower_buf: Vec::new(),
+                },
             });
         }
         Ok(Self { workspaces })
@@ -334,8 +350,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        types::{RowBatch, StageTemplate},
         Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
+        types::{RowBatch, StageTemplate},
     };
 
     /// Minimal no-op solver for workspace tests.

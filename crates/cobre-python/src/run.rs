@@ -38,8 +38,9 @@ use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    SimulationScenarioResult, SimulationStageResult, StageContext, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool,
+    SimulationOutputSpec, SimulationScenarioResult, SimulationStageResult, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -602,17 +603,22 @@ fn run_inner(
     let load_balance_row_starts = &stage_templates.load_balance_row_starts;
     let load_bus_indices = &stage_templates.load_bus_indices;
 
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &inflow_method,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+    };
+
     let training_result = train(
         &mut solver,
         training_config,
         &mut fcf,
         stage_templates_ref,
         base_rows,
-        &indexer,
-        &initial_state,
+        &training_ctx,
         stochastic.opening_tree(),
-        &stochastic,
-        &horizon,
         &risk_measures,
         stopping_rules,
         cut_selection_strategy.as_ref(),
@@ -620,7 +626,6 @@ fn run_inner(
         &comm,
         n_threads,
         HighsSolver::new,
-        &inflow_method,
         noise_scale,
         n_hydros_lp,
         n_load_buses,
@@ -697,18 +702,16 @@ fn run_inner(
                 block_counts_per_stage: &block_counts_per_stage,
             },
             &fcf,
-            &stochastic,
+            &training_ctx,
             &sim_config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage,
+                block_hours_per_stage,
+                entity_counts: &entity_counts,
+                event_sender: Some(sim_event_tx),
+            },
             &comm,
-            &result_tx,
-            &inflow_method,
-            zeta_per_stage,
-            block_hours_per_stage,
-            Some(sim_event_tx),
         )
         .map_err(|e| format!("simulation error: {e}"));
 

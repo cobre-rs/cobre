@@ -365,7 +365,7 @@ pub fn parse_cut_selection_config(
     config: &cobre_io::config::CutSelectionConfig,
 ) -> Result<Option<CutSelectionStrategy>, String> {
     let enabled = config.enabled.unwrap_or(false);
-    if !enabled && config.method.is_none() {
+    if !enabled {
         return Ok(None);
     }
 
@@ -853,6 +853,22 @@ mod tests {
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_enabled_false_with_method_returns_none() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(false),
+            method: Some("level1".to_string()),
+            threshold: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg).unwrap();
+        assert!(
+            result.is_none(),
+            "enabled=false must return None even when method is set"
+        );
     }
 
     #[test]

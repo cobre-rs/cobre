@@ -36,6 +36,24 @@ use crate::{
 };
 use cobre_solver::StageTemplate;
 
+/// Stage-0 inputs for lower bound evaluation, bundled to reduce parameter count.
+///
+/// Passed to [`evaluate_lower_bound`] in place of four separate parameters.
+pub struct LbEvalSpec<'a> {
+    /// Structural LP template for stage 0.
+    pub template: &'a StageTemplate,
+    /// AR-dynamics base row index for stage 0.
+    pub base_row: usize,
+    /// Pre-computed `ζ*σ` noise scale per hydro at stage 0.
+    pub noise_scale: &'a [f64],
+    /// Number of hydro plants with inflow noise.
+    pub n_hydros: usize,
+    /// Opening tree for stage-0 noise realizations.
+    pub opening_tree: &'a OpeningTree,
+    /// Risk measure for stage-0 objective aggregation.
+    pub risk_measure: &'a RiskMeasure,
+}
+
 /// Evaluate the global lower bound for the current FCF approximation.
 ///
 /// On rank 0 the function iterates over all stage-0 openings, solves the LP
@@ -46,26 +64,13 @@ use cobre_solver::StageTemplate;
 ///
 /// - `solver` — Mutable LP solver instance. Only rank 0 calls `solve`; other
 ///   ranks skip the opening loop entirely.
-/// - `template` — Structural LP for stage 0, shared read-only.
 /// - `fcf` — Future Cost Function with all accumulated cuts.
 /// - `initial_state` — Known initial state vector `x_0` (length `indexer.n_state`).
-/// - `base_row` — AR-dynamics base row index for stage 0, used by
-///   [`PatchBuffer::fill_forward_patches`].
 /// - `indexer` — LP layout map for stage 0.
 /// - `patch_buf` — Reusable patch buffer (must be sized for this stage).
-/// - `opening_tree` — Scenario tree providing per-opening raw noise vectors (η).
-/// - `noise_scale` — Pre-computed `ζ*σ` per hydro at stage 0, used to transform
-///   raw η into the water-balance RHS: `ζ*base + ζ*σ*η`.
-/// - `n_hydros` — Number of hydro plants (determines how many noise elements to
-///   transform from each opening).
-/// - `risk_measure` — Risk measure for stage 0 (determines probability weighting).
+/// - `spec` — Stage-0 data bundle: template, base row, noise scale, hydro count,
+///   opening tree, and risk measure. See [`LbEvalSpec`].
 /// - `comm` — Communicator for rank/size queries and broadcast.
-///
-/// ## Returns
-///
-/// `Ok(lb)` where `lb` is the risk-adjusted lower bound (finite when all
-/// stage-0 LPs have finite objectives). Returns `Err` on LP infeasibility,
-/// other solver failure, or communication error.
 ///
 /// ## Errors
 ///
@@ -78,35 +83,26 @@ use cobre_solver::StageTemplate;
 ///
 /// ## Panics
 ///
-/// Panics if `opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must have
-/// at least one opening; this is a caller contract violation.
-///
-/// ## Example
-///
-/// ```rust,ignore
-/// // Illustrative usage (not compiled in doctests: requires full solver setup).
-/// let lb = evaluate_lower_bound(
-///     &mut solver, &template, &fcf, &initial_state,
-///     base_row, &indexer, &mut patch_buf,
-///     &opening_tree, &noise_scale, n_hydros,
-///     &risk_measure, &comm,
-/// )?;
-/// ```
-#[allow(clippy::too_many_arguments)]
+/// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
+/// have at least one opening; this is a caller contract violation.
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
-    template: &StageTemplate,
     fcf: &FutureCostFunction,
     initial_state: &[f64],
-    base_row: usize,
     indexer: &StageIndexer,
     patch_buf: &mut PatchBuffer,
-    opening_tree: &OpeningTree,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    risk_measure: &RiskMeasure,
+    spec: &LbEvalSpec<'_>,
     comm: &C,
 ) -> Result<f64, SddpError> {
+    let LbEvalSpec {
+        template,
+        base_row,
+        noise_scale,
+        n_hydros,
+        opening_tree,
+        risk_measure,
+    } = spec;
+    let (base_row, n_hydros) = (*base_row, *n_hydros);
     let mut lb = 0.0_f64;
 
     if comm.rank() == 0 {
@@ -116,30 +112,23 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        // Build cut rows once — the cut batch does not change per opening.
         let cut_batch = build_cut_row_batch(fcf, 0, indexer);
-
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
 
         for opening_idx in 0..n_openings {
             solver.load_model(template);
-
             if cut_batch.num_rows > 0 {
                 solver.add_rows(&cut_batch);
             }
 
-            // Transform raw η → ζ*base + ζ*σ*η for the water-balance
-            // RHS patch (same transformation as the forward pass).
             let raw_noise = opening_tree.opening(0, opening_idx);
             noise_buf.clear();
             for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                let base_rhs = template.row_lower[base_row + h];
-                noise_buf.push(base_rhs + noise_scale[h] * eta);
+                noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta);
             }
 
             patch_buf.fill_forward_patches(indexer, initial_state, &noise_buf, base_row);
-
             let n_patches = patch_buf.forward_patch_count();
             solver.set_row_bounds(
                 &patch_buf.indices[..n_patches],
@@ -155,14 +144,12 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 },
                 other => SddpError::Solver(other),
             })?;
-
             objectives.push(view.objective);
         }
 
         #[allow(clippy::cast_precision_loss)]
         let uniform_prob = 1.0_f64 / n_openings as f64;
-        let probs = vec![uniform_prob; n_openings];
-        lb = risk_measure.evaluate_risk(&objectives, &probs);
+        lb = risk_measure.evaluate_risk(&objectives, &vec![uniform_prob; n_openings]);
     }
 
     comm.broadcast(std::slice::from_mut(&mut lb), 0)
@@ -179,7 +166,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     clippy::cast_precision_loss
 )]
 mod tests {
-    use super::evaluate_lower_bound;
+    use super::{LbEvalSpec, evaluate_lower_bound};
     use crate::{FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer};
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
@@ -477,18 +464,21 @@ mod tests {
 
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let lb = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1, // base_row
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -514,18 +504,21 @@ mod tests {
         // Solver returns 60, 80, 100 for the three openings.
         let mut solver = MockSolver::with_objectives(vec![60.0, 80.0, 100.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let lb = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -558,18 +551,21 @@ mod tests {
         // Solver returns 50, 150.
         let mut solver = MockSolver::with_objectives(vec![50.0, 150.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let lb = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -599,18 +595,21 @@ mod tests {
 
         let mut solver = MockSolver::with_objectives(vec![50.0, 150.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let lb = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -636,18 +635,21 @@ mod tests {
 
         let mut solver = MockSolver::infeasible_on_first();
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let result = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         );
 
@@ -671,18 +673,21 @@ mod tests {
 
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let result = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         );
 
@@ -713,18 +718,21 @@ mod tests {
 
         let mut solver = MockSolver::with_objectives(vec![200.0, 300.0]);
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
         let lb = evaluate_lower_bound(
             &mut solver,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -752,20 +760,24 @@ mod tests {
         let rm = RiskMeasure::Expectation;
         let comm = LocalComm;
 
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+        };
+
         // First call: solver returns [50, 100] → LB = 75.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
         let lb1 = evaluate_lower_bound(
             &mut solver1,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();
@@ -774,16 +786,11 @@ mod tests {
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
         let lb2 = evaluate_lower_bound(
             &mut solver2,
-            &template,
             &fcf,
             &initial_state,
-            1,
             &indexer,
             &mut patch_buf,
-            &opening_tree,
-            &[],
-            0,
-            &rm,
+            &spec,
             &comm,
         )
         .unwrap();

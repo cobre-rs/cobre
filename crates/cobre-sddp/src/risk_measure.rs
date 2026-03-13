@@ -121,6 +121,15 @@ pub enum RiskMeasure {
     },
 }
 
+impl From<cobre_core::StageRiskConfig> for RiskMeasure {
+    fn from(config: cobre_core::StageRiskConfig) -> Self {
+        match config {
+            cobre_core::StageRiskConfig::Expectation => Self::Expectation,
+            cobre_core::StageRiskConfig::CVaR { alpha, lambda } => Self::CVaR { alpha, lambda },
+        }
+    }
+}
+
 impl RiskMeasure {
     /// Aggregate per-opening backward pass results into a single cut.
     ///
@@ -582,5 +591,28 @@ mod tests {
         let debug_str = format!("{o:?}");
         assert!(debug_str.contains("BackwardOutcome"));
         assert!((cloned.intercept - o.intercept).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_from_stage_risk_config_expectation() {
+        let config = cobre_core::StageRiskConfig::Expectation;
+        let rm = RiskMeasure::from(config);
+        assert!(matches!(rm, RiskMeasure::Expectation));
+    }
+
+    #[test]
+    fn test_from_stage_risk_config_cvar() {
+        let config = cobre_core::StageRiskConfig::CVaR {
+            alpha: 0.95,
+            lambda: 0.5,
+        };
+        let rm = RiskMeasure::from(config);
+        assert!(matches!(
+            rm,
+            RiskMeasure::CVaR {
+                alpha: 0.95,
+                lambda: 0.5
+            }
+        ));
     }
 }

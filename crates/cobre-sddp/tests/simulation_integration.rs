@@ -41,8 +41,9 @@ use cobre_io::{
 };
 use cobre_sddp::{
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, build_training_output, simulate, train,
+    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    build_training_output, simulate, train,
 };
 
 /// Single-rank communicator for testing.
@@ -582,11 +583,14 @@ fn train_simulate_write_cycle() {
         &mut fcf,
         &fx.templates,
         &fx.base_rows,
-        &fx.indexer,
-        &fx.initial_state,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &fx.opening_tree,
-        &fx.stochastic,
-        &fx.horizon,
         &fx.risk_measures,
         iteration_limit(3),
         None,
@@ -594,7 +598,6 @@ fn train_simulate_write_cycle() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &InflowNonNegativityMethod::None,
         &[],
         0,
         0,
@@ -725,27 +728,33 @@ fn train_simulate_write_cycle() {
 
     simulate(
         &mut sim_workspaces,
-        &fx.templates,
-        &fx.base_rows,
+        &StageContext {
+            templates: &fx.templates,
+            base_rows: &fx.base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+        },
         &fcf,
-        &fx.stochastic,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &sim_config,
-        &fx.horizon,
-        &fx.initial_state,
-        &fx.indexer,
-        &entity_counts,
+        SimulationOutputSpec {
+            result_tx: &result_tx,
+            zeta_per_stage: &[],
+            block_hours_per_stage: &[],
+            entity_counts: &entity_counts,
+            event_sender: None,
+        },
         &sim_comm,
-        &result_tx,
-        &InflowNonNegativityMethod::None,
-        &[],
-        0,
-        0,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        None,
     )
     .expect("simulate must succeed");
 

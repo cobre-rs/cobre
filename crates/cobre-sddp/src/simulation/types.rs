@@ -361,7 +361,7 @@ pub struct SimulationStageResult {
 ///
 /// Matches the category breakdown in SS4.2 and is retained in the compact
 /// cost buffer even after per-stage detail is streamed to the output writer.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScenarioCategoryCosts {
     /// Sum of thermal and contract costs: `thermal_cost + contract_cost`.
     pub resource_cost: f64,

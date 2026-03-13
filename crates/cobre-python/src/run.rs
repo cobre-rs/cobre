@@ -34,12 +34,13 @@ use cobre_io::output::simulation_writer::{
     NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
     StageWritePayload, ThermalWriteRecord,
 };
-use cobre_io::{ParquetWriterConfig, write_results};
+use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, SimulationScenarioResult, SimulationStageResult, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, WorkspacePool, build_stage_templates,
-    build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SimulationScenarioResult, SimulationStageResult, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -173,8 +174,6 @@ fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
             .collect(),
     }
 }
-
-// Conversions from simulation result types to write record types.
 
 fn convert_stage(src: SimulationStageResult) -> StageWritePayload {
     StageWritePayload {
@@ -363,8 +362,8 @@ fn write_policy_checkpoint(
     seed: u64,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyBasisRecord, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
-        write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyBasisRecord,
+        PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
     };
 
     let n_stages = fcf.pools.len();
@@ -517,6 +516,9 @@ fn run_inner(
         .unwrap_or(DEFAULT_FORWARD_PASSES);
     let stopping_rules = resolve_stopping_rules(&config);
     let max_iterations = max_iterations_from_rules(&stopping_rules);
+    let cut_selection_strategy =
+        cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
+            .map_err(|msg| format!("cut_selection config error: {msg}"))?;
 
     // Build stochastic context.
     let stochastic = build_stochastic_context(&system, seed, &[])
@@ -528,7 +530,8 @@ fn run_inner(
         &inflow_method,
         stochastic.par_lp(),
         stochastic.normal_lp(),
-    );
+    )
+    .map_err(|e| e.to_string())?;
     if stage_templates.templates.is_empty() {
         return Err("system has no study stages — cannot train".to_string());
     }
@@ -568,7 +571,12 @@ fn run_inner(
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
-    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+    let risk_measures: Vec<RiskMeasure> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| RiskMeasure::from(s.risk_config))
+        .collect();
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
 
@@ -595,25 +603,29 @@ fn run_inner(
     let load_balance_row_starts = &stage_templates.load_balance_row_starts;
     let load_bus_indices = &stage_templates.load_bus_indices;
 
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &inflow_method,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+    };
+
     let training_result = train(
         &mut solver,
         training_config,
         &mut fcf,
         stage_templates_ref,
         base_rows,
-        &indexer,
-        &initial_state,
+        &training_ctx,
         stochastic.opening_tree(),
-        &stochastic,
-        &horizon,
         &risk_measures,
         stopping_rules,
-        None,
+        cut_selection_strategy.as_ref(),
         None,
         &comm,
         n_threads,
         HighsSolver::new,
-        &inflow_method,
         noise_scale,
         n_hydros_lp,
         n_load_buses,
@@ -679,27 +691,27 @@ fn run_inner(
 
         let sim_result = simulate(
             &mut sim_pool.workspaces,
-            stage_templates_ref,
-            base_rows,
+            &StageContext {
+                templates: stage_templates_ref,
+                base_rows,
+                noise_scale,
+                n_hydros: n_hydros_lp,
+                n_load_buses,
+                load_balance_row_starts,
+                load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
-            &stochastic,
+            &training_ctx,
             &sim_config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage,
+                block_hours_per_stage,
+                entity_counts: &entity_counts,
+                event_sender: Some(sim_event_tx),
+            },
             &comm,
-            &result_tx,
-            &inflow_method,
-            noise_scale,
-            n_hydros_lp,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            &block_counts_per_stage,
-            zeta_per_stage,
-            block_hours_per_stage,
-            Some(sim_event_tx),
         )
         .map_err(|e| format!("simulation error: {e}"));
 

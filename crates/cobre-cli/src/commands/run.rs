@@ -24,8 +24,9 @@ use cobre_io::write_results;
 use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    WorkspacePool, build_stage_templates, build_training_output, simulate, train,
+    SimulationConfig, SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspacePool, build_stage_templates,
+    build_training_output, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -46,18 +47,7 @@ const DEFAULT_SEED: u64 = 42;
 // BroadcastConfig — postcard-safe configuration snapshot for MPI broadcast
 // ---------------------------------------------------------------------------
 
-/// A postcard-serializable stopping rule, mirroring [`StoppingRule`].
-///
-/// [`StoppingRule`] does not implement `serde::Serialize`/`Deserialize` and
-/// uses no `#[serde(tag)]` attribute, so it cannot be broadcast directly.
-/// [`StoppingRuleConfig`](cobre_io::config::StoppingRuleConfig) uses an
-/// internally-tagged enum (`#[serde(tag = "type")]`) that postcard cannot
-/// deserialize (postcard refuses `deserialize_any`). This type uses the
-/// default external-tag representation which postcard supports fully.
-///
-/// Only the variants reachable via [`resolve_stopping_rules`] are included.
-/// The `Simulation` variant from [`StoppingRuleConfig`] is folded into
-/// `IterationLimit` by [`resolve_stopping_rules`], so it never appears here.
+/// Postcard-serializable stopping rule (external-tagged for serialization).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum BroadcastStoppingRule {
     IterationLimit { limit: u64 },
@@ -65,61 +55,106 @@ enum BroadcastStoppingRule {
     BoundStalling { iterations: u64, tolerance: f64 },
 }
 
-/// A postcard-serializable stopping mode, mirroring [`StoppingMode`].
-///
-/// [`StoppingMode`] does not implement serde traits.
+/// Postcard-serializable stopping mode.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum BroadcastStoppingMode {
     Any,
     All,
 }
 
-/// Configuration snapshot broadcast from rank 0 to all ranks before training.
-///
-/// [`cobre_io::Config`] cannot be broadcast via postcard because it contains
-/// [`cobre_io::config::StoppingRuleConfig`], an internally-tagged enum
-/// (`#[serde(tag = "type")]`) that requires `deserialize_any` — a feature
-/// postcard explicitly refuses to implement. This struct holds only the fields
-/// that all ranks need for training and simulation, using types that are
-/// postcard-serializable.
-///
-/// Rank 0 resolves the raw [`cobre_io::Config`] into a `BroadcastConfig`
-/// before broadcasting. Rank 0 retains the raw `Config` for output-writing
-/// paths that require it (e.g., `write_results`).
+/// Postcard-safe cut selection strategy.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+enum BroadcastCutSelection {
+    Disabled,
+    Level1 {
+        threshold: u64,
+        check_frequency: u64,
+    },
+    Lml1 {
+        memory_window: u64,
+        check_frequency: u64,
+    },
+    Dominated {
+        threshold: f64,
+        check_frequency: u64,
+    },
+}
+
+impl BroadcastCutSelection {
+    fn from_strategy(strategy: Option<&cobre_sddp::CutSelectionStrategy>) -> Self {
+        use cobre_sddp::CutSelectionStrategy;
+        match strategy {
+            None => Self::Disabled,
+            Some(CutSelectionStrategy::Level1 {
+                threshold,
+                check_frequency,
+            }) => Self::Level1 {
+                threshold: *threshold,
+                check_frequency: *check_frequency,
+            },
+            Some(CutSelectionStrategy::Lml1 {
+                memory_window,
+                check_frequency,
+            }) => Self::Lml1 {
+                memory_window: *memory_window,
+                check_frequency: *check_frequency,
+            },
+            Some(CutSelectionStrategy::Dominated {
+                threshold,
+                check_frequency,
+            }) => Self::Dominated {
+                threshold: *threshold,
+                check_frequency: *check_frequency,
+            },
+        }
+    }
+
+    fn into_strategy(self) -> Option<cobre_sddp::CutSelectionStrategy> {
+        use cobre_sddp::CutSelectionStrategy;
+        match self {
+            Self::Disabled => None,
+            Self::Level1 {
+                threshold,
+                check_frequency,
+            } => Some(CutSelectionStrategy::Level1 {
+                threshold,
+                check_frequency,
+            }),
+            Self::Lml1 {
+                memory_window,
+                check_frequency,
+            } => Some(CutSelectionStrategy::Lml1 {
+                memory_window,
+                check_frequency,
+            }),
+            Self::Dominated {
+                threshold,
+                check_frequency,
+            } => Some(CutSelectionStrategy::Dominated {
+                threshold,
+                check_frequency,
+            }),
+        }
+    }
+}
+
+/// Configuration snapshot broadcast from rank 0 to all ranks.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct BroadcastConfig {
-    /// Random seed for stochastic scenario generation.
     seed: u64,
-    /// Number of forward-pass trajectories per iteration.
     forward_passes: u32,
-    /// Stopping rules in postcard-safe form.
     stopping_rules: Vec<BroadcastStoppingRule>,
-    /// Combination mode for stopping rules.
     stopping_mode: BroadcastStoppingMode,
-    /// Whether to run post-training simulation on all ranks.
     should_simulate: bool,
-    /// Number of simulation scenarios (0 when simulation is disabled).
     n_scenarios: u32,
-    /// Bounded channel capacity for simulation result collection.
     io_channel_capacity: u32,
-    /// Relative path for the policy checkpoint directory (within `output_dir`).
-    /// Used by rank 0 for writing the FCF checkpoint.
     policy_path: String,
-    /// Inflow non-negativity treatment method broadcast to all ranks.
-    ///
-    /// All ranks must build LP templates with identical column counts, so the
-    /// method must be broadcast from rank 0 alongside all other config fields.
     inflow_method: InflowNonNegativityMethod,
+    cut_selection: BroadcastCutSelection,
 }
 
 impl BroadcastConfig {
-    /// Build a `BroadcastConfig` from a loaded [`cobre_io::Config`] and the
-    /// `--skip-simulation` flag.
-    ///
-    /// Resolves all values that are needed by every rank during training and
-    /// simulation. The raw `Config` is not consumed and remains available on
-    /// rank 0 for output-writing paths.
-    fn from_config(config: &cobre_io::Config, skip_simulation: bool) -> Self {
+    fn from_config(config: &cobre_io::Config, skip_simulation: bool) -> Result<Self, CliError> {
         use cobre_io::config::StoppingRuleConfig;
 
         if config.training.seed.is_none() {
@@ -179,7 +214,15 @@ impl BroadcastConfig {
         let should_simulate =
             !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
-        Self {
+        // Parse and validate the cut selection config on rank 0.
+        // Errors here are caught before the broadcast so all ranks get a valid
+        // BroadcastConfig (or the run is aborted on rank 0 before broadcast).
+        let parsed_cut_selection =
+            cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
+                .map_err(|msg| CliError::Validation { report: msg })?;
+        let cut_selection = BroadcastCutSelection::from_strategy(parsed_cut_selection.as_ref());
+
+        Ok(Self {
             seed,
             forward_passes,
             stopping_rules,
@@ -189,12 +232,11 @@ impl BroadcastConfig {
             io_channel_capacity: config.simulation.io_channel_capacity,
             policy_path: config.policy.path.clone(),
             inflow_method: InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity),
-        }
+            cut_selection,
+        })
     }
 }
 
-/// Convert a [`BroadcastConfig`] back into a [`StoppingRuleSet`] for the
-/// training loop.
 fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRuleSet {
     let rules = cfg
         .stopping_rules
@@ -263,12 +305,6 @@ pub struct RunArgs {
     pub threads: Option<u32>,
 }
 
-/// Resolve the rayon thread count for the current rank.
-///
-/// Resolution order (first non-zero value wins):
-/// 1. `cli_threads` — explicit `--threads` CLI argument.
-/// 2. `COBRE_THREADS` environment variable (HPC cluster integration).
-/// 3. Default of 1 (conservative: avoids unexpected oversubscription).
 fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
     if let Some(n) = cli_threads {
         return n as usize;
@@ -373,7 +409,7 @@ fn load_case_and_config(
         estimate_from_history(system, &args.case_dir, &config).map_err(|e| CliError::Internal {
             message: format!("estimation error: {e}"),
         })?;
-    let bcast = BroadcastConfig::from_config(&config, args.skip_simulation);
+    let bcast = BroadcastConfig::from_config(&config, args.skip_simulation)?;
     Ok((system, bcast, config))
 }
 
@@ -445,7 +481,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         return Err(e);
     }
     let system = system_result?;
-    let bcast_config = bcast_config_result?;
+    let mut bcast_config = bcast_config_result?;
 
     let seed = bcast_config.seed;
     let stochastic =
@@ -458,7 +494,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &bcast_config.inflow_method,
         stochastic.par_lp(),
         stochastic.normal_lp(),
-    );
+    )
+    .map_err(|e| CliError::Validation {
+        report: e.to_string(),
+    })?;
     if stage_templates.templates.is_empty() {
         return Err(CliError::Validation {
             report: "system has no study stages — cannot train".to_string(),
@@ -502,7 +541,12 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
-    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+    let risk_measures: Vec<RiskMeasure> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| RiskMeasure::from(s.risk_config))
+        .collect();
 
     let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
@@ -539,25 +583,37 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let load_balance_row_starts = &stage_templates.load_balance_row_starts;
     let load_bus_indices = &stage_templates.load_bus_indices;
 
+    // Reconstruct the cut selection strategy from the broadcast config so all
+    // ranks pass the same strategy to train().
+    let cut_selection_strategy = std::mem::replace(
+        &mut bcast_config.cut_selection,
+        BroadcastCutSelection::Disabled,
+    )
+    .into_strategy();
+
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &bcast_config.inflow_method,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+    };
+
     let training_result = match train(
         &mut solver,
         training_config,
         &mut fcf,
         stage_templates_ref,
         base_rows,
-        &indexer,
-        &initial_state,
+        &training_ctx,
         stochastic.opening_tree(),
-        &stochastic,
-        &horizon,
         &risk_measures,
         stopping_rules,
-        None,
+        cut_selection_strategy.as_ref(),
         None,
         &comm,
         n_threads,
         HighsSolver::new,
-        &bcast_config.inflow_method,
         noise_scale,
         n_hydros_lp,
         n_load_buses,
@@ -671,27 +727,27 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
         let sim_result = simulate(
             &mut sim_pool.workspaces,
-            stage_templates_ref,
-            base_rows,
+            &StageContext {
+                templates: stage_templates_ref,
+                base_rows,
+                noise_scale,
+                n_hydros: n_hydros_lp,
+                n_load_buses,
+                load_balance_row_starts,
+                load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
-            &stochastic,
+            &training_ctx,
             &sim_config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage,
+                block_hours_per_stage,
+                entity_counts: &entity_counts,
+                event_sender: Some(sim_event_tx),
+            },
             &comm,
-            &result_tx,
-            &bcast_config.inflow_method,
-            noise_scale,
-            n_hydros_lp,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            &block_counts_per_stage,
-            zeta_per_stage,
-            block_hours_per_stage,
-            Some(sim_event_tx),
         )
         .map_err(CliError::from);
         if let Some(handle) = sim_progress_handle {

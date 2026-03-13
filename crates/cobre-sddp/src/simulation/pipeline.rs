@@ -44,19 +44,24 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface, StageTemplate};
-use cobre_stochastic::{StochasticContext, sample_forward};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer,
+    FutureCostFunction,
+    context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
+    noise::{transform_inflow_noise, transform_load_noise},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
         extraction::EntityCounts,
-        extraction::{accumulate_category_costs, assign_scenarios, extract_stage_result},
-        types::{ScenarioCategoryCosts, SimulationScenarioResult},
+        extraction::{
+            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
+            extract_stage_result,
+        },
+        types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     workspace::SolverWorkspace,
 };
@@ -151,6 +156,345 @@ impl WelfordAccumulator {
     }
 }
 
+/// Output-related inputs bundled from the caller for [`simulate`].
+///
+/// Groups the output-channel, unit-conversion arrays, and optional event sender
+/// that would otherwise push the argument count of `simulate` beyond seven.
+pub struct SimulationOutputSpec<'a> {
+    /// Bounded channel used to stream completed scenario results to the caller.
+    pub result_tx: &'a SyncSender<SimulationScenarioResult>,
+
+    /// Per-stage productivity factor (hm³/MWh) for converting LP water-balance
+    /// RHS values to volumetric inflow (m³/s) in output records.
+    pub zeta_per_stage: &'a [f64],
+
+    /// Per-stage block hours used to compute hourly energy from block dispatch.
+    pub block_hours_per_stage: &'a [Vec<f64>],
+
+    /// Entity counts for result extraction (hydros, thermals, lines, etc.).
+    pub entity_counts: &'a EntityCounts,
+
+    /// Optional event sender for streaming progress events to the CLI/UI.
+    pub event_sender: Option<Sender<TrainingEvent>>,
+}
+
+/// Scenario identifiers bundled for `process_scenario_stages`.
+struct ScenarioIds {
+    /// Local scenario ID (0-based index within this rank's assigned slice).
+    scenario_id: u32,
+    /// Global scenario ID (used for seed derivation in `sample_forward`).
+    global_scenario: u32,
+    /// Total number of stages in the planning horizon.
+    num_stages: usize,
+}
+
+/// Rebuild the `row_lower` slice for a stage, incorporating stochastic load patches.
+///
+/// When load noise is active (`n_load_buses > 0`) and the load RHS buffer is
+/// populated, this function patches the template's `row_lower` in `scratch_buf`
+/// and returns a reference to the patched slice. Otherwise it returns the
+/// template's unmodified `row_lower` directly.
+fn build_row_lower_ref<'a>(
+    template_row_lower: &'a [f64],
+    load_rhs_buf: &[f64],
+    scratch_buf: &'a mut Vec<f64>,
+    n_load_buses: usize,
+    load_balance_row_start: usize,
+    n_blks: usize,
+    load_bus_indices: &[usize],
+) -> &'a [f64] {
+    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
+        scratch_buf.clear();
+        scratch_buf.extend_from_slice(template_row_lower);
+        let mut rhs_idx = 0;
+        for &bus_pos in load_bus_indices {
+            for blk in 0..n_blks {
+                scratch_buf[load_balance_row_start + bus_pos * n_blks + blk] =
+                    load_rhs_buf[rhs_idx];
+                rhs_idx += 1;
+            }
+        }
+        &scratch_buf[..template_row_lower.len()]
+    } else {
+        template_row_lower
+    }
+}
+
+/// Process all stages for one simulation scenario, updating workspace state in place.
+///
+/// Runs the inner stage loop for a single scenario, solving the LP at each stage,
+/// accumulating costs, and populating `stage_results`. Returns `(total_cost, stage_results)`.
+/// Stage identifiers bundled for `solve_simulation_stage`.
+struct SimStageIds {
+    /// Stage index (0-based).
+    t: usize,
+    /// Stage index as `u32` for result records and error messages.
+    stage_id_u32: u32,
+    /// Scenario ID for error messages.
+    scenario_id: u32,
+}
+
+/// Solve one stage for one simulation scenario, updating workspace in-place.
+///
+/// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
+/// and returns `(immediate_cost, SimulationStageResult)`. Updates `basis_entry`
+/// for warm-starting on the next scenario.
+fn solve_simulation_stage<S: SolverInterface>(
+    ws: &mut crate::workspace::SolverWorkspace<S>,
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    cut_batch: &RowBatch,
+    basis_entry: &mut Option<Basis>,
+    output: &SimulationOutputSpec<'_>,
+    ids: &SimStageIds,
+) -> Result<(f64, SimulationStageResult), SimulationError> {
+    // Precondition: ws.scratch.noise_buf and ws.scratch.load_rhs_buf are populated
+    // by the caller (process_scenario_stages) via transform_inflow_noise / transform_load_noise.
+    let TrainingContext { indexer, .. } = training_ctx;
+    let t = ids.t;
+    ws.solver.load_model(&ctx.templates[t]);
+    ws.solver.add_rows(cut_batch);
+    ws.patch_buf.fill_forward_patches(
+        indexer,
+        &ws.current_state,
+        &ws.scratch.noise_buf,
+        ctx.base_rows[t],
+    );
+    if ctx.n_load_buses > 0 {
+        ws.patch_buf.fill_load_patches(
+            ctx.load_balance_row_starts[t],
+            ctx.block_counts_per_stage[t],
+            &ws.scratch.load_rhs_buf,
+            ctx.load_bus_indices,
+        );
+    }
+    let pc = ws.patch_buf.forward_patch_count();
+    ws.solver.set_row_bounds(
+        &ws.patch_buf.indices[..pc],
+        &ws.patch_buf.lower[..pc],
+        &ws.patch_buf.upper[..pc],
+    );
+
+    let view = (match basis_entry.as_ref() {
+        Some(rb) => ws.solver.solve_with_basis(rb),
+        None => ws.solver.solve(),
+    })
+    .map_err(|e| {
+        *basis_entry = None;
+        match e {
+            SolverError::Infeasible => SimulationError::LpInfeasible {
+                scenario_id: ids.scenario_id,
+                stage_id: ids.stage_id_u32,
+                solver_message: "LP infeasible".to_string(),
+            },
+            other => SimulationError::SolverError {
+                scenario_id: ids.scenario_id,
+                stage_id: ids.stage_id_u32,
+                solver_message: other.to_string(),
+            },
+        }
+    })?;
+
+    let immediate_cost = view.objective - view.primal[indexer.theta];
+    ws.scratch.inflow_m3s_buf.clear();
+    if let Some(&zeta) = output.zeta_per_stage.get(t) {
+        if zeta > 0.0 {
+            for &rhs_hm3 in &ws.scratch.noise_buf {
+                ws.scratch.inflow_m3s_buf.push(rhs_hm3 / zeta);
+            }
+        }
+    }
+    let blk_hrs = output
+        .block_hours_per_stage
+        .get(t)
+        .map_or(&[][..], |v| v.as_slice());
+    // Guard index accesses when there are no load buses (slices may be empty).
+    let (load_row_start, n_blks) = if ctx.n_load_buses > 0 {
+        (
+            ctx.load_balance_row_starts[t],
+            ctx.block_counts_per_stage[t],
+        )
+    } else {
+        (0, 0)
+    };
+    let row_lower_ref = build_row_lower_ref(
+        &ctx.templates[t].row_lower,
+        &ws.scratch.load_rhs_buf,
+        &mut ws.scratch.row_lower_buf,
+        ctx.n_load_buses,
+        load_row_start,
+        n_blks,
+        ctx.load_bus_indices,
+    );
+    let result = extract_stage_result(
+        &SolutionView {
+            primal: view.primal,
+            dual: view.dual,
+            objective: view.objective,
+            objective_coeffs: &ctx.templates[t].objective,
+            row_lower: row_lower_ref,
+        },
+        &StageExtractionSpec {
+            indexer,
+            entity_counts: output.entity_counts,
+            inflow_m3s_per_hydro: &ws.scratch.inflow_m3s_buf,
+            block_hours: blk_hrs,
+        },
+        ids.stage_id_u32,
+    );
+
+    ws.current_state.clear();
+    ws.current_state
+        .extend_from_slice(&view.primal[..indexer.n_state]);
+    if let Some(rb) = basis_entry.as_mut() {
+        ws.solver.get_basis(rb);
+    } else {
+        let mut rb = Basis::new(ctx.templates[t].num_cols, ctx.templates[t].num_rows);
+        ws.solver.get_basis(&mut rb);
+        *basis_entry = Some(rb);
+    }
+    Ok((immediate_cost, result))
+}
+
+fn process_scenario_stages<S: SolverInterface>(
+    ws: &mut crate::workspace::SolverWorkspace<S>,
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    cut_batches: &[RowBatch],
+    basis_cache: &mut [Option<Basis>],
+    output: &SimulationOutputSpec<'_>,
+    ids: &ScenarioIds,
+) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
+    let TrainingContext {
+        indexer,
+        stochastic,
+        initial_state,
+        ..
+    } = training_ctx;
+    // Reset workspace state to the initial conditions for this scenario.
+    ws.current_state.clear();
+    ws.current_state.extend_from_slice(initial_state);
+    let tree_view = stochastic.tree_view();
+    let base_seed = stochastic.base_seed();
+    let mut total_cost = 0.0_f64;
+    let mut stage_results = Vec::with_capacity(ids.num_stages);
+
+    for t in 0..ids.num_stages {
+        #[allow(clippy::cast_possible_truncation)]
+        let stage_id_u32 = t as u32;
+        let (_opening_idx, raw_noise) = sample_forward(
+            &tree_view,
+            base_seed,
+            0,
+            ids.global_scenario,
+            stage_id_u32,
+            t,
+        );
+        transform_inflow_noise(
+            raw_noise,
+            t,
+            &ws.current_state,
+            ctx,
+            training_ctx,
+            &mut ws.scratch,
+        );
+        transform_load_noise(
+            raw_noise,
+            ctx.n_hydros,
+            ctx.n_load_buses,
+            stochastic,
+            t,
+            if ctx.n_load_buses > 0 {
+                ctx.block_counts_per_stage[t]
+            } else {
+                0
+            },
+            &mut ws.scratch.load_rhs_buf,
+        );
+        let (cost, result) = solve_simulation_stage(
+            ws,
+            ctx,
+            training_ctx,
+            &cut_batches[t],
+            &mut basis_cache[t],
+            output,
+            &SimStageIds {
+                t,
+                stage_id_u32,
+                scenario_id: ids.scenario_id,
+            },
+        )?;
+        // Advance state for next stage: already updated inside solve_simulation_stage, but
+        // we need indexer.theta for cost accumulation (view already consumed). Cost is immediate only.
+        total_cost += cost;
+        // Re-read state update: solve_simulation_stage already called ws.current_state.extend_from_slice.
+        // However, the noise transforms above consumed ws.scratch; we must NOT re-run them.
+        // The state was already advanced inside solve_simulation_stage. ✓
+        stage_results.push(result);
+        // State is already updated inside solve_simulation_stage via ws.current_state. ✓
+    }
+    // Restore the indexer reference lifetime: indexer is still in scope from the destructure above.
+    let _ = indexer; // suppress unused warning
+    Ok((total_cost, stage_results))
+}
+
+/// Emit an in-progress simulation event if a sender is available.
+fn emit_sim_progress(
+    sender: Option<&Sender<TrainingEvent>>,
+    acc: &WelfordAccumulator,
+    completed: u32,
+    total: u32,
+    elapsed_ms: u64,
+) {
+    if let Some(s) = sender {
+        let _ = s.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: completed,
+            scenarios_total: total,
+            elapsed_ms,
+            mean_cost: acc.mean(),
+            std_cost: acc.std_dev(),
+            ci_95_half_width: acc.ci_95_half_width(),
+        });
+    }
+}
+
+/// Accumulate per-category costs from all stage results, send the scenario
+/// result through the channel, and return a compact `(scenario_id, total_cost,
+/// category_costs)` tuple for MPI aggregation.
+///
+/// Extracted from `simulate`'s inner worker loop to keep that function within
+/// the 100-line limit.
+fn dispatch_scenario_result(
+    output: &SimulationOutputSpec<'_>,
+    scenario_id: u32,
+    total_cost: f64,
+    stage_results: Vec<SimulationStageResult>,
+) -> Result<(u32, f64, ScenarioCategoryCosts), SimulationError> {
+    let mut category_costs = ScenarioCategoryCosts {
+        resource_cost: 0.0,
+        recourse_cost: 0.0,
+        violation_cost: 0.0,
+        regularization_cost: 0.0,
+        imputed_cost: 0.0,
+    };
+    for sr in &stage_results {
+        for c in &sr.costs {
+            accumulate_category_costs(c, &mut category_costs);
+        }
+    }
+    let compact_category = category_costs.clone();
+    output
+        .result_tx
+        .send(SimulationScenarioResult {
+            scenario_id,
+            total_cost,
+            per_category_costs: category_costs,
+            stages: stage_results,
+        })
+        .map_err(|_| SimulationError::ChannelClosed)?;
+    Ok((scenario_id, total_cost, compact_category))
+}
+
 /// Evaluate the trained SDDP policy on this rank's assigned scenarios.
 ///
 /// Distributes locally assigned scenarios across worker threads using the same
@@ -178,9 +522,6 @@ impl WelfordAccumulator {
 /// On channel send failure (receiver dropped), returns
 /// `SimulationError::ChannelClosed`.
 ///
-/// Partial results already sent through the channel before an error are valid
-/// and may be consumed by the receiver.
-///
 /// # Errors
 ///
 /// Returns `Err(SimulationError::LpInfeasible { .. })` when a stage LP has no
@@ -192,329 +533,120 @@ impl WelfordAccumulator {
 ///
 /// Panics if any of the following debug preconditions are violated:
 ///
-/// - `templates.len() != num_stages`
-/// - `base_rows.len() != num_stages`
+/// - `ctx.templates.len() != num_stages`
+/// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)] // owned Option<Sender> required for worker clone pattern
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
-    templates: &[StageTemplate],
-    base_rows: &[usize],
+    ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
-    stochastic: &StochasticContext,
+    training_ctx: &TrainingContext<'_>,
     config: &SimulationConfig,
-    horizon: &HorizonMode,
-    initial_state: &[f64],
-    indexer: &StageIndexer,
-    entity_counts: &EntityCounts,
+    output: SimulationOutputSpec<'_>,
     comm: &C,
-    result_tx: &SyncSender<SimulationScenarioResult>,
-    _inflow_method: &InflowNonNegativityMethod,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
-    load_balance_row_starts: &[usize],
-    load_bus_indices: &[usize],
-    block_counts_per_stage: &[usize],
-    zeta_per_stage: &[f64],
-    block_hours_per_stage: &[Vec<f64>],
-    event_sender: Option<Sender<TrainingEvent>>,
 ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+    let TrainingContext {
+        horizon,
+        indexer,
+        initial_state,
+        ..
+    } = training_ctx;
     let num_stages = horizon.num_stages();
     let rank = comm.rank();
-    let world_size = comm.size();
-
     debug_assert_eq!(
-        templates.len(),
+        ctx.templates.len(),
         num_stages,
-        "templates.len() {got} != num_stages {expected}",
-        got = templates.len(),
-        expected = num_stages,
+        "templates.len()={} != num_stages={num_stages}",
+        ctx.templates.len()
     );
     debug_assert_eq!(
-        base_rows.len(),
+        ctx.base_rows.len(),
         num_stages,
-        "base_rows.len() {got} != num_stages {expected}",
-        got = base_rows.len(),
-        expected = num_stages,
+        "base_rows.len()={} != num_stages={num_stages}",
+        ctx.base_rows.len()
     );
     debug_assert_eq!(
         initial_state.len(),
         indexer.n_state,
-        "initial_state.len() {got} != indexer.n_state {expected}",
-        got = initial_state.len(),
-        expected = indexer.n_state,
+        "initial_state.len()={} != n_state={}",
+        initial_state.len(),
+        indexer.n_state
     );
 
-    // Build cut batches once (same for all scenarios).
     let cut_batches: Vec<RowBatch> = (0..num_stages)
         .map(|t| build_cut_row_batch(fcf, t, indexer))
         .collect();
-
-    let tree_view = stochastic.tree_view();
-    let base_seed = stochastic.base_seed();
-
-    // Determine this rank's scenario range.
-    let scenario_range = assign_scenarios(config.n_scenarios, rank, world_size);
+    let scenario_range = assign_scenarios(config.n_scenarios, rank, comm.size());
     #[allow(clippy::cast_possible_truncation)]
     let local_count = (scenario_range.end - scenario_range.start) as usize;
     let scenario_start = scenario_range.start as usize;
-
     let n_workers = workspaces.len().max(1);
-
     let sim_start = Instant::now();
     let scenarios_complete = AtomicU32::new(0);
+
     let worker_results: Vec<Result<WorkerCosts, SimulationError>> = workspaces
         .par_iter_mut()
         .enumerate()
         .map(|(w, ws)| {
             let (start_local, end_local) = partition(local_count, n_workers, w);
-
-            let worker_sender: Option<Sender<TrainingEvent>> = event_sender.clone();
+            let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
             let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
             let mut worker_acc = WelfordAccumulator::new();
-
-            let mut worker_costs: Vec<(u32, f64, ScenarioCategoryCosts)> =
-                Vec::with_capacity(end_local - start_local);
+            let mut worker_costs = Vec::with_capacity(end_local - start_local);
 
             for local_idx in start_local..end_local {
                 #[allow(clippy::cast_possible_truncation)]
                 let scenario_id = (scenario_start + local_idx) as u32;
-
                 let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
-                ws.current_state.clear();
-                ws.current_state.extend_from_slice(initial_state);
-
-                let mut total_cost = 0.0_f64;
-                let mut category_costs = ScenarioCategoryCosts {
-                    resource_cost: 0.0,
-                    recourse_cost: 0.0,
-                    violation_cost: 0.0,
-                    regularization_cost: 0.0,
-                    imputed_cost: 0.0,
-                };
-
-                let mut stage_results = Vec::with_capacity(num_stages);
-
-                for t in 0..num_stages {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let stage_id_u32 = t as u32;
-
-                    let (_opening_idx, raw_noise) =
-                        sample_forward(&tree_view, base_seed, 0, global_scenario, stage_id_u32, t);
-
-                    ws.noise_buf.clear();
-                    let stage_offset = t * n_hydros;
-                    for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                        let base_rhs = templates[t].row_lower[base_rows[t] + h];
-                        ws.noise_buf
-                            .push(base_rhs + noise_scale[stage_offset + h] * eta);
-                    }
-
-                    // Compute load noise realizations (indices [n_hydros, n_hydros + n_load_buses)).
-                    ws.load_rhs_buf.clear();
-                    if n_load_buses > 0 {
-                        let load_lp = stochastic.normal_lp();
-                        let n_blks = block_counts_per_stage[t];
-                        for lb_idx in 0..n_load_buses {
-                            let eta = raw_noise[n_hydros + lb_idx];
-                            let mean = load_lp.mean(t, lb_idx);
-                            let std = load_lp.std(t, lb_idx);
-                            let realization = (mean + std * eta).max(0.0);
-                            for blk in 0..n_blks {
-                                let factor = load_lp.block_factor(t, lb_idx, blk);
-                                ws.load_rhs_buf.push(realization * factor);
-                            }
-                        }
-                    }
-
-                    ws.solver.load_model(&templates[t]);
-                    ws.solver.add_rows(&cut_batches[t]);
-
-                    ws.patch_buf.fill_forward_patches(
-                        indexer,
-                        &ws.current_state,
-                        &ws.noise_buf,
-                        base_rows[t],
-                    );
-
-                    if n_load_buses > 0 {
-                        let n_blks = block_counts_per_stage[t];
-                        ws.patch_buf.fill_load_patches(
-                            load_balance_row_starts[t],
-                            n_blks,
-                            &ws.load_rhs_buf,
-                            load_bus_indices,
-                        );
-                    }
-
-                    let patch_count = ws.patch_buf.forward_patch_count();
-                    ws.solver.set_row_bounds(
-                        &ws.patch_buf.indices[..patch_count],
-                        &ws.patch_buf.lower[..patch_count],
-                        &ws.patch_buf.upper[..patch_count],
-                    );
-
-                    let solve_result = match basis_cache[t].as_ref() {
-                        Some(rb) => ws.solver.solve_with_basis(rb),
-                        None => ws.solver.solve(),
-                    };
-                    let view = solve_result.map_err(|e| {
-                        // Invalidate the basis on error before returning.
-                        basis_cache[t] = None;
-                        match e {
-                            SolverError::Infeasible => SimulationError::LpInfeasible {
-                                scenario_id,
-                                stage_id: stage_id_u32,
-                                solver_message: "LP infeasible".to_string(),
-                            },
-                            other => SimulationError::SolverError {
-                                scenario_id,
-                                stage_id: stage_id_u32,
-                                solver_message: other.to_string(),
-                            },
-                        }
-                    })?;
-
-                    let stage_cost = view.objective - view.primal[indexer.theta];
-                    total_cost += stage_cost;
-
-                    ws.inflow_m3s_buf.clear();
-                    if let Some(&zeta) = zeta_per_stage.get(t) {
-                        if zeta > 0.0 {
-                            for &rhs_hm3 in &ws.noise_buf {
-                                ws.inflow_m3s_buf.push(rhs_hm3 / zeta);
-                            }
-                        }
-                    }
-
-                    let blk_hrs = block_hours_per_stage
-                        .get(t)
-                        .map_or(&[][..], |v| v.as_slice());
-
-                    // Patch row_lower with stochastic load realizations.
-                    let row_lower_ref = if n_load_buses > 0 && !ws.load_rhs_buf.is_empty() {
-                        ws.row_lower_buf.clear();
-                        ws.row_lower_buf.extend_from_slice(&templates[t].row_lower);
-                        let load_start = load_balance_row_starts[t];
-                        let n_blks = block_counts_per_stage[t];
-                        let mut rhs_idx = 0;
-                        for &bus_pos in load_bus_indices {
-                            for blk in 0..n_blks {
-                                let row = load_start + bus_pos * n_blks + blk;
-                                ws.row_lower_buf[row] = ws.load_rhs_buf[rhs_idx];
-                                rhs_idx += 1;
-                            }
-                        }
-                        &ws.row_lower_buf[..templates[t].row_lower.len()]
-                    } else {
-                        &templates[t].row_lower
-                    };
-
-                    let stage_result = extract_stage_result(
-                        view.primal,
-                        view.dual,
-                        view.objective,
-                        &templates[t].objective,
-                        row_lower_ref,
-                        indexer,
-                        stage_id_u32,
-                        entity_counts,
-                        &ws.inflow_m3s_buf,
-                        blk_hrs,
-                    );
-
-                    for cost_entry in &stage_result.costs {
-                        accumulate_category_costs(cost_entry, &mut category_costs);
-                    }
-
-                    stage_results.push(stage_result);
-
-                    ws.current_state.clear();
-                    ws.current_state
-                        .extend_from_slice(&view.primal[..indexer.n_state]);
-
-                    if let Some(rb) = &mut basis_cache[t] {
-                        ws.solver.get_basis(rb);
-                    } else {
-                        let mut rb = Basis::new(templates[t].num_cols, templates[t].num_rows);
-                        ws.solver.get_basis(&mut rb);
-                        basis_cache[t] = Some(rb);
-                    }
-                }
-
-                let compact_category = ScenarioCategoryCosts {
-                    resource_cost: category_costs.resource_cost,
-                    recourse_cost: category_costs.recourse_cost,
-                    violation_cost: category_costs.violation_cost,
-                    regularization_cost: category_costs.regularization_cost,
-                    imputed_cost: category_costs.imputed_cost,
-                };
-
-                let scenario_result = SimulationScenarioResult {
+                let (total_cost, stage_results) = process_scenario_stages(
+                    ws,
+                    ctx,
+                    training_ctx,
+                    &cut_batches,
+                    &mut basis_cache,
+                    &output,
+                    &ScenarioIds {
+                        scenario_id,
+                        global_scenario,
+                        num_stages,
+                    },
+                )?;
+                worker_costs.push(dispatch_scenario_result(
+                    &output,
                     scenario_id,
                     total_cost,
-                    per_category_costs: category_costs,
-                    stages: stage_results,
-                };
-
-                result_tx
-                    .send(scenario_result)
-                    .map_err(|_| SimulationError::ChannelClosed)?;
-
-                worker_costs.push((scenario_id, total_cost, compact_category));
-
-                // Update the per-worker running statistics accumulator.
+                    stage_results,
+                )?);
                 worker_acc.update(total_cost);
-
-                // Emit a progress event from within the parallel region so
-                // the progress bar animates in real time.
                 let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
-                if let Some(ref sender) = worker_sender {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let elapsed_ms = sim_start.elapsed().as_millis() as u64;
-                    let _ = sender.send(TrainingEvent::SimulationProgress {
-                        scenarios_complete: completed,
-                        scenarios_total: config.n_scenarios,
-                        elapsed_ms,
-                        mean_cost: worker_acc.mean(),
-                        std_cost: worker_acc.std_dev(),
-                        ci_95_half_width: worker_acc.ci_95_half_width(),
-                    });
-                }
+                #[allow(clippy::cast_possible_truncation)]
+                emit_sim_progress(
+                    worker_sender.as_ref(),
+                    &worker_acc,
+                    completed,
+                    config.n_scenarios,
+                    sim_start.elapsed().as_millis() as u64,
+                );
             }
-
             Ok(worker_costs)
         })
         .collect();
 
-    // Flatten and sort for deterministic MPI aggregation.
-    let mut all_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = Vec::with_capacity(local_count);
-    let mut acc = WelfordAccumulator::new();
+    let mut all_costs = Vec::with_capacity(local_count);
     for result in worker_results {
-        let batch = result?;
-        for &(_, total_cost, _) in &batch {
-            acc.update(total_cost);
-        }
-        all_costs.extend(batch);
+        all_costs.extend(result?);
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
 
-    // Send SimulationFinished now that all workers have completed. The
-    // original `event_sender` is still valid here because workers only
-    // clone it (line above: `event_sender.clone()`), not move it.
-    if let Some(sender) = event_sender {
+    if let Some(sender) = output.event_sender {
         #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = sim_start.elapsed().as_millis() as u64;
         let _ = sender.send(TrainingEvent::SimulationFinished {
             scenarios: config.n_scenarios,
             output_dir: String::new(),
-            elapsed_ms,
+            elapsed_ms: sim_start.elapsed().as_millis() as u64,
         });
     }
-
     Ok(all_costs)
 }
 
@@ -529,11 +661,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::simulate;
+    use super::{SimulationOutputSpec, simulate};
     use crate::{
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
+        context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
-        workspace::SolverWorkspace,
+        workspace::{ScratchBuffers, SolverWorkspace},
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -867,14 +1000,16 @@ mod tests {
             solver,
             patch_buf: PatchBuffer::new(1, 0, 0, 0), // N=1, L=0
             current_state: Vec::with_capacity(1),
-            noise_buf: Vec::new(),
-            inflow_m3s_buf: Vec::new(),
-            lag_matrix_buf: Vec::new(),
-            par_inflow_buf: Vec::new(),
-            eta_floor_buf: Vec::new(),
-            zero_targets_buf: Vec::new(),
-            load_rhs_buf: Vec::new(),
-            row_lower_buf: Vec::new(),
+            scratch: ScratchBuffers {
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
+                load_rhs_buf: Vec::new(),
+                row_lower_buf: Vec::new(),
+            },
         }]
     }
 
@@ -910,27 +1045,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -985,27 +1126,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         );
 
         match result {
@@ -1054,27 +1201,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         );
 
         match result {
@@ -1121,27 +1274,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         );
 
         assert!(
@@ -1189,27 +1348,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         )
         .unwrap();
 
@@ -1255,27 +1420,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let cost_buffer = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         )
         .unwrap();
 
@@ -1317,27 +1488,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         )
         .unwrap();
 
@@ -1379,27 +1556,33 @@ mod tests {
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
         let costs_1 = simulate(
             &mut workspaces_1,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx1,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx1,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         )
         .unwrap();
 
@@ -1410,39 +1593,47 @@ mod tests {
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(1),
-                noise_buf: Vec::new(),
-                inflow_m3s_buf: Vec::new(),
-                lag_matrix_buf: Vec::new(),
-                par_inflow_buf: Vec::new(),
-                eta_floor_buf: Vec::new(),
-                zero_targets_buf: Vec::new(),
-                load_rhs_buf: Vec::new(),
-                row_lower_buf: Vec::new(),
+                scratch: ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                },
             })
             .collect();
         let costs_4 = simulate(
             &mut workspaces_4,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx4,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx4,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         )
         .unwrap();
 
@@ -1574,27 +1765,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: Some(event_tx),
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(event_tx),
         );
         assert!(result.is_ok(), "simulate returned error: {result:?}");
 
@@ -1666,27 +1863,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            None,
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -1738,27 +1941,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: Some(event_tx),
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(event_tx),
         )
         .unwrap();
 
@@ -1833,27 +2042,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: Some(event_tx),
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(event_tx),
         )
         .unwrap();
 
@@ -1916,27 +2131,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: Some(event_tx),
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(event_tx),
         )
         .unwrap();
 
@@ -2021,27 +2242,33 @@ mod tests {
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &result_tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: Some(event_tx),
+            },
             &comm,
-            &result_tx,
-            &InflowNonNegativityMethod::None,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(event_tx),
         )
         .unwrap();
 
@@ -2255,14 +2482,16 @@ mod tests {
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
-            noise_buf: Vec::new(),
-            inflow_m3s_buf: Vec::new(),
-            lag_matrix_buf: Vec::new(),
-            par_inflow_buf: Vec::new(),
-            eta_floor_buf: Vec::new(),
-            zero_targets_buf: Vec::new(),
-            load_rhs_buf: Vec::with_capacity(n_load_buses),
-            row_lower_buf: Vec::new(),
+            scratch: ScratchBuffers {
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
+                load_rhs_buf: Vec::with_capacity(n_load_buses),
+                row_lower_buf: Vec::new(),
+            },
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -2274,47 +2503,53 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &noise_scale,
-            1, // n_hydros
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
-            &[], // zeta_per_stage
-            &[], // block_hours_per_stage
-            None,
         )
         .unwrap();
 
         // The load noise path must have populated load_rhs_buf.
         assert_eq!(
-            workspaces[0].load_rhs_buf.len(),
+            workspaces[0].scratch.load_rhs_buf.len(),
             n_load_buses,
             "load_rhs_buf must have 1 entry (1 load bus x 1 block)"
         );
         assert!(
-            workspaces[0].load_rhs_buf[0] > 0.0,
+            workspaces[0].scratch.load_rhs_buf[0] > 0.0,
             "realization must be positive with mean=300, std=30: got {}",
-            workspaces[0].load_rhs_buf[0]
+            workspaces[0].scratch.load_rhs_buf[0]
         );
 
         // Verify the formula: d = max(0, mean + std * eta) * factor.
         // The exact eta drawn from the opening tree depends on the seed, but
         // we can verify formula consistency by back-computing eta from the
         // observed realization (d > 0 implies eta = (d - mean) / std).
-        let d_observed = workspaces[0].load_rhs_buf[0];
+        let d_observed = workspaces[0].scratch.load_rhs_buf[0];
         let mean_mw_val = 300.0_f64;
         let std_mw_val = 30.0_f64;
         assert!(
@@ -2331,11 +2566,11 @@ mod tests {
         // The load patch must also be reflected in the patch buffer.
         let cat4_start = 2; // n_hydros * (2 + max_par_order) = 1 * 2 = 2
         assert_eq!(
-            workspaces[0].patch_buf.lower[cat4_start], workspaces[0].load_rhs_buf[0],
+            workspaces[0].patch_buf.lower[cat4_start], workspaces[0].scratch.load_rhs_buf[0],
             "patch_buf lower at load slot must equal load_rhs_buf[0]"
         );
         assert_eq!(
-            workspaces[0].patch_buf.upper[cat4_start], workspaces[0].load_rhs_buf[0],
+            workspaces[0].patch_buf.upper[cat4_start], workspaces[0].scratch.load_rhs_buf[0],
             "patch_buf upper at load slot must equal load_rhs_buf[0] (equality constraint)"
         );
 
@@ -2343,17 +2578,17 @@ mod tests {
         // stochastic realization (not the template mean 300.0).
         // row_lower_buf[2] is the load balance row (row index 2).
         assert!(
-            !workspaces[0].row_lower_buf.is_empty(),
+            !workspaces[0].scratch.row_lower_buf.is_empty(),
             "row_lower_buf must be populated for extraction"
         );
         assert_eq!(
-            workspaces[0].row_lower_buf[2], d_observed,
+            workspaces[0].scratch.row_lower_buf[2], d_observed,
             "extraction row_lower_buf must contain stochastic load, not template mean"
         );
         assert!(
-            (workspaces[0].row_lower_buf[2] - mean_mw_val).abs() > 1e-6,
+            (workspaces[0].scratch.row_lower_buf[2] - mean_mw_val).abs() > 1e-6,
             "extracted load_mw must differ from template mean {mean_mw_val}: got {}",
-            workspaces[0].row_lower_buf[2]
+            workspaces[0].scratch.row_lower_buf[2]
         );
     }
 
@@ -2391,33 +2626,39 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[1],
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &[],  // noise_scale: empty (n_hydros=0 path)
-            0,    // n_hydros
-            0,    // n_load_buses = 0: no load patches
-            &[],  // load_balance_row_starts
-            &[],  // load_bus_indices
-            &[1], // block_counts_per_stage
-            &[],  // zeta_per_stage
-            &[],  // block_hours_per_stage
-            None,
         )
         .unwrap();
 
         // load_rhs_buf must remain empty when n_load_buses=0.
         assert!(
-            workspaces[0].load_rhs_buf.is_empty(),
+            workspaces[0].scratch.load_rhs_buf.is_empty(),
             "load_rhs_buf must be empty when n_load_buses=0"
         );
         // forward_patch_count = N*(2+L) = 1*(2+0) = 2 (no load patches added).
@@ -2484,14 +2725,16 @@ mod tests {
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
-            noise_buf: Vec::new(),
-            inflow_m3s_buf: Vec::new(),
-            lag_matrix_buf: Vec::new(),
-            par_inflow_buf: Vec::new(),
-            eta_floor_buf: Vec::new(),
-            zero_targets_buf: Vec::new(),
-            load_rhs_buf: Vec::with_capacity(n_load_buses),
-            row_lower_buf: Vec::new(),
+            scratch: ScratchBuffers {
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: Vec::new(),
+                load_rhs_buf: Vec::with_capacity(n_load_buses),
+                row_lower_buf: Vec::new(),
+            },
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -2501,52 +2744,415 @@ mod tests {
 
         simulate(
             &mut workspaces,
-            &templates,
-            &base_rows,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses,
+                load_balance_row_starts: &load_balance_row_starts,
+                load_bus_indices: &load_bus_indices,
+                block_counts_per_stage: &block_counts_per_stage,
+            },
             &fcf,
-            &stochastic,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &config,
-            &horizon,
-            &initial_state,
-            &indexer,
-            &entity_counts,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
             &comm,
-            &tx,
-            &InflowNonNegativityMethod::None,
-            &noise_scale,
-            1, // n_hydros
-            n_load_buses,
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
-            &[], // zeta_per_stage
-            &[], // block_hours_per_stage
-            None,
         )
         .unwrap();
 
         // noise_buf contains only inflow values (n_hydros=1 entries).
         // It must not be contaminated by load noise (which lives in load_rhs_buf).
         assert_eq!(
-            workspaces[0].noise_buf.len(),
+            workspaces[0].scratch.noise_buf.len(),
             1,
             "noise_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
-            workspaces[0].noise_buf.len()
+            workspaces[0].scratch.noise_buf.len()
         );
         // The inflow noise must be a reasonable value near mean_rhs=100.
         // With noise_scale=1.0 and mean_rhs=100 (from row_lower[base_rows[0]+0]=100):
         //   noise_buf[0] = 100.0 + 1.0 * eta_inflow
         // For any |eta_inflow| <= 5 this remains in [75, 125] for practical draws.
         assert!(
-            workspaces[0].noise_buf[0] > 50.0 && workspaces[0].noise_buf[0] < 200.0,
+            workspaces[0].scratch.noise_buf[0] > 50.0 && workspaces[0].scratch.noise_buf[0] < 200.0,
             "noise_buf[0] must be a reasonable inflow value near 100.0, got {}",
-            workspaces[0].noise_buf[0]
+            workspaces[0].scratch.noise_buf[0]
         );
         // load_rhs_buf must also be populated (confirms both buffers coexist).
         assert_eq!(
-            workspaces[0].load_rhs_buf.len(),
+            workspaces[0].scratch.load_rhs_buf.len(),
             n_load_buses,
             "load_rhs_buf must have 1 entry alongside noise_buf"
+        );
+    }
+
+    // ── Inflow truncation unit tests ──────────────────────────────────────────
+
+    /// Build a `StochasticContext` for 1 hydro, 1 stage with configurable
+    /// `mean_m3s` and `std_m3s`.  Used by the truncation tests below.
+    fn make_stochastic_1h_1s(mean_m3s: f64, std_m3s: f64) -> StochasticContext {
+        use std::collections::BTreeMap;
+
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{
+            CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        };
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+        use cobre_stochastic::context::build_stochastic_context;
+
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(1),
+            name: "H1".to_string(),
+            bus_id: EntityId(0),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let inflow_model = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s,
+            std_m3s,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "g1".to_string(),
+                    entities: vec![CorrelationEntity {
+                        entity_type: "inflow".to_string(),
+                        id: EntityId(1),
+                    }],
+                    matrix: vec![vec![1.0]],
+                }],
+            },
+        );
+        let correlation = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(vec![stage])
+            .inflow_models(vec![inflow_model])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(&system, 42, &[]).unwrap()
+    }
+
+    /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
+    ///
+    /// Used by truncation tests so that the water-balance base RHS is configurable.
+    fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
+        StageTemplate {
+            num_cols: 3,
+            num_rows: 1,
+            num_nz: 1,
+            col_starts: vec![0_i32, 0, 1, 1],
+            row_indices: vec![0_i32],
+            values: vec![1.0],
+            col_lower: vec![0.0, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            objective: vec![0.0, 0.0, 1.0],
+            row_lower: vec![base_rhs],
+            row_upper: vec![base_rhs],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 1,
+            n_hydro: 1,
+            max_par_order: 0,
+        }
+    }
+
+    /// Build a workspace with `zero_targets_buf` pre-populated to `hydro_count` zeros.
+    ///
+    /// The standard `single_workspace` helper leaves `zero_targets_buf` empty because
+    /// existing tests do not reach the truncation branch.  The truncation tests use
+    /// 1 hydro and must have `zero_targets_buf[..1]` accessible, so they use this
+    /// helper instead.
+    fn single_workspace_with_hydros(
+        solver: MockSolver,
+        hydro_count: usize,
+    ) -> Vec<SolverWorkspace<MockSolver>> {
+        vec![SolverWorkspace {
+            solver,
+            patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0),
+            current_state: Vec::with_capacity(hydro_count),
+            scratch: ScratchBuffers {
+                noise_buf: Vec::new(),
+                inflow_m3s_buf: Vec::new(),
+                lag_matrix_buf: Vec::new(),
+                par_inflow_buf: Vec::new(),
+                eta_floor_buf: Vec::new(),
+                zero_targets_buf: vec![0.0_f64; hydro_count],
+                load_rhs_buf: Vec::new(),
+                row_lower_buf: Vec::new(),
+            },
+        }]
+    }
+
+    /// AC: truncation clamps negative inflow noise in the simulation pipeline.
+    ///
+    /// Set `mean_m3s = -1000.0` and `std_m3s = 1.0` so that the deterministic
+    /// PAR base alone would produce a hugely negative inflow for any sample.
+    ///
+    /// With `InflowNonNegativityMethod::Truncation` active, the simulation pipeline
+    /// must clamp `eta` to the floor that produces zero inflow.  As a result,
+    /// `noise_buf[0] = base_rhs + noise_scale * eta_clamped >= 0.0` for all
+    /// scenarios processed.
+    ///
+    /// Concretely (zeta=1): `base_rhs = -1000`, `noise_scale = 1`.
+    /// `eta_floor` = (0 - mean) / sigma = 1000. So `noise_buf`\[0\] = -1000 + 1\*1000 = 0.
+    #[test]
+    fn simulation_truncation_clamps_negative_inflow_noise() {
+        let mean_m3s = -1000.0_f64;
+        let sigma = 1.0_f64;
+        let zeta = 1.0_f64; // simplified: treat zeta=1
+        let base_rhs = zeta * mean_m3s;
+        let noise_scale_val = zeta * sigma;
+
+        let n_stages = 1;
+        let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
+        let template = minimal_template_1_0_with_base(base_rhs);
+        let templates = vec![template];
+        let base_rows = vec![0_usize];
+        let noise_scale = vec![noise_scale_val];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, 0);
+        let config = SimulationConfig {
+            n_scenarios: 4,
+            io_channel_capacity: 16,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![0.0_f64];
+
+        let solution = fixed_solution(0.0, 0.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (tx, _rx) = mpsc::sync_channel(16);
+
+        // Use the hydro-aware workspace builder so zero_targets_buf[..1] is valid.
+        let mut workspaces = single_workspace_with_hydros(solver, 1);
+        simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[n_stages],
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::Truncation,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
+            &comm,
+        )
+        .unwrap();
+
+        // After truncation the noise_buf contains the value from the last stage solved
+        // for the last scenario.  All scenarios must have produced a clamped value >= 0.
+        // We verify the workspace buffer left by the final scenario-stage pair.
+        assert_eq!(
+            workspaces[0].scratch.noise_buf.len(),
+            1,
+            "noise_buf must have exactly 1 entry for 1 hydro"
+        );
+        assert!(
+            workspaces[0].scratch.noise_buf[0] >= 0.0,
+            "after truncation, noise_buf[0] must be >= 0 (inflow cannot be negative), got {}",
+            workspaces[0].scratch.noise_buf[0]
+        );
+    }
+
+    /// AC: `InflowNonNegativityMethod::None` in the simulation pipeline produces
+    /// raw (potentially negative) noise values, unchanged from the pre-fix behavior.
+    ///
+    /// With `mean_m3s = -1000.0` and `std_m3s = 1.0`, the PAR inflow is always
+    /// deeply negative.  The `None` path must NOT clamp eta, so the noise buffer
+    /// value must be negative (`base_rhs` + `noise_scale` \* `raw_eta` << 0).
+    #[test]
+    fn simulation_none_method_produces_raw_negative_noise() {
+        let mean_m3s = -1000.0_f64;
+        let sigma = 1.0_f64;
+        let zeta = 1.0_f64;
+        let base_rhs = zeta * mean_m3s;
+        let noise_scale_val = zeta * sigma;
+
+        let n_stages = 1;
+        let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
+        let template = minimal_template_1_0_with_base(base_rhs);
+        let templates = vec![template];
+        let base_rows = vec![0_usize];
+        let noise_scale = vec![noise_scale_val];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, 0);
+        let config = SimulationConfig {
+            n_scenarios: 4,
+            io_channel_capacity: 16,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![0.0_f64];
+
+        let solution = fixed_solution(0.0, 0.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+
+        let (tx, _rx) = mpsc::sync_channel(16);
+
+        let mut workspaces = single_workspace_with_hydros(solver, 1);
+        simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &noise_scale,
+                n_hydros: 1,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[n_stages],
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                event_sender: None,
+            },
+            &comm,
+        )
+        .unwrap();
+
+        assert_eq!(
+            workspaces[0].scratch.noise_buf.len(),
+            1,
+            "noise_buf must have exactly 1 entry for 1 hydro"
+        );
+        // With None, no clamping occurs.  base_rhs=-1000 and noise_scale=1, so
+        // noise_buf[0] = -1000 + 1 * eta.  For |eta| < 5 this remains << 0.
+        assert!(
+            workspaces[0].scratch.noise_buf[0] < 0.0,
+            "with None method, noise_buf[0] must be negative (raw eta applied), got {}",
+            workspaces[0].scratch.noise_buf[0]
         );
     }
 }

@@ -350,7 +350,6 @@ fn estimate_ar_with_aic(
 ///
 /// Returns a `Vec` whose length may be less than `max_order` when a required lag
 /// season has zero standard deviation or insufficient observations.
-#[allow(clippy::too_many_arguments)]
 fn compute_autocorrelations(
     hydro_id: EntityId,
     season_id: usize,

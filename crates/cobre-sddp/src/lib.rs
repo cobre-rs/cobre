@@ -36,6 +36,7 @@
 
 pub mod backward;
 pub mod config;
+pub mod context;
 pub mod convergence;
 pub mod cut;
 pub mod cut_selection;
@@ -48,6 +49,7 @@ pub mod indexer;
 pub mod inflow_method;
 pub mod lower_bound;
 pub mod lp_builder;
+pub(crate) mod noise;
 pub mod risk_measure;
 pub mod simulation;
 pub mod state_exchange;
@@ -57,11 +59,14 @@ pub mod training_output;
 pub mod trajectory;
 pub mod workspace;
 
-pub use backward::{BackwardResult, run_backward_pass};
+pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::TrainingConfig;
+pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction};
-pub use cut_selection::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+pub use cut_selection::{
+    CutMetadata, CutSelectionStrategy, DeactivationSet, parse_cut_selection_config,
+};
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
 pub use estimation::EstimationError;
@@ -69,17 +74,17 @@ pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
 pub use inflow_method::InflowNonNegativityMethod;
-pub use lower_bound::evaluate_lower_bound;
+pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
     SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
     SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
-    SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
-    SimulationStageResult, SimulationSummary, SimulationThermalResult, StageSummaryStats,
-    accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
-    simulate,
+    SimulationNonControllableResult, SimulationOutputSpec, SimulationPumpingResult,
+    SimulationScenarioResult, SimulationStageResult, SimulationSummary, SimulationThermalResult,
+    StageSummaryStats, accumulate_category_costs, aggregate_simulation, assign_scenarios,
+    extract_stage_result, simulate,
 };
 pub use state_exchange::ExchangeBuffers;
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};

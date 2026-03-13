@@ -49,8 +49,9 @@ use cobre_core::{
 };
 use cobre_sddp::{
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SolverWorkspace, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, lp_builder::build_stage_templates, simulate, train,
+    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -435,7 +436,8 @@ fn build_fixture() -> Fixture {
         &inflow_method,
         &par_lp,
         &cobre_stochastic::normal::precompute::PrecomputedNormalLp::default(),
-    );
+    )
+    .expect("no FPHA plants in integration test fixture");
     let stochastic = build_stochastic();
     let opening_tree = build_opening_tree();
 
@@ -517,11 +519,14 @@ fn train_fixture(
         &mut fcf,
         &fx.stage_templates.templates,
         &fx.stage_templates.base_rows,
-        &fx.indexer,
-        &fx.initial_state,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &fx.inflow_method,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &fx.opening_tree,
-        &fx.stochastic,
-        &fx.horizon,
         &fx.risk_measures,
         StoppingRuleSet {
             rules: vec![StoppingRule::IterationLimit { limit: iterations }],
@@ -532,7 +537,6 @@ fn train_fixture(
         &comm,
         1,
         HighsSolver::new,
-        &fx.inflow_method,
         &fx.stage_templates.noise_scale,
         fx.stage_templates.n_hydros,
         fx.stage_templates.n_load_buses,
@@ -577,30 +581,36 @@ fn simulate_fixture(
 
     simulate(
         &mut sim_workspaces,
-        &fx.stage_templates.templates,
-        &fx.stage_templates.base_rows,
+        &StageContext {
+            templates: &fx.stage_templates.templates,
+            base_rows: &fx.stage_templates.base_rows,
+            noise_scale: &fx.stage_templates.noise_scale,
+            n_hydros: fx.stage_templates.n_hydros,
+            n_load_buses: fx.stage_templates.n_load_buses,
+            load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
+            load_bus_indices: &fx.stage_templates.load_bus_indices,
+            block_counts_per_stage: &block_counts_sim,
+        },
         fcf,
-        &fx.stochastic,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &fx.inflow_method,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+        },
         &SimulationConfig {
             n_scenarios: 20,
             io_channel_capacity: 32,
         },
-        &fx.horizon,
-        &fx.initial_state,
-        &fx.indexer,
-        &fx.entity_counts,
+        SimulationOutputSpec {
+            result_tx: &result_tx,
+            zeta_per_stage: &fx.stage_templates.zeta_per_stage,
+            block_hours_per_stage: &fx.stage_templates.block_hours_per_stage,
+            entity_counts: &fx.entity_counts,
+            event_sender: None,
+        },
         &comm,
-        &result_tx,
-        &fx.inflow_method,
-        &fx.stage_templates.noise_scale,
-        fx.stage_templates.n_hydros,
-        fx.stage_templates.n_load_buses,
-        &fx.stage_templates.load_balance_row_starts,
-        &fx.stage_templates.load_bus_indices,
-        &block_counts_sim,
-        &fx.stage_templates.zeta_per_stage,
-        &fx.stage_templates.block_hours_per_stage,
-        None,
     )?;
 
     drop(result_tx);

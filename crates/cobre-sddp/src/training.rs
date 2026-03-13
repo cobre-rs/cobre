@@ -39,15 +39,16 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    HorizonMode, InflowNonNegativityMethod, SddpError, StageIndexer, StoppingRuleSet,
-    TrainingConfig, TrajectoryRecord,
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
+    context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{run_forward_pass, sync_forward},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
@@ -229,11 +230,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     fcf: &mut FutureCostFunction,
     templates: &[StageTemplate],
     base_rows: &[usize],
-    indexer: &StageIndexer,
-    initial_state: &[f64],
+    training_ctx: &TrainingContext<'_>,
     opening_tree: &OpeningTree,
-    stochastic: &cobre_stochastic::StochasticContext,
-    horizon: &HorizonMode,
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     cut_selection: Option<&CutSelectionStrategy>,
@@ -241,7 +239,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     n_fwd_threads: usize,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
-    inflow_method: &InflowNonNegativityMethod,
     noise_scale: &[f64],
     n_hydros: usize,
     n_load_buses: usize,
@@ -250,6 +247,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     load_bus_indices: &[usize],
     block_counts_per_stage: &[usize],
 ) -> Result<TrainingResult, SddpError> {
+    let horizon = training_ctx.horizon;
+    let indexer = training_ctx.indexer;
+    let initial_state = training_ctx.initial_state;
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
     let my_rank = comm.rank();
@@ -305,6 +305,20 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
     let start_time = Instant::now();
 
+    // Bundle the per-stage LP layout and noise scaling parameters into a
+    // single context struct. Constructed once here and passed by reference to
+    // the forward pass inside the iteration loop.
+    let stage_ctx = StageContext {
+        templates,
+        base_rows,
+        noise_scale,
+        n_hydros,
+        n_load_buses,
+        load_balance_row_starts,
+        load_bus_indices,
+        block_counts_per_stage,
+    };
+
     let TrainingConfig {
         forward_passes: config_forward_passes,
         max_iterations,
@@ -344,27 +358,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         let iter_start = Instant::now();
         let fwd_record_len = my_actual_fwd * num_stages;
+        let fwd_batch = ForwardPassBatch {
+            local_forward_passes: my_actual_fwd,
+            iteration,
+            fwd_offset: my_fwd_offset,
+        };
         let forward_result = run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
-            templates,
-            base_rows,
+            &stage_ctx,
             fcf,
-            stochastic,
-            my_actual_fwd,
-            iteration,
-            horizon,
-            initial_state,
+            training_ctx,
+            &fwd_batch,
             &mut records[..fwd_record_len],
-            indexer,
-            my_fwd_offset,
-            inflow_method,
-            noise_scale,
-            n_hydros,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            block_counts_per_stage,
         )?;
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
@@ -398,27 +404,21 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         for stage in 0..num_stages {
             exchange_bufs.exchange(&records, stage, num_stages, comm)?;
         }
+        let bwd_spec = crate::backward::BackwardPassSpec {
+            exchange: &exchange_bufs,
+            iteration,
+            local_work: my_actual_fwd,
+            fwd_offset: my_fwd_offset,
+            risk_measures,
+        };
         let backward_result = run_backward_pass(
             &mut fwd_pool.workspaces,
             &basis_store,
-            templates,
-            base_rows,
+            &stage_ctx,
             fcf,
-            &exchange_bufs,
-            stochastic,
-            iteration,
-            horizon,
-            risk_measures,
-            indexer,
+            training_ctx,
+            &bwd_spec,
             comm,
-            my_actual_fwd,
-            my_fwd_offset,
-            noise_scale,
-            n_hydros,
-            n_load_buses,
-            load_balance_row_starts,
-            load_bus_indices,
-            block_counts_per_stage,
         )?;
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
@@ -489,18 +489,21 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             }
         }
         let lb_solves_before = solver.statistics().solve_count;
-        let lb = evaluate_lower_bound(
-            solver,
-            &templates[0],
-            fcf,
-            initial_state,
-            base_rows[0],
-            indexer,
-            &mut patch_buf,
-            opening_tree,
+        let lb_spec = LbEvalSpec {
+            template: &templates[0],
+            base_row: base_rows[0],
             noise_scale,
             n_hydros,
-            &risk_measures[0],
+            opening_tree,
+            risk_measure: &risk_measures[0],
+        };
+        let lb = evaluate_lower_bound(
+            solver,
+            fcf,
+            initial_state,
+            indexer,
+            &mut patch_buf,
+            &lb_spec,
             comm,
         )?;
         let lb_lp_solves = solver.statistics().solve_count - lb_solves_before;
@@ -625,7 +628,8 @@ mod tests {
     use super::train;
     use crate::{
         HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig, cut::fcf::FutureCostFunction,
+        StoppingRule, StoppingRuleSet, TrainingConfig, context::TrainingContext,
+        cut::fcf::FutureCostFunction,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -1044,11 +1048,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(5),
             None,
@@ -1056,7 +1063,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1108,11 +1114,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(5),
             None,
@@ -1120,7 +1129,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::infeasible()),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1181,11 +1189,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(2),
             None,
@@ -1193,7 +1204,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1299,11 +1309,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(5),
             None,
@@ -1311,7 +1324,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1362,11 +1374,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(2),
             None,
@@ -1374,7 +1389,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1423,11 +1437,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(1),
             None,
@@ -1435,7 +1452,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1491,11 +1507,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(5),
             None,
@@ -1503,7 +1522,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1572,11 +1590,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(5),
             Some(&strategy),
@@ -1584,7 +1605,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1672,11 +1692,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(2),
             Some(&strategy),
@@ -1684,7 +1707,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,
@@ -1761,11 +1783,14 @@ mod tests {
             &mut fcf,
             &templates,
             &base_rows,
-            &indexer,
-            &initial_state,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
             &opening_tree,
-            &stochastic,
-            &horizon,
             &risk_measures,
             iteration_limit_rules(3),
             None,
@@ -1773,7 +1798,6 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &InflowNonNegativityMethod::None,
             &[],
             0,
             0,

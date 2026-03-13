@@ -345,12 +345,68 @@ impl CutSelectionStrategy {
 }
 
 // ---------------------------------------------------------------------------
+// Config parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a [`cobre_io::config::CutSelectionConfig`] into an optional
+/// [`CutSelectionStrategy`].
+///
+/// Returns `None` when disabled (default). Returns `Err` when explicitly
+/// enabled with invalid configuration (unknown method, `enabled = true` with no
+/// method, or `check_frequency = 0`). Defaults: `threshold = 0`,
+/// `check_frequency = 5`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `enabled = true` but no `method` is specified,
+/// when the `method` string is not a recognised variant, or when
+/// `check_frequency = 0`.
+pub fn parse_cut_selection_config(
+    config: &cobre_io::config::CutSelectionConfig,
+) -> Result<Option<CutSelectionStrategy>, String> {
+    let enabled = config.enabled.unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+
+    let method = config
+        .method
+        .as_deref()
+        .ok_or_else(|| "cut_selection.enabled is true but method is not specified".to_string())?;
+
+    let threshold = config.threshold.unwrap_or(0);
+    let check_frequency = config.check_frequency.unwrap_or(5);
+
+    if check_frequency == 0 {
+        return Err("cut_selection.check_frequency must be > 0".to_string());
+    }
+
+    match method {
+        "level1" => Ok(Some(CutSelectionStrategy::Level1 {
+            threshold: u64::from(threshold),
+            check_frequency: u64::from(check_frequency),
+        })),
+        "lml1" => Ok(Some(CutSelectionStrategy::Lml1 {
+            memory_window: u64::from(threshold),
+            check_frequency: u64::from(check_frequency),
+        })),
+        "domination" => Ok(Some(CutSelectionStrategy::Dominated {
+            threshold: f64::from(threshold),
+            check_frequency: u64::from(check_frequency),
+        })),
+        other => Err(format!("unknown cut_selection.method: \"{other}\"")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    use super::parse_cut_selection_config;
     use super::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+    use cobre_io::config::CutSelectionConfig;
 
     fn make_meta(active_count: u64, last_active_iter: u64, domination_count: u64) -> CutMetadata {
         CutMetadata {
@@ -674,5 +730,162 @@ mod tests {
         let cloned = meta.clone();
         assert_eq!(cloned.active_count, 5);
         assert!(!format!("{meta:?}").is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_cut_selection_config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_disabled_default() {
+        let cfg = CutSelectionConfig::default();
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "default config must produce None (disabled)"
+        );
+    }
+
+    #[test]
+    fn test_parse_level1() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("level1".to_string()),
+            threshold: Some(0),
+            check_frequency: Some(5),
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_ok());
+        let strategy = result
+            .unwrap()
+            .expect("must produce Some for enabled level1");
+        assert!(
+            matches!(
+                strategy,
+                CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 5,
+                }
+            ),
+            "unexpected variant: {strategy:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_lml1() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("lml1".to_string()),
+            threshold: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_ok());
+        let strategy = result.unwrap().expect("must produce Some for enabled lml1");
+        // threshold defaults to 0 (mapped to memory_window), check_frequency defaults to 5.
+        assert!(
+            matches!(
+                strategy,
+                CutSelectionStrategy::Lml1 {
+                    memory_window: 0,
+                    check_frequency: 5,
+                }
+            ),
+            "unexpected variant: {strategy:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_domination() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("domination".to_string()),
+            threshold: Some(0),
+            check_frequency: Some(10),
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_ok());
+        let strategy = result
+            .unwrap()
+            .expect("must produce Some for enabled domination");
+        assert!(
+            matches!(
+                strategy,
+                CutSelectionStrategy::Dominated {
+                    threshold,
+                    check_frequency: 10,
+                } if threshold == 0.0
+            ),
+            "unexpected variant: {strategy:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_unknown_method() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("bogus".to_string()),
+            threshold: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("bogus"),
+            "error message must contain the unrecognized method name, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_enabled_without_method() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: None,
+            threshold: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_enabled_false_with_method_returns_none() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(false),
+            method: Some("level1".to_string()),
+            threshold: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg).unwrap();
+        assert!(
+            result.is_none(),
+            "enabled=false must return None even when method is set"
+        );
+    }
+
+    #[test]
+    fn test_parse_zero_check_frequency() {
+        let cfg = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("level1".to_string()),
+            threshold: None,
+            check_frequency: Some(0),
+            cut_activity_tolerance: None,
+        };
+        let result = parse_cut_selection_config(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("check_frequency"),
+            "error message must mention check_frequency, got: {msg}"
+        );
     }
 }

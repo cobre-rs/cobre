@@ -1,6 +1,6 @@
 # ferrompi
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 Safe MPI 4.x bindings for Rust, used by `cobre-comm` as the MPI communication backend. This is a separate repository at [github.com/cobre-rs/ferrompi](https://github.com/cobre-rs/ferrompi).
 

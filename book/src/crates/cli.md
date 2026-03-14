@@ -1,5 +1,7 @@
 # cobre-cli
 
+<span class="status-alpha">alpha</span>
+
 `cobre-cli` provides the `cobre` binary: the command-line interface for running
 SDDP studies, validating input data, and inspecting results. It ties together
 `cobre-io`, `cobre-stochastic`, `cobre-solver`, `cobre-comm`, and `cobre-sddp`

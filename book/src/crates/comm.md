@@ -1,6 +1,6 @@
 # cobre-comm
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-comm` is the pluggable communication backend abstraction for the Cobre
 ecosystem. It defines the `Communicator` and `SharedMemoryProvider` traits that
@@ -15,7 +15,7 @@ The crate currently provides two concrete backends:
 - **`mpi`** — MPI backend via [ferrompi](https://github.com/cobre-rs/ferrompi),
   feature-gated behind `features = ["mpi"]`.
 
-Two additional backend slots are reserved for future implementation:
+Two additional backend slots are deferred for future implementation:
 
 - **`tcp`** — TCP/IP coordinator pattern (no MPI required).
 - **`shm`** — POSIX shared memory for single-node multi-process execution.
@@ -67,7 +67,7 @@ inlining.
 | `rank`       | `(&self) -> usize`                                             | `usize`                 | Return this rank's index (0..size); infallible             |
 | `size`       | `(&self) -> usize`                                             | `usize`                 | Return total number of ranks; infallible                   |
 
-### Design: compile-time static dispatch (DEC-001)
+### Design: compile-time static dispatch
 
 Writing `Box<dyn Communicator>` does not compile — the trait is intentionally
 not object-safe. All callers use a generic type parameter:
@@ -80,7 +80,7 @@ fn print_topology<C: Communicator>(comm: &C) {
 }
 ```
 
-This is the mandated pattern for closed variant sets in Cobre (DEC-001). The
+This is the mandated enum dispatch pattern for closed variant sets in Cobre. The
 dispatch overhead for `CommBackend` is a single branch-predictor-friendly
 integer comparison, negligible compared to the cost of the MPI collective
 operation or LP solve it wraps.
@@ -243,8 +243,8 @@ environment variables:
 | `"auto"`  | Same as unset                                                                   |
 | `"mpi"`   | Use `FerrompiBackend`; fails if `mpi` feature is not compiled in                |
 | `"local"` | Always use `LocalBackend`                                                       |
-| `"tcp"`   | Reserved; returns `BackendNotAvailable` (no implementation yet)                 |
-| `"shm"`   | Reserved; returns `BackendNotAvailable` (no implementation yet)                 |
+| `"tcp"`   | Deferred; returns `BackendNotAvailable` (no implementation yet)                 |
+| `"shm"`   | Deferred; returns `BackendNotAvailable` (no implementation yet)                 |
 
 Auto-detection checks for the presence of MPI launcher environment variables
 (`PMI_RANK`, `PMI_SIZE`, `OMPI_COMM_WORLD_RANK`, `OMPI_COMM_WORLD_SIZE`,
@@ -326,11 +326,11 @@ The following features are planned but not yet implemented:
 
 ## Feature flags
 
-| Feature | Default | Description                                                 |
-| ------- | ------- | ----------------------------------------------------------- |
-| `mpi`   | no      | Enables `FerrompiBackend` and the `ferrompi` dependency     |
-| `tcp`   | no      | Reserved for the future TCP backend (no implementation yet) |
-| `shm`   | no      | Reserved for the future shared memory backend               |
+| Feature | Default | Description                                                    |
+| ------- | ------- | -------------------------------------------------------------- |
+| `mpi`   | no      | Enables `FerrompiBackend` and the `ferrompi` dependency        |
+| `tcp`   | no      | Deferred: future TCP backend (no implementation yet)           |
+| `shm`   | no      | Deferred: future shared memory backend (no implementation yet) |
 
 Without any feature flags, only `LocalBackend`, the trait definitions, and
 the type definitions are compiled. `create_communicator` returns `LocalBackend`
@@ -378,12 +378,12 @@ conformance suite covers:
 
 ## Design notes
 
-### Enum dispatch (DEC-001)
+### Enum dispatch
 
 `CommBackend` uses enum dispatch rather than `Box<dyn Communicator>`. The
 `Communicator` trait carries generic methods that make it intentionally not
 object-safe. Enum dispatch is the mandated pattern for closed variant sets
-in Cobre (DEC-001): a single `match` arm delegates each method to the inner
+in Cobre: a single `match` arm delegates each method to the inner
 concrete type. The overhead is a single branch-predictor-friendly integer
 comparison per call, which is negligible compared to the cost of the
 underlying MPI collective or LP solve.

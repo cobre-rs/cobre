@@ -1,6 +1,6 @@
 # cobre-stochastic
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-stochastic` provides the stochastic process models for the Cobre power
 systems ecosystem. It builds probabilistic representations of hydro inflow
@@ -20,7 +20,7 @@ for deterministic noise generation.
 | Module          | Purpose                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedParLp` cache                             |
-| `par::evaluate` | PAR model forward evaluation (`evaluate_par_inflow`) and inverse noise solving (`solve_par_noise`)                                   |
+| `par::evaluate` | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                          |
 | `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, AIC order selection |
 | `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                            |
 | `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormalLp` cache with stage-major layout                            |
@@ -64,12 +64,13 @@ All hot-path arrays use `Box<[f64]>` (via `Vec::into_boxed_slice()`) rather
 than `Vec<f64>`. The boxed-slice type communicates the no-resize invariant and
 eliminates the capacity word from each allocation.
 
-### Deterministic noise via SipHash-1-3 seed derivation (DEC-017)
+### Deterministic noise via communication-free seed derivation
 
 Each scenario realization in an iterative optimization run requires a draw
 from the noise distribution. Rather than broadcasting seeds across compute
-nodes — which would require communication — each node independently derives
-its own seed from a small tuple using SipHash-1-3 (DEC-017).
+nodes — which would require communication and create a serialization point as
+the number of ranks grows — each node independently derives its own seed from
+a small tuple using SipHash-1-3.
 
 Two derivation functions are provided:
 
@@ -174,7 +175,7 @@ fitted PAR(p) model to concrete state and noise values. Both operate on slices
 (no allocation) and are designed for repeated calls inside the iterative
 optimization loop.
 
-### `evaluate_par_inflow`
+### `evaluate_par`
 
 Computes the inflow for a single hydro plant at a single stage:
 
@@ -191,13 +192,13 @@ The returned value may be negative; truncation to a physical minimum (e.g.,
 zero) is the caller's responsibility.
 
 ```rust,no_run
-use cobre_stochastic::evaluate_par_inflow;
+use cobre_stochastic::evaluate_par;
 
 // AR(1): a_h = 70.0 + 0.48 * 90.0 + 28.62 * 0.5 = 127.51
-let a_h = evaluate_par_inflow(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
+let a_h = evaluate_par(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
 ```
 
-The batch variant `evaluate_par_inflows` fills an output slice for all hydro
+The batch variant `evaluate_par_batch` fills an output slice for all hydro
 plants at a given stage in one call, reading from a lag matrix indexed as
 `[lag * n_hydros + hydro]` for cache-optimal access.
 
@@ -221,7 +222,7 @@ let eta = solve_par_noise(70.0, &[0.48], 1, &[90.0], 28.62, 0.0);
 ```
 
 When `sigma == 0.0` (deterministic stage), `f64::NEG_INFINITY` is returned to
-indicate that no finite noise bound applies. The batch variant `solve_par_noises`
+indicate that no finite noise bound applies. The batch variant `solve_par_noise_batch`
 fills an output slice for all hydros at a given stage.
 
 ## Estimation pipeline
@@ -535,7 +536,7 @@ No external dependencies or system libraries are required. All dependencies
 
 ### Test suite overview
 
-The crate has 220 tests total covering unit tests, conformance integration
+The crate has 227 tests total covering unit tests, conformance integration
 tests, reproducibility integration tests, and doc-tests. New tests were added
 in v0.1.1 for the PAR evaluation functions, normal noise precomputation, and
 the estimation pipeline.
@@ -579,10 +580,10 @@ for correct behavior in a distributed, multi-run setting:
 
 ## Design notes
 
-### Communication-free noise generation (DEC-017)
+### Communication-free noise generation
 
 The original design considered broadcasting a seed from the root rank to all
-workers before each iteration. DEC-017 rejected this approach because it adds
+workers before each iteration. This approach was rejected because it adds
 an MPI collective on the hot path and creates a serialization point as the
 number of ranks grows.
 
@@ -597,3 +598,23 @@ The two wire formats (20 bytes for forward seeds, 16 bytes for opening seeds)
 use length-based domain separation rather than an explicit prefix byte, which
 is slightly more efficient and equally correct given that the two sets of
 input tuples have different shapes and lengths.
+
+### Planned type renames (0.2.0)
+
+Two types in `cobre-stochastic` carry an `Lp` suffix that incorrectly implies
+coupling to a specific solver backend. Because `cobre-stochastic` is
+deliberately solver-agnostic (it has no dependency on `cobre-solver`), the
+suffix is misleading — these types are general-purpose coefficient caches, not
+LP-specific structures.
+
+The following renames are planned for the 0.2.0 release (a minor-version bump,
+as the old names will be deprecated before removal):
+
+| Current name          | Planned name        | Reason                                                               |
+| --------------------- | ------------------- | -------------------------------------------------------------------- |
+| `PrecomputedParLp`    | `PrecomputedPar`    | The `Lp` suffix implies solver coupling; the type is solver-agnostic |
+| `PrecomputedNormalLp` | `PrecomputedNormal` | Same reason as above                                                 |
+
+Until 0.2.0, the existing names remain the canonical public API. No code
+changes are required at this stage. The rename will be accompanied by
+`#[deprecated]` annotations on the old names and a CHANGELOG entry.

@@ -21,8 +21,26 @@ The following features were delivered in v0.1.1:
   forecasts using the same Cholesky-based framework as inflow noise.
 - **PAR estimation from history** -- Fitting PAR(p) model coefficients from
   historical inflow records provided in the case directory.
+- **CVaR risk measure** -- Convex combination `(1 - λ)·E[Z] + λ·CVaR_α[Z]`
+  configurable per stage via the `risk_measure` field in `stages.json`.
 - **`cobre summary` subcommand** -- Post-run summary reporting subcommand that
   prints convergence statistics and output file locations.
+
+## v0.1.2 Deliverables
+
+The following features were delivered in v0.1.2:
+
+- **Cut selection wiring** -- Level-1 cut selection strategy connected to the
+  training loop; inactive cuts are retained in the pool for potential
+  reactivation and reported in convergence output.
+- **Generic PAR evaluation aliases** -- Public API aliases that decouple PAR
+  evaluation from inflow-specific naming, enabling reuse across load and
+  other stochastic processes.
+- **Documentation accuracy** -- Roadmap sections, crate overview pages, and
+  book reference pages updated to match the implemented state.
+- **Design ADRs** -- Architecture Decision Records for opening tree
+  user-supply, stochastic artifact export, complete tree work distribution,
+  and per-stage warm-start cuts.
 
 ## Sections
 
@@ -34,5 +52,6 @@ The roadmap is organized into four areas:
   grouped into near-term (v0.1.x/v0.2.x) and longer-term (v0.3+) items.
 - **Post-MVP Crates** -- Implementation plans for the three stubbed workspace
   crates: `cobre-mcp`, `cobre-python`, and `cobre-tui`.
-- **Algorithm Extensions** -- Deferred solver variants: CVaR risk measure,
-  multi-cut formulation, and infinite-horizon policy graphs.
+- **Algorithm Extensions** -- Deferred solver variants: multi-cut formulation
+  and infinite-horizon policy graphs. (CVaR risk measure was delivered in
+  v0.1.1. Cut selection wiring was delivered in v0.1.2.)

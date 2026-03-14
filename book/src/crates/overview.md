@@ -10,7 +10,7 @@ cobre/crates/
 ├── cobre-solver/       LP solver abstraction (HiGHS backend)
 ├── cobre-comm/         Communication abstraction (MPI, TCP, shm, local)
 ├── cobre-sddp/         SDDP training loop, simulation, cut management
-├── cobre-cli/          Binary: run/validate/report/compare/serve
+├── cobre-cli/          Binary: run/validate/report/init/schema/summary/version
 ├── cobre-mcp/          Binary: MCP server for AI agent integration
 ├── cobre-python/       cdylib: PyO3 Python bindings
 └── cobre-tui/          Library: ratatui terminal UI

@@ -164,18 +164,18 @@ The minimal viable solver is built through an [8-phase implementation sequence](
 
 **Complete.** PAR model fitting from inflow history (Levinson-Durbin, AIC order selection), inflow truncation, stochastic load demand, estimation pipeline, `cobre summary` subcommand, load validation rules.
 
-### v0.2 — Ecosystem Hardening
+### v0.1.2 — Code Quality and Documentation
 
+**In progress.** Abstraction cleanup (generic PAR evaluation aliases), documentation accuracy fixes, multi-rank reproducibility validation, and design ADRs for upcoming features (opening tree, stochastic export, complete tree work distribution, per-stage warm-start cuts).
+
+### v0.2 — Production Hardening
+
+- [ ] FPHA hydroelectric production function
 - [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
 - [ ] Benchmark suite with published results
-- [ ] Comparison study: Cobre vs. others on public test cases
-
-### v0.3 — Power Flow
-
-- [ ] Newton-Raphson AC power flow
-- [ ] DC power flow and OPF
+- [ ] Comparison study against reference implementations on public test cases
 
 ## Contributing
 

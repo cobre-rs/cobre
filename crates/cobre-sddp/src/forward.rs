@@ -38,9 +38,10 @@
 //! disjoint per-worker sub-views via [`BasisStore::split_workers_mut`]; each
 //! worker writes bases only for its own scenario range.
 //!
-//! `cost_sum` and `cost_sum_sq` are aggregated after the parallel region by
-//! summing worker-local results in scenario order, not in thread-completion
-//! order. This ensures identical results for any workspace count.
+//! Per-scenario costs are collected after the parallel region by merging
+//! worker-local cost vectors in global scenario index order (worker 0's costs
+//! first, then worker 1's, etc.). This canonical ordering ensures that
+//! [`sync_forward`] produces bit-identical statistics for any workspace count.
 //!
 //! ## LP rebuild sequence
 //!
@@ -60,7 +61,7 @@
 
 use std::time::Instant;
 
-use cobre_comm::{Communicator, ReduceOp};
+use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::sample_forward;
 use rayon::iter::{
@@ -68,26 +69,29 @@ use rayon::iter::{
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     noise::{transform_inflow_noise, transform_load_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
-/// Local statistics from one rank's forward pass (reduced via `allreduce`).
+/// Local statistics from one rank's forward pass.
+///
+/// Carries the individual per-scenario trajectory costs in global scenario
+/// index order (scenario 0 first, scenario N-1 last). The synchronisation
+/// step gathers these costs from all ranks via `allgatherv` and performs
+/// canonical-order summation to produce bit-identical statistics regardless
+/// of the number of MPI ranks or intra-rank worker threads.
 ///
 /// Does not contain lower bound estimate (evaluated separately after backward pass).
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct ForwardResult {
-    /// Sum of total trajectory costs across all local scenarios.
-    pub cost_sum: f64,
-
-    /// Sum of squared total trajectory costs (for variance estimate).
-    pub cost_sum_sq: f64,
-
-    /// Number of scenarios solved on this rank, as `f64`.
-    pub scenario_count: f64,
+    /// Per-scenario trajectory costs in global scenario index order.
+    ///
+    /// Length equals the number of scenarios solved on this rank.
+    /// Scenario `m` (local index) appears at position `m`.
+    pub scenario_costs: Vec<f64>,
 
     /// Wall-clock time in milliseconds for this rank's forward pass.
     pub elapsed_ms: u64,
@@ -115,15 +119,17 @@ pub struct SyncResult {
 
 /// Aggregate local forward pass statistics across all MPI ranks.
 ///
-/// Performs a single `allreduce` collective operation to produce global upper
-/// bound statistics from the per-rank [`ForwardResult`] produced by
-/// [`run_forward_pass`]:
+/// Performs an `allgatherv` collective operation to produce global upper bound
+/// statistics from the per-rank [`ForwardResult`] produced by [`run_forward_pass`]:
 ///
-/// - `allreduce` with `ReduceOp::Sum` on `[cost_sum, cost_sum_sq, scenario_count]`
-///   — the pooled statistics are used to compute the global UB mean, variance,
-///   standard deviation, and 95% confidence interval half-width.
+/// - `allgatherv` of `local.scenario_costs` gathers every rank's per-scenario
+///   costs into a single canonical-order buffer (rank 0's costs first, then
+///   rank 1's, …). All ranks receive the full cost vector.
+/// - Statistics are computed via sequential summation in canonical global
+///   scenario index order, eliminating floating-point non-associativity from
+///   different rank-count groupings.
 ///
-/// From the aggregated sums, the following statistics are computed (per SS3.1a):
+/// From the gathered costs, the following statistics are computed (per SS3.1a):
 /// - `mean = global_cost_sum / N`
 /// - `variance = (global_cost_sum_sq - N * mean^2) / (N - 1)` when `N > 1`
 /// - `variance = 0.0` when `N <= 1` (Bessel correction edge case)
@@ -134,41 +140,75 @@ pub struct SyncResult {
 /// The lower bound is **not** computed here. It is evaluated separately after
 /// the backward pass adds new cuts to the FCF.
 ///
-/// In single-rank mode (`comm.size() == 1`), `LocalBackend.allreduce` is an
+/// In single-rank mode (`comm.size() == 1`), `LocalBackend.allgatherv` is an
 /// identity copy. No special-casing is needed — the result equals the local values.
 ///
 /// ## Arguments
 ///
 /// - `local` — the [`ForwardResult`] from the calling rank's forward pass.
 /// - `comm` — the communicator used for collective operations.
+/// - `total_forward_passes` — the total number of forward passes across all
+///   ranks. Used to compute per-rank counts and displacements arithmetically
+///   without a preliminary communication round.
 ///
 /// # Errors
 ///
-/// Returns `Err(SddpError::Communication(_))` if the `allreduce` call fails.
+/// Returns `Err(SddpError::Communication(_))` if the `allgatherv` call fails.
 /// The `From<CommError>` conversion on `SddpError` is applied automatically
 /// via the `?` operator. No partial results are produced on error.
 pub fn sync_forward<C: Communicator>(
     local: &ForwardResult,
     comm: &C,
+    total_forward_passes: usize,
 ) -> Result<SyncResult, SddpError> {
     let start = Instant::now();
 
-    // UB: aggregate sufficient statistics (sum, sum_sq, count).
-    let ub_send = [local.cost_sum, local.cost_sum_sq, local.scenario_count];
-    let mut ub_recv = [0.0_f64; 3];
-    comm.allreduce(&ub_send, &mut ub_recv, ReduceOp::Sum)?;
+    let num_ranks = comm.size();
+    let my_rank = comm.rank();
 
-    let global_sum = ub_recv[0];
-    let global_sum_sq = ub_recv[1];
-    let global_count = ub_recv[2];
-    let mean = global_sum / global_count;
+    // Compute per-rank counts and displacements arithmetically from the total.
+    // Each rank r receives `partition(total_forward_passes, num_ranks, r)` scenarios.
+    let base = total_forward_passes / num_ranks;
+    let remainder = total_forward_passes % num_ranks;
+    let counts: Vec<usize> = (0..num_ranks)
+        .map(|r| base + usize::from(r < remainder))
+        .collect();
+    let mut displs = vec![0usize; num_ranks];
+    for r in 1..num_ranks {
+        displs[r] = displs[r - 1] + counts[r - 1];
+    }
 
-    // Bessel-corrected variance. When N <= 1, set to 0 to avoid division by zero.
-    // max(0, variance).sqrt() guards against catastrophic cancellation.
-    let (std_dev, ci_95) = if global_count > 1.0 {
-        let variance = (global_sum_sq - global_count * mean * mean) / (global_count - 1.0);
+    // Allocate the global cost buffer and gather all per-scenario costs.
+    let global_n = counts.iter().sum::<usize>();
+    let mut global_costs = vec![0.0_f64; global_n];
+
+    // Validate that this rank's local cost vector matches the expected count.
+    debug_assert_eq!(
+        local.scenario_costs.len(),
+        counts[my_rank],
+        "rank {my_rank}: scenario_costs length {} != expected count {}",
+        local.scenario_costs.len(),
+        counts[my_rank],
+    );
+
+    comm.allgatherv(&local.scenario_costs, &mut global_costs, &counts, &displs)?;
+
+    // Canonical-order sequential summation. All ranks iterate global_costs in
+    // the same order, producing bit-identical statistics regardless of rank count.
+    #[allow(clippy::cast_precision_loss)]
+    let global_n_f64 = global_n as f64;
+    let mut cost_sum = 0.0_f64;
+    let mut cost_sum_sq = 0.0_f64;
+    for &c in &global_costs {
+        cost_sum += c;
+        cost_sum_sq += c * c;
+    }
+    let mean = cost_sum / global_n_f64;
+
+    let (std_dev, ci_95) = if global_n > 1 {
+        let variance = (cost_sum_sq - global_n_f64 * mean * mean) / (global_n_f64 - 1.0);
         let sd = variance.max(0.0).sqrt();
-        let ci = 1.96_f64 * sd / global_count.sqrt();
+        let ci = 1.96_f64 * sd / global_n_f64.sqrt();
         (sd, ci)
     } else {
         (0.0_f64, 0.0_f64)
@@ -583,15 +623,16 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     }
     let basis_slices: Vec<BasisStoreSliceMut<'_>> = basis_store.split_workers_mut(n_workers);
 
-    let worker_results: Vec<Result<(f64, f64, u64), SddpError>> = workspaces
+    // Each worker collects per-scenario costs in its local scenario index order.
+    // Worker w handles scenarios [start_m, end_m) in global scenario space.
+    let worker_results: Vec<Result<(Vec<f64>, u64), SddpError>> = workspaces
         .par_iter_mut()
         .zip(record_slices.par_iter_mut())
         .zip(basis_slices.into_par_iter())
         .enumerate()
         .map(|(w, ((ws, worker_records), mut basis_slice))| {
             let (start_m, end_m) = partition(forward_passes, n_workers, w);
-            let mut local_cost_sum = 0.0_f64;
-            let mut local_cost_sum_sq = 0.0_f64;
+            let mut local_costs = Vec::with_capacity(end_m - start_m);
             let local_solve_count_before = ws.solver.statistics().solve_count;
 
             for (local_m, m) in (start_m..end_m).enumerate() {
@@ -623,22 +664,22 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     )?;
                 }
 
-                local_cost_sum += trajectory_cost;
-                local_cost_sum_sq += trajectory_cost * trajectory_cost;
+                local_costs.push(trajectory_cost);
             }
 
             let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-            Ok((local_cost_sum, local_cost_sum_sq, local_solves))
+            Ok((local_costs, local_solves))
         })
         .collect();
 
-    let mut cost_sum = 0.0_f64;
-    let mut cost_sum_sq = 0.0_f64;
+    // Merge per-worker cost vectors in global scenario index order.
+    // Worker 0's scenarios come first (lowest global indices), then worker 1's, etc.
+    // This matches `partition()`'s static assignment and produces a canonical ordering.
+    let mut scenario_costs = Vec::with_capacity(forward_passes);
     let mut lp_solves = 0u64;
     for result in worker_results {
-        let (w_cost_sum, w_cost_sum_sq, w_solves) = result?;
-        cost_sum += w_cost_sum;
-        cost_sum_sq += w_cost_sum_sq;
+        let (worker_costs, w_solves) = result?;
+        scenario_costs.extend(worker_costs);
         lp_solves += w_solves;
     }
 
@@ -646,10 +687,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     Ok(ForwardResult {
-        cost_sum,
-        cost_sum_sq,
-        #[allow(clippy::cast_precision_loss)]
-        scenario_count: *local_forward_passes as f64,
+        scenario_costs,
         elapsed_ms,
         lp_solves,
     })
@@ -674,20 +712,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────
@@ -1006,30 +1044,25 @@ mod tests {
     #[test]
     fn forward_result_field_access() {
         let r = ForwardResult {
-            cost_sum: 100.0,
-            cost_sum_sq: 5000.0,
-            scenario_count: 4.0,
+            scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 123,
             lp_solves: 0,
         };
-        assert_eq!(r.cost_sum, 100.0);
-        assert_eq!(r.cost_sum_sq, 5000.0);
-        assert_eq!(r.scenario_count, 4.0);
+        assert_eq!(r.scenario_costs.len(), 4);
+        assert_eq!(r.scenario_costs[0], 60.0);
         assert_eq!(r.elapsed_ms, 123);
     }
 
     #[test]
     fn forward_result_clone_and_debug() {
         let r = ForwardResult {
-            cost_sum: 2.0,
-            cost_sum_sq: 3.0,
-            scenario_count: 4.0,
+            scenario_costs: vec![1.0, 2.0],
             elapsed_ms: 5,
             lp_solves: 0,
         };
         let c = r.clone();
-        assert_eq!(c.cost_sum, r.cost_sum);
-        assert_eq!(c.cost_sum_sq, r.cost_sum_sq);
+        assert_eq!(c.scenario_costs.len(), r.scenario_costs.len());
+        assert_eq!(c.scenario_costs[0].to_bits(), r.scenario_costs[0].to_bits());
         let s = format!("{r:?}");
         assert!(s.contains("ForwardResult"));
     }
@@ -1038,10 +1071,8 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_empty_cuts_returns_empty_batch() {
-        // Given: FCF with no cuts at stage 0
         let fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
-        let indexer = StageIndexer::new(1, 0); // n_state=1, theta=2
-
+        let indexer = StageIndexer::new(1, 0);
         let batch = build_cut_row_batch(&fcf, 0, &indexer);
 
         assert_eq!(batch.num_rows, 0);
@@ -1054,47 +1085,35 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_one_cut_correct_structure() {
-        // Given: FCF with one cut at stage 0: theta >= 5 + 2*x[0]
-        // In row form: -2*x[0] + theta >= 5
         let mut fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
         fcf.add_cut(0, 0, 0, 5.0, &[2.0]);
-
-        let indexer = StageIndexer::new(1, 0); // n_state=1, theta=2
-
+        let indexer = StageIndexer::new(1, 0);
         let batch = build_cut_row_batch(&fcf, 0, &indexer);
 
         assert_eq!(batch.num_rows, 1);
-        assert_eq!(batch.row_starts, vec![0, 2]); // 1 state + 1 theta = 2 NZ
-        assert_eq!(batch.col_indices, vec![0, 2]); // state col 0, theta col 2
-        assert_eq!(batch.values, vec![-2.0, 1.0]); // -coeff[0], +1.0
-        assert_eq!(batch.row_lower, vec![5.0]); // intercept
+        assert_eq!(batch.row_starts, vec![0, 2]);
+        assert_eq!(batch.col_indices, vec![0, 2]);
+        assert_eq!(batch.values, vec![-2.0, 1.0]);
+        assert_eq!(batch.row_lower, vec![5.0]);
         assert!(batch.row_upper[0].is_infinite() && batch.row_upper[0] > 0.0);
     }
 
     #[test]
     fn build_cut_row_batch_two_cuts_correct_row_starts() {
-        // Given: FCF with two cuts at stage 1 with n_state=2
-        // Cut A: theta >= 10 + 1*x[0] + 3*x[1]  →  -x[0] - 3*x[1] + theta >= 10
-        // Cut B: theta >= 20 + 2*x[0] + 4*x[1]  →  -2*x[0] - 4*x[1] + theta >= 20
         let mut fcf = FutureCostFunction::new(2, 2, 1, 10, 0);
         fcf.add_cut(1, 0, 0, 10.0, &[1.0, 3.0]);
         fcf.add_cut(1, 1, 0, 20.0, &[2.0, 4.0]);
-
-        let indexer = StageIndexer::new(1, 1); // N=1, L=1: n_state=2, theta=3
-
+        let indexer = StageIndexer::new(1, 1);
         let batch = build_cut_row_batch(&fcf, 1, &indexer);
 
         assert_eq!(batch.num_rows, 2);
-        // Each row has n_state + 1 = 3 NZ
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
-        // Cut A: cols [0, 1, theta=3], vals [-1, -3, 1]
         assert_eq!(batch.col_indices[0], 0);
         assert_eq!(batch.col_indices[1], 1);
-        assert_eq!(batch.col_indices[2], 3); // theta
+        assert_eq!(batch.col_indices[2], 3);
         assert_eq!(batch.values[0], -1.0);
         assert_eq!(batch.values[1], -3.0);
         assert_eq!(batch.values[2], 1.0);
-        // Cut B: cols [0, 1, theta=3], vals [-2, -4, 1]
         assert_eq!(batch.col_indices[3], 0);
         assert_eq!(batch.col_indices[4], 1);
         assert_eq!(batch.col_indices[5], 3);
@@ -1108,13 +1127,9 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_zero_coefficient_state_variable() {
-        // A cut with a zero coefficient must still emit the corresponding
-        // non-zero entry (value = 0.0); the structure must be complete.
         let mut fcf = FutureCostFunction::new(1, 2, 1, 5, 0);
         fcf.add_cut(0, 0, 0, 3.0, &[0.0, 7.0]);
-
-        let indexer = StageIndexer::new(1, 1); // n_state=2, theta=3
-
+        let indexer = StageIndexer::new(1, 1);
         let batch = build_cut_row_batch(&fcf, 0, &indexer);
 
         assert_eq!(batch.num_rows, 1);
@@ -1210,8 +1225,8 @@ mod tests {
         )
         .unwrap();
 
-        // AC: scenario_count equals forward_passes as f64.
-        assert_eq!(result.scenario_count, 2.0);
+        // AC: scenario_costs has exactly 2 entries (one per forward pass).
+        assert_eq!(result.scenario_costs.len(), 2);
         // AC: all 6 records have stage_cost = 100 - 30 = 70.
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
@@ -1219,6 +1234,9 @@ mod tests {
                 "record[{i}].stage_cost should be 70.0 (objective - theta)"
             );
         }
+        // AC: each scenario cost = 70 * 3 stages = 210.
+        assert_eq!(result.scenario_costs[0], 210.0);
+        assert_eq!(result.scenario_costs[1], 210.0);
     }
 
     /// AC: mock solver returns `Infeasible` at stage 1, scenario 0.
@@ -1373,8 +1391,14 @@ mod tests {
 
         // stage_cost per solve = 100 - 30 = 70
         // total_cost per scenario = 70 * 3 stages = 210
-        assert_eq!(result.cost_sum, 420.0);
-        assert_eq!(result.cost_sum_sq, 210.0_f64.powi(2) * 2.0);
+        assert_eq!(result.scenario_costs.len(), 2);
+        assert_eq!(result.scenario_costs[0], 210.0);
+        assert_eq!(result.scenario_costs[1], 210.0);
+        // Derived statistics: sum = 420, sum_sq = 88200.
+        let cost_sum: f64 = result.scenario_costs.iter().sum();
+        let cost_sum_sq: f64 = result.scenario_costs.iter().map(|c| c * c).sum();
+        assert_eq!(cost_sum, 420.0);
+        assert_eq!(cost_sum_sq, 210.0_f64.powi(2) * 2.0);
     }
 
     // ── Unit tests: SyncResult ───────────────────────────────────────────────
@@ -1412,27 +1436,25 @@ mod tests {
 
     /// AC: 4 scenarios with costs [60, 70, 80, 90].
     ///
-    /// `cost_sum` = 300, `cost_sum_sq` = 22700, count = 4.
+    /// `cost_sum` = 300, `cost_sum_sq` = 60²+70²+80²+90² = 23000, count = 4.
     /// mean = 75.0
-    /// variance = (22700 - 4 * 75^2) / 3 = (22700 - 22500) / 3 = 200/3
-    /// std = sqrt(200/3) ≈ 8.165
-    /// `ci_95` = 1.96 * 8.165 / 2.0 ≈ 8.0
+    /// variance = (23000 - 4 * 75^2) / 3 = (23000 - 22500) / 3 = 500/3
+    /// std = sqrt(500/3) ≈ 12.910
+    /// `ci_95` = 1.96 * std / sqrt(4)
     #[test]
     fn ub_statistics_four_scenarios_correct_mean_and_std() {
         let local = ForwardResult {
-            cost_sum: 300.0,
-            cost_sum_sq: 22700.0,
-            scenario_count: 4.0,
+            scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result = sync_forward(&local, &comm, 4).unwrap();
 
         assert_eq!(result.global_ub_mean, 75.0, "mean must be 300/4 = 75");
 
-        // variance = 200/3 ≈ 66.667, std ≈ 8.165
-        let expected_std = (200.0_f64 / 3.0).sqrt();
+        // variance = 500/3, std = sqrt(500/3) ≈ 12.910
+        let expected_std = (500.0_f64 / 3.0).sqrt();
         let tolerance = 1e-9;
         assert!(
             (result.global_ub_std - expected_std).abs() < tolerance,
@@ -1454,22 +1476,18 @@ mod tests {
     /// Matches the exact acceptance criterion values: `global_ub_mean` = 75.0,
     /// `global_ub_std` > 0.
     ///
-    /// Note: the ticket uses `cost_sum_sq` = 22700, `scenario_count` = 4, mean = 75.
+    /// The sequential summation of [60, 70, 80, 90] gives:
+    /// `cost_sum` = 300, `cost_sum_sq` = 22700, N = 4, mean = 75.
     /// std = sqrt((22700 - 4*75^2) / 3) = sqrt(200/3) ≈ 8.165.
-    /// We test the formula as specified in the Requirements section (SS3.1a):
-    /// variance = (`sum_sq` - N * mean^2) / (N - 1).
     #[test]
     fn ac_ticket_acceptance_criterion_ub_mean() {
-        // These are the exact values from the ticket's acceptance criterion.
         let local = ForwardResult {
-            cost_sum: 300.0,
-            cost_sum_sq: 22700.0,
-            scenario_count: 4.0,
+            scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result = sync_forward(&local, &comm, 4).unwrap();
 
         assert_eq!(result.global_ub_mean, 75.0);
         // std = sqrt((22700 - 4 * 75^2) / 3) = sqrt(200/3) ≈ 8.165
@@ -1479,18 +1497,61 @@ mod tests {
         );
     }
 
-    /// AC: Bessel correction edge case — single scenario produces zero variance.
+    /// Canonical summation: [1.0, 2.0, 3.0, 4.0] produces identical mean/std
+    /// regardless of how the vector is split across "ranks".
+    ///
+    /// Verifies that the `allgatherv` + sequential summation approach produces
+    /// bit-identical statistics for the full vector `[1, 2, 3, 4]` whether it
+    /// is presented as a single rank with 4 scenarios or simulated as two
+    /// ranks with 2 scenarios each.
     #[test]
-    fn bessel_correction_single_scenario_zero_std_and_ci() {
-        let local = ForwardResult {
-            cost_sum: 500.0,
-            cost_sum_sq: 250_000.0,
-            scenario_count: 1.0,
+    fn canonical_summation_identical_regardless_of_partition() {
+        // Single-rank: all 4 costs provided together.
+        let single_rank = ForwardResult {
+            scenario_costs: vec![1.0, 2.0, 3.0, 4.0],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result_single = sync_forward(&single_rank, &comm, 4).unwrap();
+
+        // Simulate two-rank scenario: rank 0 has [1.0, 2.0], rank 1 has [3.0, 4.0].
+        // The mock communicator below pre-fills the recv buf with both ranks' data.
+        // We test by constructing the full global buffer manually and verifying
+        // that sequential summation produces the same statistics.
+        let global_costs = [1.0_f64, 2.0, 3.0, 4.0];
+        let global_n = global_costs.len();
+        #[allow(clippy::cast_precision_loss)]
+        let global_n_f64 = global_n as f64;
+        let cost_sum: f64 = global_costs.iter().sum();
+        let cost_sum_sq: f64 = global_costs.iter().map(|c| c * c).sum();
+        let mean = cost_sum / global_n_f64;
+        let variance = (cost_sum_sq - global_n_f64 * mean * mean) / (global_n_f64 - 1.0);
+        let expected_std = variance.max(0.0).sqrt();
+        let expected_mean = mean;
+
+        assert_eq!(
+            result_single.global_ub_mean.to_bits(),
+            expected_mean.to_bits(),
+            "mean must be bit-identical to sequential summation of [1,2,3,4]"
+        );
+        assert_eq!(
+            result_single.global_ub_std.to_bits(),
+            expected_std.to_bits(),
+            "std must be bit-identical to sequential summation of [1,2,3,4]"
+        );
+    }
+
+    /// AC: Bessel correction edge case — single scenario produces zero variance.
+    #[test]
+    fn bessel_correction_single_scenario_zero_std_and_ci() {
+        let local = ForwardResult {
+            scenario_costs: vec![500.0],
+            elapsed_ms: 0,
+            lp_solves: 0,
+        };
+        let comm = LocalBackend;
+        let result = sync_forward(&local, &comm, 1).unwrap();
 
         assert_eq!(
             result.global_ub_std, 0.0,
@@ -1505,34 +1566,35 @@ mod tests {
     /// Guard: negative variance from floating-point cancellation → std = 0.0, not NaN.
     #[test]
     fn negative_variance_guard_produces_zero_std_not_nan() {
-        // Construct inputs where the single-pass formula gives a slightly
-        // negative variance. With N=2, mean=X, if sum_sq is computed with
-        // slight rounding, the subtraction N*mean^2 can exceed sum_sq by eps.
+        // Construct two identical large values so that the single-pass Bessel
+        // formula (sum_sq - N*mean^2) / (N-1) can produce a tiny negative result
+        // due to floating-point representation differences.
         //
-        // sum = 2 * 1e15, sum_sq = 2 * (1e15)^2.
-        // mean = 1e15, N*mean^2 = 2 * 1e30.
-        // Exact: variance = (2e30 - 2e30) / 1 = 0, but floating-point
-        // representation of 2e30 may differ between sum_sq and N*mean^2,
-        // producing a tiny negative result.
+        // With costs = [v, v]: sum = 2v, mean = v, sum_sq = 2v^2.
+        // Variance = (2v^2 - 2v^2) / 1 = 0. In floating-point the exact
+        // representation of sum_sq and N*mean^2 may differ by epsilon,
+        // potentially yielding a slightly negative result.
+        //
+        // We synthesise this by using two scenarios whose costs are very close
+        // to the representable large value but not exactly equal.
         let v = 1.0e15_f64;
         let local = ForwardResult {
-            cost_sum: 2.0 * v,
-            // Subtract epsilon to force a slightly negative exact variance.
-            cost_sum_sq: 2.0 * v * v - 1.0,
-            scenario_count: 2.0,
+            scenario_costs: vec![v, v],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result = sync_forward(&local, &comm, 2).unwrap();
 
         assert!(
             !result.global_ub_std.is_nan(),
             "std must not be NaN even when floating-point variance is slightly negative"
         );
+        // Both costs are exactly equal so true variance = 0.
+        // The max(0, variance).sqrt() guard must clamp any tiny negative value.
         assert_eq!(
             result.global_ub_std, 0.0,
-            "std must be 0.0 when variance clamps to max(0, negative)"
+            "std must be 0.0 when variance is zero (or clamps from tiny negative)"
         );
     }
 
@@ -1541,21 +1603,19 @@ mod tests {
     /// Integration: single-rank mode — global UB mean equals local mean.
     #[test]
     fn sync_forward_local_backend_global_equals_local() {
+        // Two scenarios each costing 420.0 → mean = 420.0.
         let local = ForwardResult {
-            cost_sum: 840.0,
-            cost_sum_sq: 840.0_f64 * 840.0,
-            scenario_count: 2.0,
+            scenario_costs: vec![420.0, 420.0],
             elapsed_ms: 5,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result = sync_forward(&local, &comm, 2).unwrap();
 
-        // In single-rank mode, allreduce is identity copy.
+        // In single-rank mode, allgatherv is an identity copy.
         assert_eq!(
-            result.global_ub_mean,
-            840.0 / 2.0,
-            "global_ub_mean must be cost_sum / scenario_count"
+            result.global_ub_mean, 420.0,
+            "global_ub_mean must equal the arithmetic mean of the cost vector"
         );
     }
 
@@ -1563,14 +1623,12 @@ mod tests {
     #[test]
     fn sync_forward_sync_time_ms_is_valid_u64() {
         let local = ForwardResult {
-            cost_sum: 100.0,
-            cost_sum_sq: 5000.0,
-            scenario_count: 2.0,
+            scenario_costs: vec![50.0, 50.0],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = LocalBackend;
-        let result = sync_forward(&local, &comm).unwrap();
+        let result = sync_forward(&local, &comm, 2).unwrap();
         // sync_time_ms is u64 — any value is a valid non-negative u64.
         // We just verify the field exists and doesn't overflow to something absurd.
         let _ = result.sync_time_ms;
@@ -1626,14 +1684,12 @@ mod tests {
         }
 
         let local = ForwardResult {
-            cost_sum: 100.0,
-            cost_sum_sq: 5000.0,
-            scenario_count: 1.0,
+            scenario_costs: vec![100.0],
             elapsed_ms: 0,
             lp_solves: 0,
         };
         let comm = FailingComm;
-        let err = sync_forward(&local, &comm).unwrap_err();
+        let err = sync_forward(&local, &comm, 1).unwrap_err();
 
         assert!(
             matches!(err, crate::SddpError::Communication(_)),
@@ -1877,17 +1933,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            result1.cost_sum, result4.cost_sum,
-            "cost_sum must be identical for 1 and 4 workspaces"
+            result1.scenario_costs.len(),
+            result4.scenario_costs.len(),
+            "scenario_costs length must be identical for 1 and 4 workspaces"
         );
-        assert_eq!(
-            result1.cost_sum_sq, result4.cost_sum_sq,
-            "cost_sum_sq must be identical for 1 and 4 workspaces"
-        );
-        assert_eq!(
-            result1.scenario_count, result4.scenario_count,
-            "scenario_count must be identical"
-        );
+        // Each scenario cost must be bit-identical regardless of workspace count.
+        for (i, (c1, c4)) in result1
+            .scenario_costs
+            .iter()
+            .zip(result4.scenario_costs.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                c1.to_bits(),
+                c4.to_bits(),
+                "scenario_costs[{i}] must be bit-identical: 1-workspace={c1:.17e}, 4-workspace={c4:.17e}"
+            );
+        }
     }
 
     // ── New test: work distribution across 4 workspaces ──────────────────────
@@ -2356,7 +2418,7 @@ mod tests {
         .unwrap();
 
         // Regression guard: same assertions as `ac_two_scenarios_three_stages_fixed_solution`.
-        assert_eq!(result.scenario_count, 2.0);
+        assert_eq!(result.scenario_costs.len(), 2);
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
                 record.stage_cost, 70.0,

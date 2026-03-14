@@ -26,9 +26,9 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
@@ -39,7 +39,6 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
@@ -47,13 +46,14 @@ use crate::{
     cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool},
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -375,14 +375,16 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 
+        let local_n = forward_result.scenario_costs.len();
+        let local_cost_sum: f64 = forward_result.scenario_costs.iter().sum();
         emit(
             event_sender.as_ref(),
             TrainingEvent::ForwardPassComplete {
                 iteration,
                 scenarios: config_forward_passes,
                 #[allow(clippy::cast_precision_loss)]
-                ub_mean: if forward_result.scenario_count > 0.0 {
-                    forward_result.cost_sum / forward_result.scenario_count
+                ub_mean: if local_n > 0 {
+                    local_cost_sum / local_n as f64
                 } else {
                     0.0
                 },
@@ -390,7 +392,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 elapsed_ms: forward_elapsed_ms,
             },
         );
-        let sync_result = sync_forward(&forward_result, comm)?;
+        let sync_result = sync_forward(&forward_result, comm, total_forward_passes)?;
 
         emit(
             event_sender.as_ref(),
@@ -611,25 +613,25 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
+        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig, context::TrainingContext,
-        cut::fcf::FutureCostFunction,
+        context::TrainingContext, cut::fcf::FutureCostFunction, HorizonMode,
+        InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
+        StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
@@ -800,12 +802,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

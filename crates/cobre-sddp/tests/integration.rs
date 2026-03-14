@@ -23,32 +23,32 @@
 // External crate imports
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
 };
 
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
-    train,
+    cut::fcf::FutureCostFunction, train, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    TrainingContext,
 };
 
 // ===========================================================================
@@ -68,7 +68,6 @@ impl Communicator for StubComm {
         _counts: &[usize],
         _displs: &[usize],
     ) -> Result<(), CommError> {
-        // Single rank: copy send into recv (identity gather).
         recv[..send.len()].clone_from_slice(send);
         Ok(())
     }
@@ -108,15 +107,16 @@ impl Communicator for StubComm {
 /// iteration 2's convergence check runs the shutdown flag is already set.
 struct ShutdownComm {
     flag: Arc<AtomicBool>,
-    /// Count of allreduce calls so we only flip the flag once.
-    allreduce_calls: AtomicUsize,
+    /// Count of allgatherv calls; the shutdown flag is flipped on the first
+    /// call that corresponds to `sync_forward` (forward sync in iteration 1).
+    allgatherv_calls: AtomicUsize,
 }
 
 impl ShutdownComm {
     fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,
-            allreduce_calls: AtomicUsize::new(0),
+            allgatherv_calls: AtomicUsize::new(0),
         }
     }
 }
@@ -130,6 +130,10 @@ impl Communicator for ShutdownComm {
         _displs: &[usize],
     ) -> Result<(), CommError> {
         recv[..send.len()].clone_from_slice(send);
+        // Set flag on first call so iteration 2's convergence check triggers shutdown.
+        if self.allgatherv_calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            self.flag.store(true, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -140,12 +144,6 @@ impl Communicator for ShutdownComm {
         _op: ReduceOp,
     ) -> Result<(), CommError> {
         recv.clone_from_slice(send);
-        // Set the shutdown flag on the very first allreduce call (iteration 1
-        // forward sync). The training loop checks the flag at the start of each
-        // iteration, so iteration 2 will trigger GracefulShutdown.
-        if self.allreduce_calls.fetch_add(1, Ordering::Relaxed) == 0 {
-            self.flag.store(true, Ordering::Relaxed);
-        }
         Ok(())
     }
 
@@ -298,9 +296,9 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),
@@ -497,10 +495,6 @@ impl Fixture {
 // Tests
 
 /// Verify the full training loop runs to completion under `IterationLimit`.
-///
-/// Exercises: `run_forward_pass` → `sync_forward` → `ExchangeBuffers::exchange`
-/// → `run_backward_pass` → `CutSyncBuffers::sync_cuts` → `evaluate_lower_bound`
-/// → `ConvergenceMonitor::update` → `TrainingResult` fields.
 #[test]
 fn train_converges_with_mock_solver() {
     let fx = Fixture::new(2);
@@ -547,29 +541,11 @@ fn train_converges_with_mock_solver() {
     )
     .unwrap();
 
-    assert!(
-        result.iterations <= 10,
-        "iterations must be <= 10, got {}",
-        result.iterations
-    );
-    assert!(
-        result.final_lb >= 0.0,
-        "final_lb must be >= 0.0, got {}",
-        result.final_lb
-    );
-    assert!(
-        result.final_ub >= 0.0,
-        "final_ub must be >= 0.0, got {}",
-        result.final_ub
-    );
-    assert!(
-        result.final_gap >= 0.0 || result.final_gap < 0.0,
-        "final_gap is a real number"
-    );
-    assert!(
-        !result.reason.is_empty(),
-        "reason must be a non-empty string"
-    );
+    assert!(result.iterations <= 10);
+    assert!(result.final_lb >= 0.0);
+    assert!(result.final_ub >= 0.0);
+    assert!(result.final_gap.is_finite());
+    assert!(!result.reason.is_empty());
 }
 
 /// Run `train` twice with identical configuration and verify bit-for-bit
@@ -661,24 +637,9 @@ fn train_deterministic_with_same_seed() {
     )
     .unwrap();
 
-    assert_eq!(
-        result1.final_lb.to_bits(),
-        result2.final_lb.to_bits(),
-        "final_lb must be bit-for-bit identical: {} vs {}",
-        result1.final_lb,
-        result2.final_lb
-    );
-    assert_eq!(
-        result1.final_ub.to_bits(),
-        result2.final_ub.to_bits(),
-        "final_ub must be bit-for-bit identical: {} vs {}",
-        result1.final_ub,
-        result2.final_ub
-    );
-    assert_eq!(
-        result1.iterations, result2.iterations,
-        "iteration count must be identical"
-    );
+    assert_eq!(result1.final_lb.to_bits(), result2.final_lb.to_bits());
+    assert_eq!(result1.final_ub.to_bits(), result2.final_ub.to_bits());
+    assert_eq!(result1.iterations, result2.iterations);
 }
 
 /// Verify `lb[k] >= lb[k-1]` for all consecutive iterations from
@@ -745,18 +706,9 @@ fn train_lb_monotonically_nondecreasing() {
         })
         .collect();
 
-    assert!(
-        lower_bounds.len() >= 5,
-        "expected at least 5 ConvergenceUpdate events, got {}",
-        lower_bounds.len()
-    );
-
+    assert!(lower_bounds.len() >= 5);
     for window in lower_bounds.windows(2) {
-        let (prev, curr) = (window[0], window[1]);
-        assert!(
-            curr >= prev,
-            "LB must be non-decreasing: lb[k]={curr} < lb[k-1]={prev}"
-        );
+        assert!(window[1] >= window[0]);
     }
 }
 
@@ -812,24 +764,9 @@ fn train_emits_correct_event_sequence() {
 
     let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-    assert_eq!(
-        events.len(),
-        20,
-        "expected 20 events (1 started + 3*6 per-iter + 1 finished), got {} events: {events:?}",
-        events.len()
-    );
-
-    assert!(
-        matches!(events[0], TrainingEvent::TrainingStarted { .. }),
-        "events[0] must be TrainingStarted, got {:?}",
-        events[0]
-    );
-
-    assert!(
-        matches!(events[19], TrainingEvent::TrainingFinished { .. }),
-        "events[19] must be TrainingFinished, got {:?}",
-        events[19]
-    );
+    assert_eq!(events.len(), 20);
+    assert!(matches!(events[0], TrainingEvent::TrainingStarted { .. }));
+    assert!(matches!(events[19], TrainingEvent::TrainingFinished { .. }));
 
     let per_iter_types: &[fn(&TrainingEvent) -> bool] = &[
         |e| matches!(e, TrainingEvent::ForwardPassComplete { .. }),
@@ -843,14 +780,7 @@ fn train_emits_correct_event_sequence() {
     for iter_idx in 0..3usize {
         let offset = 1 + iter_idx * 6;
         for (step, &check_fn) in per_iter_types.iter().enumerate() {
-            let event = &events[offset + step];
-            assert!(
-                check_fn(event),
-                "iteration {}, step {}: unexpected event {:?}",
-                iter_idx + 1,
-                step,
-                event
-            );
+            assert!(check_fn(&events[offset + step]));
         }
     }
 }
@@ -901,16 +831,8 @@ fn train_stops_at_iteration_limit() {
     )
     .unwrap();
 
-    assert_eq!(
-        result.iterations, 3,
-        "expected exactly 3 iterations, got {}",
-        result.iterations
-    );
-    assert_eq!(
-        result.reason, "iteration_limit",
-        "expected reason 'iteration_limit', got '{}'",
-        result.reason
-    );
+    assert_eq!(result.iterations, 3);
+    assert_eq!(result.reason, "iteration_limit");
 }
 
 /// Verify `train` terminates with `reason == "graceful_shutdown"` when an
@@ -969,16 +891,8 @@ fn train_stops_on_graceful_shutdown() {
     )
     .unwrap();
 
-    assert_eq!(
-        result.reason, "graceful_shutdown",
-        "expected reason 'graceful_shutdown', got '{}' after {} iterations",
-        result.reason, result.iterations
-    );
-    assert!(
-        result.iterations <= 2,
-        "expected at most 2 iterations before shutdown, got {}",
-        result.iterations
-    );
+    assert_eq!(result.reason, "graceful_shutdown");
+    assert!(result.iterations <= 2);
 }
 
 /// Verify `train` propagates `SddpError::Infeasible` when the solver returns
@@ -1026,8 +940,8 @@ fn train_propagates_infeasible_error() {
         &[1usize, 1],
     );
 
-    assert!(
-        matches!(result, Err(SddpError::Infeasible { stage: 0, .. })),
-        "expected Err(SddpError::Infeasible {{ stage: 0, .. }}), got: {result:?}"
-    );
+    assert!(matches!(
+        result,
+        Err(SddpError::Infeasible { stage: 0, .. })
+    ));
 }

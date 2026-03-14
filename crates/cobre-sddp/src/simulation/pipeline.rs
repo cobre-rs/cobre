@@ -80,82 +80,6 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// The outer function flattens and sorts the results.
 type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 
-// ---------------------------------------------------------------------------
-// Welford online accumulator for running mean and variance
-// ---------------------------------------------------------------------------
-
-/// Online accumulator for mean and variance using Welford's algorithm.
-///
-/// Accumulates one value at a time with O(1) updates and O(1) statistics
-/// queries, with no re-scanning of previous data. Safe for use on the main
-/// thread after the parallel region completes — not intended for concurrent
-/// access.
-struct WelfordAccumulator {
-    count: u64,
-    mean: f64,
-    /// Sum of squared deviations from the running mean.
-    m2: f64,
-}
-
-impl WelfordAccumulator {
-    /// Create a new accumulator with no observations.
-    fn new() -> Self {
-        Self {
-            count: 0,
-            mean: 0.0,
-            m2: 0.0,
-        }
-    }
-
-    /// Incorporate a new observation into the running statistics.
-    fn update(&mut self, value: f64) {
-        self.count += 1;
-        let delta = value - self.mean;
-        #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
-        let count_f64 = self.count as f64;
-        self.mean += delta / count_f64;
-        let delta2 = value - self.mean;
-        self.m2 += delta * delta2;
-    }
-
-    /// Running mean of all observed values, or `0.0` if no observations.
-    fn mean(&self) -> f64 {
-        self.mean
-    }
-
-    /// Population variance (`m2 / n`), or `0.0` if fewer than 2 observations.
-    ///
-    /// Returns `0.0` for zero or one observation since variance is undefined
-    /// with insufficient data.
-    fn variance(&self) -> f64 {
-        if self.count < 2 {
-            0.0
-        } else {
-            #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
-            let count_f64 = self.count as f64;
-            self.m2 / count_f64
-        }
-    }
-
-    /// Population standard deviation, or `0.0` if fewer than 2 observations.
-    fn std_dev(&self) -> f64 {
-        self.variance().sqrt()
-    }
-
-    /// Half-width of the 95% confidence interval (`1.96 * std / sqrt(n)`).
-    ///
-    /// Returns `0.0` when fewer than 2 observations are available.
-    fn ci_95_half_width(&self) -> f64 {
-        if self.count < 2 {
-            0.0
-        } else {
-            #[allow(clippy::cast_precision_loss)] // count is bounded by n_scenarios (u32-range)
-            let count_f64 = self.count as f64;
-            1.96 * self.std_dev() / count_f64.sqrt()
-        }
-    }
-}
-
 /// Output-related inputs bundled from the caller for [`simulate`].
 ///
 /// Groups the output-channel, unit-conversion arrays, and optional event sender
@@ -441,7 +365,7 @@ fn process_scenario_stages<S: SolverInterface>(
 /// Emit an in-progress simulation event if a sender is available.
 fn emit_sim_progress(
     sender: Option<&Sender<TrainingEvent>>,
-    acc: &WelfordAccumulator,
+    scenario_cost: f64,
     completed: u32,
     total: u32,
     elapsed_ms: u64,
@@ -451,9 +375,7 @@ fn emit_sim_progress(
             scenarios_complete: completed,
             scenarios_total: total,
             elapsed_ms,
-            mean_cost: acc.mean(),
-            std_cost: acc.std_dev(),
-            ci_95_half_width: acc.ci_95_half_width(),
+            scenario_cost,
         });
     }
 }
@@ -592,7 +514,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
             let (start_local, end_local) = partition(local_count, n_workers, w);
             let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
             let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
-            let mut worker_acc = WelfordAccumulator::new();
             let mut worker_costs = Vec::with_capacity(end_local - start_local);
 
             for local_idx in start_local..end_local {
@@ -618,12 +539,11 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     total_cost,
                     stage_results,
                 )?);
-                worker_acc.update(total_cost);
                 let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
                 #[allow(clippy::cast_possible_truncation)]
                 emit_sim_progress(
                     worker_sender.as_ref(),
-                    &worker_acc,
+                    total_cost,
                     completed,
                     config.n_scenarios,
                     sim_start.elapsed().as_millis() as u64,
@@ -1667,73 +1587,11 @@ mod tests {
         }
     }
 
-    // ── Welford accumulator unit tests ───────────────────────────────────────
-
-    /// Known dataset: `[2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]`
-    /// Expected: mean=5.0, variance=4.0, `std_dev`=2.0.
-    #[test]
-    fn welford_known_dataset_mean_variance_std() {
-        let values = [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
-        let mut acc = super::WelfordAccumulator::new();
-        for &v in &values {
-            acc.update(v);
-        }
-        assert!(
-            (acc.mean() - 5.0).abs() < 1e-10,
-            "mean: expected 5.0, got {}",
-            acc.mean()
-        );
-        assert!(
-            (acc.variance() - 4.0).abs() < 1e-10,
-            "variance: expected 4.0, got {}",
-            acc.variance()
-        );
-        assert!(
-            (acc.std_dev() - 2.0).abs() < 1e-10,
-            "std_dev: expected 2.0, got {}",
-            acc.std_dev()
-        );
-    }
-
-    /// Single value: mean equals that value, `std_dev`=0.0, CI half-width=0.0.
-    #[test]
-    fn welford_single_value_no_variance() {
-        let mut acc = super::WelfordAccumulator::new();
-        acc.update(42.0);
-        assert!(
-            (acc.mean() - 42.0).abs() < 1e-10,
-            "mean: expected 42.0, got {}",
-            acc.mean()
-        );
-        assert_eq!(
-            acc.std_dev(),
-            0.0,
-            "std_dev must be 0.0 with one observation"
-        );
-        assert_eq!(
-            acc.ci_95_half_width(),
-            0.0,
-            "ci_95_half_width must be 0.0 with one observation"
-        );
-    }
-
-    /// Zero updates: mean=0.0, `std_dev`=0.0.
-    #[test]
-    fn welford_zero_updates() {
-        let acc = super::WelfordAccumulator::new();
-        assert_eq!(acc.mean(), 0.0, "mean must be 0.0 with no observations");
-        assert_eq!(
-            acc.std_dev(),
-            0.0,
-            "std_dev must be 0.0 with no observations"
-        );
-    }
-
     // ── Integration tests for event emission ─────────────────────────────────
 
     /// Acceptance criterion: with `event_sender: Some(&tx)` and 10 scenarios,
-    /// at least 1 `SimulationProgress` event is received with `scenarios_complete > 0`,
-    /// finite non-NaN `mean_cost`, and `ci_95_half_width >= 0.0`.
+    /// at least 1 `SimulationProgress` event is received with `scenarios_complete > 0`
+    /// and a finite non-NaN `scenario_cost`.
     #[test]
     fn simulate_emits_progress_events() {
         use cobre_core::TrainingEvent;
@@ -1810,8 +1668,7 @@ mod tests {
         for event in &progress_events {
             let TrainingEvent::SimulationProgress {
                 scenarios_complete,
-                mean_cost,
-                ci_95_half_width,
+                scenario_cost,
                 ..
             } = event
             else {
@@ -1823,12 +1680,8 @@ mod tests {
                 "scenarios_complete must be > 0, got {scenarios_complete}"
             );
             assert!(
-                mean_cost.is_finite() && !mean_cost.is_nan(),
-                "mean_cost must be finite and non-NaN, got {mean_cost}"
-            );
-            assert!(
-                *ci_95_half_width >= 0.0,
-                "ci_95_half_width must be >= 0.0, got {ci_95_half_width}"
+                scenario_cost.is_finite() && !scenario_cost.is_nan(),
+                "scenario_cost must be finite and non-NaN, got {scenario_cost}"
             );
         }
     }
@@ -1989,26 +1842,14 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion: after 2+ scenarios complete, `std_cost` in
-    /// `SimulationProgress` events is non-zero (per-worker running statistics).
+    /// Acceptance criterion: each `SimulationProgress` event carries the raw
+    /// `scenario_cost` of the completed scenario.
     ///
-    /// Uses 3 scenarios with distinct per-scenario costs so that the second
-    /// progress event has a non-zero standard deviation.
-    ///
-    /// NOTE: The `MockSolver` always returns the same solution, so `total_cost`
-    /// is identical for every scenario. To get a non-zero `std_cost` we need
-    /// varying costs. Since `stage_cost = objective - primal[theta]`, and
-    /// `MockSolver` returns a fixed solution, all scenarios will have the same
-    /// cost. Therefore we validate that `std_cost` converges to `0.0` for
-    /// identical costs and that `mean_cost` matches the fixed cost.
-    ///
-    /// To test non-zero `std_cost` we verify the `WelfordAccumulator` directly
-    /// (already done in `welford_known_dataset_mean_variance_std`). Here we
-    /// verify that `mean_cost` equals the true running mean and that `std_cost`
-    /// is `0.0` when all costs are identical (a valid invariant of the
-    /// implementation).
+    /// With `MockSolver` returning a fixed solution, all scenarios have the same
+    /// `total_cost`. Validates that every `SimulationProgress.scenario_cost`
+    /// equals the expected per-scenario cost.
     #[test]
-    fn simulate_progress_mean_cost_is_running_mean() {
+    fn simulate_progress_scenario_cost_equals_total_cost() {
         use cobre_core::TrainingEvent;
 
         let n_stages = 1;
@@ -2084,15 +1925,14 @@ mod tests {
             "expected {n_scenarios} progress events"
         );
 
-        // Every progress event must report the running mean (= expected_stage_cost
-        // for this mock, since all scenarios have the same cost).
+        // Every progress event must carry the raw scenario cost.
         for event in &progress_events {
-            let TrainingEvent::SimulationProgress { mean_cost, .. } = event else {
+            let TrainingEvent::SimulationProgress { scenario_cost, .. } = event else {
                 continue;
             };
             assert!(
-                (mean_cost - expected_stage_cost).abs() < 1e-9,
-                "mean_cost must equal running mean {expected_stage_cost}, got {mean_cost}"
+                (scenario_cost - expected_stage_cost).abs() < 1e-9,
+                "scenario_cost must equal expected cost {expected_stage_cost}, got {scenario_cost}"
             );
         }
     }
@@ -2198,20 +2038,12 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion: with a single workspace, after the second scenario
-    /// completes, the `std_cost` field in the `WelfordAccumulator` is non-zero
-    /// when scenario costs differ.
-    ///
-    /// Since `MockSolver` returns a fixed solution (all costs identical), we
-    /// test this indirectly: the accumulator's `std_dev` for two identical
-    /// values is `0.0` (correct), and for differing values is non-zero. The
-    /// direct test of non-zero `std_cost` is done via `WelfordAccumulator`
-    /// unit tests (`welford_known_dataset_mean_variance_std`), which confirm
-    /// that the accumulator produces non-zero std for datasets with variance.
-    /// Here we verify the integration: `std_cost` in events is `0.0` when all
-    /// scenario costs are identical (expected behavior, not a bug).
+    /// Acceptance criterion: each `SimulationProgress` event carries a finite,
+    /// non-NaN `scenario_cost`. Statistics accumulation is deferred to the
+    /// progress thread (ticket-007); this test verifies the per-scenario cost
+    /// field is always valid.
     #[test]
-    fn simulate_progress_std_cost_zero_for_identical_costs() {
+    fn simulate_progress_scenario_cost_is_finite() {
         use cobre_core::TrainingEvent;
 
         let n_stages = 1;
@@ -2278,23 +2110,14 @@ mod tests {
             .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
             .collect();
 
-        // After 2+ identical costs, std_cost must be 0.0 (not NaN, not negative).
+        // Every scenario_cost must be finite and non-NaN.
         for event in &progress_events {
-            let TrainingEvent::SimulationProgress {
-                std_cost,
-                ci_95_half_width,
-                ..
-            } = event
-            else {
+            let TrainingEvent::SimulationProgress { scenario_cost, .. } = event else {
                 continue;
             };
             assert!(
-                std_cost.is_finite() && *std_cost >= 0.0,
-                "std_cost must be finite and >= 0.0, got {std_cost}"
-            );
-            assert!(
-                ci_95_half_width.is_finite() && *ci_95_half_width >= 0.0,
-                "ci_95_half_width must be finite and >= 0.0, got {ci_95_half_width}"
+                scenario_cost.is_finite() && !scenario_cost.is_nan(),
+                "scenario_cost must be finite and non-NaN, got {scenario_cost}"
             );
         }
     }

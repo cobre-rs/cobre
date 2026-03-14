@@ -49,6 +49,7 @@ pub mod system;
 pub mod temporal;
 pub mod topology;
 pub mod training_event;
+pub mod welford;
 
 pub use entities::{
     Bus, ContractType, DeficitSegment, DiversionChannel, EfficiencyModel, EnergyContract,
@@ -63,9 +64,9 @@ pub use generic_constraint::{
 };
 pub use initial_conditions::{HydroStorage, InitialConditions};
 pub use penalty::{
-    GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
-    resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
-    resolve_ncs_curtailment_cost,
+    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
+    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
+    HydroPenaltyOverrides,
 };
 pub use resolved::{
     BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,
@@ -85,3 +86,4 @@ pub use temporal::{
 };
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};
 pub use training_event::{StoppingRuleResult, TrainingEvent};
+pub use welford::WelfordAccumulator;

@@ -31,9 +31,9 @@
 use std::sync::mpsc;
 use std::thread;
 
-use cobre_core::TrainingEvent;
+use cobre_core::{TrainingEvent, WelfordAccumulator};
 use console::Term;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 
 const TRAINING_TEMPLATE: &str = "Training   {bar:40} {pos}/{len} iter  {msg}";
 const SIMULATION_TEMPLATE: &str =
@@ -84,15 +84,93 @@ impl ProgressHandle {
     }
 }
 
+/// Terminal wrapper that overrides the width reported to `indicatif`.
+///
+/// Under MPI, `mpiexec` pipes stderr through a non-TTY pipe. `Term::stderr()`
+/// falls back to `(24, 80)` for the terminal size, but the user's real terminal
+/// may be wider. This causes `indicatif`'s cursor-movement math to overshoot,
+/// erasing the banner and earlier output. `MpiTerm` delegates all I/O to the
+/// underlying `Term` but reports the actual terminal width captured before the
+/// MPI process was spawned.
+#[derive(Debug)]
+struct MpiTerm {
+    inner: Term,
+    width: u16,
+}
+
+impl TermLike for MpiTerm {
+    fn width(&self) -> u16 {
+        self.width
+    }
+
+    fn move_cursor_up(&self, n: usize) -> std::io::Result<()> {
+        self.inner.move_cursor_up(n)
+    }
+
+    fn move_cursor_down(&self, n: usize) -> std::io::Result<()> {
+        self.inner.move_cursor_down(n)
+    }
+
+    fn move_cursor_right(&self, n: usize) -> std::io::Result<()> {
+        self.inner.move_cursor_right(n)
+    }
+
+    fn move_cursor_left(&self, n: usize) -> std::io::Result<()> {
+        self.inner.move_cursor_left(n)
+    }
+
+    fn write_line(&self, s: &str) -> std::io::Result<()> {
+        self.inner.write_line(s)
+    }
+
+    fn write_str(&self, s: &str) -> std::io::Result<()> {
+        self.inner.write_str(s)
+    }
+
+    fn clear_line(&self) -> std::io::Result<()> {
+        self.inner.clear_line()
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Resolve the terminal width for progress bar rendering.
+///
+/// Tries, in order: (1) `Term::stderr()` native detection (works when stderr
+/// is a real TTY), (2) `$COLUMNS` environment variable (inherited by MPI
+/// processes from the launching shell), (3) fallback to 120 columns.
+pub fn resolve_term_width() -> u16 {
+    let term = Term::stderr();
+    if let Some((_, w)) = term.size_checked() {
+        return w;
+    }
+    if let Ok(val) = std::env::var("COLUMNS") {
+        if let Ok(w) = val.parse::<u16>() {
+            if w > 0 {
+                return w;
+            }
+        }
+    }
+    120
+}
+
 /// Spawn a background thread that renders progress bars and collects events.
+///
+/// `term_width` overrides the terminal width reported to `indicatif` for correct
+/// cursor math under MPI (where stderr is a pipe, not a TTY). Use
+/// [`resolve_term_width`] on the main thread before spawning.
 pub fn run_progress_thread(
     receiver: mpsc::Receiver<TrainingEvent>,
     max_iterations: u64,
+    term_width: u16,
 ) -> ProgressHandle {
     let handle = thread::spawn(move || {
         let mut events: Vec<TrainingEvent> = Vec::new();
         let mut training_bar: Option<ProgressBar> = None;
         let mut simulation_bar: Option<ProgressBar> = None;
+        let mut sim_acc: Option<WelfordAccumulator> = None;
 
         loop {
             if let Ok(event) = receiver.recv() {
@@ -105,8 +183,8 @@ pub fn run_progress_thread(
                         gap,
                         ..
                     } => {
-                        let bar =
-                            training_bar.get_or_insert_with(|| create_training_bar(max_iterations));
+                        let bar = training_bar
+                            .get_or_insert_with(|| create_training_bar(max_iterations, term_width));
                         let gap_pct = gap * 100.0;
                         bar.set_position(iteration);
                         bar.set_message(format!(
@@ -135,24 +213,24 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationProgress {
                         scenarios_complete,
                         scenarios_total,
-                        mean_cost,
-                        std_cost,
-                        ci_95_half_width,
+                        scenario_cost,
                         ..
                     } => {
                         let bar = simulation_bar.get_or_insert_with(|| {
-                            create_simulation_bar(u64::from(scenarios_total))
+                            create_simulation_bar(u64::from(scenarios_total), term_width)
                         });
                         bar.set_position(u64::from(scenarios_complete));
+                        let acc = sim_acc.get_or_insert_with(WelfordAccumulator::new);
+                        acc.update(scenario_cost);
                         let msg = if scenarios_complete >= 2 {
                             format!(
                                 "mean: {}  std: {}  CI95: +/-{}",
-                                fmt_sci(mean_cost),
-                                fmt_sci(std_cost),
-                                fmt_sci(ci_95_half_width)
+                                fmt_sci(acc.mean()),
+                                fmt_sci(acc.std_dev()),
+                                fmt_sci(acc.ci_95_half_width())
                             )
                         } else {
-                            format!("mean: {}", fmt_sci(mean_cost))
+                            format!("mean: {}", fmt_sci(acc.mean()))
                         };
                         bar.set_message(msg);
                     }
@@ -190,8 +268,14 @@ pub fn run_progress_thread(
     ProgressHandle { handle }
 }
 
-fn create_training_bar(max_iterations: u64) -> ProgressBar {
-    let target = ProgressDrawTarget::term_like_with_hz(Box::new(Term::stderr()), 8);
+fn create_training_bar(max_iterations: u64, term_width: u16) -> ProgressBar {
+    let target = ProgressDrawTarget::term_like_with_hz(
+        Box::new(MpiTerm {
+            inner: Term::stderr(),
+            width: term_width,
+        }),
+        8,
+    );
     let bar = ProgressBar::with_draw_target(Some(max_iterations), target);
     let style = ProgressStyle::with_template(TRAINING_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
@@ -199,8 +283,14 @@ fn create_training_bar(max_iterations: u64) -> ProgressBar {
     bar
 }
 
-fn create_simulation_bar(scenarios_total: u64) -> ProgressBar {
-    let target = ProgressDrawTarget::term_like_with_hz(Box::new(Term::stderr()), 8);
+fn create_simulation_bar(scenarios_total: u64, term_width: u16) -> ProgressBar {
+    let target = ProgressDrawTarget::term_like_with_hz(
+        Box::new(MpiTerm {
+            inner: Term::stderr(),
+            width: term_width,
+        }),
+        8,
+    );
     let bar = ProgressBar::with_draw_target(Some(scenarios_total), target);
     let style = ProgressStyle::with_template(SIMULATION_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar());
@@ -247,9 +337,7 @@ mod tests {
             scenarios_complete: complete,
             scenarios_total: total,
             elapsed_ms: u64::from(complete) * 50,
-            mean_cost: 45_230.4,
-            std_cost: 3_100.2,
-            ci_95_half_width: 858.6,
+            scenario_cost: 45_230.4,
         }
     }
 
@@ -264,7 +352,7 @@ mod tests {
     #[test]
     fn test_progress_handle_training_events_returned() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
         tx.send(make_iteration_summary(1)).unwrap();
         tx.send(make_iteration_summary(2)).unwrap();
@@ -279,7 +367,7 @@ mod tests {
     #[test]
     fn test_progress_handle_simulation_events_returned() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
         tx.send(make_simulation_progress(50, 200)).unwrap();
         tx.send(make_simulation_progress(100, 200)).unwrap();
@@ -318,7 +406,7 @@ mod tests {
     #[test]
     fn test_progress_handle_returns_all_events() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
         tx.send(make_iteration_summary(1)).unwrap();
         tx.send(make_iteration_summary(2)).unwrap();
@@ -353,7 +441,7 @@ mod tests {
     #[test]
     fn test_empty_channel_returns_empty_vec() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
         drop(tx);
 
         let events = handle.join();
@@ -367,7 +455,7 @@ mod tests {
     #[test]
     fn test_training_only_no_simulation_events() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
         for i in 1..=5 {
             tx.send(make_iteration_summary(i)).unwrap();
@@ -395,16 +483,13 @@ mod tests {
     #[test]
     fn test_simulation_progress_message_with_statistics() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
-        // scenarios_complete >= 2: full statistics message expected
         tx.send(TrainingEvent::SimulationProgress {
             scenarios_complete: 50,
             scenarios_total: 200,
             elapsed_ms: 2_500,
-            mean_cost: 45_230.4,
-            std_cost: 3_100.2,
-            ci_95_half_width: 858.6,
+            scenario_cost: 45_230.4,
         })
         .unwrap();
         tx.send(make_simulation_finished()).unwrap();
@@ -417,31 +502,24 @@ mod tests {
                 events[0],
                 TrainingEvent::SimulationProgress {
                     scenarios_complete: 50,
-                    mean_cost,
-                    std_cost,
-                    ci_95_half_width,
+                    scenario_cost,
                     ..
-                } if (mean_cost - 45_230.4).abs() < f64::EPSILON
-                    && (std_cost - 3_100.2).abs() < f64::EPSILON
-                    && (ci_95_half_width - 858.6).abs() < f64::EPSILON
+                } if (scenario_cost - 45_230.4).abs() < f64::EPSILON
             ),
-            "event must be SimulationProgress with expected statistics"
+            "event must be SimulationProgress with expected scenario_cost"
         );
     }
 
     #[test]
     fn test_simulation_progress_message_single_scenario() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
-        // scenarios_complete == 1: only mean shown, no std/CI
         tx.send(TrainingEvent::SimulationProgress {
             scenarios_complete: 1,
             scenarios_total: 200,
             elapsed_ms: 50,
-            mean_cost: 45_230.4,
-            std_cost: 0.0,
-            ci_95_half_width: 0.0,
+            scenario_cost: 45_230.4,
         })
         .unwrap();
         tx.send(make_simulation_finished()).unwrap();
@@ -464,7 +542,7 @@ mod tests {
     #[test]
     fn test_non_ui_events_are_collected() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10);
+        let handle = run_progress_thread(rx, 10, 120);
 
         tx.send(TrainingEvent::ForwardPassComplete {
             iteration: 1,
@@ -495,5 +573,57 @@ mod tests {
             events[1],
             TrainingEvent::BackwardPassComplete { .. }
         ));
+    }
+
+    /// Progress thread accumulates 3 [`TrainingEvent::SimulationProgress`] events via
+    /// [`WelfordAccumulator`] and completes without panic. Verifies the accumulator path
+    /// in the event loop.
+    #[test]
+    fn test_simulation_progress_accumulator_three_events_no_panic() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, 10, 120);
+
+        // Send 3 events with known costs to exercise the >= 2 branch.
+        tx.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: 1,
+            scenarios_total: 200,
+            elapsed_ms: 50,
+            scenario_cost: 100.0,
+        })
+        .unwrap();
+        tx.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: 2,
+            scenarios_total: 200,
+            elapsed_ms: 100,
+            scenario_cost: 200.0,
+        })
+        .unwrap();
+        tx.send(TrainingEvent::SimulationProgress {
+            scenarios_complete: 3,
+            scenarios_total: 200,
+            elapsed_ms: 150,
+            scenario_cost: 300.0,
+        })
+        .unwrap();
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(
+            events.len(),
+            4,
+            "expected 4 events (3 progress + 1 finished)"
+        );
+
+        // Verify all 3 SimulationProgress events were collected.
+        let progress_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .collect();
+        assert_eq!(
+            progress_events.len(),
+            3,
+            "all 3 SimulationProgress events must be collected"
+        );
     }
 }

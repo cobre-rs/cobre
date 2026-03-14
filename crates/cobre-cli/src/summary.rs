@@ -1,6 +1,7 @@
 //! Post-run summary block for the `cobre run` command.
 //!
 //! Provides separate printing functions for each phase of the run:
+//! - [`print_stochastic_summary`] — stochastic preprocessing statistics
 //! - [`print_training_summary`] — training convergence metrics
 //! - [`print_simulation_summary`] — simulation completion stats
 //! - [`print_output_path`] — output directory location
@@ -9,6 +10,210 @@
 //! results at the right point in the execution flow.
 
 use console::Term;
+
+/// Source of stochastic data for a given component.
+pub enum StochasticSource {
+    /// Data was estimated from historical records.
+    Estimated,
+    /// Data was loaded from user-supplied files.
+    Loaded,
+    /// No data available (component not modeled).
+    None,
+}
+
+/// Summary of AR order selection across hydro plants.
+pub struct ArOrderSummary {
+    /// Method used for order selection (e.g., `"AIC"`, `"fixed"`).
+    pub method: String,
+    /// Count of hydros at each AR order. Index = order, value = count.
+    ///
+    /// For example, `[0, 3, 2]` means 0 hydros at order 0, 3 at order 1,
+    /// 2 at order 2.
+    pub order_counts: Vec<usize>,
+    /// Minimum AR order across all hydros.
+    pub min_order: usize,
+    /// Maximum AR order across all hydros.
+    pub max_order: usize,
+    /// Number of hydro plants included in the summary.
+    pub n_hydros: usize,
+}
+
+impl ArOrderSummary {
+    /// Render a compact human-readable string describing the AR order
+    /// distribution.
+    ///
+    /// Three tiers based on the number of hydro plants:
+    ///
+    /// - **≤10 hydros**: compact distribution, e.g. `"AIC (3x order-1, 2x order-2)"`.
+    /// - **11–30 hydros**: range format, e.g. `"AIC (orders 1-4, 15 hydros)"`.
+    /// - **31+ hydros**: histogram format, e.g. `"AIC (order 1: 12, order 2: 8, 31 hydros)"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cobre_cli::summary::ArOrderSummary;
+    ///
+    /// let s = ArOrderSummary {
+    ///     method: "AIC".into(),
+    ///     order_counts: vec![0, 3, 2],
+    ///     min_order: 1,
+    ///     max_order: 2,
+    ///     n_hydros: 5,
+    /// };
+    /// let text = s.display_string();
+    /// assert!(text.contains("3x order-1"));
+    /// assert!(text.contains("2x order-2"));
+    /// ```
+    pub fn display_string(&self) -> String {
+        if self.n_hydros <= 10 {
+            let parts: Vec<String> = self
+                .order_counts
+                .iter()
+                .enumerate()
+                .filter(|&(_, count)| *count > 0)
+                .map(|(order, count)| format!("{count}x order-{order}"))
+                .collect();
+            format!("{} ({})", self.method, parts.join(", "))
+        } else if self.n_hydros <= 30 {
+            format!(
+                "{} (orders {}-{}, {} hydros)",
+                self.method, self.min_order, self.max_order, self.n_hydros
+            )
+        } else {
+            let parts: Vec<String> = self
+                .order_counts
+                .iter()
+                .enumerate()
+                .filter(|&(_, count)| *count > 0)
+                .map(|(order, count)| format!("order {order}: {count}"))
+                .collect();
+            format!(
+                "{} ({}, {} hydros)",
+                self.method,
+                parts.join(", "),
+                self.n_hydros
+            )
+        }
+    }
+}
+
+/// Summary of the stochastic preprocessing pipeline for display.
+pub struct StochasticSummary {
+    /// Source of inflow seasonal statistics.
+    pub inflow_source: StochasticSource,
+    /// Number of hydro plants in the system.
+    pub n_hydros: usize,
+    /// Number of seasons in the PAR model.
+    pub n_seasons: usize,
+    /// AR order summary (`None` if no hydros or no AR model).
+    pub ar_summary: Option<ArOrderSummary>,
+    /// Source of correlation data.
+    pub correlation_source: StochasticSource,
+    /// Dimension of the correlation matrix (e.g., `"5x5"`).
+    pub correlation_dim: Option<String>,
+    /// Source of the opening tree.
+    pub opening_tree_source: StochasticSource,
+    /// Number of openings per stage (from stage 0).
+    pub openings_per_stage: usize,
+    /// Number of stages in the stochastic context.
+    pub n_stages: usize,
+    /// Number of buses with stochastic load noise.
+    pub n_load_buses: usize,
+    /// Random seed used for noise generation.
+    pub seed: u64,
+}
+
+/// Format a [`StochasticSource`] variant as a short label string.
+fn source_label(source: &StochasticSource) -> &'static str {
+    match source {
+        StochasticSource::Estimated => "estimated",
+        StochasticSource::Loaded => "loaded",
+        StochasticSource::None => "none",
+    }
+}
+
+/// Print the stochastic preprocessing summary to `stderr`.
+///
+/// Renders a bold header followed by indented lines covering seed, inflow
+/// source, AR order distribution, correlation, opening tree, and load noise.
+/// Write errors are silently ignored (fire-and-forget).
+pub fn print_stochastic_summary(stderr: &Term, summary: &StochasticSummary) {
+    let _ = stderr.write_line(&format!(
+        "{}",
+        console::style("Stochastic preprocessing").bold()
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Seed:          {}",
+        console::style(summary.seed).bold()
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Inflow stats:  {} ({} hydros, {} seasons)",
+        source_label(&summary.inflow_source),
+        summary.n_hydros,
+        summary.n_seasons,
+    ));
+    if let Some(ref ar) = summary.ar_summary {
+        let _ = stderr.write_line(&format!(
+            "  AR orders:     {}",
+            console::style(ar.display_string()).bold()
+        ));
+    }
+    let correlation_detail = match &summary.correlation_dim {
+        Some(dim) => format!("{} ({})", source_label(&summary.correlation_source), dim),
+        None => source_label(&summary.correlation_source).to_string(),
+    };
+    let _ = stderr.write_line(&format!("  Correlation:   {correlation_detail}"));
+    let _ = stderr.write_line(&format!(
+        "  Opening tree:  {} ({} openings/stage, {} stages)",
+        source_label(&summary.opening_tree_source),
+        summary.openings_per_stage,
+        summary.n_stages,
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Load noise:    {} stochastic buses",
+        summary.n_load_buses
+    ));
+}
+
+/// Render the stochastic preprocessing summary as a plain-text `String`.
+///
+/// The returned string contains no ANSI escape sequences. Color and styling
+/// are applied by [`print_stochastic_summary`] when writing to the terminal.
+/// This function exists to allow unit tests to assert on summary content
+/// without requiring a real terminal.
+#[cfg(test)]
+pub fn format_stochastic_summary_string(summary: &StochasticSummary) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push("Stochastic preprocessing".to_string());
+    lines.push(format!("  Seed:          {}", summary.seed));
+    lines.push(format!(
+        "  Inflow stats:  {} ({} hydros, {} seasons)",
+        source_label(&summary.inflow_source),
+        summary.n_hydros,
+        summary.n_seasons,
+    ));
+    if let Some(ref ar) = summary.ar_summary {
+        lines.push(format!("  AR orders:     {}", ar.display_string()));
+    }
+    let correlation_detail = match &summary.correlation_dim {
+        Some(dim) => format!("{} ({})", source_label(&summary.correlation_source), dim),
+        None => source_label(&summary.correlation_source).to_string(),
+    };
+    lines.push(format!("  Correlation:   {correlation_detail}"));
+    lines.push(format!(
+        "  Opening tree:  {} ({} openings/stage, {} stages)",
+        source_label(&summary.opening_tree_source),
+        summary.openings_per_stage,
+        summary.n_stages,
+    ));
+    lines.push(format!(
+        "  Load noise:    {} stochastic buses",
+        summary.n_load_buses
+    ));
+
+    lines.join("\n")
+}
 
 /// Format a floating-point value as scientific notation with 6 significant digits.
 ///
@@ -530,5 +735,142 @@ mod tests {
         };
         let summary = make_run_summary(Some(sim));
         print_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    // ── StochasticSummary tests ────────────────────────────────────────────
+
+    use super::{
+        format_stochastic_summary_string, print_stochastic_summary, ArOrderSummary,
+        StochasticSource, StochasticSummary,
+    };
+
+    fn make_stochastic_summary() -> StochasticSummary {
+        StochasticSummary {
+            inflow_source: StochasticSource::Estimated,
+            n_hydros: 5,
+            n_seasons: 12,
+            ar_summary: Some(ArOrderSummary {
+                method: "AIC".into(),
+                order_counts: vec![0, 3, 2],
+                min_order: 1,
+                max_order: 2,
+                n_hydros: 5,
+            }),
+            correlation_source: StochasticSource::Estimated,
+            correlation_dim: Some("5x5".into()),
+            opening_tree_source: StochasticSource::Loaded,
+            openings_per_stage: 20,
+            n_stages: 60,
+            n_load_buses: 3,
+            seed: 42,
+        }
+    }
+
+    #[test]
+    fn test_ar_order_display_compact_10_or_fewer_hydros() {
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 3, 2],
+            min_order: 1,
+            max_order: 2,
+            n_hydros: 5,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("3x order-1"),
+            "compact format must contain '3x order-1', got: {s}"
+        );
+        assert!(
+            s.contains("2x order-2"),
+            "compact format must contain '2x order-2', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_range_11_to_30_hydros() {
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 10, 8, 5, 2],
+            min_order: 1,
+            max_order: 4,
+            n_hydros: 25,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("orders 1-"),
+            "range format must contain 'orders 1-', got: {s}"
+        );
+        assert!(
+            s.contains("25 hydros"),
+            "range format must contain '25 hydros', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_histogram_31_plus_hydros() {
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 12, 8, 5, 6],
+            min_order: 1,
+            max_order: 4,
+            n_hydros: 31,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("order 1:"),
+            "histogram format must contain 'order 1:', got: {s}"
+        );
+        assert!(
+            s.contains("31 hydros"),
+            "histogram format must contain '31 hydros', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_print_stochastic_summary_does_not_panic() {
+        let summary = make_stochastic_summary();
+        print_stochastic_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    #[test]
+    fn test_format_stochastic_summary_estimated_sources() {
+        let summary = make_stochastic_summary();
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("estimated"),
+            "summary must contain 'estimated' for estimated inflow source, got: {s}"
+        );
+        assert!(
+            s.contains("5x5"),
+            "summary must contain correlation dim '5x5', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_format_stochastic_summary_loaded_source() {
+        let summary = StochasticSummary {
+            inflow_source: StochasticSource::Loaded,
+            ..make_stochastic_summary()
+        };
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("loaded"),
+            "summary must contain 'loaded' for loaded inflow source, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_format_stochastic_summary_none_source() {
+        let summary = StochasticSummary {
+            inflow_source: StochasticSource::None,
+            n_hydros: 0,
+            ar_summary: None,
+            ..make_stochastic_summary()
+        };
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("none"),
+            "summary must contain 'none' for None inflow source, got: {s}"
+        );
     }
 }

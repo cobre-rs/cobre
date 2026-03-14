@@ -3,7 +3,7 @@
 //! These helpers centralise the typed-downcast logic used by every Parquet parser
 //! in `cobre-io`. They are `pub(crate)` — not part of the public API.
 
-use arrow::array::{Array, Date32Array, Float64Array, Int32Array};
+use arrow::array::{Array, Date32Array, Float64Array, Int32Array, UInt32Array};
 use std::path::Path;
 
 use crate::LoadError;
@@ -110,6 +110,33 @@ pub(crate) fn extract_optional_float64<'a>(
                 ),
             })?;
     Ok(Some(arr))
+}
+
+/// Extract a required column as [`UInt32Array`] by name.
+///
+/// Returns `SchemaError` if the column is absent or has the wrong Arrow type.
+pub(crate) fn extract_required_uint32<'a>(
+    batch: &'a arrow::record_batch::RecordBatch,
+    name: &str,
+    path: &Path,
+) -> Result<&'a UInt32Array, LoadError> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: name.to_string(),
+            message: format!("missing required column \"{name}\""),
+        })?;
+    col.as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: name.to_string(),
+            message: format!(
+                "column \"{name}\" has type {} but UInt32 is required",
+                col.data_type()
+            ),
+        })
 }
 
 /// Extract a required column as [`Date32Array`] by name.

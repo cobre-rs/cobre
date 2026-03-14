@@ -489,6 +489,7 @@ dependencies = [
  "arrow",
  "chrono",
  "cobre-core",
+ "cobre-stochastic",
  "csv",
  "flatbuffers",
  "parquet",

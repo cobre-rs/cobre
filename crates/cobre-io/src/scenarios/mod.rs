@@ -36,41 +36,31 @@ pub mod inflow_history;
 pub mod inflow_stats;
 pub mod load_factors;
 pub mod load_stats;
+pub mod noise_openings;
 
-pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
+pub use ar_coefficients::{parse_inflow_ar_coefficients, InflowArCoefficientRow};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
 pub use correlation::parse_correlation;
-pub use external::{ExternalScenarioRow, parse_external_scenarios};
-pub use inflow_history::{InflowHistoryRow, parse_inflow_history};
-pub use inflow_stats::{InflowSeasonalStatsRow, parse_inflow_seasonal_stats};
-pub use load_factors::{BlockFactor, LoadFactorEntry, parse_load_factors};
-pub use load_stats::{LoadSeasonalStatsRow, parse_load_seasonal_stats};
+pub use external::{parse_external_scenarios, ExternalScenarioRow};
+pub use inflow_history::{parse_inflow_history, InflowHistoryRow};
+pub use inflow_stats::{parse_inflow_seasonal_stats, InflowSeasonalStatsRow};
+pub use load_factors::{parse_load_factors, BlockFactor, LoadFactorEntry};
+pub use load_stats::{parse_load_seasonal_stats, LoadSeasonalStatsRow};
+pub use noise_openings::{
+    assemble_opening_tree, parse_noise_openings, validate_noise_openings, NoiseOpeningRow,
+};
 
 use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel};
 
-use crate::LoadError;
 use crate::validation::structural::FileManifest;
+use crate::LoadError;
 use std::path::Path;
 
-/// Load `scenarios/inflow_seasonal_stats.parquet` when the path is known, or
-/// return an empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None` (the structural validation step found no file at the
-/// expected location), returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/inflow_seasonal_stats.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_inflow_seasonal_stats`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_inflow_seasonal_stats;
-///
-/// // No file present — returns empty vec.
-/// let rows = load_inflow_seasonal_stats(None).expect("no file is fine");
-/// assert!(rows.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_inflow_seasonal_stats(
     path: Option<&Path>,
 ) -> Result<Vec<InflowSeasonalStatsRow>, LoadError> {
@@ -80,24 +70,11 @@ pub fn load_inflow_seasonal_stats(
     }
 }
 
-/// Load `scenarios/inflow_ar_coefficients.parquet` when the path is known, or
-/// return an empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None`, returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/inflow_ar_coefficients.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_inflow_ar_coefficients`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_inflow_ar_coefficients;
-///
-/// // No file present — returns empty vec.
-/// let rows = load_inflow_ar_coefficients(None).expect("no file is fine");
-/// assert!(rows.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_inflow_ar_coefficients(
     path: Option<&Path>,
 ) -> Result<Vec<InflowArCoefficientRow>, LoadError> {
@@ -107,24 +84,11 @@ pub fn load_inflow_ar_coefficients(
     }
 }
 
-/// Load `scenarios/inflow_history.parquet` when the path is known, or return
-/// an empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None`, returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/inflow_history.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_inflow_history`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_inflow_history;
-///
-/// // No file present — returns empty vec.
-/// let rows = load_inflow_history(None).expect("no file is fine");
-/// assert!(rows.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_inflow_history(path: Option<&Path>) -> Result<Vec<InflowHistoryRow>, LoadError> {
     match path {
         None => Ok(Vec::new()),
@@ -132,25 +96,11 @@ pub fn load_inflow_history(path: Option<&Path>) -> Result<Vec<InflowHistoryRow>,
     }
 }
 
-/// Load `scenarios/load_seasonal_stats.parquet` when the path is known, or
-/// return an empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None` (the structural validation step found no file at the
-/// expected location), returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/load_seasonal_stats.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_load_seasonal_stats`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_load_seasonal_stats;
-///
-/// // No file present — returns empty vec.
-/// let rows = load_load_seasonal_stats(None).expect("no file is fine");
-/// assert!(rows.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_load_seasonal_stats(
     path: Option<&Path>,
 ) -> Result<Vec<LoadSeasonalStatsRow>, LoadError> {
@@ -160,24 +110,11 @@ pub fn load_load_seasonal_stats(
     }
 }
 
-/// Load `scenarios/load_factors.json` when the path is known, or return an
-/// empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None`, returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/load_factors.json`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_load_factors`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_load_factors;
-///
-/// // No file present — returns empty vec.
-/// let entries = load_load_factors(None).expect("no file is fine");
-/// assert!(entries.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_load_factors(path: Option<&Path>) -> Result<Vec<LoadFactorEntry>, LoadError> {
     match path {
         None => Ok(Vec::new()),
@@ -185,31 +122,14 @@ pub fn load_load_factors(path: Option<&Path>) -> Result<Vec<LoadFactorEntry>, Lo
     }
 }
 
-/// Load `scenarios/correlation.json` when the path is known, or return a
-/// default [`CorrelationModel`] when the file is absent (optional file).
+/// Load `scenarios/correlation.json`, returning a default model when absent.
 ///
-/// Unlike the Parquet parsers, `load_correlation` returns
-/// `Ok(CorrelationModel::default())` for `None` (not an empty `Vec`), because
-/// the target type is a structured model rather than a collection.
-///
-/// When `path` is `None`, returns `Ok(CorrelationModel::default())` without
-/// touching the filesystem. The default model has an empty profiles map and
-/// an empty schedule, meaning no inter-entity correlation is applied.
+/// Unlike the Parquet loaders, this returns `Ok(CorrelationModel::default())` for
+/// `None` rather than an empty collection, since the target type is a structured model.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_correlation`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_correlation;
-///
-/// // No file present — returns default (empty) correlation model.
-/// let model = load_correlation(None).expect("no file is fine");
-/// assert!(model.profiles.is_empty());
-/// assert!(model.schedule.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_correlation(path: Option<&Path>) -> Result<CorrelationModel, LoadError> {
     match path {
         None => Ok(CorrelationModel::default()),
@@ -217,24 +137,11 @@ pub fn load_correlation(path: Option<&Path>) -> Result<CorrelationModel, LoadErr
     }
 }
 
-/// Load `scenarios/external_scenarios.parquet` when the path is known, or
-/// return an empty `Vec` when the file is absent (optional file).
-///
-/// When `path` is `None`, returns `Ok(Vec::new())` without touching the filesystem.
+/// Load `scenarios/external_scenarios.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
-/// Propagates [`LoadError`] from [`parse_external_scenarios`] when `path` is `Some`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::load_external_scenarios;
-///
-/// // No file present — returns empty vec.
-/// let rows = load_external_scenarios(None).expect("no file is fine");
-/// assert!(rows.is_empty());
-/// ```
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
 pub fn load_external_scenarios(path: Option<&Path>) -> Result<Vec<ExternalScenarioRow>, LoadError> {
     match path {
         None => Ok(Vec::new()),
@@ -242,11 +149,23 @@ pub fn load_external_scenarios(path: Option<&Path>) -> Result<Vec<ExternalScenar
     }
 }
 
+/// Load `scenarios/noise_openings.parquet`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_noise_openings(path: Option<&Path>) -> Result<Vec<NoiseOpeningRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_noise_openings(p),
+    }
+}
+
 // ── ScenarioData ──────────────────────────────────────────────────────────────
 
 /// All assembled scenario pipeline data for one case directory.
 ///
-/// Produced by [`load_scenarios`] after loading and assembling all seven
+/// Produced by [`load_scenarios`] after loading and assembling all eight
 /// scenario files. Each field maps directly to the corresponding field in
 /// [`cobre_core::System`].
 ///
@@ -268,9 +187,11 @@ pub fn load_external_scenarios(path: Option<&Path>) -> Result<Vec<ExternalScenar
 ///     inflow_history: vec![],
 ///     external_scenarios: vec![],
 ///     load_factors: vec![],
+///     noise_openings: vec![],
 /// };
 /// assert!(data.inflow_models.is_empty());
 /// assert!(data.correlation.profiles.is_empty());
+/// assert!(data.noise_openings.is_empty());
 /// ```
 #[derive(Debug, Clone)]
 pub struct ScenarioData {
@@ -286,11 +207,13 @@ pub struct ScenarioData {
     pub external_scenarios: Vec<ExternalScenarioRow>,
     /// Load factor entries, sorted by `(bus_id, stage_id)`. Empty when absent.
     pub load_factors: Vec<LoadFactorEntry>,
+    /// Noise opening rows, sorted by `(stage_id, opening_index, entity_index)`. Empty when absent.
+    pub noise_openings: Vec<NoiseOpeningRow>,
 }
 
 // ── load_scenarios ────────────────────────────────────────────────────────────
 
-/// Orchestrate loading of all seven scenario files and assemble the results.
+/// Orchestrate loading of all eight scenario files and assemble the results.
 ///
 /// Reads files indicated as present in `manifest`, calls the corresponding
 /// `load_*` wrappers (passing `None` for absent files), and then assembles the
@@ -324,44 +247,58 @@ pub fn load_scenarios(
     case_root: &Path,
     manifest: &FileManifest,
 ) -> Result<ScenarioData, LoadError> {
-    // Construct optional paths from manifest flags.
-    let stats_path = manifest
-        .scenarios_inflow_seasonal_stats_parquet
-        .then(|| case_root.join("scenarios/inflow_seasonal_stats.parquet"));
-    let coeff_path = manifest
-        .scenarios_inflow_ar_coefficients_parquet
-        .then(|| case_root.join("scenarios/inflow_ar_coefficients.parquet"));
-    let history_path = manifest
-        .scenarios_inflow_history_parquet
-        .then(|| case_root.join("scenarios/inflow_history.parquet"));
-    let load_stats_path = manifest
-        .scenarios_load_seasonal_stats_parquet
-        .then(|| case_root.join("scenarios/load_seasonal_stats.parquet"));
-    let load_factors_path = manifest
-        .scenarios_load_factors_json
-        .then(|| case_root.join("scenarios/load_factors.json"));
-    let correlation_path = manifest
-        .scenarios_correlation_json
-        .then(|| case_root.join("scenarios/correlation.json"));
-    let external_path = manifest
-        .scenarios_external_scenarios_parquet
-        .then(|| case_root.join("scenarios/external_scenarios.parquet"));
+    let scenarios_dir = case_root.join("scenarios");
 
-    // Load each file (None → empty / default).
-    let raw_stats = load_inflow_seasonal_stats(stats_path.as_deref())?;
-    let raw_coefficients = load_inflow_ar_coefficients(coeff_path.as_deref())?;
-    let inflow_history = load_inflow_history(history_path.as_deref())?;
-    let raw_load_stats = load_load_seasonal_stats(load_stats_path.as_deref())?;
-    let load_factors = load_load_factors(load_factors_path.as_deref())?;
-    let correlation = load_correlation(correlation_path.as_deref())?;
-    let external_scenarios = load_external_scenarios(external_path.as_deref())?;
+    let raw_stats = load_inflow_seasonal_stats(
+        manifest
+            .scenarios_inflow_seasonal_stats_parquet
+            .then(|| scenarios_dir.join("inflow_seasonal_stats.parquet"))
+            .as_deref(),
+    )?;
+    let raw_coefficients = load_inflow_ar_coefficients(
+        manifest
+            .scenarios_inflow_ar_coefficients_parquet
+            .then(|| scenarios_dir.join("inflow_ar_coefficients.parquet"))
+            .as_deref(),
+    )?;
+    let inflow_history = load_inflow_history(
+        manifest
+            .scenarios_inflow_history_parquet
+            .then(|| scenarios_dir.join("inflow_history.parquet"))
+            .as_deref(),
+    )?;
+    let raw_load_stats = load_load_seasonal_stats(
+        manifest
+            .scenarios_load_seasonal_stats_parquet
+            .then(|| scenarios_dir.join("load_seasonal_stats.parquet"))
+            .as_deref(),
+    )?;
+    let load_factors = load_load_factors(
+        manifest
+            .scenarios_load_factors_json
+            .then(|| scenarios_dir.join("load_factors.json"))
+            .as_deref(),
+    )?;
+    let correlation = load_correlation(
+        manifest
+            .scenarios_correlation_json
+            .then(|| scenarios_dir.join("correlation.json"))
+            .as_deref(),
+    )?;
+    let external_scenarios = load_external_scenarios(
+        manifest
+            .scenarios_external_scenarios_parquet
+            .then(|| scenarios_dir.join("external_scenarios.parquet"))
+            .as_deref(),
+    )?;
+    let noise_openings = load_noise_openings(
+        manifest
+            .scenarios_noise_openings_parquet
+            .then(|| scenarios_dir.join("noise_openings.parquet"))
+            .as_deref(),
+    )?;
 
-    // Assemble inflow models (join stats + coefficients). Call even when both
-    // are empty so orphaned coefficients are detected when stats is empty but
-    // coefficients is not.
     let inflow_models = assemble_inflow_models(raw_stats, raw_coefficients)?;
-
-    // Assemble load models (1:1 map).
     let load_models = assemble_load_models(raw_load_stats);
 
     Ok(ScenarioData {
@@ -371,6 +308,7 @@ pub fn load_scenarios(
         inflow_history,
         external_scenarios,
         load_factors,
+        noise_openings,
     })
 }
 
@@ -476,6 +414,29 @@ mod tests {
         assert!(
             data.load_factors.is_empty(),
             "load_factors should be empty when file absent"
+        );
+    }
+
+    /// `load_noise_openings(None)` returns `Ok(Vec::new())` without I/O.
+    #[test]
+    fn test_load_noise_openings_none_returns_empty() {
+        let result = load_noise_openings(None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    /// `load_scenarios` with `scenarios_noise_openings_parquet` flag `false` produces
+    /// an empty `noise_openings` collection in the resulting [`ScenarioData`].
+    #[test]
+    fn test_load_scenarios_noise_openings_absent() {
+        let dir = TempDir::new().unwrap();
+        let manifest = FileManifest::default(); // all flags false, including noise_openings
+
+        let data =
+            load_scenarios(dir.path(), &manifest).expect("empty manifest should always succeed");
+
+        assert!(
+            data.noise_openings.is_empty(),
+            "noise_openings should be empty when scenarios_noise_openings_parquet flag is false"
         );
     }
 }

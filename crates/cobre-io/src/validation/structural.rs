@@ -6,7 +6,7 @@
 //!
 //! Call [`validate_structure`] with a path to the case root and a mutable
 //! [`ValidationContext`].  It returns a [`FileManifest`] that records which of
-//! the 33 input files are present.  Missing required files produce
+//! the 34 input files are present.  Missing required files produce
 //! [`ErrorKind::FileNotFound`] entries in the context.  Missing optional files
 //! leave the corresponding manifest field `false` without adding any error.
 //!
@@ -28,12 +28,12 @@ use super::{ErrorKind, ValidationContext};
 
 // ── FileManifest ─────────────────────────────────────────────────────────────
 
-/// Records whether each of the 33 input files is present in the case directory.
+/// Records whether each of the 34 input files is present in the case directory.
 ///
 /// All fields default to `false`.  After calling [`validate_structure`], each field
 /// is `true` if the corresponding file was found on disk.
 ///
-/// The 33 files are organised by subdirectory following the input directory structure spec.
+/// The 34 files are organised by subdirectory following the input directory structure spec.
 /// Each bool is an independent "present/absent" flag for a distinct file.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
@@ -70,7 +70,7 @@ pub struct FileManifest {
     /// `system/fpha_hyperplanes.parquet` — optional
     pub system_fpha_hyperplanes_parquet: bool,
 
-    // ── scenarios/ (7 files) ─────────────────────────────────────────────────
+    // ── scenarios/ (8 files) ─────────────────────────────────────────────────
     /// `scenarios/inflow_history.parquet` — optional
     pub scenarios_inflow_history_parquet: bool,
     /// `scenarios/inflow_seasonal_stats.parquet` — optional
@@ -85,6 +85,8 @@ pub struct FileManifest {
     pub scenarios_load_factors_json: bool,
     /// `scenarios/correlation.json` — optional
     pub scenarios_correlation_json: bool,
+    /// `scenarios/noise_openings.parquet` — optional
+    pub scenarios_noise_openings_parquet: bool,
 
     // ── constraints/ (12 files) ──────────────────────────────────────────────
     /// `constraints/thermal_bounds.parquet` — optional
@@ -123,7 +125,7 @@ struct FileEntry {
     required: bool,
 }
 
-/// All 33 input files in canonical order.
+/// All 34 input files in canonical order.
 const FILE_ENTRIES: &[FileEntry] = &[
     // Root-level — required
     FileEntry {
@@ -213,6 +215,10 @@ const FILE_ENTRIES: &[FileEntry] = &[
         relative: "scenarios/correlation.json",
         required: false,
     },
+    FileEntry {
+        relative: "scenarios/noise_openings.parquet",
+        required: false,
+    },
     // constraints/ — optional
     FileEntry {
         relative: "constraints/thermal_bounds.parquet",
@@ -266,7 +272,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 
 /// Performs Layer 1 structural validation on the case directory at `case_root`.
 ///
-/// For each of the 33 known input files:
+/// For each of the 34 known input files:
 ///
 /// - If the file is present, the corresponding [`FileManifest`] field is set to `true`.
 /// - If the file is absent **and required**, an [`ErrorKind::FileNotFound`] error is
@@ -283,7 +289,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 ///
 /// # Returns
 ///
-/// A [`FileManifest`] recording presence/absence of all 33 files.
+/// A [`FileManifest`] recording presence/absence of all 34 files.
 #[must_use]
 pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> FileManifest {
     let mut manifest = FileManifest::default();
@@ -313,7 +319,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 ///
 /// This keeps the mapping between entries and manifest fields explicit and avoids
 /// fragile positional indexing elsewhere.
-fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 33] {
+fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 34] {
     [
         // Root (4)
         &mut m.config_json,
@@ -332,7 +338,7 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 33] {
         &mut m.system_hydro_geometry_parquet,
         &mut m.system_hydro_production_models_json,
         &mut m.system_fpha_hyperplanes_parquet,
-        // scenarios/ (7)
+        // scenarios/ (8)
         &mut m.scenarios_inflow_history_parquet,
         &mut m.scenarios_inflow_seasonal_stats_parquet,
         &mut m.scenarios_inflow_ar_coefficients_parquet,
@@ -340,6 +346,7 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 33] {
         &mut m.scenarios_load_seasonal_stats_parquet,
         &mut m.scenarios_load_factors_json,
         &mut m.scenarios_correlation_json,
+        &mut m.scenarios_noise_openings_parquet,
         // constraints/ (12)
         &mut m.constraints_thermal_bounds_parquet,
         &mut m.constraints_hydro_bounds_parquet,
@@ -527,19 +534,60 @@ mod tests {
 
     #[test]
     fn test_structural_manifest_fields_count() {
-        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (33 entries)
+        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (34 entries)
         assert_eq!(
             FILE_ENTRIES.len(),
-            33,
-            "FILE_ENTRIES should have exactly 33 entries"
+            34,
+            "FILE_ENTRIES should have exactly 34 entries"
         );
 
         let mut manifest = FileManifest::default();
         let fields = manifest_fields_mut(&mut manifest);
         assert_eq!(
             fields.len(),
-            33,
-            "manifest_fields_mut should return exactly 33 fields"
+            34,
+            "manifest_fields_mut should return exactly 34 fields"
+        );
+    }
+
+    #[test]
+    fn test_manifest_noise_openings_absent() {
+        let dir = TempDir::new().unwrap();
+        make_case_with_required(&dir);
+        // No scenarios/noise_openings.parquet created
+
+        let mut ctx = ValidationContext::new();
+        let manifest = validate_structure(dir.path(), &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "absent optional file should not produce errors"
+        );
+        assert!(
+            !manifest.scenarios_noise_openings_parquet,
+            "scenarios_noise_openings_parquet should be false when file is absent"
+        );
+    }
+
+    #[test]
+    fn test_manifest_noise_openings_present() {
+        let dir = TempDir::new().unwrap();
+        make_case_with_required(&dir);
+        // Create the optional file
+        let scenarios_dir = dir.path().join("scenarios");
+        fs::create_dir_all(&scenarios_dir).unwrap();
+        fs::write(scenarios_dir.join("noise_openings.parquet"), b"").unwrap();
+
+        let mut ctx = ValidationContext::new();
+        let manifest = validate_structure(dir.path(), &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "present optional file should not produce errors"
+        );
+        assert!(
+            manifest.scenarios_noise_openings_parquet,
+            "scenarios_noise_openings_parquet should be true when file is present"
         );
     }
 }

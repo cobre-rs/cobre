@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 
 use cobre_core::{
-    EntityId,
     entities::{EnergyContract, Hydro, Line, PumpingStation, Thermal},
     resolved::{
         ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds, ResolvedBounds,
         ThermalStageBounds,
     },
+    EntityId,
 };
 
 use crate::constraints::{

@@ -15,20 +15,23 @@ pub mod parquet_config;
 pub mod policy;
 pub(crate) mod schemas;
 pub mod simulation_writer;
+pub mod stochastic;
 pub mod training_writer;
 
-pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
+pub use convergence_reader::{read_convergence_summary, ConvergenceSummary};
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use manifest::{
-    ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
-    ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,
-    MetadataPerformanceSummary, MetadataProblemDimensions, MetadataRunInfo, SimulationManifest,
-    TrainingManifest, TrainingMetadata, read_simulation_manifest, read_training_manifest,
-    write_metadata, write_simulation_manifest, write_training_manifest,
+    read_simulation_manifest, read_training_manifest, write_metadata, write_simulation_manifest,
+    write_training_manifest, ManifestChecksum, ManifestConvergence, ManifestCuts,
+    ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
+    MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
+    MetadataProblemDimensions, MetadataRunInfo, SimulationManifest, TrainingManifest,
+    TrainingMetadata,
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use simulation_writer::SimulationParquetWriter;
+pub use stochastic::write_noise_openings;
 pub use training_writer::TrainingParquetWriter;
 
 use cobre_core::System;

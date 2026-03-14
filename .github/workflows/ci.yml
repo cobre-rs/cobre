@@ -116,8 +116,12 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   python:
-    name: Python Bindings
+    name: Python Bindings (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -129,7 +133,8 @@ jobs:
           prefix-key: python
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
       - name: Create virtualenv and install dependencies
         run: |
           python -m venv .venv
@@ -145,6 +150,7 @@ jobs:
           source .venv/bin/activate
           pytest crates/cobre-python/tests/ -v --cov=cobre --cov-report=xml:python-coverage.xml
       - uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.12'
         with:
           files: python-coverage.xml
           flags: python

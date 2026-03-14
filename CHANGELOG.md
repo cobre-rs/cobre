@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-03-14
+
+### Fixed
+
+- Canonical upper bound summation for multi-rank determinism — the upper
+  bound `allreduce` now uses a compensated (Kahan) summation that produces
+  bit-for-bit identical results regardless of MPI rank count and scenario
+  distribution across ranks.
+- Removed all production clippy suppressions (`#[allow(...)]`) from cobre-sddp
+  source files, addressing each underlying lint finding instead of silencing it.
+- Addressed code review findings across cobre-sddp: simplified control flow,
+  removed dead code, fixed off-by-one edge cases in stopping rules.
+
+### Added
+
+- ADR-008: User-supplied opening tree via Parquet file (design accepted,
+  implementation planned for v0.1.3).
+- ADR-009: Stochastic artifact export (design accepted, implementation
+  planned for v0.1.3).
+- ADR-010: Complete tree work distribution for forward/backward pass.
+- ADR-011: Per-stage warm-start counts and terminal-stage boundary conditions.
+- Generic PAR type aliases (`ParOrder`, `ParCoefficients`, `ParResidualStdRatio`)
+  in cobre-stochastic for improved API clarity.
+
+### Changed
+
+- Updated software book: new 4-Region Example page, revised roadmap sections,
+  fixed overview and SDDP crate pages, updated badges and DEC references.
+- Updated cobre-stochastic docstrings to use generic terminology (no
+  algorithm-specific language in infrastructure crate documentation).
+- Python bindings: added Python 3.14 classifier and CI testing matrix
+  (3.12, 3.13, 3.14).
+
 ## [0.1.1] - 2026-03-12
 
 ### Added
@@ -49,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 
-[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/cobre-rs/cobre/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cobre-rs/cobre/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cobre-rs/cobre/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/cobre-rs/cobre/releases/tag/v0.0.1

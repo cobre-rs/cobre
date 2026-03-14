@@ -207,7 +207,10 @@ pub fn run_progress_thread(
                                 fmt_sci(final_lb),
                                 fmt_sci(final_ub)
                             ));
-                            bar.println("");
+                            // Force a newline after the finished bar so the
+                            // summary printed by the main thread starts on
+                            // a fresh line.
+                            let _ = Term::stderr().write_line("");
                         }
                     }
 
@@ -240,7 +243,7 @@ pub fn run_progress_thread(
                         if let Some(bar) = simulation_bar.take() {
                             bar.set_position(u64::from(scenarios));
                             bar.finish_with_message("complete");
-                            bar.println("");
+                            let _ = Term::stderr().write_line("");
                         }
                     }
 

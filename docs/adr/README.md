@@ -42,12 +42,16 @@ What becomes easier or more difficult because of this change?
 
 ## Index
 
-| ADR                                      | Status   | Title                                                       |
-| ---------------------------------------- | -------- | ----------------------------------------------------------- |
-| [001](001-documentation-split.md)        | Accepted | Documentation split between cobre and cobre-docs            |
-| [002](002-enum-dispatch.md)              | Accepted | Enum dispatch over dynamic dispatch for closed variant sets |
-| [003](003-compile-time-solver.md)        | Accepted | Compile-time solver selection via Cargo feature flags       |
-| [004](004-postcard-mpi-serialization.md) | Accepted | postcard for MPI broadcast serialization                    |
-| [005](005-flatbuffers-policy.md)         | Accepted | FlatBuffers for policy data persistence                     |
-| [006](006-soa-bound-patching.md)         | Accepted | SoA bound patching for solver hot path                      |
-| [007](007-raw-basis-status-codes.md)     | Accepted | Raw i32 basis status codes for zero-copy warm-start         |
+| ADR                                           | Status   | Title                                                          |
+| --------------------------------------------- | -------- | -------------------------------------------------------------- |
+| [001](001-documentation-split.md)             | Accepted | Documentation split between cobre and cobre-docs               |
+| [002](002-enum-dispatch.md)                   | Accepted | Enum dispatch over dynamic dispatch for closed variant sets    |
+| [003](003-compile-time-solver.md)             | Accepted | Compile-time solver selection via Cargo feature flags          |
+| [004](004-postcard-mpi-serialization.md)      | Accepted | postcard for MPI broadcast serialization                       |
+| [005](005-flatbuffers-policy.md)              | Accepted | FlatBuffers for policy data persistence                        |
+| [006](006-soa-bound-patching.md)              | Accepted | SoA bound patching for solver hot path                         |
+| [007](007-raw-basis-status-codes.md)          | Accepted | Raw i32 basis status codes for zero-copy warm-start            |
+| [008](008-user-supplied-opening-tree.md)      | Accepted | User-supplied opening tree via Parquet file                    |
+| [009](009-stochastic-artifact-export.md)      | Accepted | Stochastic artifact export to output/stochastic/               |
+| [010](010-complete-tree-work-distribution.md) | Accepted | Complete tree work distribution with stage-by-stage allgatherv |
+| [011](011-per-stage-warm-start-cuts.md)       | Accepted | Per-stage warm-start counts and terminal-stage boundary cuts   |

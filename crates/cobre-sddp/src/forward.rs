@@ -180,6 +180,10 @@ pub fn sync_forward<C: Communicator>(
 
     // Allocate the global cost buffer and gather all per-scenario costs.
     let global_n = counts.iter().sum::<usize>();
+    debug_assert_eq!(
+        global_n, total_forward_passes,
+        "counts sum {global_n} != total_forward_passes {total_forward_passes}",
+    );
     let mut global_costs = vec![0.0_f64; global_n];
 
     // Validate that this rank's local cost vector matches the expected count.

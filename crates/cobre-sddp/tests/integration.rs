@@ -99,11 +99,11 @@ impl Communicator for StubComm {
     }
 }
 
-/// Communicator wrapper that sets `flag` to `true` on the first `allreduce`
+/// Communicator wrapper that sets `flag` to `true` on the first `allgatherv`
 /// call, simulating a shutdown signal arriving mid-iteration-1. On
 /// subsequent calls it behaves identically to [`StubComm`].
 ///
-/// The `allreduce` is called during `sync_forward` (step 2), so by the time
+/// The `allgatherv` is called during `sync_forward` (step 2), so by the time
 /// iteration 2's convergence check runs the shutdown flag is already set.
 struct ShutdownComm {
     flag: Arc<AtomicBool>,

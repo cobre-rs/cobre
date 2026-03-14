@@ -8,29 +8,36 @@
 //!    The raw `Config` stays on rank 0 for output writing only.
 //! 3. Build stage LP templates (`cobre_sddp::build_stage_templates`) on all ranks.
 //! 4. Build the stochastic context (`cobre_stochastic::build_stochastic_context`) on all ranks.
+//!    If `scenarios/noise_openings.parquet` is present, the user-supplied opening tree is
+//!    loaded on rank 0, broadcast to all ranks, and passed to `build_stochastic_context`.
 //! 5. Train the SDDP policy (`cobre_sddp::train`).
 //! 6. Optionally run simulation (`cobre_sddp::simulate`).
 //! 7. Write all outputs (`cobre_io::write_results`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use clap::Args;
 use console::Term;
 
 use cobre_comm::{create_communicator, Communicator, ReduceOp};
-use cobre_core::TrainingEvent;
+use cobre_core::{System, TrainingEvent};
+use cobre_io::output::{
+    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings, FittingReport,
+    HydroFittingEntry,
+};
+use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 use cobre_io::write_results;
-use cobre_sddp::estimation::estimate_from_history;
-use cobre_sddp::EstimationReport;
+use cobre_sddp::estimation::{estimate_from_history, HydroEstimationEntry};
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts, EstimationReport,
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
     SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
     TrainingConfig, TrainingContext, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
-use cobre_stochastic::build_stochastic_context;
+use cobre_stochastic::{build_stochastic_context, context::OpeningTree};
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
@@ -152,10 +159,15 @@ struct BroadcastConfig {
     policy_path: String,
     inflow_method: InflowNonNegativityMethod,
     cut_selection: BroadcastCutSelection,
+    export_stochastic: bool,
 }
 
 impl BroadcastConfig {
-    fn from_config(config: &cobre_io::Config, skip_simulation: bool) -> Result<Self, CliError> {
+    fn from_config(
+        config: &cobre_io::Config,
+        skip_simulation: bool,
+        export_stochastic: bool,
+    ) -> Result<Self, CliError> {
         use cobre_io::config::StoppingRuleConfig;
 
         if config.training.seed.is_none() {
@@ -234,8 +246,107 @@ impl BroadcastConfig {
             policy_path: config.policy.path.clone(),
             inflow_method: InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity),
             cut_selection,
+            export_stochastic,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// BroadcastOpeningTree — postcard-safe wrapper for MPI broadcast
+// ---------------------------------------------------------------------------
+
+/// Postcard-serializable wrapper for [`OpeningTree`] broadcast.
+///
+/// [`OpeningTree`] does not implement `serde::Serialize + Deserialize` to avoid
+/// adding a serde dependency to `cobre-stochastic`. This wrapper holds the three
+/// constituent parts (`data`, `openings_per_stage`, `dim`) that are sufficient
+/// to reconstruct the tree via [`OpeningTree::from_parts`] on all ranks.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct BroadcastOpeningTree {
+    data: Vec<f64>,
+    openings_per_stage: Vec<usize>,
+    dim: usize,
+}
+
+// ---------------------------------------------------------------------------
+// load_user_opening_tree — rank-0 helper
+// ---------------------------------------------------------------------------
+
+/// Load, validate, and assemble a user-supplied opening tree from the case directory.
+///
+/// Called on rank 0 inside [`load_case_and_config`]. Runs [`validate_structure`]
+/// to check whether `scenarios/noise_openings.parquet` is present. If absent,
+/// returns `Ok(None)`. If present, parses the rows, validates them against the
+/// system dimensions, and assembles an [`OpeningTree`].
+///
+/// # Expected dimension
+///
+/// The noise dimension matches what [`build_stochastic_context`] computes:
+/// `n_hydros + n_load_buses`, where `n_load_buses` is the count of distinct bus
+/// IDs that have at least one [`LoadModel`] entry with `std_mw > 0`.
+///
+/// # Errors
+///
+/// - [`CliError::Io`] if the Parquet file cannot be read.
+/// - [`CliError::Validation`] if rows fail dimension or stage consistency checks.
+///
+/// [`LoadModel`]: cobre_core::scenario::LoadModel
+fn load_user_opening_tree(
+    case_dir: &Path,
+    system: &System,
+) -> Result<Option<OpeningTree>, CliError> {
+    let mut ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
+
+    if !manifest.scenarios_noise_openings_parquet {
+        return Ok(None);
+    }
+
+    let path = case_dir.join("scenarios").join("noise_openings.parquet");
+
+    let rows = cobre_io::load_noise_openings(Some(&path)).map_err(CliError::from)?;
+
+    // Compute expected_dim = n_hydros + n_load_buses (buses with std_mw > 0).
+    let n_hydros = system.hydros().len();
+    let mut load_bus_ids: Vec<cobre_core::EntityId> = system
+        .load_models()
+        .iter()
+        .filter(|m| m.std_mw > 0.0)
+        .map(|m| m.bus_id)
+        .collect();
+    load_bus_ids.sort_unstable_by_key(|id| id.0);
+    load_bus_ids.dedup();
+    let n_load_buses = load_bus_ids.len();
+    let expected_dim = n_hydros + n_load_buses;
+
+    // Compute expected_stages: study stages (non-negative stage.id).
+    let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+
+    // Compute openings_per_stage from the parsed rows (self-consistent).
+    // Count distinct opening_index values per stage in sorted order.
+    let mut openings_by_stage: std::collections::BTreeMap<i32, std::collections::BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
+    for row in &rows {
+        openings_by_stage
+            .entry(row.stage_id)
+            .or_default()
+            .insert(row.opening_index);
+    }
+    let openings_per_stage: Vec<usize> = openings_by_stage
+        .values()
+        .map(std::collections::BTreeSet::len)
+        .collect();
+
+    cobre_io::scenarios::validate_noise_openings(
+        &rows,
+        expected_dim,
+        expected_stages,
+        &openings_per_stage,
+    )
+    .map_err(CliError::from)?;
+
+    let tree = cobre_io::scenarios::assemble_opening_tree(rows, expected_dim);
+    Ok(Some(tree))
 }
 
 fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRuleSet {
@@ -294,6 +405,12 @@ pub struct RunArgs {
     /// Increase the tracing log level (debug for `cobre_cli`, info for library crates).
     #[arg(long)]
     pub verbose: bool,
+
+    /// Export stochastic preprocessing artifacts to `output/stochastic/`.
+    ///
+    /// Overrides `exports.stochastic` in `config.json` when set.
+    #[arg(long)]
+    pub export_stochastic: bool,
 
     /// Number of worker threads for parallel scenario processing within each
     /// MPI rank.  Each thread solves its own LP instances sequentially; multiple
@@ -380,6 +497,15 @@ where
     }
 }
 
+/// Return type of [`load_case_and_config`]: the five values loaded on rank 0.
+type LoadedCase = (
+    cobre_core::System,
+    BroadcastConfig,
+    cobre_io::Config,
+    Option<EstimationReport>,
+    Option<OpeningTree>,
+);
+
 /// Load the case directory and parse the config on rank 0.
 ///
 /// Extracted into a separate function so that errors are captured as `Err`
@@ -390,15 +516,7 @@ fn load_case_and_config(
     args: &RunArgs,
     quiet: bool,
     stderr: &Term,
-) -> Result<
-    (
-        cobre_core::System,
-        BroadcastConfig,
-        cobre_io::Config,
-        Option<EstimationReport>,
-    ),
-    CliError,
-> {
+) -> Result<LoadedCase, CliError> {
     if !args.case_dir.exists() {
         return Err(CliError::Io {
             source: std::io::Error::new(
@@ -418,8 +536,10 @@ fn load_case_and_config(
         .map_err(|e| CliError::Internal {
             message: format!("estimation error: {e}"),
         })?;
-    let bcast = BroadcastConfig::from_config(&config, args.skip_simulation)?;
-    Ok((system, bcast, config, estimation_report))
+    let user_opening_tree = load_user_opening_tree(&args.case_dir, &system)?;
+    let export_stochastic = args.export_stochastic || config.exports.stochastic;
+    let bcast = BroadcastConfig::from_config(&config, args.skip_simulation, export_stochastic)?;
+    Ok((system, bcast, config, estimation_report, user_opening_tree))
 }
 
 /// Execute the `run` subcommand.
@@ -475,39 +595,85 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // Only rank 0 accesses the filesystem. Config is converted to BroadcastConfig
     // (postcard-safe) and broadcast. Root config stays on rank 0 for output writing.
     // The estimation report is rank-0-only and is NOT broadcast to other ranks.
-    let (raw_system, raw_bcast_config, root_config, root_estimation_report, load_err) = if is_root {
+    let (
+        raw_system,
+        raw_bcast_config,
+        root_config,
+        root_estimation_report,
+        raw_opening_tree,
+        load_err,
+    ) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
-            Ok((system, bcast, config, estimation_report)) => (
+            Ok((system, bcast, config, estimation_report, user_opening_tree)) => (
                 Some(system),
                 Some(bcast),
                 Some(config),
                 Some(estimation_report),
+                Some(user_opening_tree),
                 None,
             ),
-            Err(e) => (None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None)
+        (None, None, None, None, None, None)
     };
-    // The estimation report is available on rank 0 for output writing (ticket-013).
-    // Wrapped in Option<Option<_>>: outer None on non-root ranks, Some on rank 0.
-    #[allow(clippy::no_effect_underscore_binding)]
-    let _root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
+    // The estimation report is available on rank 0 for stochastic artifact export.
+    // Wrapped in Option<Option<_>>: outer None on non-root ranks, Some on rank 0;
+    // inner None means estimation was not performed (explicit stats were provided).
+    let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
     let system_result = broadcast_value(raw_system, &comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
+
+    // Broadcast the optional opening tree. Wrap in Option<BroadcastOpeningTree> so that
+    // both the "no user tree" (None) and "user tree present" (Some) cases can be broadcast
+    // as a single postcard-serializable value. postcard supports Option natively.
+    let raw_bcast_tree: Option<Option<BroadcastOpeningTree>> = raw_opening_tree.map(|tree_opt| {
+        tree_opt.map(|t| BroadcastOpeningTree {
+            data: t.data().to_vec(),
+            openings_per_stage: t.openings_per_stage_slice().to_vec(),
+            dim: t.dim(),
+        })
+    });
+    let tree_result = broadcast_value(raw_bcast_tree, &comm);
 
     if let Some(e) = load_err {
         return Err(e);
     }
     let system = system_result?;
     let mut bcast_config = bcast_config_result?;
+    let user_tree: Option<OpeningTree> =
+        tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
+
+    // Consume args here — no fields are needed after output_dir is resolved.
+    let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     let seed = bcast_config.seed;
-    let stochastic =
-        build_stochastic_context(&system, seed, &[], None).map_err(|e| CliError::Internal {
+    let stochastic = build_stochastic_context(&system, seed, &[], user_tree).map_err(|e| {
+        CliError::Internal {
             message: format!("stochastic context error: {e}"),
+        }
+    })?;
+
+    // Export stochastic preprocessing artifacts when requested.
+    // Rank 0 writes all applicable files; all ranks wait at the barrier.
+    // Export failure is non-fatal: each write is wrapped individually.
+    if bcast_config.export_stochastic {
+        if is_root {
+            let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
+            export_stochastic_artifacts(
+                &output_dir,
+                &stochastic,
+                &system,
+                estimation,
+                quiet,
+                &stderr,
+            );
+        }
+        comm.barrier().map_err(|e| CliError::Internal {
+            message: format!("post-export barrier error: {e}"),
         })?;
+    }
 
     let stage_templates = build_stage_templates(
         &system,
@@ -698,7 +864,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
 
     let should_simulate = bcast_config.should_simulate;
-    let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     if should_simulate {
         let n_scenarios = bcast_config.n_scenarios;
@@ -1025,10 +1190,178 @@ fn build_initial_state(system: &cobre_core::System, indexer: &StageIndexer) -> V
     state
 }
 
+// ---------------------------------------------------------------------------
+// Stochastic artifact export helpers
+// ---------------------------------------------------------------------------
+
+/// Convert an [`EstimationReport`] to a [`FittingReport`] for serialization.
+///
+/// Maps each `(EntityId, HydroEstimationEntry)` pair to a `(String, HydroFittingEntry)` pair.
+/// The entity ID is serialized as its inner `i32` value converted to a string (e.g., `"1"`).
+/// Fields are copied 1:1 — `selected_order`, `aic_scores`, `coefficients`.
+fn estimation_report_to_fitting_report(report: &EstimationReport) -> FittingReport {
+    let hydros = report
+        .entries
+        .iter()
+        .map(
+            |(id, entry): (&cobre_core::EntityId, &HydroEstimationEntry)| {
+                (
+                    id.0.to_string(),
+                    HydroFittingEntry {
+                        selected_order: entry.selected_order,
+                        aic_scores: entry.aic_scores.clone(),
+                        coefficients: entry.coefficients.clone(),
+                    },
+                )
+            },
+        )
+        .collect();
+    FittingReport { hydros }
+}
+
+/// Convert a slice of [`cobre_core::scenario::InflowModel`] to [`InflowSeasonalStatsRow`] records.
+///
+/// One row per model entry — `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` fields map 1:1.
+fn inflow_models_to_stats_rows(
+    models: &[cobre_core::scenario::InflowModel],
+) -> Vec<InflowSeasonalStatsRow> {
+    models
+        .iter()
+        .map(|m| InflowSeasonalStatsRow {
+            hydro_id: m.hydro_id,
+            stage_id: m.stage_id,
+            mean_m3s: m.mean_m3s,
+            std_m3s: m.std_m3s,
+        })
+        .collect()
+}
+
+/// Convert a slice of [`cobre_core::scenario::InflowModel`] to [`InflowArCoefficientRow`] records.
+///
+/// Expands each model's `ar_coefficients` into one row per lag (1-based lag numbering).
+/// Models with empty `ar_coefficients` (white noise, AR order 0) contribute no rows.
+/// The `residual_std_ratio` is repeated across all lag rows of the same `(hydro_id, stage_id)`.
+fn inflow_models_to_ar_rows(
+    models: &[cobre_core::scenario::InflowModel],
+) -> Vec<InflowArCoefficientRow> {
+    models
+        .iter()
+        .flat_map(|m| {
+            m.ar_coefficients
+                .iter()
+                .enumerate()
+                .map(move |(i, &coefficient)| {
+                    // AR order is bounded by a small integer (typical range 1-12);
+                    // the cast from usize to i32 is safe in practice.
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    let lag = (i + 1) as i32;
+                    InflowArCoefficientRow {
+                        hydro_id: m.hydro_id,
+                        stage_id: m.stage_id,
+                        lag,
+                        coefficient,
+                        residual_std_ratio: m.residual_std_ratio,
+                    }
+                })
+        })
+        .collect()
+}
+
+/// Write all applicable stochastic preprocessing artifacts to `{output_dir}/stochastic/`.
+///
+/// Called on rank 0 only when `--export-stochastic` is set (or `exports.stochastic = true`
+/// in config). Each writer call is independent: failure is logged as a warning on stderr
+/// and does not prevent the remaining files or training from proceeding.
+///
+/// Files written:
+/// - `noise_openings.parquet` — always
+/// - `inflow_seasonal_stats.parquet` — always
+/// - `inflow_ar_coefficients.parquet` — always
+/// - `correlation.json` — always
+/// - `load_seasonal_stats.parquet` — only when `system.load_models()` contains any model with `std_mw > 0`
+/// - `fitting_report.json` — only when `estimation_report` is `Some`
+fn export_stochastic_artifacts(
+    output_dir: &Path,
+    stochastic: &cobre_stochastic::StochasticContext,
+    system: &System,
+    estimation_report: Option<&EstimationReport>,
+    quiet: bool,
+    stderr: &Term,
+) {
+    use cobre_core::scenario::LoadModel;
+
+    let stochastic_dir = output_dir.join("stochastic");
+
+    if !quiet {
+        let _ = stderr.write_line("Exporting stochastic artifacts...");
+    }
+
+    if let Err(e) = write_noise_openings(
+        &stochastic_dir.join("noise_openings.parquet"),
+        stochastic.opening_tree(),
+    ) {
+        eprintln!("warning: stochastic export failed (noise_openings): {e}");
+    }
+
+    let stats_rows = inflow_models_to_stats_rows(system.inflow_models());
+    if let Err(e) = write_inflow_seasonal_stats(
+        &stochastic_dir.join("inflow_seasonal_stats.parquet"),
+        &stats_rows,
+    ) {
+        eprintln!("warning: stochastic export failed (inflow_seasonal_stats): {e}");
+    }
+
+    let ar_rows = inflow_models_to_ar_rows(system.inflow_models());
+    if let Err(e) = write_inflow_ar_coefficients(
+        &stochastic_dir.join("inflow_ar_coefficients.parquet"),
+        &ar_rows,
+    ) {
+        eprintln!("warning: stochastic export failed (inflow_ar_coefficients): {e}");
+    }
+
+    if let Err(e) = write_correlation_json(
+        &stochastic_dir.join("correlation.json"),
+        system.correlation(),
+    ) {
+        eprintln!("warning: stochastic export failed (correlation): {e}");
+    }
+
+    let has_stochastic_load = system
+        .load_models()
+        .iter()
+        .any(|m: &LoadModel| m.std_mw > 0.0);
+    if has_stochastic_load {
+        let load_rows: Vec<LoadSeasonalStatsRow> = system
+            .load_models()
+            .iter()
+            .map(|m| LoadSeasonalStatsRow {
+                bus_id: m.bus_id,
+                stage_id: m.stage_id,
+                mean_mw: m.mean_mw,
+                std_mw: m.std_mw,
+            })
+            .collect();
+        if let Err(e) = write_load_seasonal_stats(
+            &stochastic_dir.join("load_seasonal_stats.parquet"),
+            &load_rows,
+        ) {
+            eprintln!("warning: stochastic export failed (load_seasonal_stats): {e}");
+        }
+    }
+
+    if let Some(report) = estimation_report {
+        let fitting = estimation_report_to_fitting_report(report);
+        if let Err(e) = write_fitting_report(&stochastic_dir.join("fitting_report.json"), &fitting)
+        {
+            eprintln!("warning: stochastic export failed (fitting_report): {e}");
+        }
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{broadcast_value, resolve_thread_count};
+    use super::{broadcast_value, resolve_thread_count, BroadcastOpeningTree};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1083,6 +1416,39 @@ mod tests {
         };
         let result = broadcast_value(Some(original.clone()), &comm).unwrap();
         assert_eq!(result, original);
+    }
+
+    /// `BroadcastConfig.export_stochastic` round-trips via postcard with `LocalBackend`.
+    ///
+    /// Constructs a minimal `BroadcastConfig`-shaped struct that includes the
+    /// `export_stochastic` field and verifies that `broadcast_value` preserves
+    /// the value after serialization and deserialization.
+    #[test]
+    fn broadcast_value_local_round_trips_export_stochastic() {
+        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct BcastExportStochastic {
+            export_stochastic: bool,
+        }
+
+        let comm = cobre_comm::LocalBackend;
+
+        let with_flag = BcastExportStochastic {
+            export_stochastic: true,
+        };
+        let result = broadcast_value(Some(with_flag.clone()), &comm).unwrap();
+        assert_eq!(
+            result, with_flag,
+            "export_stochastic=true must survive broadcast round-trip"
+        );
+
+        let without_flag = BcastExportStochastic {
+            export_stochastic: false,
+        };
+        let result = broadcast_value(Some(without_flag.clone()), &comm).unwrap();
+        assert_eq!(
+            result, without_flag,
+            "export_stochastic=false must survive broadcast round-trip"
+        );
     }
 
     /// `broadcast_value` returns `CliError::Internal` when `None` is passed on root.
@@ -1145,5 +1511,273 @@ mod tests {
             1,
             "single-thread CLI value must produce 1"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // BroadcastOpeningTree tests
+    // ------------------------------------------------------------------
+
+    /// `BroadcastOpeningTree` round-trips through postcard serialization.
+    ///
+    /// Verifies that the wrapper type is fully postcard-compatible and that
+    /// no field is lost during the serialize → deserialize round-trip.
+    #[test]
+    fn broadcast_opening_tree_round_trips_via_postcard() {
+        let original = BroadcastOpeningTree {
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            openings_per_stage: vec![2, 1],
+            dim: 3,
+        };
+        let bytes = postcard::to_allocvec(&original).unwrap();
+        let decoded: BroadcastOpeningTree = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.data, original.data, "data must survive round-trip");
+        assert_eq!(
+            decoded.openings_per_stage, original.openings_per_stage,
+            "openings_per_stage must survive round-trip"
+        );
+        assert_eq!(decoded.dim, original.dim, "dim must survive round-trip");
+    }
+
+    /// `BroadcastOpeningTree` wrapped in `Option` round-trips via `broadcast_value`
+    /// with `LocalBackend`. Covers both the `None` and `Some` cases.
+    ///
+    /// `Some(None)` represents "no user-supplied tree" and `Some(Some(...))` represents
+    /// a valid user tree. Both must survive the broadcast without data loss.
+    #[test]
+    fn broadcast_optional_opening_tree_local_round_trips() {
+        use cobre_stochastic::context::OpeningTree;
+
+        let comm = cobre_comm::LocalBackend;
+
+        // Case 1: no user tree — broadcast Some(None)
+        let no_tree: Option<BroadcastOpeningTree> = None;
+        let result = broadcast_value(Some(no_tree), &comm).unwrap();
+        assert!(result.is_none(), "Some(None) must round-trip to None");
+
+        // Case 2: user tree present — broadcast Some(Some(...))
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let ops = vec![2];
+        let dim = 2usize;
+        let source_tree = OpeningTree::from_parts(data.clone(), ops.clone(), dim);
+        let bcast = Some(BroadcastOpeningTree {
+            data: source_tree.data().to_vec(),
+            openings_per_stage: source_tree.openings_per_stage_slice().to_vec(),
+            dim: source_tree.dim(),
+        });
+        let result = broadcast_value(Some(bcast), &comm).unwrap();
+        let bt = result.unwrap();
+        let reconstructed = OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim);
+        assert_eq!(
+            reconstructed.data(),
+            source_tree.data(),
+            "reconstructed tree data must match source"
+        );
+        assert_eq!(
+            reconstructed.dim(),
+            source_tree.dim(),
+            "reconstructed tree dim must match source"
+        );
+        assert_eq!(
+            reconstructed.openings_per_stage_slice(),
+            source_tree.openings_per_stage_slice(),
+            "reconstructed tree openings_per_stage must match source"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // load_user_opening_tree tests
+    // ------------------------------------------------------------------
+
+    /// `load_user_opening_tree` returns `Ok(None)` when no `noise_openings.parquet`
+    /// is present in the case directory.
+    ///
+    /// `load_user_opening_tree` checks the manifest before using the `system`
+    /// parameter, so a minimal system (one bus, no stages) suffices — the function
+    /// returns `Ok(None)` before any field of `system` is accessed.
+    #[test]
+    fn load_user_opening_tree_returns_none_when_file_absent() {
+        use super::load_user_opening_tree;
+        use cobre_core::{
+            scenario::CorrelationModel, Bus, DeficitSegment, EntityId, SystemBuilder,
+        };
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Create all required structural files so validate_structure reports no
+        // errors for missing required files. The optional noise_openings.parquet
+        // is intentionally absent.
+        fs::create_dir_all(root.join("system")).unwrap();
+        fs::write(root.join("config.json"), b"{}").unwrap();
+        fs::write(root.join("penalties.json"), b"{}").unwrap();
+        fs::write(root.join("stages.json"), b"{}").unwrap();
+        fs::write(root.join("initial_conditions.json"), b"{}").unwrap();
+        fs::write(root.join("system/buses.json"), b"{}").unwrap();
+        fs::write(root.join("system/lines.json"), b"{}").unwrap();
+        fs::write(root.join("system/hydros.json"), b"{}").unwrap();
+        fs::write(root.join("system/thermals.json"), b"{}").unwrap();
+
+        // A minimal system with one bus, no stages. The system is not consulted
+        // because load_user_opening_tree returns Ok(None) before the manifest check.
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .correlation(CorrelationModel::default())
+            .build()
+            .unwrap();
+
+        let result = load_user_opening_tree(root, &system).unwrap();
+        assert!(
+            result.is_none(),
+            "must return Ok(None) when noise_openings.parquet is absent"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Stochastic artifact conversion helper tests
+    // ------------------------------------------------------------------
+
+    /// `estimation_report_to_fitting_report` maps 2-hydro `EstimationReport`
+    /// to `FittingReport` preserving all fields and using string entity IDs as keys.
+    #[test]
+    fn estimation_report_to_fitting_report_two_hydros() {
+        use std::collections::BTreeMap;
+
+        use cobre_core::EntityId;
+        use cobre_sddp::estimation::HydroEstimationEntry;
+        use cobre_sddp::EstimationReport;
+
+        use super::estimation_report_to_fitting_report;
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            EntityId(1),
+            HydroEstimationEntry {
+                selected_order: 3,
+                aic_scores: vec![10.0, 9.5, 9.2, 9.8],
+                coefficients: vec![vec![0.4, -0.1, 0.05], vec![0.3, -0.08, 0.04]],
+            },
+        );
+        entries.insert(
+            EntityId(5),
+            HydroEstimationEntry {
+                selected_order: 2,
+                aic_scores: vec![12.1, 11.3, 11.5],
+                coefficients: vec![vec![0.6, -0.2]],
+            },
+        );
+        let report = EstimationReport { entries };
+        let fitting = estimation_report_to_fitting_report(&report);
+
+        assert_eq!(
+            fitting.hydros.len(),
+            2,
+            "FittingReport must contain exactly 2 hydro entries"
+        );
+
+        let h1 = fitting.hydros.get("1").unwrap();
+        assert_eq!(h1.selected_order, 3);
+        assert_eq!(h1.aic_scores, vec![10.0, 9.5, 9.2, 9.8]);
+        assert_eq!(h1.coefficients.len(), 2);
+
+        let h5 = fitting.hydros.get("5").unwrap();
+        assert_eq!(h5.selected_order, 2);
+        assert_eq!(h5.aic_scores, vec![12.1, 11.3, 11.5]);
+        assert_eq!(h5.coefficients, vec![vec![0.6, -0.2]]);
+    }
+
+    /// `inflow_models_to_stats_rows` produces the correct number of rows and
+    /// preserves `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` field values.
+    #[test]
+    fn inflow_models_to_stats_rows_field_values() {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::EntityId;
+
+        use super::inflow_models_to_stats_rows;
+
+        let models = vec![
+            InflowModel {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                mean_m3s: 150.0,
+                std_m3s: 30.0,
+                ar_coefficients: vec![0.5],
+                residual_std_ratio: 0.87,
+            },
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 1,
+                mean_m3s: 200.0,
+                std_m3s: 40.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+        ];
+        let rows = inflow_models_to_stats_rows(&models);
+
+        assert_eq!(rows.len(), 2, "must produce one row per model");
+        assert_eq!(rows[0].hydro_id, EntityId(1));
+        assert_eq!(rows[0].stage_id, 0);
+        assert_eq!(rows[0].mean_m3s, 150.0);
+        assert_eq!(rows[0].std_m3s, 30.0);
+        assert_eq!(rows[1].hydro_id, EntityId(2));
+        assert_eq!(rows[1].mean_m3s, 200.0);
+    }
+
+    /// `inflow_models_to_ar_rows` produces 1-based lag numbering and the correct
+    /// total row count (sum of AR orders across all models).
+    ///
+    /// A model with 3 AR coefficients produces 3 rows with lags 1, 2, 3.
+    /// A white-noise model (order 0) produces no rows.
+    #[test]
+    fn inflow_models_to_ar_rows_lag_numbering_and_count() {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::EntityId;
+
+        use super::inflow_models_to_ar_rows;
+
+        let models = vec![
+            InflowModel {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![0.4, -0.1, 0.05],
+                residual_std_ratio: 0.92,
+            },
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 15.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+        ];
+        let rows = inflow_models_to_ar_rows(&models);
+
+        // 3 rows for hydro 1 (order 3), 0 rows for hydro 2 (order 0).
+        assert_eq!(rows.len(), 3, "must produce 3 rows total (3 + 0)");
+
+        assert_eq!(rows[0].hydro_id, EntityId(1));
+        assert_eq!(rows[0].lag, 1, "first lag must be 1 (1-based)");
+        assert_eq!(rows[0].coefficient, 0.4);
+        assert_eq!(rows[0].residual_std_ratio, 0.92);
+
+        assert_eq!(rows[1].lag, 2);
+        assert_eq!(rows[1].coefficient, -0.1);
+
+        assert_eq!(rows[2].lag, 3);
+        assert_eq!(rows[2].coefficient, 0.05);
     }
 }

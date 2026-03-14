@@ -51,6 +51,7 @@ pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
 pub mod risk_measure;
+pub mod setup;
 pub mod simulation;
 pub mod state_exchange;
 pub mod stopping_rule;
@@ -77,6 +78,7 @@ pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{evaluate_lower_bound, LbEvalSpec};
 pub use lp_builder::{ar_dynamics_row_offset, build_stage_templates, PatchBuffer, StageTemplates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use setup::StudySetup;
 pub use simulation::{
     accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
     simulate, CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult,

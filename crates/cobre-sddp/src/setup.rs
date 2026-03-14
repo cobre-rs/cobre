@@ -1,0 +1,1341 @@
+//! Study setup struct that owns all precomputed state for a solve run.
+//!
+//! [`StudySetup`] centralises the orchestration that was previously scattered
+//! across entry points (CLI, Python bindings). It builds stage LP templates,
+//! the stage indexer, initial state, future cost function, horizon mode, risk
+//! measures, entity counts, and configuration-derived scalars from a validated
+//! [`System`] and [`cobre_io::Config`].
+//!
+//! ## Ownership model
+//!
+//! `StudySetup` owns all data. Callers borrow from it when constructing
+//! [`TrainingContext`] and [`StageContext`] for each pass. The
+//! [`StochasticContext`] is moved in at construction time so its lifetime
+//! matches `StudySetup`.
+//!
+//! ## What is NOT included
+//!
+//! - MPI communication — broadcast and barrier calls remain in the CLI/Python
+//!   entry points.
+//! - Solver instances — callers create solvers and pass them to `train()`/
+//!   `simulate()`.
+//! - Progress bars or event channels — callers wire those up and pass the
+//!   sender to [`TrainingConfig`].
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! use cobre_sddp::setup::StudySetup;
+//! use cobre_stochastic::build_stochastic_context;
+//!
+//! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
+//! #     -> Result<(), cobre_sddp::SddpError> {
+//! let stochastic = build_stochastic_context(system, 42, &[], None)?;
+//! let setup = StudySetup::new(system, config, stochastic)?;
+//! assert!(!setup.stage_templates().is_empty());
+//! # Ok(())
+//! # }
+//! ```
+
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+
+use cobre_comm::Communicator;
+use cobre_core::{entities::hydro::HydroGenerationModel, System, TrainingEvent};
+use cobre_solver::{SolverError, SolverInterface};
+use cobre_stochastic::StochasticContext;
+
+use crate::{
+    build_stage_templates,
+    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
+    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
+    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
+    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
+};
+
+/// Default number of forward-pass trajectories when not specified in config.
+const DEFAULT_FORWARD_PASSES: u32 = 1;
+
+/// Default maximum iterations when no stopping rule specifies an iteration limit.
+const DEFAULT_MAX_ITERATIONS: u64 = 100;
+
+/// Default random seed for stochastic scenario generation.
+const DEFAULT_SEED: u64 = 42;
+
+// ---------------------------------------------------------------------------
+// StudySetup
+// ---------------------------------------------------------------------------
+
+/// All precomputed study state built once before training and simulation.
+///
+/// Constructed by [`StudySetup::new`] from a validated [`System`] and
+/// [`cobre_io::Config`]. Owns all data so it can be held across async
+/// boundaries (e.g., Python GIL release) without lifetime issues.
+///
+/// Callers build [`TrainingContext`](crate::TrainingContext) and
+/// [`StageContext`](crate::StageContext) by borrowing from `StudySetup`.
+#[derive(Debug)]
+pub struct StudySetup {
+    // ── LP templates ─────────────────────────────────────────────────────────
+    stage_templates: StageTemplates,
+
+    // ── Algorithm state ──────────────────────────────────────────────────────
+    stochastic: StochasticContext,
+    indexer: StageIndexer,
+    fcf: FutureCostFunction,
+    initial_state: Vec<f64>,
+    horizon: HorizonMode,
+    risk_measures: Vec<RiskMeasure>,
+    entity_counts: EntityCounts,
+
+    // ── Derived layout values ─────────────────────────────────────────────────
+    block_counts_per_stage: Vec<usize>,
+    max_blocks: usize,
+
+    // ── Config-derived scalars ────────────────────────────────────────────────
+    seed: u64,
+    forward_passes: u32,
+    max_iterations: u64,
+    n_scenarios: u32,
+    io_channel_capacity: usize,
+    policy_path: String,
+    inflow_method: InflowNonNegativityMethod,
+    cut_selection: Option<CutSelectionStrategy>,
+    stopping_rule_set: StoppingRuleSet,
+}
+
+impl StudySetup {
+    /// Build all precomputed study state from a validated system and config.
+    ///
+    /// The constructor performs:
+    /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
+    /// 2. [`build_stage_templates`] — constructs LP skeletons for each stage
+    /// 3. [`StageIndexer::with_equipment`] — computes LP column/row offsets
+    /// 4. [`build_initial_state`] — extracts initial storage from system IC
+    /// 5. [`max_iterations_from_rules`] — sizes the FCF cut pool
+    /// 6. [`FutureCostFunction::new`] — pre-allocates cut storage
+    /// 7. [`HorizonMode::Finite`] — wraps stage count
+    /// 8. Risk measures from stage configs
+    /// 9. [`build_entity_counts`] — entity ID and productivity vectors
+    /// 10. Block layout derivation (`block_counts_per_stage`, `max_blocks`)
+    ///
+    /// # Errors
+    ///
+    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
+    ///   the template list is empty ("system has no study stages").
+    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
+    ///   `build_stage_templates` on LP construction failure.
+    /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
+    ///   an invalid config string.
+    #[allow(clippy::too_many_lines)]
+    pub fn new(
+        system: &System,
+        config: &cobre_io::Config,
+        stochastic: StochasticContext,
+    ) -> Result<Self, SddpError> {
+        // ── Config extraction ─────────────────────────────────────────────────
+        use cobre_io::config::StoppingRuleConfig;
+
+        let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
+
+        let forward_passes = config
+            .training
+            .forward_passes
+            .unwrap_or(DEFAULT_FORWARD_PASSES);
+
+        let rule_configs = match &config.training.stopping_rules {
+            Some(rules) if !rules.is_empty() => rules.clone(),
+            _ => vec![StoppingRuleConfig::IterationLimit {
+                limit: u32::try_from(DEFAULT_MAX_ITERATIONS).unwrap_or(u32::MAX),
+            }],
+        };
+
+        let stopping_rules: Vec<StoppingRule> = rule_configs
+            .into_iter()
+            .map(|c| match c {
+                StoppingRuleConfig::IterationLimit { limit } => StoppingRule::IterationLimit {
+                    limit: u64::from(limit),
+                },
+                StoppingRuleConfig::TimeLimit { seconds } => StoppingRule::TimeLimit { seconds },
+                StoppingRuleConfig::BoundStalling {
+                    iterations,
+                    tolerance,
+                } => StoppingRule::BoundStalling {
+                    iterations: u64::from(iterations),
+                    tolerance,
+                },
+                StoppingRuleConfig::Simulation { .. } => {
+                    // Not implemented in the minimal viable solver; fold into
+                    // an iteration limit so the stopping rule set is valid.
+                    StoppingRule::IterationLimit {
+                        limit: DEFAULT_MAX_ITERATIONS,
+                    }
+                }
+            })
+            .collect();
+
+        let stopping_mode = if config.training.stopping_mode.eq_ignore_ascii_case("all") {
+            StoppingMode::All
+        } else {
+            StoppingMode::Any
+        };
+
+        let stopping_rule_set = StoppingRuleSet {
+            rules: stopping_rules,
+            mode: stopping_mode,
+        };
+
+        let n_scenarios = if config.simulation.enabled {
+            config.simulation.num_scenarios
+        } else {
+            0
+        };
+
+        let io_channel_capacity =
+            usize::try_from(config.simulation.io_channel_capacity).unwrap_or(64);
+
+        let policy_path = config.policy.path.clone();
+
+        let inflow_method = InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity);
+
+        let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
+            .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
+
+        // ── Stage templates ───────────────────────────────────────────────────
+        let stage_templates = build_stage_templates(
+            system,
+            &inflow_method,
+            stochastic.par_lp(),
+            stochastic.normal_lp(),
+        )?;
+
+        if stage_templates.templates.is_empty() {
+            return Err(SddpError::Validation(
+                "system has no study stages".to_string(),
+            ));
+        }
+
+        let stage_templates_ref = &stage_templates.templates;
+
+        // ── Stage indexer ─────────────────────────────────────────────────────
+        let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
+        let has_inflow_penalty =
+            inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
+
+        let indexer = StageIndexer::with_equipment(
+            stage_templates_ref[0].n_hydro,
+            stage_templates_ref[0].max_par_order,
+            system.thermals().len(),
+            system.lines().len(),
+            system.buses().len(),
+            n_blks_stage0,
+            has_inflow_penalty,
+        );
+
+        // ── Initial state ─────────────────────────────────────────────────────
+        let initial_state = build_initial_state(system, &indexer);
+
+        // ── FCF pre-allocation ────────────────────────────────────────────────
+        let n_stages = stage_templates_ref.len();
+        let max_iterations = max_iterations_from_rules(&stopping_rule_set);
+        let fcf_capacity_iterations = max_iterations.saturating_add(1);
+        let fcf = FutureCostFunction::new(
+            n_stages,
+            indexer.n_state,
+            forward_passes,
+            fcf_capacity_iterations,
+            0,
+        );
+
+        // ── Horizon and risk measures ─────────────────────────────────────────
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+
+        let risk_measures: Vec<RiskMeasure> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .map(|s| RiskMeasure::from(s.risk_config))
+            .collect();
+
+        // ── Entity counts ─────────────────────────────────────────────────────
+        let entity_counts = build_entity_counts(system);
+
+        // ── Block layout ──────────────────────────────────────────────────────
+        let block_counts_per_stage: Vec<usize> = stage_templates
+            .block_hours_per_stage
+            .iter()
+            .map(Vec::len)
+            .collect();
+        let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
+
+        Ok(Self {
+            stage_templates,
+            stochastic,
+            indexer,
+            fcf,
+            initial_state,
+            horizon,
+            risk_measures,
+            entity_counts,
+            block_counts_per_stage,
+            max_blocks,
+            seed,
+            forward_passes,
+            max_iterations,
+            n_scenarios,
+            io_channel_capacity,
+            policy_path,
+            inflow_method,
+            cut_selection,
+            stopping_rule_set,
+        })
+    }
+
+    // ── Accessors: LP templates ───────────────────────────────────────────────
+
+    /// Return a reference to the full [`StageTemplates`] struct.
+    #[must_use]
+    pub fn templates_full(&self) -> &StageTemplates {
+        &self.stage_templates
+    }
+
+    /// Return the slice of [`StageTemplate`](cobre_solver::StageTemplate)s,
+    /// one per study stage.
+    #[must_use]
+    pub fn stage_templates(&self) -> &[cobre_solver::StageTemplate] {
+        &self.stage_templates.templates
+    }
+
+    /// Return the per-stage water-balance row offset array.
+    #[must_use]
+    pub fn base_rows(&self) -> &[usize] {
+        &self.stage_templates.base_rows
+    }
+
+    /// Return the pre-computed noise scale factors (stage-major layout).
+    #[must_use]
+    pub fn noise_scale(&self) -> &[f64] {
+        &self.stage_templates.noise_scale
+    }
+
+    // ── Accessors: algorithm state ────────────────────────────────────────────
+
+    /// Return a shared reference to the stochastic context.
+    #[must_use]
+    pub fn stochastic(&self) -> &StochasticContext {
+        &self.stochastic
+    }
+
+    /// Return a shared reference to the stage indexer.
+    #[must_use]
+    pub fn indexer(&self) -> &StageIndexer {
+        &self.indexer
+    }
+
+    /// Return a shared reference to the future cost function.
+    #[must_use]
+    pub fn fcf(&self) -> &FutureCostFunction {
+        &self.fcf
+    }
+
+    /// Return a mutable reference to the future cost function.
+    ///
+    /// Training and simulation modify the FCF (add/deactivate cuts), so
+    /// callers must use this accessor when passing it to `train()` or
+    /// `simulate()`.
+    #[must_use]
+    pub fn fcf_mut(&mut self) -> &mut FutureCostFunction {
+        &mut self.fcf
+    }
+
+    /// Return a reference to the initial state vector.
+    #[must_use]
+    pub fn initial_state(&self) -> &[f64] {
+        &self.initial_state
+    }
+
+    /// Return a reference to the horizon mode.
+    #[must_use]
+    pub fn horizon(&self) -> &HorizonMode {
+        &self.horizon
+    }
+
+    /// Return a reference to the per-stage risk measures.
+    #[must_use]
+    pub fn risk_measures(&self) -> &[RiskMeasure] {
+        &self.risk_measures
+    }
+
+    /// Return a reference to the entity counts struct.
+    #[must_use]
+    pub fn entity_counts(&self) -> &EntityCounts {
+        &self.entity_counts
+    }
+
+    // ── Accessors: derived layout ─────────────────────────────────────────────
+
+    /// Return the number of blocks per stage as a slice.
+    #[must_use]
+    pub fn block_counts_per_stage(&self) -> &[usize] {
+        &self.block_counts_per_stage
+    }
+
+    /// Return the maximum block count across all stages.
+    #[must_use]
+    pub fn max_blocks(&self) -> usize {
+        self.max_blocks
+    }
+
+    // ── Accessors: config-derived scalars ─────────────────────────────────────
+
+    /// Return the random seed used for noise generation.
+    #[must_use]
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Return the number of forward passes per training iteration.
+    #[must_use]
+    pub fn forward_passes(&self) -> u32 {
+        self.forward_passes
+    }
+
+    /// Return the maximum training iteration budget (derived from stopping rules).
+    #[must_use]
+    pub fn max_iterations(&self) -> u64 {
+        self.max_iterations
+    }
+
+    /// Return the number of simulation scenarios (0 if simulation is disabled).
+    #[must_use]
+    pub fn n_scenarios(&self) -> u32 {
+        self.n_scenarios
+    }
+
+    /// Return the I/O channel capacity for the simulation output pipeline.
+    #[must_use]
+    pub fn io_channel_capacity(&self) -> usize {
+        self.io_channel_capacity
+    }
+
+    /// Return the policy directory path string.
+    #[must_use]
+    pub fn policy_path(&self) -> &str {
+        &self.policy_path
+    }
+
+    /// Return a reference to the inflow non-negativity enforcement method.
+    #[must_use]
+    pub fn inflow_method(&self) -> &InflowNonNegativityMethod {
+        &self.inflow_method
+    }
+
+    /// Return a reference to the optional cut selection strategy.
+    #[must_use]
+    pub fn cut_selection(&self) -> Option<&CutSelectionStrategy> {
+        self.cut_selection.as_ref()
+    }
+
+    /// Return a reference to the stopping rule set.
+    #[must_use]
+    pub fn stopping_rule_set(&self) -> &StoppingRuleSet {
+        &self.stopping_rule_set
+    }
+
+    // ── Training method ───────────────────────────────────────────────────────
+
+    /// Execute the training loop using the precomputed study state.
+    ///
+    /// Constructs [`TrainingConfig`] and [`TrainingContext`] from the struct's
+    /// owned fields, then delegates to the internal [`crate::train`] function.
+    /// After a successful call, `self.fcf` contains all Benders cuts generated
+    /// during the run.
+    ///
+    /// The method takes `&mut self` because training mutates the FCF cut pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(SddpError::Infeasible { .. })` when an LP has no feasible
+    /// solution. Returns `Err(SddpError::Solver(_))` for other solver failures.
+    /// Returns `Err(SddpError::Communication(_))` when a collective operation
+    /// fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn train<S: SolverInterface + Send, C: Communicator>(
+        &mut self,
+        solver: &mut S,
+        comm: &C,
+        n_threads: usize,
+        solver_factory: impl Fn() -> Result<S, SolverError>,
+        event_sender: Option<Sender<TrainingEvent>>,
+        shutdown_flag: Option<&Arc<AtomicBool>>,
+    ) -> Result<TrainingResult, SddpError> {
+        let training_config = TrainingConfig {
+            forward_passes: self.forward_passes,
+            max_iterations: self.max_iterations,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender,
+        };
+
+        let training_ctx = TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+        };
+
+        crate::train(
+            solver,
+            training_config,
+            &mut self.fcf,
+            &self.stage_templates.templates,
+            &self.stage_templates.base_rows,
+            &training_ctx,
+            self.stochastic.opening_tree(),
+            &self.risk_measures,
+            self.stopping_rule_set.clone(),
+            self.cut_selection.as_ref(),
+            shutdown_flag,
+            comm,
+            n_threads,
+            solver_factory,
+            &self.stage_templates.noise_scale,
+            self.stage_templates.n_hydros,
+            self.stage_templates.n_load_buses,
+            self.max_blocks,
+            &self.stage_templates.load_balance_row_starts,
+            &self.stage_templates.load_bus_indices,
+            &self.block_counts_per_stage,
+        )
+    }
+
+    // ── Simulation method ─────────────────────────────────────────────────────
+
+    /// Execute the simulation pipeline using the trained future cost function.
+    ///
+    /// Constructs [`StageContext`], [`TrainingContext`], [`SimulationConfig`],
+    /// and [`SimulationOutputSpec`] from the struct's owned fields, then
+    /// delegates to [`crate::simulate`].
+    ///
+    /// The method takes `&self` because simulation only reads the FCF —
+    /// the cut pool is not modified during simulation.
+    ///
+    /// The `result_tx` channel and `event_sender` are created by the caller
+    /// (CLI/Python), because the caller also spawns the drain thread and
+    /// progress display. `StudySetup` does not manage threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(SimulationError::LpInfeasible { .. })` when a stage LP
+    /// has no feasible solution.
+    /// Returns `Err(SimulationError::SolverError { .. })` for other terminal
+    /// LP solver failures.
+    /// Returns `Err(SimulationError::ChannelClosed)` when the channel receiver
+    /// has been dropped.
+    pub fn simulate<S: SolverInterface + Send, C: Communicator>(
+        &self,
+        workspaces: &mut [SolverWorkspace<S>],
+        comm: &C,
+        result_tx: &SyncSender<SimulationScenarioResult>,
+        event_sender: Option<Sender<TrainingEvent>>,
+    ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+        let stage_ctx = StageContext {
+            templates: &self.stage_templates.templates,
+            base_rows: &self.stage_templates.base_rows,
+            noise_scale: &self.stage_templates.noise_scale,
+            n_hydros: self.stage_templates.n_hydros,
+            n_load_buses: self.stage_templates.n_load_buses,
+            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
+            load_bus_indices: &self.stage_templates.load_bus_indices,
+            block_counts_per_stage: &self.block_counts_per_stage,
+        };
+
+        let training_ctx = TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+        };
+
+        let sim_config = self.simulation_config();
+
+        let output = SimulationOutputSpec {
+            result_tx,
+            zeta_per_stage: &self.stage_templates.zeta_per_stage,
+            block_hours_per_stage: &self.stage_templates.block_hours_per_stage,
+            entity_counts: &self.entity_counts,
+            event_sender,
+        };
+
+        crate::simulate(
+            workspaces,
+            &stage_ctx,
+            &self.fcf,
+            &training_ctx,
+            &sim_config,
+            output,
+            comm,
+        )
+    }
+
+    // ── Training output method ────────────────────────────────────────────────
+
+    /// Convert a [`TrainingResult`] and event log into the [`TrainingOutput`]
+    /// required by the output writers in `cobre-io`.
+    ///
+    /// This is a thin delegation to [`crate::build_training_output`], using
+    /// the FCF stored in `self` to populate cut statistics.
+    ///
+    /// The conversion is pure and cannot fail.
+    #[must_use]
+    pub fn build_training_output(
+        &self,
+        result: &TrainingResult,
+        events: &[TrainingEvent],
+    ) -> cobre_io::TrainingOutput {
+        crate::build_training_output(result, events, &self.fcf)
+    }
+
+    // ── Workspace pool helper ─────────────────────────────────────────────────
+
+    /// Construct a [`WorkspacePool`] sized for this study's indexer dimensions.
+    ///
+    /// Each workspace receives a fresh solver instance created by
+    /// `solver_factory`. The pool size equals `n_threads`.
+    ///
+    /// `n_load_buses` and `max_blocks` are taken from the pre-computed stage
+    /// templates so that Category 4 patch buffers are correctly sized.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(SolverError)` if any call to `solver_factory` fails.
+    pub fn create_workspace_pool<S: SolverInterface + Send>(
+        &self,
+        n_threads: usize,
+        solver_factory: impl Fn() -> Result<S, SolverError>,
+    ) -> Result<WorkspacePool<S>, SolverError> {
+        WorkspacePool::try_new(
+            n_threads,
+            self.indexer.hydro_count,
+            self.indexer.max_par_order,
+            self.indexer.n_state,
+            self.stage_templates.n_load_buses,
+            self.max_blocks,
+            solver_factory,
+        )
+    }
+
+    // ── SimulationConfig convenience accessor ─────────────────────────────────
+
+    /// Build a [`SimulationConfig`] from the stored `n_scenarios` and
+    /// `io_channel_capacity` fields.
+    ///
+    /// Provided as a convenience so callers do not have to construct the struct
+    /// manually when they only need the config (e.g., for sizing a drain
+    /// channel before calling [`simulate`](Self::simulate)).
+    #[must_use]
+    pub fn simulation_config(&self) -> SimulationConfig {
+        SimulationConfig {
+            n_scenarios: self.n_scenarios,
+            io_channel_capacity: self.io_channel_capacity,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helper functions (extracted from cobre-cli/src/commands/run.rs)
+// ---------------------------------------------------------------------------
+
+/// Return the maximum iteration budget from the stopping rule set.
+///
+/// Used for FCF pre-sizing. If no iteration limit is present, returns
+/// [`DEFAULT_MAX_ITERATIONS`].
+fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
+    rules
+        .rules
+        .iter()
+        .filter_map(|r| {
+            if let StoppingRule::IterationLimit { limit } = r {
+                Some(*limit)
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(DEFAULT_MAX_ITERATIONS)
+}
+
+/// Build [`EntityCounts`] from the loaded system.
+///
+/// Entity IDs are extracted from [`cobre_core::EntityId`], which stores
+/// an `i32` in its inner field.
+fn build_entity_counts(system: &System) -> EntityCounts {
+    EntityCounts {
+        hydro_ids: system.hydros().iter().map(|h| h.id.0).collect(),
+        hydro_productivities: system
+            .hydros()
+            .iter()
+            .map(|h| match &h.generation_model {
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s,
+                }
+                | HydroGenerationModel::LinearizedHead {
+                    productivity_mw_per_m3s,
+                } => *productivity_mw_per_m3s,
+                HydroGenerationModel::Fpha => 0.0,
+            })
+            .collect(),
+        thermal_ids: system.thermals().iter().map(|t| t.id.0).collect(),
+        line_ids: system.lines().iter().map(|l| l.id.0).collect(),
+        bus_ids: system.buses().iter().map(|b| b.id.0).collect(),
+        pumping_station_ids: system.pumping_stations().iter().map(|p| p.id.0).collect(),
+        contract_ids: system.contracts().iter().map(|c| c.id.0).collect(),
+        non_controllable_ids: system
+            .non_controllable_sources()
+            .iter()
+            .map(|n| n.id.0)
+            .collect(),
+    }
+}
+
+/// Build the initial state vector from the system's initial conditions.
+///
+/// The state vector layout is `[storage(0..N), lags(N..N*(1+L))]` where N is
+/// the number of hydros and L is the maximum PAR order. Storage positions
+/// correspond to hydros in canonical ID order. Lag variables are initialised
+/// to zero (no historical inflow information at the start of the study).
+///
+/// Each `HydroStorage` entry in `initial_conditions.storage` is matched to
+/// its positional index among the system's hydros (both sorted by `hydro_id`).
+fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
+    let mut state = vec![0.0_f64; indexer.n_state];
+    let hydros = system.hydros();
+    let ic = system.initial_conditions();
+
+    for hs in &ic.storage {
+        // Both hydros() and ic.storage are sorted by hydro_id.
+        // Find the positional index for this hydro.
+        if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
+            state[idx] = hs.value_hm3;
+        }
+    }
+
+    state
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::StudySetup;
+
+    use cobre_core::{
+        entities::{
+            bus::{Bus, DeficitSegment},
+            hydro::{Hydro, HydroGenerationModel, HydroPenalties},
+            thermal::{Thermal, ThermalCostSegment},
+        },
+        scenario::{InflowModel, LoadModel},
+        temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        },
+        EntityId, SystemBuilder,
+    };
+    use cobre_core::{
+        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
+        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
+    };
+    use cobre_io::config::{
+        Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
+        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+    };
+    use cobre_stochastic::build_stochastic_context;
+
+    // ── Fixture helpers ───────────────────────────────────────────────────────
+
+    /// Build a minimal system with 1 bus, 1 thermal, 1 hydro, and `n_stages`
+    /// study stages (each with 1 block). All bounds and penalties are set to
+    /// sensible non-zero defaults so `build_stage_templates` succeeds.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::items_after_statements
+    )]
+    fn minimal_system(n_stages: usize) -> cobre_core::System {
+        use chrono::NaiveDate;
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+
+        fn default_hydro_bounds() -> HydroStageBounds {
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            }
+        }
+
+        fn default_hydro_penalties() -> HydroStagePenalties {
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 500.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            }
+        }
+
+        let bounds = ResolvedBounds::new(
+            1, // n_hydros
+            1, // n_thermals
+            0, // n_lines
+            0, // n_pumping
+            0, // n_contracts
+            n_st,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            1, // n_hydros
+            1, // n_buses
+            0, // n_lines
+            0, // n_ncs
+            n_st,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("minimal_system: valid")
+    }
+
+    /// Build a minimal valid [`Config`] with a single iteration-limit stopping rule.
+    fn minimal_config(forward_passes: u32, max_iterations: u32) -> Config {
+        Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "penalty".to_string(),
+                    penalty_cost: 1000.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: Some(42),
+                forward_passes: Some(forward_passes),
+                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit {
+                    limit: max_iterations,
+                }]),
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        }
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    /// Given a minimal valid system (1 hydro, 1 thermal, 1 bus, 2 stages),
+    /// when `StudySetup::new()` is called, then it returns `Ok` and
+    /// `stage_templates()` returns a non-empty slice.
+    #[test]
+    fn new_minimal_valid_system_returns_ok() {
+        let system = minimal_system(2);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let result = StudySetup::new(&system, &config, stochastic);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let setup = result.unwrap();
+        assert!(!setup.stage_templates().is_empty());
+    }
+
+    /// Given a system with zero study stages, when `StudySetup::new()` is
+    /// called, then it returns `Err` containing the substring "no study stages".
+    #[test]
+    fn new_zero_stages_returns_validation_error() {
+        let system = minimal_system(0);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let result = StudySetup::new(&system, &config, stochastic);
+        assert!(result.is_err(), "expected Err, got Ok");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no study stages"),
+            "error message should contain 'no study stages': {msg}"
+        );
+    }
+
+    /// Given a valid `StudySetup`, accessor methods return the expected values.
+    #[test]
+    fn accessor_methods_return_expected_values() {
+        let n_stages = 3;
+        let system = minimal_system(n_stages);
+        let config = minimal_config(2, 50);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        // Stage templates
+        assert_eq!(setup.stage_templates().len(), n_stages);
+        assert_eq!(setup.base_rows().len(), n_stages);
+
+        // Config-derived scalars
+        assert_eq!(setup.seed(), 42);
+        assert_eq!(setup.forward_passes(), 2);
+        assert_eq!(setup.max_iterations(), 50);
+        assert_eq!(setup.n_scenarios(), 0); // simulation disabled by default
+        assert_eq!(setup.policy_path(), "./policy");
+
+        // Derived layout
+        assert_eq!(setup.block_counts_per_stage().len(), n_stages);
+        assert!(setup.max_blocks() > 0);
+
+        // Horizon
+        assert_eq!(setup.horizon().num_stages(), n_stages);
+
+        // Risk measures: one per study stage
+        assert_eq!(setup.risk_measures().len(), n_stages);
+
+        // FCF: pools match stage count
+        assert_eq!(setup.fcf().pools.len(), n_stages);
+
+        // Entity counts: 1 hydro, 1 thermal
+        assert_eq!(setup.entity_counts().hydro_ids.len(), 1);
+        assert_eq!(setup.entity_counts().thermal_ids.len(), 1);
+    }
+
+    /// FCF is accessible mutably via `fcf_mut()`.
+    #[test]
+    fn fcf_mut_allows_cut_insertion() {
+        let system = minimal_system(2);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        let n_state = setup.indexer().n_state;
+        let coefficients = vec![1.0_f64; n_state];
+        setup.fcf_mut().add_cut(0, 0, 0, 42.0, &coefficients);
+        assert_eq!(setup.fcf().total_active_cuts(), 1);
+    }
+
+    /// `inflow_method()` reflects the config setting.
+    #[test]
+    fn inflow_method_reflects_config() {
+        use crate::InflowNonNegativityMethod;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        // The minimal_config uses "penalty" — should not be None.
+        assert!(
+            !matches!(setup.inflow_method(), InflowNonNegativityMethod::None),
+            "expected penalty or truncation method"
+        );
+    }
+
+    /// `cut_selection()` returns `None` when disabled in config (default).
+    #[test]
+    fn cut_selection_none_when_disabled() {
+        let system = minimal_system(2);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        assert!(
+            setup.cut_selection().is_none(),
+            "cut_selection should be None when disabled"
+        );
+    }
+
+    /// Given a 1-hydro, 1-thermal, 1-bus, 2-stage system with an iteration
+    /// limit of 3, when `train()` is called, then it completes successfully
+    /// with `result.iterations <= 3`.
+    #[test]
+    fn train_completes_within_iteration_limit() {
+        use cobre_comm::LocalBackend;
+        use cobre_solver::highs::HighsSolver;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 3);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let comm = LocalBackend;
+        let mut solver = HighsSolver::new().expect("solver");
+
+        let result = setup
+            .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+            .expect("train");
+
+        assert!(
+            result.iterations <= 3,
+            "expected iterations <= 3, got {}",
+            result.iterations
+        );
+        assert!(
+            result.iterations >= 1,
+            "expected at least 1 iteration, got {}",
+            result.iterations
+        );
+    }
+
+    /// After `train()` completes, at least one cut should be populated in the
+    /// FCF cut pool for stage 0.
+    #[test]
+    fn train_generates_cuts_in_fcf() {
+        use cobre_comm::LocalBackend;
+        use cobre_solver::highs::HighsSolver;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 3);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let comm = LocalBackend;
+        let mut solver = HighsSolver::new().expect("solver");
+
+        setup
+            .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+            .expect("train");
+
+        assert!(
+            setup.fcf().pools[0].populated_count > 0,
+            "expected at least one cut in FCF pool[0] after training"
+        );
+    }
+
+    // ── simulation_config() ───────────────────────────────────────────────────
+
+    /// `simulation_config()` returns a `SimulationConfig` whose fields match
+    /// the values extracted from the `Config` at construction time.
+    #[test]
+    fn simulation_config_reflects_setup_fields() {
+        use cobre_io::config::SimulationConfig as IoSimulationConfig;
+
+        // Build a config with simulation enabled so n_scenarios is non-zero.
+        let mut config = minimal_config(1, 5);
+        config.simulation = IoSimulationConfig {
+            enabled: true,
+            num_scenarios: 50,
+            io_channel_capacity: 16,
+            ..IoSimulationConfig::default()
+        };
+
+        let system = minimal_system(2);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        let sim_cfg = setup.simulation_config();
+        assert_eq!(sim_cfg.n_scenarios, setup.n_scenarios());
+        assert_eq!(sim_cfg.io_channel_capacity, setup.io_channel_capacity());
+    }
+
+    // ── create_workspace_pool() ───────────────────────────────────────────────
+
+    /// `create_workspace_pool()` with `n_threads = 2` returns a pool whose
+    /// `workspaces.len()` equals 2.
+    #[test]
+    fn create_workspace_pool_returns_correct_size() {
+        use cobre_solver::highs::HighsSolver;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 3);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        let pool = setup
+            .create_workspace_pool(2, HighsSolver::new)
+            .expect("workspace pool");
+
+        assert_eq!(pool.workspaces.len(), 2);
+    }
+
+    // ── build_training_output() ───────────────────────────────────────────────
+
+    /// `build_training_output()` with a non-empty `TrainingResult` and empty
+    /// events produces a `TrainingOutput` whose `convergence_records` is
+    /// non-empty (one record per `result.iterations`).
+    #[test]
+    fn build_training_output_non_empty() {
+        use cobre_comm::LocalBackend;
+        use cobre_solver::highs::HighsSolver;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 2);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let comm = LocalBackend;
+        let mut solver = HighsSolver::new().expect("solver");
+
+        // Collect events from training so we have at least one IterationSummary.
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let result = setup
+            .train(
+                &mut solver,
+                &comm,
+                1,
+                HighsSolver::new,
+                Some(event_tx),
+                None,
+            )
+            .expect("train");
+
+        let events: Vec<cobre_core::TrainingEvent> = event_rx.try_iter().collect();
+
+        let output = setup.build_training_output(&result, &events);
+        assert!(
+            !output.convergence_records.is_empty(),
+            "convergence_records must be non-empty after training"
+        );
+    }
+
+    // ── simulate() integration test ───────────────────────────────────────────
+
+    /// Given a trained `StudySetup` with `n_scenarios > 0`, calling `simulate()`
+    /// returns `Ok(costs)` with `costs.len() > 0`.
+    #[test]
+    fn simulate_after_train_returns_nonempty_costs() {
+        use cobre_comm::LocalBackend;
+        use cobre_solver::highs::HighsSolver;
+
+        // Enable simulation with 3 scenarios.
+        let mut config = minimal_config(1, 3);
+        config.simulation = cobre_io::config::SimulationConfig {
+            enabled: true,
+            num_scenarios: 3,
+            io_channel_capacity: 8,
+            ..cobre_io::config::SimulationConfig::default()
+        };
+
+        let system = minimal_system(2);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+
+        // Train first so the FCF has cuts.
+        let comm = LocalBackend;
+        let mut solver = HighsSolver::new().expect("solver");
+        setup
+            .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+            .expect("train");
+
+        // Build simulation pool.
+        let mut pool = setup
+            .create_workspace_pool(1, HighsSolver::new)
+            .expect("sim pool");
+
+        // Create the result channel and drain thread.
+        let io_capacity = setup.io_channel_capacity().max(1);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
+        let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
+
+        let costs = setup
+            .simulate(&mut pool.workspaces, &comm, &result_tx, None)
+            .expect("simulate");
+
+        // Drop the sender so the drain thread terminates.
+        drop(result_tx);
+        let _results = drain_handle.join().expect("drain thread");
+
+        assert!(
+            !costs.is_empty(),
+            "simulate must return at least one cost entry"
+        );
+    }
+}

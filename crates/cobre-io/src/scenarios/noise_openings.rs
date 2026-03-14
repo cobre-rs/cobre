@@ -1,5 +1,5 @@
-//! Parsing for `scenarios/noise_openings.parquet` — user-supplied backward-pass
-//! noise realisations for the opening scenario tree.
+//! Parsing for `scenarios/noise_openings.parquet` — user-supplied noise
+//! realisations for the opening scenario tree.
 //!
 //! [`parse_noise_openings`] reads `scenarios/noise_openings.parquet` and returns a
 //! sorted `Vec<NoiseOpeningRow>`. [`validate_noise_openings`] checks dimension and
@@ -28,6 +28,8 @@
 //! - Distinct `stage_id` count must equal `expected_stages`.
 //! - For every `(stage, entity)`, the set of `opening_index` values must be exactly
 //!   `0..expected_openings_per_stage[stage]` (no gaps, no extras).
+
+use std::path::PathBuf;
 
 use cobre_stochastic::OpeningTree;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -162,9 +164,7 @@ pub fn parse_noise_openings(path: &Path) -> Result<Vec<NoiseOpeningRow>, LoadErr
 /// | Distinct stage count != `expected_stages`                     | [`LoadError::SchemaError`] |
 /// | Opening indices for any stage are not `0..openings_per_stage` | [`LoadError::SchemaError`] |
 ///
-/// # Panics
-///
-/// Panics if `expected_count` is larger than `u32::MAX`.
+/// Returns [`LoadError::SchemaError`] if any `expected_count` exceeds `u32::MAX`.
 ///
 /// # Examples
 ///
@@ -222,7 +222,12 @@ pub fn validate_noise_openings(
 
     for (stage_pos, (&stage_id, opening_set)) in openings_by_stage.iter().enumerate() {
         let expected_count = expected_openings_per_stage[stage_pos];
-        let expected_set: BTreeSet<u32> = (0..u32::try_from(expected_count).unwrap_or(0)).collect();
+        let expected_max = u32::try_from(expected_count).map_err(|_| LoadError::SchemaError {
+            path: PathBuf::from("noise_openings.parquet"),
+            field: String::new(),
+            message: format!("opening count {expected_count} exceeds u32::MAX"),
+        })?;
+        let expected_set: BTreeSet<u32> = (0..expected_max).collect();
         if *opening_set != expected_set {
             return Err(LoadError::SchemaError {
                 path: std::path::PathBuf::from("scenarios/noise_openings.parquet"),

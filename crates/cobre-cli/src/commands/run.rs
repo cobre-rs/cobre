@@ -51,11 +51,9 @@ const DEFAULT_MAX_ITERATIONS: u64 = 100;
 /// Default random seed for stochastic scenario generation.
 const DEFAULT_SEED: u64 = 42;
 
-// ---------------------------------------------------------------------------
-// BroadcastConfig — postcard-safe configuration snapshot for MPI broadcast
-// ---------------------------------------------------------------------------
+// Broadcast types — postcard-safe serializable wrappers for MPI communication
 
-/// Postcard-serializable stopping rule (external-tagged for serialization).
+/// Postcard-serializable stopping rule.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum BroadcastStoppingRule {
     IterationLimit { limit: u64 },
@@ -70,7 +68,7 @@ enum BroadcastStoppingMode {
     All,
 }
 
-/// Postcard-safe cut selection strategy.
+/// Postcard-serializable cut selection strategy.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 enum BroadcastCutSelection {
     Disabled,
@@ -150,12 +148,7 @@ impl BroadcastCutSelection {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct BroadcastConfig {
     seed: u64,
-    /// `true` when `training.seed` was explicitly set in `config.json`.
-    ///
-    /// Used by the stochastic diagnostics block to distinguish between a
-    /// user-specified seed and the hardcoded default, so the diagnostic line
-    /// can append a "(default -- set training.seed for reproducibility)" hint
-    /// when the seed was not explicitly configured.
+    /// Whether `training.seed` was explicitly set in `config.json`.
     seed_was_explicit: bool,
     forward_passes: u32,
     stopping_rules: Vec<BroadcastStoppingRule>,
@@ -211,8 +204,7 @@ impl BroadcastConfig {
                     tolerance,
                 },
                 StoppingRuleConfig::Simulation { .. } => {
-                    // Simulation stopping rule requires upper-bound evaluation;
-                    // not implemented in the MVP — fold into iteration limit.
+                    // Not implemented in MVP; fold into iteration limit.
                     BroadcastStoppingRule::IterationLimit {
                         limit: DEFAULT_MAX_ITERATIONS,
                     }
@@ -229,9 +221,6 @@ impl BroadcastConfig {
         let should_simulate =
             !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
-        // Parse and validate the cut selection config on rank 0.
-        // Errors here are caught before the broadcast so all ranks get a valid
-        // BroadcastConfig (or the run is aborted on rank 0 before broadcast).
         let parsed_cut_selection =
             cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
                 .map_err(|msg| CliError::Validation { report: msg })?;
@@ -254,10 +243,6 @@ impl BroadcastConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// BroadcastOpeningTree — postcard-safe wrapper for MPI broadcast
-// ---------------------------------------------------------------------------
-
 /// Postcard-serializable wrapper for [`OpeningTree`] broadcast.
 ///
 /// [`OpeningTree`] does not implement `serde::Serialize + Deserialize` to avoid
@@ -270,10 +255,6 @@ struct BroadcastOpeningTree {
     openings_per_stage: Vec<usize>,
     dim: usize,
 }
-
-// ---------------------------------------------------------------------------
-// load_user_opening_tree — rank-0 helper
-// ---------------------------------------------------------------------------
 
 /// Load, validate, and assemble a user-supplied opening tree from the case directory.
 ///
@@ -309,7 +290,6 @@ fn load_user_opening_tree(
 
     let rows = cobre_io::load_noise_openings(Some(&path)).map_err(CliError::from)?;
 
-    // Compute expected_dim = n_hydros + n_load_buses (buses with std_mw > 0).
     let n_hydros = system.hydros().len();
     let mut load_bus_ids: Vec<cobre_core::EntityId> = system
         .load_models()
@@ -322,11 +302,7 @@ fn load_user_opening_tree(
     let n_load_buses = load_bus_ids.len();
     let expected_dim = n_hydros + n_load_buses;
 
-    // Compute expected_stages: study stages (non-negative stage.id).
     let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
-
-    // Compute openings_per_stage from the parsed rows (self-consistent).
-    // Count distinct opening_index values per stage in sorted order.
     let mut openings_by_stage: std::collections::BTreeMap<i32, std::collections::BTreeSet<u32>> =
         std::collections::BTreeMap::new();
     for row in &rows {

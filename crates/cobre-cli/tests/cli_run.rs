@@ -30,9 +30,6 @@ fn cobre() -> Command {
 }
 
 /// Minimal `config.json` with `forward_passes` and `stopping_rules`.
-/// Uses a single iteration limit so tests run fast.
-/// `training.seed` is absent, so the CLI will use the default seed (42) and
-/// emit a warning to stderr.
 const CONFIG_JSON: &str = r#"{
     "training": {
         "forward_passes": 1,
@@ -42,8 +39,7 @@ const CONFIG_JSON: &str = r#"{
     }
 }"#;
 
-/// Variant of `CONFIG_JSON` with an explicit `training.seed`.
-/// The CLI must not emit the "no random seed specified" warning.
+/// `CONFIG_JSON` variant with explicit `training.seed`.
 const CONFIG_WITH_SEED_JSON: &str = r#"{
     "training": {
         "forward_passes": 1,

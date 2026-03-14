@@ -1,12 +1,11 @@
 //! Online accumulator for running mean and variance using Welford's algorithm.
 //!
 //! Accumulates one value at a time with O(1) updates and O(1) statistics
-//! queries, with no re-scanning of previous data.
+//! queries, with no re-scanning of previous data. Useful for streaming statistics
+//! in iterative algorithms where values arrive one at a time and the full dataset
+//! is not stored.
 
 /// Online accumulator for running mean and variance using Welford's algorithm.
-///
-/// Useful for streaming statistics in iterative algorithms where values
-/// arrive one at a time and the full dataset is not stored.
 pub struct WelfordAccumulator {
     count: u64,
     mean: f64,

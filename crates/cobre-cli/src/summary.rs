@@ -216,9 +216,6 @@ pub fn format_stochastic_summary_string(summary: &StochasticSummary) -> String {
 }
 
 /// Format a floating-point value as scientific notation with 6 significant digits.
-///
-/// Delegates to the same logic as `progress::fmt_sci` — duplicated here to
-/// avoid making `fmt_sci` part of the public API of this crate.
 fn fmt_sci(v: f64) -> String {
     let raw = format!("{v:.5e}");
     if let Some(pos) = raw.find('e') {

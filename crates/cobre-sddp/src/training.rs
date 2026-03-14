@@ -375,14 +375,16 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 
+        let local_n = forward_result.scenario_costs.len();
+        let local_cost_sum: f64 = forward_result.scenario_costs.iter().sum();
         emit(
             event_sender.as_ref(),
             TrainingEvent::ForwardPassComplete {
                 iteration,
                 scenarios: config_forward_passes,
                 #[allow(clippy::cast_precision_loss)]
-                ub_mean: if forward_result.scenario_count > 0.0 {
-                    forward_result.cost_sum / forward_result.scenario_count
+                ub_mean: if local_n > 0 {
+                    local_cost_sum / local_n as f64
                 } else {
                     0.0
                 },
@@ -390,7 +392,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 elapsed_ms: forward_elapsed_ms,
             },
         );
-        let sync_result = sync_forward(&forward_result, comm)?;
+        let sync_result = sync_forward(&forward_result, comm, total_forward_passes)?;
 
         emit(
             event_sender.as_ref(),

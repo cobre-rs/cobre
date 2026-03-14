@@ -1,6 +1,6 @@
 # cobre-io
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-io` is the case directory loader for the Cobre ecosystem. It provides the
 [`load_case`](#load_case) function, which reads a case directory from disk and

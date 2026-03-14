@@ -205,7 +205,7 @@ impl StochasticContext {
 
     /// Returns the noise dimension (`n_hydros + n_load_buses`).
     ///
-    /// Opening tree noise vectors have this length. Inflow noise occupies
+    /// Opening tree noise vectors have this length. PAR model noise occupies
     /// indices `[0, n_hydros)` and load noise occupies `[n_hydros, dim)`.
     /// Use `par_lp().n_hydros()` to find the boundary.
     #[must_use]
@@ -249,7 +249,7 @@ impl StochasticContext {
 /// 4. Collect stochastic load bus IDs (buses with at least one [`LoadModel`]
 ///    entry where `std_mw > 0`), sorted by [`EntityId`] for declaration-order
 ///    invariance.
-/// 5. Build [`PrecomputedParLp`] from inflow models and study stages.
+/// 5. Build [`PrecomputedParLp`] from PAR model parameters and study stages.
 /// 6. Build [`DecomposedCorrelation`] from the system correlation model.
 /// 7. Generate the opening scenario tree from the expanded entity order
 ///    (`hydro_ids` followed by `load_bus_ids`) with `dim = n_hydros + n_load_buses`.
@@ -321,7 +321,7 @@ pub fn build_stochastic_context(
         DecomposedCorrelation::build(system.correlation())?
     };
 
-    // Build the expanded entity order: hydro IDs first (inflow noise indices),
+    // Build the expanded entity order: hydro IDs first (PAR noise indices),
     // then load bus IDs (load noise indices). Load bus IDs are already sorted.
     let entity_order: Vec<EntityId> = hydro_ids
         .iter()

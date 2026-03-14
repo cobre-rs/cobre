@@ -1,6 +1,6 @@
 # cobre-solver
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-solver` is the LP solver abstraction layer for the Cobre ecosystem. It
 defines a backend-agnostic interface for constructing, solving, and querying
@@ -30,7 +30,7 @@ depending on any particular backend.
 
 ## Architecture
 
-### Compile-time monomorphization (DEC-002)
+### Compile-time monomorphization
 
 `SolverInterface` is resolved as a **generic type parameter at compile time**,
 not as `Box<dyn SolverInterface>` or any other form of dynamic dispatch. An
@@ -42,8 +42,7 @@ fn run<S: SolverInterface>(solver_factory: impl Fn() -> S, ...) { ... }
 
 The compiler generates one concrete implementation per backend. The HiGHS
 backend is the only active backend in a standard build; the binary contains
-no solver-selection branch. This is specified in DEC-002 and implemented in
-ADR-003.
+no solver-selection branch. This pattern is implemented in ADR-003.
 
 ### Custom FFI — not `highs-sys`
 
@@ -279,7 +278,7 @@ the method falls back to a cold-start solve and increments
 `SolverStatistics.basis_rejections`. After setting the basis, `solve_with_basis`
 delegates to `solve()`, which handles the retry escalation sequence.
 
-## SoA bound patching (DEC-019)
+## SoA bound patching
 
 The `set_row_bounds` and `set_col_bounds` methods take three separate slices:
 
@@ -294,11 +293,11 @@ caller to convert from its natural SoA representation before the call, and the
 HiGHS C API (`Highs_changeRowsBoundsBySet`) would then expect SoA again,
 producing a double conversion on the hottest solver path.
 
-DEC-019 documents the rationale: the calling algorithm naturally holds separate
-index, lower-bound, and upper-bound arrays; the C API expects separate arrays;
-so the trait signature matches both, eliminating any intermediate conversion.
-The performance impact is meaningful because bound patching happens at every
-scenario realization, which occurs on the innermost loop of iterative LP solving.
+The calling algorithm naturally holds separate index, lower-bound, and
+upper-bound arrays; the C API expects separate arrays; so the trait signature
+matches both, eliminating any intermediate conversion. The performance impact
+is meaningful because bound patching happens at every scenario realization,
+which occurs on the innermost loop of iterative LP solving.
 
 ## Usage example
 

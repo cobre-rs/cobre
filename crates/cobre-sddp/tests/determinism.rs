@@ -37,10 +37,10 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    simulate, train,
+    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
+    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
+    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    TrainingContext, simulate, sync_forward, train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -54,7 +54,6 @@ use cobre_stochastic::{
 // Shared communicator stub
 // ===========================================================================
 
-/// Single-rank communicator: correctly copies data through allgatherv and allreduce.
 struct StubComm;
 
 impl Communicator for StubComm {
@@ -692,90 +691,252 @@ fn test_training_determinism_across_thread_counts() {
     let (result_1, fcf_1) = run_training(1, &fx, N_ITERATIONS);
     let (result_4, fcf_4) = run_training(4, &fx, N_ITERATIONS);
 
-    assert_eq!(
-        result_1.iterations, result_4.iterations,
-        "iteration count must be identical: 1-thread={}, 4-thread={}",
-        result_1.iterations, result_4.iterations
-    );
+    assert_eq!(result_1.iterations, result_4.iterations);
+    assert_eq!(result_1.final_lb.to_bits(), result_4.final_lb.to_bits());
+    assert_eq!(result_1.final_ub.to_bits(), result_4.final_ub.to_bits());
+    assert_eq!(result_1.final_gap.to_bits(), result_4.final_gap.to_bits());
 
-    assert_eq!(
-        result_1.final_lb.to_bits(),
-        result_4.final_lb.to_bits(),
-        "final_lb must be bit-identical: 1-thread={:.17e}, 4-thread={:.17e}",
-        result_1.final_lb,
-        result_4.final_lb
-    );
-
-    assert_eq!(
-        result_1.final_ub.to_bits(),
-        result_4.final_ub.to_bits(),
-        "final_ub must be bit-identical: 1-thread={:.17e}, 4-thread={:.17e}",
-        result_1.final_ub,
-        result_4.final_ub
-    );
-
-    assert_eq!(
-        result_1.final_gap.to_bits(),
-        result_4.final_gap.to_bits(),
-        "final_gap must be bit-identical: 1-thread={:.17e}, 4-thread={:.17e}",
-        result_1.final_gap,
-        result_4.final_gap
-    );
-
-    // Compare FCF cut pools stage by stage.
-    // The FCF holds n_stages - 1 non-trivial pools (the last stage in Finite
-    // horizon mode has no successor, so pool[n_stages-1] may be empty).
-    assert_eq!(
-        fcf_1.pools.len(),
-        fcf_4.pools.len(),
-        "FCF pool count must be identical"
-    );
-
+    assert_eq!(fcf_1.pools.len(), fcf_4.pools.len());
     for t in 0..fcf_1.pools.len() {
         let pool_1 = &fcf_1.pools[t];
         let pool_4 = &fcf_4.pools[t];
-
-        assert_eq!(
-            pool_1.populated_count, pool_4.populated_count,
-            "populated_count mismatch at stage {t}: 1-thread={}, 4-thread={}",
-            pool_1.populated_count, pool_4.populated_count
-        );
+        assert_eq!(pool_1.populated_count, pool_4.populated_count);
 
         for s in 0..pool_1.populated_count {
-            assert_eq!(
-                pool_1.active[s], pool_4.active[s],
-                "active flag mismatch at stage {t}, slot {s}"
-            );
-
+            assert_eq!(pool_1.active[s], pool_4.active[s]);
             assert_eq!(
                 pool_1.intercepts[s].to_bits(),
-                pool_4.intercepts[s].to_bits(),
-                "intercept mismatch at stage {t}, slot {s}: \
-                 1-thread={:.17e}, 4-thread={:.17e}",
-                pool_1.intercepts[s],
-                pool_4.intercepts[s]
+                pool_4.intercepts[s].to_bits()
             );
-
-            assert_eq!(
-                pool_1.coefficients[s].len(),
-                pool_4.coefficients[s].len(),
-                "coefficient length mismatch at stage {t}, slot {s}"
-            );
-
-            for (c, (&coeff_1, &coeff_4)) in pool_1.coefficients[s]
+            assert_eq!(pool_1.coefficients[s].len(), pool_4.coefficients[s].len());
+            for (&coeff_1, &coeff_4) in pool_1.coefficients[s]
                 .iter()
                 .zip(pool_4.coefficients[s].iter())
-                .enumerate()
             {
-                assert_eq!(
-                    coeff_1.to_bits(),
-                    coeff_4.to_bits(),
-                    "coefficient mismatch at stage {t}, slot {s}, dim {c}: \
-                     1-thread={coeff_1:.17e}, 4-thread={coeff_4:.17e}"
-                );
+                assert_eq!(coeff_1.to_bits(), coeff_4.to_bits());
             }
         }
     }
+}
+
+// ===========================================================================
+// Multi-rank mock communicator
+// ===========================================================================
+
+use std::any::Any;
+use std::cell::RefCell;
+use std::sync::Arc;
+
+/// Type-erased wrapper that lets `allgatherv<T>` retrieve a `Vec<T>` stored
+/// under the mock's thread-local gather buffer.
+///
+/// The thread-local holds `Box<dyn Any + Send>`. Before each `sync_forward`
+/// call the test stores `GatherBuffer(pre_assembled_vec_f64)`. Inside
+/// `allgatherv<T>` we call `downcast_ref::<GatherBuffer<T>>()`: when
+/// `T = f64` the downcast succeeds and we get a `&Vec<f64>` that can be
+/// `clone_from_slice`d directly into `recv: &mut [f64]` — no unsafe, no
+/// transmutation.
+struct GatherBuffer<T>(Vec<T>);
+
+thread_local! {
+    /// Stores the pre-assembled flat gather buffer as a type-erased `Any`.
+    ///
+    /// Set by [`MultiRankMockComm::set_gather_buffer`] before each call to
+    /// `sync_forward`. Read by `allgatherv<T>` via `downcast_ref::<GatherBuffer<T>>`.
+    static MOCK_GATHER_BUFFER: RefCell<Arc<dyn Any + Send + Sync>> =
+        RefCell::new(Arc::new(GatherBuffer::<f64>(Vec::new())));
+}
+
+/// Multi-rank mock communicator for testing canonical summation.
+///
+/// Simulates a single rank within a multi-rank group. `allgatherv` fills the
+/// entire `recv` buffer from a pre-loaded gather buffer set via
+/// [`MultiRankMockComm::set_gather_buffer`], faithfully reproducing what real
+/// MPI `allgatherv` delivers to every rank — all ranks receive all data.
+///
+/// The test orchestrator stores the full flat cost vector before each
+/// `sync_forward` call. When `allgatherv<f64>` runs inside `sync_forward`,
+/// the type-erased buffer is downcast back to `GatherBuffer<f64>` via
+/// `Any::downcast_ref` (a safe operation), and its contents are
+/// `clone_from_slice`d into `recv: &mut [f64]` (also safe). This pattern
+/// avoids unsafe transmutations while correctly simulating multi-rank gather.
+struct MultiRankMockComm {
+    rank: usize,
+    total_size: usize,
+}
+
+impl MultiRankMockComm {
+    /// Create a mock for virtual `rank` within a group of `total_size` ranks.
+    fn new(rank: usize, total_size: usize) -> Self {
+        Self { rank, total_size }
+    }
+
+    /// Pre-load the full flat gathered cost buffer used by `allgatherv`.
+    ///
+    /// `global_costs` must contain all ranks' scenario costs in rank order:
+    /// rank 0's costs first, then rank 1's, etc. This mirrors what real MPI
+    /// `allgatherv` places in `recv` on every participating rank.
+    ///
+    /// Must be called on the same thread that will call `sync_forward`.
+    fn set_gather_buffer(global_costs: Vec<f64>) {
+        MOCK_GATHER_BUFFER.with(|cell| {
+            *cell.borrow_mut() = Arc::new(GatherBuffer(global_costs));
+        });
+    }
+}
+
+impl Communicator for MultiRankMockComm {
+    /// Simulate `allgatherv` by filling `recv` from the pre-loaded buffer.
+    ///
+    /// The pre-loaded buffer is type-erased as `Box<dyn Any>`. This method
+    /// attempts `downcast_ref::<GatherBuffer<T>>()` to retrieve a `&Vec<T>`.
+    /// When `T = f64` (which is always the case when called from
+    /// `sync_forward`), the downcast succeeds and the buffer contents are
+    /// copied into `recv` via `clone_from_slice` — a fully safe operation.
+    ///
+    /// If the downcast fails (e.g., some other `T` is used), the method falls
+    /// back to filling only the local rank's slot from `_send` and leaving
+    /// other slots at `T::default()`. This fallback is unreachable in the
+    /// tests in this file.
+    fn allgatherv<T: CommData>(
+        &self,
+        send: &[T],
+        recv: &mut [T],
+        counts: &[usize],
+        displs: &[usize],
+    ) -> Result<(), CommError> {
+        MOCK_GATHER_BUFFER.with(|cell| {
+            let arc = cell.borrow();
+            if let Some(buf) = arc.downcast_ref::<GatherBuffer<T>>() {
+                // Happy path: T = f64 (always true in sync_forward calls).
+                // Fill recv from the pre-assembled flat buffer in rank order.
+                for rank in 0..self.total_size {
+                    let start = displs[rank];
+                    let count = counts[rank];
+                    recv[start..start + count].clone_from_slice(&buf.0[start..start + count]);
+                }
+            } else {
+                // Fallback: only fill this rank's local slot.
+                // Unreachable in the determinism tests (T is always f64).
+                let local_start = displs[self.rank];
+                let local_count = counts[self.rank];
+                recv[local_start..local_start + local_count].clone_from_slice(send);
+            }
+        });
+        Ok(())
+    }
+
+    fn allreduce<T: CommData>(
+        &self,
+        send: &[T],
+        recv: &mut [T],
+        _op: ReduceOp,
+    ) -> Result<(), CommError> {
+        recv.clone_from_slice(send);
+        Ok(())
+    }
+
+    fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
+        Ok(())
+    }
+
+    fn barrier(&self) -> Result<(), CommError> {
+        Ok(())
+    }
+
+    fn rank(&self) -> usize {
+        self.rank
+    }
+
+    fn size(&self) -> usize {
+        self.total_size
+    }
+}
+
+// ===========================================================================
+// Test: canonical upper bound determinism across rank counts
+// ===========================================================================
+
+/// Verify that `sync_forward` produces bit-identical `SyncResult` statistics
+/// when the same 8 scenario costs are partitioned across 1, 2, and 4 virtual
+/// ranks.
+///
+/// This is the CI-compatible regression gate for the canonical upper bound
+/// summation fix (ticket-009). After that fix, `sync_forward` uses `allgatherv`
+/// to assemble a flat global cost vector in rank order, then sums it
+/// sequentially. The sequential summation order is identical regardless of how
+/// many ranks contribute (because the costs always appear in global scenario
+/// index order: rank 0's costs first, rank 1's next, etc.).
+///
+/// The test uses [`MultiRankMockComm`] to simulate 2-rank and 4-rank
+/// `allgatherv` without requiring an MPI installation. The mock pre-loads the
+/// full flat gather buffer via [`MultiRankMockComm::set_gather_buffer`] and
+/// correctly fills the entire `recv` slice using a type-erased `Any`-based
+/// downcast — no unsafe code required.
+#[test]
+fn test_canonical_ub_determinism_across_rank_counts() {
+    // Known cost vector with distinct non-trivial values.
+    // Chosen so that partial sums group differently across partition boundaries,
+    // exercising the canonical summation property.
+    const ALL_COSTS: &[f64] = &[100.0, 200.0, 150.0, 175.0, 125.0, 190.0, 160.0, 180.0];
+    const N: usize = 8;
+    const TOTAL_FWD_PASSES: usize = N;
+
+    let result_1rank = {
+        let local = ForwardResult {
+            scenario_costs: ALL_COSTS.to_vec(),
+            elapsed_ms: 0,
+            lp_solves: 0,
+        };
+        sync_forward(&local, &StubComm, TOTAL_FWD_PASSES).unwrap()
+    };
+
+    let result_2rank = {
+        MultiRankMockComm::set_gather_buffer(ALL_COSTS.to_vec());
+        let comm = MultiRankMockComm::new(0, 2);
+        let local = ForwardResult {
+            scenario_costs: ALL_COSTS[..4].to_vec(),
+            elapsed_ms: 0,
+            lp_solves: 0,
+        };
+        sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
+    };
+
+    let result_4rank = {
+        MultiRankMockComm::set_gather_buffer(ALL_COSTS.to_vec());
+        let comm = MultiRankMockComm::new(0, 4);
+        let local = ForwardResult {
+            scenario_costs: ALL_COSTS[..2].to_vec(),
+            elapsed_ms: 0,
+            lp_solves: 0,
+        };
+        sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
+    };
+
+    assert_eq!(
+        result_1rank.global_ub_mean.to_bits(),
+        result_2rank.global_ub_mean.to_bits()
+    );
+    assert_eq!(
+        result_1rank.global_ub_mean.to_bits(),
+        result_4rank.global_ub_mean.to_bits()
+    );
+    assert_eq!(
+        result_1rank.global_ub_std.to_bits(),
+        result_2rank.global_ub_std.to_bits()
+    );
+    assert_eq!(
+        result_1rank.global_ub_std.to_bits(),
+        result_4rank.global_ub_std.to_bits()
+    );
+    assert_eq!(
+        result_1rank.ci_95_half_width.to_bits(),
+        result_2rank.ci_95_half_width.to_bits()
+    );
+    assert_eq!(
+        result_1rank.ci_95_half_width.to_bits(),
+        result_4rank.ci_95_half_width.to_bits()
+    );
 }
 
 // ===========================================================================
@@ -800,53 +961,26 @@ fn test_simulation_determinism_across_thread_counts() {
     let costs_1 = run_simulation(1, &fx, &fcf, N_SCENARIOS);
     let costs_4 = run_simulation(4, &fx, &fcf, N_SCENARIOS);
 
-    assert_eq!(
-        costs_1.len(),
-        costs_4.len(),
-        "cost buffer length must be identical: 1-worker={}, 4-worker={}",
-        costs_1.len(),
-        costs_4.len()
-    );
-
-    for (idx, ((id_1, cost_1, cats_1), (id_4, cost_4, cats_4))) in
-        costs_1.iter().zip(costs_4.iter()).enumerate()
-    {
-        assert_eq!(
-            id_1, id_4,
-            "scenario_id mismatch at position {idx}: 1-worker={id_1}, 4-worker={id_4}"
-        );
-
-        assert_eq!(
-            cost_1.to_bits(),
-            cost_4.to_bits(),
-            "total_cost mismatch at scenario {id_1}: \
-             1-worker={cost_1:.17e}, 4-worker={cost_4:.17e}"
-        );
-
+    assert_eq!(costs_1.len(), costs_4.len());
+    for ((id_1, cost_1, cats_1), (id_4, cost_4, cats_4)) in costs_1.iter().zip(costs_4.iter()) {
+        assert_eq!(id_1, id_4);
+        assert_eq!(cost_1.to_bits(), cost_4.to_bits());
         assert_eq!(
             cats_1.resource_cost.to_bits(),
-            cats_4.resource_cost.to_bits(),
-            "resource_cost mismatch at scenario {id_1}"
+            cats_4.resource_cost.to_bits()
         );
         assert_eq!(
             cats_1.recourse_cost.to_bits(),
-            cats_4.recourse_cost.to_bits(),
-            "recourse_cost mismatch at scenario {id_1}"
+            cats_4.recourse_cost.to_bits()
         );
         assert_eq!(
             cats_1.violation_cost.to_bits(),
-            cats_4.violation_cost.to_bits(),
-            "violation_cost mismatch at scenario {id_1}"
+            cats_4.violation_cost.to_bits()
         );
         assert_eq!(
             cats_1.regularization_cost.to_bits(),
-            cats_4.regularization_cost.to_bits(),
-            "regularization_cost mismatch at scenario {id_1}"
+            cats_4.regularization_cost.to_bits()
         );
-        assert_eq!(
-            cats_1.imputed_cost.to_bits(),
-            cats_4.imputed_cost.to_bits(),
-            "imputed_cost mismatch at scenario {id_1}"
-        );
+        assert_eq!(cats_1.imputed_cost.to_bits(), cats_4.imputed_cost.to_bits());
     }
 }

@@ -1,13 +1,13 @@
-//! PAR(p) inflow evaluation and inverse functions.
+//! PAR(p) evaluation and inverse functions.
 //!
 //! This module provides functions for evaluating the Periodic Autoregressive
-//! model equation in both directions: computing the inflow value at a given
+//! model equation in both directions: computing the output value at a given
 //! stage from the current lag state and a noise realisation (forward), and
-//! solving for the noise value that produces a desired target inflow (inverse).
+//! solving for the noise value that produces a desired target output (inverse).
 //!
-//! ## PAR inflow equation
+//! ## PAR model equation
 //!
-//! Given precomputed parameters, the inflow for hydro `h` at stage `t` is:
+//! Given precomputed parameters, the output for series `h` at stage `t` is:
 //!
 //! ```text
 //! a_h = deterministic_base + sum_{l=0}^{order-1} psi[l] * lag[l] + sigma * eta
@@ -17,7 +17,7 @@
 //! - `deterministic_base` encodes `mu_m - sum psi_{m,l} * mu_{m-l}` (built by
 //!   [`PrecomputedParLp`])
 //! - `psi[l]` are the AR coefficients in original units (lag 1 is at index 0)
-//! - `lag[l]` is the observed inflow value at lag `l+1`
+//! - `lag[l]` is the observed series value at lag `l+1`
 //! - `sigma` is the residual standard deviation
 //! - `eta` is the standardised noise realisation
 //!
@@ -28,7 +28,7 @@
 
 use super::precompute::PrecomputedParLp;
 
-/// Evaluate the PAR(p) inflow equation for a single hydro at a single stage.
+/// Evaluate the PAR(p) model equation for a single series element at a single stage.
 ///
 /// Computes:
 /// ```text
@@ -41,11 +41,11 @@ use super::precompute::PrecomputedParLp;
 /// # Parameters
 ///
 /// - `deterministic_base` — the precomputed `b_{h,m(t)} = mu_m - sum psi_{m,l} * mu_{m-l}`
-/// - `psi` — AR coefficients in original units for this (stage, hydro) pair;
+/// - `psi` — AR coefficients in original units for this (stage, series element) pair;
 ///   only `psi[0..order]` are used
 /// - `order` — number of meaningful entries in `psi` (the AR order)
-/// - `lags` — observed inflow values at lags 1..p; `lags[0]` = lag-1 inflow,
-///   `lags[1]` = lag-2 inflow, etc.; must have `lags.len() >= order`
+/// - `lags` — observed series values at lags 1..p; `lags[0]` = lag-1 value,
+///   `lags[1]` = lag-2 value, etc.; must have `lags.len() >= order`
 /// - `sigma` — residual standard deviation
 /// - `eta` — standardised noise realisation (post-correlation)
 ///
@@ -54,23 +54,23 @@ use super::precompute::PrecomputedParLp;
 /// AR(0) — mean plus noise:
 ///
 /// ```
-/// use cobre_stochastic::evaluate_par_inflow;
+/// use cobre_stochastic::evaluate_par;
 ///
-/// let a_h = evaluate_par_inflow(100.0, &[], 0, &[], 30.0, 1.5);
+/// let a_h = evaluate_par(100.0, &[], 0, &[], 30.0, 1.5);
 /// assert!((a_h - 145.0).abs() < 1e-10);
 /// ```
 ///
 /// AR(1) — one lag:
 ///
 /// ```
-/// use cobre_stochastic::evaluate_par_inflow;
+/// use cobre_stochastic::evaluate_par;
 ///
 /// // a_h = 70.0 + 0.48 * 90.0 + 28.62 * 0.5 = 127.51
-/// let a_h = evaluate_par_inflow(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
+/// let a_h = evaluate_par(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
 /// assert!((a_h - 127.51).abs() < 1e-10);
 /// ```
 #[must_use]
-pub fn evaluate_par_inflow(
+pub fn evaluate_par(
     deterministic_base: f64,
     psi: &[f64],
     order: usize,
@@ -91,30 +91,150 @@ pub fn evaluate_par_inflow(
     a_h + sigma * eta
 }
 
-/// Evaluate the PAR(p) inflow equation for all hydros at a given stage.
+/// Evaluate the PAR(p) model equation for a single series element at a single stage.
 ///
-/// Writes the computed inflow for each hydro into `output`. Does not allocate.
-/// Values may be negative (truncation is the caller's responsibility).
+/// # Deprecation
 ///
-/// The `lag_matrix` is a flat array indexed as `[lag * n_hydros + hydro]`:
-/// lag 0 (most recent, i.e. lag-1 inflow) for all hydros is contiguous,
-/// followed by lag 1 for all hydros, and so on. This layout is optimal for
-/// sequential hydro iteration at a fixed lag depth.
+/// Renamed to [`evaluate_par`] for infrastructure-crate genericity.
+/// This alias will be removed in a future minor version.
+///
+/// # Examples
+///
+/// AR(0) — mean plus noise:
+///
+/// ```
+/// #[allow(deprecated)]
+/// use cobre_stochastic::evaluate_par_inflow;
+///
+/// let a_h = evaluate_par_inflow(100.0, &[], 0, &[], 30.0, 1.5);
+/// assert!((a_h - 145.0).abs() < 1e-10);
+/// ```
+///
+/// AR(1) — one lag:
+///
+/// ```
+/// #[allow(deprecated)]
+/// use cobre_stochastic::evaluate_par_inflow;
+///
+/// // a_h = 70.0 + 0.48 * 90.0 + 28.62 * 0.5 = 127.51
+/// let a_h = evaluate_par_inflow(70.0, &[0.48], 1, &[90.0], 28.62, 0.5);
+/// assert!((a_h - 127.51).abs() < 1e-10);
+/// ```
+#[must_use]
+#[deprecated(since = "0.1.2", note = "use evaluate_par instead")]
+pub fn evaluate_par_inflow(
+    deterministic_base: f64,
+    psi: &[f64],
+    order: usize,
+    lags: &[f64],
+    sigma: f64,
+    eta: f64,
+) -> f64 {
+    evaluate_par(deterministic_base, psi, order, lags, sigma, eta)
+}
+
+/// Evaluate the PAR(p) model equation for all series elements at a given stage.
+///
+/// Writes the computed output for each series element into `output`. Does not
+/// allocate. Values may be negative (truncation is the caller's responsibility).
+///
+/// The `lag_matrix` is a flat array indexed as `[lag * n_series + element]`:
+/// lag 0 (most recent, i.e. lag-1 value) for all elements is contiguous,
+/// followed by lag 1 for all elements, and so on. This layout is optimal for
+/// sequential element iteration at a fixed lag depth.
 ///
 /// # Parameters
 ///
 /// - `par_lp` — precomputed PAR cache built by [`PrecomputedParLp::build`]
 /// - `stage` — 0-based stage index (must be `< par_lp.n_stages()`)
-/// - `lag_matrix` — flat lag array, length `max_order * n_hydros`, indexed
-///   as `[lag * n_hydros + hydro]`
-/// - `noise` — standardised noise vector, length `n_hydros`
-/// - `output` — output buffer; filled with computed inflows, length `n_hydros`
+/// - `lag_matrix` — flat lag array, length `max_order * n_series`, indexed
+///   as `[lag * n_series + element]`
+/// - `noise` — standardised noise vector, length `n_series`
+/// - `output` — output buffer; filled with computed values, length `n_series`
 ///
 /// # Examples
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
 /// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::evaluate_par_batch;
+/// use chrono::NaiveDate;
+///
+/// let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+/// let stage = Stage {
+///     index: 0, id: 0,
+///     start_date: date,
+///     end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+///     season_id: Some(0),
+///     blocks: vec![Block { index: 0, name: "SINGLE".to_string(), duration_hours: 744.0 }],
+///     block_mode: BlockMode::Parallel,
+///     state_config: StageStateConfig { storage: true, inflow_lags: false },
+///     risk_config: StageRiskConfig::Expectation,
+///     scenario_config: ScenarioSourceConfig { branching_factor: 10, noise_method: NoiseMethod::Saa },
+/// };
+/// let model = InflowModel {
+///     hydro_id: EntityId(1), stage_id: 0,
+///     mean_m3s: 100.0, std_m3s: 30.0,
+///     ar_coefficients: vec![],
+///     residual_std_ratio: 1.0,
+/// };
+/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+///
+/// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
+/// let noise = vec![0.5];
+/// let mut output = vec![0.0];
+/// evaluate_par_batch(&par_lp, 0, &lag_matrix, &noise, &mut output);
+/// assert!((output[0] - 115.0).abs() < 1e-10); // 100.0 + 30.0 * 0.5
+/// ```
+pub fn evaluate_par_batch(
+    par_lp: &PrecomputedParLp,
+    stage: usize,
+    lag_matrix: &[f64],
+    noise: &[f64],
+    output: &mut [f64],
+) {
+    let n_series = par_lp.n_hydros();
+    debug_assert!(
+        noise.len() == n_series,
+        "noise.len() ({}) must equal n_series ({})",
+        noise.len(),
+        n_series
+    );
+    debug_assert!(
+        output.len() == n_series,
+        "output.len() ({}) must equal n_series ({})",
+        output.len(),
+        n_series
+    );
+
+    for h in 0..n_series {
+        let base = par_lp.deterministic_base(stage, h);
+        let sigma = par_lp.sigma(stage, h);
+        let psi = par_lp.psi_slice(stage, h);
+        let order = par_lp.order(h);
+
+        let mut a_h = base;
+        for l in 0..order {
+            a_h += psi[l] * lag_matrix[l * n_series + h];
+        }
+        a_h += sigma * noise[h];
+        output[h] = a_h;
+    }
+}
+
+/// Evaluate the PAR(p) model equation for all series elements at a given stage.
+///
+/// # Deprecation
+///
+/// Renamed to [`evaluate_par_batch`] for infrastructure-crate genericity.
+/// This alias will be removed in a future minor version.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
+/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// #[allow(deprecated)]
 /// use cobre_stochastic::evaluate_par_inflows;
 /// use chrono::NaiveDate;
 ///
@@ -141,9 +261,11 @@ pub fn evaluate_par_inflow(
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
 /// let noise = vec![0.5];
 /// let mut output = vec![0.0];
+/// #[allow(deprecated)]
 /// evaluate_par_inflows(&par_lp, 0, &lag_matrix, &noise, &mut output);
 /// assert!((output[0] - 115.0).abs() < 1e-10); // 100.0 + 30.0 * 0.5
 /// ```
+#[deprecated(since = "0.1.2", note = "use evaluate_par_batch instead")]
 pub fn evaluate_par_inflows(
     par_lp: &PrecomputedParLp,
     stage: usize,
@@ -151,37 +273,11 @@ pub fn evaluate_par_inflows(
     noise: &[f64],
     output: &mut [f64],
 ) {
-    let n_hydros = par_lp.n_hydros();
-    debug_assert!(
-        noise.len() == n_hydros,
-        "noise.len() ({}) must equal n_hydros ({})",
-        noise.len(),
-        n_hydros
-    );
-    debug_assert!(
-        output.len() == n_hydros,
-        "output.len() ({}) must equal n_hydros ({})",
-        output.len(),
-        n_hydros
-    );
-
-    for h in 0..n_hydros {
-        let base = par_lp.deterministic_base(stage, h);
-        let sigma = par_lp.sigma(stage, h);
-        let psi = par_lp.psi_slice(stage, h);
-        let order = par_lp.order(h);
-
-        let mut a_h = base;
-        for l in 0..order {
-            a_h += psi[l] * lag_matrix[l * n_hydros + h];
-        }
-        a_h += sigma * noise[h];
-        output[h] = a_h;
-    }
+    evaluate_par_batch(par_lp, stage, lag_matrix, noise, output);
 }
 
 /// Solve the PAR(p) equation for the noise value `η` that produces a given
-/// target inflow.
+/// target output value.
 ///
 /// Derived by setting `a_h = target` in the PAR equation and solving for `η`:
 ///
@@ -190,12 +286,12 @@ pub fn evaluate_par_inflows(
 /// ```
 ///
 /// Common use cases:
-/// - **Inflow truncation**: `target = 0.0` gives the noise floor that clamps
-///   inflow to zero.
-/// - **Residual recovery**: `target = historical_inflow` recovers the noise
+/// - **Output truncation**: `target = 0.0` gives the noise floor that clamps
+///   the output to zero.
+/// - **Residual recovery**: `target = historical_value` recovers the noise
 ///   that would reproduce a historical observation.
 ///
-/// When `sigma == 0.0`, noise has no effect on the inflow. `f64::NEG_INFINITY`
+/// When `sigma == 0.0`, noise has no effect on the output. `f64::NEG_INFINITY`
 /// is returned to indicate that no finite noise bound applies.
 ///
 /// # Parameters
@@ -203,13 +299,13 @@ pub fn evaluate_par_inflows(
 /// - `deterministic_base` — the precomputed `b_{h,m(t)} = mu_m - Σ psi_{m,l} * mu_{m-l}`
 /// - `psi` — AR coefficients in original units; only `psi[0..order]` are used
 /// - `order` — number of meaningful entries in `psi` (the AR order)
-/// - `lags` — observed inflow values at lags 1..p; must have `lags.len() >= order`
+/// - `lags` — observed series values at lags 1..p; must have `lags.len() >= order`
 /// - `sigma` — residual standard deviation
-/// - `target` — desired inflow value to solve for
+/// - `target` — desired output value to solve for
 ///
 /// # Examples
 ///
-/// Solve for noise that produces zero inflow (truncation):
+/// Solve for noise that produces zero output (truncation):
 ///
 /// ```
 /// use cobre_stochastic::solve_par_noise;
@@ -246,34 +342,118 @@ pub fn solve_par_noise(
         lags.len(),
         order
     );
-    let mut deterministic_inflow = deterministic_base;
+    let mut deterministic_value = deterministic_base;
     for l in 0..order {
-        deterministic_inflow += psi[l] * lags[l];
+        deterministic_value += psi[l] * lags[l];
     }
-    (target - deterministic_inflow) / sigma
+    (target - deterministic_value) / sigma
 }
 
-/// Solve the PAR(p) equation for all hydros at a given stage, computing the
-/// noise value that produces each hydro's target inflow.
+/// Solve the PAR(p) equation for all series elements at a given stage, computing
+/// the noise value that produces each element's target output.
 ///
-/// Writes the solved noise values into `output[0..n_hydros]`. Does not
-/// allocate. The `lag_matrix` uses the same layout as [`evaluate_par_inflows`]:
-/// indexed as `[lag * n_hydros + hydro]`.
+/// Writes the solved noise values into `output[0..n_series]`. Does not
+/// allocate. The `lag_matrix` uses the same layout as [`evaluate_par_batch`]:
+/// indexed as `[lag * n_series + element]`.
 ///
 /// # Parameters
 ///
 /// - `par_lp` — precomputed PAR cache built by [`PrecomputedParLp::build`]
 /// - `stage` — 0-based stage index (must be `< par_lp.n_stages()`)
-/// - `lag_matrix` — flat lag array, length `max_order * n_hydros`, indexed
-///   as `[lag * n_hydros + hydro]`
-/// - `targets` — desired inflow values per hydro, length `n_hydros`
-/// - `output` — output buffer; filled with solved noise values, length `n_hydros`
+/// - `lag_matrix` — flat lag array, length `max_order * n_series`, indexed
+///   as `[lag * n_series + element]`
+/// - `targets` — desired output values per series element, length `n_series`
+/// - `output` — output buffer; filled with solved noise values, length `n_series`
 ///
 /// # Examples
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
 /// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::{solve_par_noise, solve_par_noise_batch};
+/// use chrono::NaiveDate;
+///
+/// let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+/// let stage = Stage {
+///     index: 0, id: 0,
+///     start_date: date,
+///     end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+///     season_id: Some(0),
+///     blocks: vec![Block { index: 0, name: "SINGLE".to_string(), duration_hours: 744.0 }],
+///     block_mode: BlockMode::Parallel,
+///     state_config: StageStateConfig { storage: true, inflow_lags: false },
+///     risk_config: StageRiskConfig::Expectation,
+///     scenario_config: ScenarioSourceConfig { branching_factor: 10, noise_method: NoiseMethod::Saa },
+/// };
+/// let model = InflowModel {
+///     hydro_id: EntityId(1), stage_id: 0,
+///     mean_m3s: 100.0, std_m3s: 30.0,
+///     ar_coefficients: vec![],
+///     residual_std_ratio: 1.0,
+/// };
+/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+///
+/// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
+/// let targets = vec![0.0]; // solve for zero output (truncation)
+/// let mut output = vec![0.0];
+/// solve_par_noise_batch(&par_lp, 0, &lag_matrix, &targets, &mut output);
+/// // η = (0.0 - 100.0) / 30.0
+/// assert!((output[0] - (-100.0 / 30.0)).abs() < 1e-10);
+/// ```
+pub fn solve_par_noise_batch(
+    par_lp: &PrecomputedParLp,
+    stage: usize,
+    lag_matrix: &[f64],
+    targets: &[f64],
+    output: &mut [f64],
+) {
+    let n_series = par_lp.n_hydros();
+    debug_assert!(
+        targets.len() == n_series,
+        "targets.len() ({}) must equal n_series ({})",
+        targets.len(),
+        n_series
+    );
+    debug_assert!(
+        output.len() == n_series,
+        "output.len() ({}) must equal n_series ({})",
+        output.len(),
+        n_series
+    );
+
+    for h in 0..n_series {
+        let base = par_lp.deterministic_base(stage, h);
+        let sigma = par_lp.sigma(stage, h);
+        let psi = par_lp.psi_slice(stage, h);
+        let order = par_lp.order(h);
+
+        if sigma == 0.0 {
+            output[h] = f64::NEG_INFINITY;
+            continue;
+        }
+
+        let mut deterministic_value = base;
+        for l in 0..order {
+            deterministic_value += psi[l] * lag_matrix[l * n_series + h];
+        }
+        output[h] = (targets[h] - deterministic_value) / sigma;
+    }
+}
+
+/// Solve the PAR(p) equation for all series elements at a given stage.
+///
+/// # Deprecation
+///
+/// Renamed to [`solve_par_noise_batch`] for naming consistency with
+/// [`evaluate_par_batch`]. This alias will be removed in a future minor
+/// version.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
+/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// #[allow(deprecated)]
 /// use cobre_stochastic::{solve_par_noise, solve_par_noises};
 /// use chrono::NaiveDate;
 ///
@@ -298,12 +478,14 @@ pub fn solve_par_noise(
 /// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
-/// let targets = vec![0.0]; // solve for zero inflow (truncation)
+/// let targets = vec![0.0]; // solve for zero output (truncation)
 /// let mut output = vec![0.0];
+/// #[allow(deprecated)]
 /// solve_par_noises(&par_lp, 0, &lag_matrix, &targets, &mut output);
 /// // η = (0.0 - 100.0) / 30.0
 /// assert!((output[0] - (-100.0 / 30.0)).abs() < 1e-10);
 /// ```
+#[deprecated(since = "0.1.2", note = "use solve_par_noise_batch instead")]
 pub fn solve_par_noises(
     par_lp: &PrecomputedParLp,
     stage: usize,
@@ -311,37 +493,7 @@ pub fn solve_par_noises(
     targets: &[f64],
     output: &mut [f64],
 ) {
-    let n_hydros = par_lp.n_hydros();
-    debug_assert!(
-        targets.len() == n_hydros,
-        "targets.len() ({}) must equal n_hydros ({})",
-        targets.len(),
-        n_hydros
-    );
-    debug_assert!(
-        output.len() == n_hydros,
-        "output.len() ({}) must equal n_hydros ({})",
-        output.len(),
-        n_hydros
-    );
-
-    for h in 0..n_hydros {
-        let base = par_lp.deterministic_base(stage, h);
-        let sigma = par_lp.sigma(stage, h);
-        let psi = par_lp.psi_slice(stage, h);
-        let order = par_lp.order(h);
-
-        if sigma == 0.0 {
-            output[h] = f64::NEG_INFINITY;
-            continue;
-        }
-
-        let mut deterministic_inflow = base;
-        for l in 0..order {
-            deterministic_inflow += psi[l] * lag_matrix[l * n_hydros + h];
-        }
-        output[h] = (targets[h] - deterministic_inflow) / sigma;
-    }
+    solve_par_noise_batch(par_lp, stage, lag_matrix, targets, output);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +501,7 @@ pub fn solve_par_noises(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
@@ -360,7 +513,10 @@ mod tests {
         },
     };
 
-    use super::{evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noises};
+    use super::{
+        evaluate_par, evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows,
+        solve_par_noise, solve_par_noise_batch, solve_par_noises,
+    };
     use crate::par::precompute::PrecomputedParLp;
 
     fn dummy_date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -773,7 +929,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // solve_par_noises batch unit tests
+    // solve_par_noises batch unit tests (deprecated alias)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -874,6 +1030,82 @@ mod tests {
                 (inflow - targets[h]).abs() < 1e-10,
                 "batch roundtrip nonzero: h={h} expected {}, got {inflow}",
                 targets[h]
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // New generic API tests
+    // -----------------------------------------------------------------------
+
+    /// `evaluate_par` and `evaluate_par_inflow` must produce bitwise identical
+    /// results for the same inputs.
+    #[test]
+    fn test_evaluate_par_matches_inflow() {
+        type EvalCase<'a> = (f64, &'a [f64], usize, &'a [f64], f64, f64);
+        let cases: &[EvalCase<'_>] = &[
+            (100.0, &[], 0, &[], 30.0, 1.5),
+            (70.0, &[0.48], 1, &[90.0], 28.62, 0.5),
+            (50.0, &[0.4, 0.2], 2, &[80.0, 60.0], 20.0, -0.5),
+            (100.0, &[0.3], 1, &[90.0], 0.0, 999.0),
+        ];
+        for &(base, psi, order, lags, sigma, eta) in cases {
+            let via_new = evaluate_par(base, psi, order, lags, sigma, eta);
+            let via_old = evaluate_par_inflow(base, psi, order, lags, sigma, eta);
+            assert_eq!(
+                via_new.to_bits(),
+                via_old.to_bits(),
+                "evaluate_par / evaluate_par_inflow mismatch for base={base} eta={eta}"
+            );
+        }
+    }
+
+    /// `evaluate_par_batch` and `evaluate_par_inflows` must fill output slices
+    /// with bitwise identical values.
+    #[test]
+    fn test_evaluate_par_batch_matches_inflows() {
+        let par_lp = make_two_hydro_three_stage_par();
+
+        let lag_matrix = vec![85.0, 55.0, 0.0, 0.0];
+        let noise = vec![0.3_f64, -0.4_f64];
+        let mut output_new = vec![0.0_f64; 2];
+        let mut output_old = vec![0.0_f64; 2];
+
+        evaluate_par_batch(&par_lp, 1, &lag_matrix, &noise, &mut output_new);
+        evaluate_par_inflows(&par_lp, 1, &lag_matrix, &noise, &mut output_old);
+
+        assert_eq!(
+            output_new[0].to_bits(),
+            output_old[0].to_bits(),
+            "evaluate_par_batch / evaluate_par_inflows mismatch at h=0"
+        );
+        assert_eq!(
+            output_new[1].to_bits(),
+            output_old[1].to_bits(),
+            "evaluate_par_batch / evaluate_par_inflows mismatch at h=1"
+        );
+    }
+
+    /// `solve_par_noise_batch` and `solve_par_noises` must fill output slices
+    /// with bitwise identical values.
+    #[test]
+    fn test_solve_par_noise_batch_matches_noises() {
+        let par_lp = make_two_hydro_three_stage_par();
+        let n_hydros = par_lp.n_hydros();
+
+        let lag_matrix = vec![85.0, 55.0, 0.0, 0.0];
+        let targets = vec![0.0_f64; n_hydros];
+        let mut output_new = vec![0.0_f64; n_hydros];
+        let mut output_old = vec![0.0_f64; n_hydros];
+
+        solve_par_noise_batch(&par_lp, 1, &lag_matrix, &targets, &mut output_new);
+        solve_par_noises(&par_lp, 1, &lag_matrix, &targets, &mut output_old);
+
+        for h in 0..n_hydros {
+            assert_eq!(
+                output_new[h].to_bits(),
+                output_old[h].to_bits(),
+                "solve_par_noise_batch / solve_par_noises mismatch at h={h}"
             );
         }
     }

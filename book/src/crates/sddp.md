@@ -1,6 +1,6 @@
 # cobre-sddp
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-sddp` implements the Stochastic Dual Dynamic Programming (SDDP) algorithm
 (Pereira & Pinto, 1991) for long-term hydrothermal dispatch and energy planning.
@@ -61,9 +61,12 @@ not during forward synchronization.
 │          The ConvergenceMonitor updates bound statistics and evaluates   │
 │          the configured stopping rules to determine whether to stop.    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Step 7  Checkpoint (deferred)                                          │
-│          Periodic FCF checkpointing is planned for Phase 7. The MVP     │
-│          does not write intermediate checkpoints.                       │
+│  Step 7  Checkpoint                                                     │
+│          The FlatBuffers policy checkpoint infrastructure is             │
+│          implemented in cobre-io (write_policy_checkpoint). The CLI     │
+│          writes a final snapshot after training completes. Periodic     │
+│          in-loop writes via checkpoint_interval are not yet wired       │
+│          into the training loop.                                        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Step 8  Event emission                                                 │
 │          TrainingEvent values are sent to the optional event channel    │
@@ -443,7 +446,7 @@ followed by `n_state * 8` bytes of coefficients. The record size is
 
 Forward pass noise is generated without inter-rank communication. Each rank
 independently derives its noise seed from `(base_seed, iteration, scenario, stage_id)`
-using SipHash-1-3 (DEC-017 from `cobre-stochastic`). The opening tree is
+using deterministic SipHash-1-3 seed derivation from `cobre-stochastic`. The opening tree is
 pre-generated once before training and shared read-only across all iterations.
 
 ## Testing
@@ -458,7 +461,7 @@ of `cobre-comm`).
 
 ### Test suite overview
 
-The crate has 590 tests across 15 source modules covering:
+The crate has 607 tests across 15 source modules covering:
 
 - Unit tests for each module's core logic.
 - Integration tests using `LocalBackend` (single-rank) for the
@@ -474,5 +477,5 @@ training is available at link time.
 
 ```toml
 # Cargo.toml
-cobre-sddp = { version = "0.0.1" }
+cobre-sddp = { version = "0.1" }
 ```

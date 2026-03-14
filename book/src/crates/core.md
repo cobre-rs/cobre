@@ -1,6 +1,6 @@
 # cobre-core
 
-<span class="status-experimental">experimental</span>
+<span class="status-alpha">alpha</span>
 
 `cobre-core` is the shared data model for the Cobre ecosystem. It defines the
 fundamental entity types used across all crates: buses, transmission lines,

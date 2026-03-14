@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
-    "forward_passes": 1,
+    "forward_passes": 4,
     "stopping_rules": [
       {
         "type": "iteration_limit",

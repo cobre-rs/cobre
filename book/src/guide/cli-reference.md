@@ -49,6 +49,7 @@ Executes the full solve lifecycle for a case directory:
 | `--quiet`           | flag    | off                  | Suppress the banner and progress bars. Errors still go to stderr                                                                                                       |
 | `--no-banner`       | flag    | off                  | Suppress the startup banner but keep progress bars                                                                                                                     |
 | `--verbose`         | flag    | off                  | Enable debug-level logging for `cobre_cli`; info-level for library crates                                                                                              |
+| `--export-stochastic` | flag    | off                  | Export stochastic preprocessing artifacts to `output/stochastic/`. Overrides `exports.stochastic` in `config.json`.                                                  |
 
 ### Examples
 

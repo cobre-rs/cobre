@@ -37,7 +37,8 @@ my_case/
 │   ├── external_scenarios.parquet           # Pre-generated external scenarios (optional)
 │   ├── load_seasonal_stats.parquet          # Load model seasonal statistics (optional)
 │   ├── load_factors.json                    # Load scaling factors (optional)
-│   └── correlation.json                     # Cross-series correlation model (optional)
+│   ├── correlation.json                     # Cross-series correlation model (optional)
+│   └── noise_openings.parquet              # User-supplied backward-pass opening tree (optional)
 └── constraints/
     ├── thermal_bounds.parquet               # Stage-varying thermal bounds (optional)
     ├── hydro_bounds.parquet                 # Stage-varying hydro bounds (optional)
@@ -78,6 +79,7 @@ my_case/
 | `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics          |
 | `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage      |
 | `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model          |
+| `scenarios/noise_openings.parquet`             | Parquet | No       | User-supplied backward-pass opening tree |
 | `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds |
 | `constraints/hydro_bounds.parquet`              | Parquet | No       | Stage-varying hydro operational bounds  |
 | `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity        |
@@ -223,6 +225,7 @@ Each entry has a `"type"` discriminator. Valid types:
 | `forward_detail`  | boolean        | `false` | Export per-scenario forward-pass detail            |
 | `backward_detail` | boolean        | `false` | Export per-scenario backward-pass detail           |
 | `compression`     | string or null | `null`  | Output compression: `"zstd"`, `"lz4"`, or `"none"` |
+| `stochastic`      | boolean        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.       |
 
 **Minimal valid example:**
 
@@ -437,6 +440,46 @@ Autoregressive coefficients for the PAR(p) inflow model.
 | `stage_id`    | INT32  | Yes      | Stage ID                                    |
 | `lag`         | INT32  | Yes      | Lag index (1-based)                         |
 | `coefficient` | DOUBLE | Yes      | AR coefficient for this (hydro, stage, lag) |
+
+---
+
+### `scenarios/noise_openings.parquet`
+
+User-supplied backward-pass opening tree. When present, Cobre loads the opening
+tree directly from this file instead of generating it internally via
+`generate_opening_tree()`. This enables cross-tool comparison, sensitivity
+analysis, and round-trip replay of a previously exported opening tree.
+
+| Column          | Type   | Required | Description                                                                        |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
+| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                                         |
+| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1)            |
+| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order (see entity ordering below)      |
+| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple                         |
+
+**Entity ordering.** The `entity_index` column follows the system dimension
+convention: hydro entities first (sorted by canonical ID), then load buses
+(sorted by canonical ID), matching the ordering used by the internal opening
+tree generator. Violating this convention causes silent value misassignment
+because the file stores indices only, not entity identifiers.
+
+**Validation rules.** The loader checks three conditions and raises a hard error
+on failure:
+
+- **Dimension mismatch** — the number of distinct `entity_index` values must
+  equal `n_hydros + n_load_buses`.
+- **Stage count mismatch** — the number of distinct `stage_id` values must
+  equal the configured number of study stages.
+- **Missing opening indices** — for each stage, every opening index from 0 to
+  `openings_per_stage − 1` must be present for every entity. Gaps are not
+  permitted; partial-stage override is not supported in v0.1.x.
+
+The total row count must equal `n_stages × openings_per_stage × (n_hydros +
+n_load_buses)`.
+
+See [ADR-008](../../docs/adr/008-user-supplied-opening-tree.md) for design
+rationale and [User-Supplied Opening Trees](../guide/stochastic-modeling.md#user-supplied-opening-trees)
+in the Stochastic Modeling guide for usage instructions.
 
 ---
 

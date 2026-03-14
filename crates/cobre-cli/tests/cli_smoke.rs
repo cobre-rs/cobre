@@ -33,10 +33,7 @@ fn run_help_exits_0_and_lists_flags() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--output"))
-        .stdout(predicate::str::contains("--skip-simulation"))
         .stdout(predicate::str::contains("--quiet"))
-        .stdout(predicate::str::contains("--no-banner"))
-        .stdout(predicate::str::contains("--verbose"))
         .stdout(predicate::str::contains("--threads"))
         .stdout(predicate::str::contains("CASE_DIR"));
 }

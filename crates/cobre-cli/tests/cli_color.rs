@@ -137,7 +137,6 @@ fn color_always_flag_forces_ansi_in_banner() {
             "run",
             "--color",
             "always",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),
@@ -169,7 +168,6 @@ fn color_never_flag_suppresses_ansi_in_banner() {
             "--color",
             "never",
             "--quiet",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),
@@ -192,7 +190,6 @@ fn color_always_global_flag_before_subcommand_is_accepted() {
             "--color",
             "always",
             "run",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),
@@ -215,7 +212,6 @@ fn cobre_color_env_always_forces_ansi() {
         .env_remove("FORCE_COLOR")
         .args([
             "run",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),
@@ -238,7 +234,6 @@ fn force_color_env_forces_ansi() {
         .env_remove("COBRE_COLOR")
         .args([
             "run",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),
@@ -264,7 +259,6 @@ fn cobre_color_env_invalid_value_is_silently_ignored() {
         .env_remove("FORCE_COLOR")
         .args([
             "run",
-            "--skip-simulation",
             dir.path().to_str().unwrap(),
             "--output",
             out.path().to_str().unwrap(),

@@ -21,7 +21,6 @@
 mod banner;
 mod commands;
 mod error;
-mod logging;
 mod policy_io;
 mod progress;
 mod simulation_io;
@@ -126,9 +125,6 @@ fn main() {
     // progress bars, and error messages all honour the chosen setting.
     resolve_color(cli.color);
 
-    let verbose = matches!(&cli.command, Command::Run(args) if args.verbose);
-    logging::init_logging(verbose);
-
     let result = match cli.command {
         Command::Init(args) => init::execute(args),
         Command::Run(args) => run::execute(args),
@@ -150,7 +146,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorWhen, resolve_color};
+    use super::{resolve_color, ColorWhen};
 
     // Unit tests cover only `Always` and `Never` variants (safe without env var mutation).
     // Environment variable tests are in the integration suite (cli_color.rs).

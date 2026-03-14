@@ -270,7 +270,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         apply_opening_noise_and_patch(ws, ctx, training_ctx, succ.cut_batch, raw_noise, x_hat, s);
 
         let warm = if omega == 0 {
-            succ.basis_store.get(scenario, s)
+            succ.basis_store.get(m, s)
         } else {
             working_basis.as_ref()
         };

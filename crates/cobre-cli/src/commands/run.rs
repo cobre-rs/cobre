@@ -31,10 +31,8 @@ use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSe
 use cobre_io::write_results;
 use cobre_sddp::estimation::{estimate_from_history, HydroEstimationEntry};
 use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts, EstimationReport,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig, TrainingContext, WorkspacePool,
+    EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult, StoppingMode,
+    StoppingRule, StoppingRuleSet, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{build_stochastic_context, context::OpeningTree};
@@ -604,10 +602,34 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         }
     })?;
 
+    // Construct StudySetup on all ranks from broadcast parameters.
+    // Ownership of stochastic moves into setup; use setup.stochastic() for all
+    // subsequent stochastic references.
+    let stopping_rule_set = stopping_rules_from_broadcast(&bcast_config);
+    let cut_selection = std::mem::replace(
+        &mut bcast_config.cut_selection,
+        BroadcastCutSelection::Disabled,
+    )
+    .into_strategy();
+    let mut setup = StudySetup::from_broadcast_params(
+        &system,
+        stochastic,
+        bcast_config.seed,
+        bcast_config.forward_passes,
+        stopping_rule_set,
+        bcast_config.n_scenarios,
+        usize::try_from(bcast_config.io_channel_capacity).unwrap_or(64),
+        bcast_config.policy_path.clone(),
+        bcast_config.inflow_method.clone(),
+        cut_selection,
+    )
+    .map_err(CliError::from)?;
+
     // Print stochastic preprocessing summary on rank 0 before training starts.
     if !quiet && is_root {
         let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
-        let stochastic_summary = build_stochastic_summary(&system, &stochastic, estimation, seed);
+        let stochastic_summary =
+            build_stochastic_summary(&system, setup.stochastic(), estimation, seed);
         crate::summary::print_stochastic_summary(&stderr, &stochastic_summary);
     }
 
@@ -616,7 +638,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
         export_stochastic_artifacts(
             &output_dir,
-            &stochastic,
+            setup.stochastic(),
             &system,
             estimation,
             quiet,
@@ -627,77 +649,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-export barrier error: {e}"),
     })?;
 
-    let stage_templates = build_stage_templates(
-        &system,
-        &bcast_config.inflow_method,
-        stochastic.par_lp(),
-        stochastic.normal_lp(),
-    )
-    .map_err(|e| CliError::Validation {
-        report: e.to_string(),
-    })?;
-    if stage_templates.templates.is_empty() {
-        return Err(CliError::Validation {
-            report: "system has no study stages — cannot train".to_string(),
-        });
-    }
-    let stage_templates_ref = &stage_templates.templates;
-    let base_rows = &stage_templates.base_rows;
-    let noise_scale = &stage_templates.noise_scale;
-    let zeta_per_stage = &stage_templates.zeta_per_stage;
-    let block_hours_per_stage = &stage_templates.block_hours_per_stage;
-    let n_hydros_lp = stage_templates.n_hydros;
-
-    let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
-    let has_inflow_penalty =
-        bcast_config.inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
-    let indexer = StageIndexer::with_equipment(
-        stage_templates_ref[0].n_hydro,
-        stage_templates_ref[0].max_par_order,
-        system.thermals().len(),
-        system.lines().len(),
-        system.buses().len(),
-        n_blks_stage0,
-        has_inflow_penalty,
-    );
-    let initial_state = build_initial_state(&system, &indexer);
-
-    let forward_passes = bcast_config.forward_passes;
-    let stopping_rules = stopping_rules_from_broadcast(&bcast_config);
-    let n_stages = stage_templates_ref.len();
-    let max_iterations = max_iterations_from_rules(&stopping_rules);
-
-    let fcf_capacity_iterations = max_iterations.saturating_add(1);
-    let mut fcf = FutureCostFunction::new(
-        n_stages,
-        indexer.n_state,
-        forward_passes,
-        fcf_capacity_iterations,
-        0,
-    );
-
-    let horizon = HorizonMode::Finite {
-        num_stages: n_stages,
-    };
-    let risk_measures: Vec<RiskMeasure> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| RiskMeasure::from(s.risk_config))
-        .collect();
-
     let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
     })?;
 
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
-    let training_config = TrainingConfig {
-        forward_passes,
-        max_iterations,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(event_tx),
-    };
 
     let term_width = crate::progress::resolve_term_width();
     let quiet_rx: Option<mpsc::Receiver<TrainingEvent>>;
@@ -708,59 +664,18 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         quiet_rx = None;
         Some(crate::progress::run_progress_thread(
             event_rx,
-            max_iterations,
+            setup.max_iterations(),
             term_width,
         ))
     };
 
-    let n_load_buses = stage_templates.n_load_buses;
-    let max_blocks = block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(0);
-    let block_counts_per_stage: Vec<usize> = block_hours_per_stage.iter().map(Vec::len).collect();
-    let load_balance_row_starts = &stage_templates.load_balance_row_starts;
-    let load_bus_indices = &stage_templates.load_bus_indices;
-
-    // Reconstruct the cut selection strategy from the broadcast config so all
-    // ranks pass the same strategy to train().
-    let cut_selection_strategy = std::mem::replace(
-        &mut bcast_config.cut_selection,
-        BroadcastCutSelection::Disabled,
-    )
-    .into_strategy();
-
-    let training_ctx = TrainingContext {
-        horizon: &horizon,
-        indexer: &indexer,
-        inflow_method: &bcast_config.inflow_method,
-        stochastic: &stochastic,
-        initial_state: &initial_state,
-    };
-
-    let training_result = match train(
+    let training_result = match setup.train(
         &mut solver,
-        training_config,
-        &mut fcf,
-        stage_templates_ref,
-        base_rows,
-        &training_ctx,
-        stochastic.opening_tree(),
-        &risk_measures,
-        stopping_rules,
-        cut_selection_strategy.as_ref(),
-        None,
         &comm,
         n_threads,
         HighsSolver::new,
-        noise_scale,
-        n_hydros_lp,
-        n_load_buses,
-        max_blocks,
-        load_balance_row_starts,
-        load_bus_indices,
-        &block_counts_per_stage,
+        Some(event_tx),
+        None,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -776,7 +691,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         (None, Some(rx)) => rx.try_iter().collect(),
         (None, None) => Vec::new(),
     };
-    let training_output = build_training_output(&training_result, &events, &fcf);
+    let training_output = setup.build_training_output(&training_result, &events);
 
     let local_lp_solves: u64 = training_output
         .convergence_records
@@ -817,31 +732,17 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         crate::summary::print_training_summary(&stderr, &training_summary);
     }
 
-    let should_simulate = bcast_config.n_scenarios > 0;
+    let should_simulate = setup.n_scenarios() > 0;
 
     if should_simulate {
-        let n_scenarios = bcast_config.n_scenarios;
-        let io_capacity = bcast_config.io_channel_capacity as usize;
+        let n_scenarios = setup.n_scenarios();
+        let sim_config = setup.simulation_config();
 
-        let sim_config = SimulationConfig {
-            n_scenarios,
-            io_channel_capacity: io_capacity,
-        };
-
-        let entity_counts = build_entity_counts(&system);
-
-        let mut sim_pool = WorkspacePool::try_new(
-            n_threads,
-            indexer.hydro_count,
-            indexer.max_par_order,
-            indexer.n_state,
-            n_load_buses,
-            max_blocks,
-            HighsSolver::new,
-        )
-        .map_err(|e| CliError::Solver {
-            message: format!("HiGHS initialisation failed for simulation pool: {e}"),
-        })?;
+        let mut sim_pool = setup
+            .create_workspace_pool(n_threads, HighsSolver::new)
+            .map_err(|e| CliError::Solver {
+                message: format!("HiGHS initialisation failed for simulation pool: {e}"),
+            })?;
 
         let (sim_event_tx, sim_event_rx) = mpsc::channel::<TrainingEvent>();
         let sim_progress_handle = if quiet {
@@ -855,41 +756,25 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             ))
         };
 
+        let io_capacity = sim_config.io_channel_capacity;
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
         let drain_handle = std::thread::spawn(move || {
             result_rx
                 .into_iter()
-                .collect::<Vec<cobre_sddp::SimulationScenarioResult>>()
+                .collect::<Vec<SimulationScenarioResult>>()
         });
 
         let sim_start = std::time::Instant::now();
 
-        let sim_result = simulate(
-            &mut sim_pool.workspaces,
-            &StageContext {
-                templates: stage_templates_ref,
-                base_rows,
-                noise_scale,
-                n_hydros: n_hydros_lp,
-                n_load_buses,
-                load_balance_row_starts,
-                load_bus_indices,
-                block_counts_per_stage: &block_counts_per_stage,
-            },
-            &fcf,
-            &training_ctx,
-            &sim_config,
-            SimulationOutputSpec {
-                result_tx: &result_tx,
-                zeta_per_stage,
-                block_hours_per_stage,
-                entity_counts: &entity_counts,
-                event_sender: Some(sim_event_tx),
-            },
-            &comm,
-        )
-        .map_err(CliError::from);
+        let sim_result = setup
+            .simulate(
+                &mut sim_pool.workspaces,
+                &comm,
+                &result_tx,
+                Some(sim_event_tx),
+            )
+            .map_err(CliError::from);
         if let Some(handle) = sim_progress_handle {
             let _ = handle.join();
         }
@@ -972,11 +857,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             }
             let write_start = std::time::Instant::now();
 
-            let mut all_results: Vec<cobre_sddp::SimulationScenarioResult> =
+            let mut all_results: Vec<SimulationScenarioResult> =
                 Vec::with_capacity(n_scenarios as usize);
             let mut offset = 0;
             for &count in &recv_counts {
-                let partition: Vec<cobre_sddp::SimulationScenarioResult> =
+                let partition: Vec<SimulationScenarioResult> =
                     postcard::from_bytes(&all_bytes[offset..offset + count]).map_err(|e| {
                         CliError::Internal {
                             message: format!("simulation result deserialization error: {e}"),
@@ -1005,15 +890,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize();
             sim_output.failed = failed;
 
-            let policy_dir = output_dir.join(&bcast_config.policy_path);
+            let policy_dir = output_dir.join(setup.policy_path());
             crate::policy_io::write_checkpoint(
                 &policy_dir,
-                &fcf,
+                setup.fcf(),
                 &training_result,
                 &crate::policy_io::CheckpointParams {
-                    max_iterations,
-                    forward_passes,
-                    seed,
+                    max_iterations: setup.max_iterations(),
+                    forward_passes: setup.forward_passes(),
+                    seed: setup.seed(),
                 },
             )?;
 
@@ -1042,15 +927,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         }
         let write_start = std::time::Instant::now();
 
-        let policy_dir = output_dir.join(&bcast_config.policy_path);
+        let policy_dir = output_dir.join(setup.policy_path());
         crate::policy_io::write_checkpoint(
             &policy_dir,
-            &fcf,
+            setup.fcf(),
             &training_result,
             &crate::policy_io::CheckpointParams {
-                max_iterations,
-                forward_passes,
-                seed,
+                max_iterations: setup.max_iterations(),
+                forward_passes: setup.forward_passes(),
+                seed: setup.seed(),
             },
         )?;
 
@@ -1064,85 +949,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-/// Return the maximum iteration budget from the stopping rule set.
-///
-/// Used for FCF pre-sizing. If no iteration limit is present, returns
-/// [`DEFAULT_MAX_ITERATIONS`].
-fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
-    rules
-        .rules
-        .iter()
-        .filter_map(|r| {
-            if let StoppingRule::IterationLimit { limit } = r {
-                Some(*limit)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(DEFAULT_MAX_ITERATIONS)
-}
-
-/// Build [`EntityCounts`] from the loaded system.
-///
-/// Entity IDs are extracted from [`cobre_core::EntityId`], which stores
-/// an `i32` in its inner field.
-fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
-    use cobre_core::entities::hydro::HydroGenerationModel;
-
-    EntityCounts {
-        hydro_ids: system.hydros().iter().map(|h| h.id.0).collect(),
-        hydro_productivities: system
-            .hydros()
-            .iter()
-            .map(|h| match &h.generation_model {
-                HydroGenerationModel::ConstantProductivity {
-                    productivity_mw_per_m3s,
-                }
-                | HydroGenerationModel::LinearizedHead {
-                    productivity_mw_per_m3s,
-                } => *productivity_mw_per_m3s,
-                HydroGenerationModel::Fpha => 0.0,
-            })
-            .collect(),
-        thermal_ids: system.thermals().iter().map(|t| t.id.0).collect(),
-        line_ids: system.lines().iter().map(|l| l.id.0).collect(),
-        bus_ids: system.buses().iter().map(|b| b.id.0).collect(),
-        pumping_station_ids: system.pumping_stations().iter().map(|p| p.id.0).collect(),
-        contract_ids: system.contracts().iter().map(|c| c.id.0).collect(),
-        non_controllable_ids: system
-            .non_controllable_sources()
-            .iter()
-            .map(|n| n.id.0)
-            .collect(),
-    }
-}
-
-/// Build the initial state vector from the system's initial conditions.
-///
-/// The state vector layout is `[storage(0..N), lags(N..N*(1+L))]` where N is
-/// the number of hydros and L is the maximum PAR order. Storage positions
-/// correspond to hydros in canonical ID order. Lag variables are initialised
-/// to zero (no historical inflow information at the start of the study).
-///
-/// Each `HydroStorage` entry in `initial_conditions.storage` is matched to
-/// its positional index among the system's hydros (both sorted by `hydro_id`).
-fn build_initial_state(system: &cobre_core::System, indexer: &StageIndexer) -> Vec<f64> {
-    let mut state = vec![0.0_f64; indexer.n_state];
-    let hydros = system.hydros();
-    let ic = system.initial_conditions();
-
-    for hs in &ic.storage {
-        // Both hydros() and ic.storage are sorted by hydro_id.
-        // Find the positional index for this hydro.
-        if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
-            state[idx] = hs.value_hm3;
-        }
-    }
-
-    state
 }
 
 // ---------------------------------------------------------------------------

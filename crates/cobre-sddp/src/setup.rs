@@ -113,15 +113,7 @@ impl StudySetup {
     ///
     /// The constructor performs:
     /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
-    /// 2. [`build_stage_templates`] — constructs LP skeletons for each stage
-    /// 3. [`StageIndexer::with_equipment`] — computes LP column/row offsets
-    /// 4. [`build_initial_state`] — extracts initial storage from system IC
-    /// 5. [`max_iterations_from_rules`] — sizes the FCF cut pool
-    /// 6. [`FutureCostFunction::new`] — pre-allocates cut storage
-    /// 7. [`HorizonMode::Finite`] — wraps stage count
-    /// 8. Risk measures from stage configs
-    /// 9. [`build_entity_counts`] — entity ID and productivity vectors
-    /// 10. Block layout derivation (`block_counts_per_stage`, `max_blocks`)
+    /// 2. Delegates to [`StudySetup::from_broadcast_params`] with the extracted values.
     ///
     /// # Errors
     ///
@@ -131,7 +123,6 @@ impl StudySetup {
     ///   `build_stage_templates` on LP construction failure.
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
-    #[allow(clippy::too_many_lines)]
     pub fn new(
         system: &System,
         config: &cobre_io::Config,
@@ -205,6 +196,55 @@ impl StudySetup {
         let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
             .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
 
+        Self::from_broadcast_params(
+            system,
+            stochastic,
+            seed,
+            forward_passes,
+            stopping_rule_set,
+            n_scenarios,
+            io_channel_capacity,
+            policy_path,
+            inflow_method,
+            cut_selection,
+        )
+    }
+
+    /// Build all precomputed study state from pre-resolved broadcast parameters.
+    ///
+    /// This constructor accepts the scalar fields already extracted from either a
+    /// [`cobre_io::Config`] (on rank 0) or a broadcast config struct (on non-root
+    /// ranks). It performs the expensive computation steps that cannot be serialised:
+    ///
+    /// 1. [`build_stage_templates`] — constructs LP skeletons for each stage
+    /// 2. [`StageIndexer::with_equipment`] — computes LP column/row offsets
+    /// 3. [`build_initial_state`] — extracts initial storage from system IC
+    /// 4. [`max_iterations_from_rules`] — sizes the FCF cut pool
+    /// 5. [`FutureCostFunction::new`] — pre-allocates cut storage
+    /// 6. [`HorizonMode::Finite`] — wraps stage count
+    /// 7. Risk measures from stage configs
+    /// 8. [`build_entity_counts`] — entity ID and productivity vectors
+    /// 9. Block layout derivation (`block_counts_per_stage`, `max_blocks`)
+    ///
+    /// # Errors
+    ///
+    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
+    ///   the template list is empty ("system has no study stages").
+    /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
+    ///   construction failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_broadcast_params(
+        system: &System,
+        stochastic: StochasticContext,
+        seed: u64,
+        forward_passes: u32,
+        stopping_rule_set: StoppingRuleSet,
+        n_scenarios: u32,
+        io_channel_capacity: usize,
+        policy_path: String,
+        inflow_method: InflowNonNegativityMethod,
+        cut_selection: Option<CutSelectionStrategy>,
+    ) -> Result<Self, SddpError> {
         // ── Stage templates ───────────────────────────────────────────────────
         let stage_templates = build_stage_templates(
             system,

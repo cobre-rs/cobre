@@ -32,12 +32,12 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::NaiveDate;
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, SystemBuilder,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, SystemBuilder,
 };
 use cobre_io::Config;
 use cobre_sddp::estimation::estimate_from_history;
@@ -321,7 +321,7 @@ fn test_estimate_from_history_fixed_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("estimation should succeed with 15 years of monthly data");
 
     // One InflowModel per (hydro_id, stage_id) pair, but estimation groups by
@@ -382,7 +382,7 @@ fn test_estimate_from_history_aic_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("AIC estimation should succeed with 15 years of monthly data");
 
     let models = updated.inflow_models();
@@ -468,7 +468,7 @@ fn generate_par1_interleaved(
     n_per_season: usize,
     seed: u64,
 ) -> Vec<f64> {
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
     use rand_distr::{Distribution, Normal};
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -554,12 +554,12 @@ fn write_par1_inflow_history(path: &Path, n_hydros: usize) {
 /// 15th of January or February) falls within a stage's `[1st, 1st-of-next)` window.
 fn build_system_for_par1(n_hydros: usize) -> cobre_core::System {
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     let bus = Bus {
@@ -699,7 +699,7 @@ fn test_estimation_round_trip_par1() {
     let system = build_system_for_par1(1);
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with N=200 per season should succeed");
 
     let models = updated.inflow_models();
@@ -791,7 +791,7 @@ fn test_estimation_round_trip_two_hydros() {
     let system = build_system_for_par1(N_HYDROS);
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with 2 hydros should succeed");
 
     let models = updated.inflow_models();

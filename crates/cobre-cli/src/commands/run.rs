@@ -22,6 +22,7 @@ use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::estimation::estimate_from_history;
+use cobre_sddp::EstimationReport;
 use cobre_sddp::{
     build_stage_templates, build_training_output, simulate, train, EntityCounts,
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
@@ -389,7 +390,15 @@ fn load_case_and_config(
     args: &RunArgs,
     quiet: bool,
     stderr: &Term,
-) -> Result<(cobre_core::System, BroadcastConfig, cobre_io::Config), CliError> {
+) -> Result<
+    (
+        cobre_core::System,
+        BroadcastConfig,
+        cobre_io::Config,
+        Option<EstimationReport>,
+    ),
+    CliError,
+> {
     if !args.case_dir.exists() {
         return Err(CliError::Io {
             source: std::io::Error::new(
@@ -405,12 +414,12 @@ fn load_case_and_config(
     let system = cobre_io::load_case(&args.case_dir)?;
     let config_path = args.case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path)?;
-    let system =
-        estimate_from_history(system, &args.case_dir, &config).map_err(|e| CliError::Internal {
+    let (system, estimation_report) = estimate_from_history(system, &args.case_dir, &config)
+        .map_err(|e| CliError::Internal {
             message: format!("estimation error: {e}"),
         })?;
     let bcast = BroadcastConfig::from_config(&config, args.skip_simulation)?;
-    Ok((system, bcast, config))
+    Ok((system, bcast, config, estimation_report))
 }
 
 /// Execute the `run` subcommand.
@@ -465,14 +474,25 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     // Only rank 0 accesses the filesystem. Config is converted to BroadcastConfig
     // (postcard-safe) and broadcast. Root config stays on rank 0 for output writing.
-    let (raw_system, raw_bcast_config, root_config, load_err) = if is_root {
+    // The estimation report is rank-0-only and is NOT broadcast to other ranks.
+    let (raw_system, raw_bcast_config, root_config, root_estimation_report, load_err) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
-            Ok((system, bcast, config)) => (Some(system), Some(bcast), Some(config), None),
-            Err(e) => (None, None, None, Some(e)),
+            Ok((system, bcast, config, estimation_report)) => (
+                Some(system),
+                Some(bcast),
+                Some(config),
+                Some(estimation_report),
+                None,
+            ),
+            Err(e) => (None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
+    // The estimation report is available on rank 0 for output writing (ticket-013).
+    // Wrapped in Option<Option<_>>: outer None on non-root ranks, Some on rank 0.
+    #[allow(clippy::no_effect_underscore_binding)]
+    let _root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
     let system_result = broadcast_value(raw_system, &comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &comm);

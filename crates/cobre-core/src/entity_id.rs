@@ -30,7 +30,7 @@ use core::fmt;
 /// let raw: i32 = i32::from(id);
 /// assert_eq!(raw, 42);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntityId(pub i32);
 

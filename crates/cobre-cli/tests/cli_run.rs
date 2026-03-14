@@ -334,10 +334,10 @@ fn make_valid_case_with_config(dir: &TempDir, config_content: &str) {
     write_file(root, "system/thermals.json", THERMALS_JSON);
 }
 
-// ---- Seed-warning tests --------------------------------------------------
+// ---- Seed diagnostic tests --------------------------------------------------
 
-/// AC: When `training.seed` is absent, stderr contains "no random seed specified"
-/// and the run exits 0.
+/// AC: When `training.seed` is absent, stderr contains the default-seed hint
+/// emitted by the stochastic diagnostics block, and the run exits 0.
 #[test]
 fn no_seed_in_config_emits_warning_on_stderr() {
     let dir = TempDir::new().unwrap();
@@ -354,11 +354,13 @@ fn no_seed_in_config_emits_warning_on_stderr() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("no random seed specified"));
+        .stderr(predicate::str::contains(
+            "set training.seed for reproducibility",
+        ));
 }
 
 /// AC: When `training.seed` is explicitly set, stderr does NOT contain the
-/// "no random seed specified" warning.
+/// default-seed hint (the seed line shows the value without any hint suffix).
 #[test]
 fn explicit_seed_in_config_suppresses_warning() {
     let dir = TempDir::new().unwrap();
@@ -375,5 +377,5 @@ fn explicit_seed_in_config_suppresses_warning() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("no random seed specified").not());
+        .stderr(predicate::str::contains("set training.seed for reproducibility").not());
 }

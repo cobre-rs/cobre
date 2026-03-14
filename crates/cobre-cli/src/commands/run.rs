@@ -150,6 +150,13 @@ impl BroadcastCutSelection {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct BroadcastConfig {
     seed: u64,
+    /// `true` when `training.seed` was explicitly set in `config.json`.
+    ///
+    /// Used by the stochastic diagnostics block to distinguish between a
+    /// user-specified seed and the hardcoded default, so the diagnostic line
+    /// can append a "(default -- set training.seed for reproducibility)" hint
+    /// when the seed was not explicitly configured.
+    seed_was_explicit: bool,
     forward_passes: u32,
     stopping_rules: Vec<BroadcastStoppingRule>,
     stopping_mode: BroadcastStoppingMode,
@@ -170,12 +177,7 @@ impl BroadcastConfig {
     ) -> Result<Self, CliError> {
         use cobre_io::config::StoppingRuleConfig;
 
-        if config.training.seed.is_none() {
-            eprintln!(
-                "warning: no random seed specified in config.json (training.seed); \
-                 using default seed 42. Set training.seed for reproducible results."
-            );
-        }
+        let seed_was_explicit = config.training.seed.is_some();
         let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
 
         let forward_passes = config
@@ -237,6 +239,7 @@ impl BroadcastConfig {
 
         Ok(Self {
             seed,
+            seed_was_explicit,
             forward_passes,
             stopping_rules,
             stopping_mode,
@@ -497,13 +500,18 @@ where
     }
 }
 
-/// Return type of [`load_case_and_config`]: the five values loaded on rank 0.
+/// Return type of [`load_case_and_config`]: the six values loaded on rank 0.
+///
+/// The [`cobre_io::FileManifest`] is rank-0-only diagnostic data. It is NOT
+/// broadcast to other ranks; it follows the same `Option<FileManifest>` wrapping
+/// pattern as `root_config` in `execute()`.
 type LoadedCase = (
     cobre_core::System,
     BroadcastConfig,
     cobre_io::Config,
     Option<EstimationReport>,
     Option<OpeningTree>,
+    cobre_io::FileManifest,
 );
 
 /// Load the case directory and parse the config on rank 0.
@@ -537,9 +545,21 @@ fn load_case_and_config(
             message: format!("estimation error: {e}"),
         })?;
     let user_opening_tree = load_user_opening_tree(&args.case_dir, &system)?;
+    // Compute the manifest once for diagnostic use on rank 0.
+    // This is cheap (filesystem stat calls only) and provides file-presence
+    // booleans needed to determine data sources in the diagnostics block.
+    let mut manifest_ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(&args.case_dir, &mut manifest_ctx);
     let export_stochastic = args.export_stochastic || config.exports.stochastic;
     let bcast = BroadcastConfig::from_config(&config, args.skip_simulation, export_stochastic)?;
-    Ok((system, bcast, config, estimation_report, user_opening_tree))
+    Ok((
+        system,
+        bcast,
+        config,
+        estimation_report,
+        user_opening_tree,
+        manifest,
+    ))
 }
 
 /// Execute the `run` subcommand.
@@ -594,33 +614,39 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     // Only rank 0 accesses the filesystem. Config is converted to BroadcastConfig
     // (postcard-safe) and broadcast. Root config stays on rank 0 for output writing.
-    // The estimation report is rank-0-only and is NOT broadcast to other ranks.
+    // The estimation report and file manifest are rank-0-only and are NOT broadcast.
     let (
         raw_system,
         raw_bcast_config,
         root_config,
         root_estimation_report,
         raw_opening_tree,
+        root_manifest,
         load_err,
     ) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
-            Ok((system, bcast, config, estimation_report, user_opening_tree)) => (
+            Ok((system, bcast, config, estimation_report, user_opening_tree, manifest)) => (
                 Some(system),
                 Some(bcast),
                 Some(config),
                 Some(estimation_report),
                 Some(user_opening_tree),
+                Some(manifest),
                 None,
             ),
-            Err(e) => (None, None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None)
+        (None, None, None, None, None, None, None)
     };
     // The estimation report is available on rank 0 for stochastic artifact export.
     // Wrapped in Option<Option<_>>: outer None on non-root ranks, Some on rank 0;
     // inner None means estimation was not performed (explicit stats were provided).
     let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
+
+    // Track whether the user supplied an opening tree before broadcast consumes
+    // `raw_opening_tree`. Used on rank 0 for the stochastic diagnostics block.
+    let user_tree_supplied: bool = raw_opening_tree.as_ref().is_some_and(Option::is_some);
 
     let system_result = broadcast_value(raw_system, &comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
@@ -649,11 +675,28 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     let seed = bcast_config.seed;
+    let seed_was_explicit = bcast_config.seed_was_explicit;
     let stochastic = build_stochastic_context(&system, seed, &[], user_tree).map_err(|e| {
         CliError::Internal {
             message: format!("stochastic context error: {e}"),
         }
     })?;
+
+    // Print stochastic diagnostics on rank 0 before any artifacts are exported.
+    if !quiet && is_root {
+        if let Some(ref manifest) = root_manifest {
+            let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
+            print_stochastic_diagnostics(
+                &system,
+                manifest,
+                estimation,
+                user_tree_supplied,
+                &stochastic,
+                seed,
+                seed_was_explicit,
+            );
+        }
+    }
 
     // Export stochastic preprocessing artifacts when requested.
     // Rank 0 writes all applicable files; all ranks wait at the barrier.
@@ -1358,6 +1401,176 @@ fn export_stochastic_artifacts(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Stochastic diagnostics helpers
+// ---------------------------------------------------------------------------
+
+/// Format stochastic pipeline diagnostics as a vector of lines.
+///
+/// Returns 7 `[stochastic]`-prefixed lines covering seed, inflow stats source,
+/// AR coefficients source, correlation source, opening tree source, load noise
+/// buses, and noise dimension. Lines are collected into a `Vec<String>` to
+/// allow unit testing of the formatting logic independently of stderr output.
+///
+/// Intended to be called on rank 0 only, after `build_stochastic_context` returns.
+fn format_stochastic_diagnostics(
+    system: &System,
+    manifest: &cobre_io::FileManifest,
+    estimation_report: Option<&EstimationReport>,
+    user_tree_supplied: bool,
+    stochastic: &cobre_stochastic::StochasticContext,
+    seed: u64,
+    seed_was_explicit: bool,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::with_capacity(7);
+    let n_hydros = system.hydros().len();
+
+    // ── Line 1: Seed ──────────────────────────────────────────────────────────
+    if seed_was_explicit {
+        lines.push(format!("[stochastic] Seed: {seed}"));
+    } else {
+        lines.push(format!(
+            "[stochastic] Seed: {seed} (default -- set training.seed for reproducibility)"
+        ));
+    }
+
+    // ── Line 2: Inflow stats source ───────────────────────────────────────────
+    if n_hydros == 0 {
+        lines.push("[stochastic] Inflow stats: none (no hydro plants)".to_string());
+    } else if let Some(report) = estimation_report {
+        // Count distinct stage_ids in inflow_models to get the number of seasons
+        // modelled per hydro. When all hydros have the same season count (the
+        // normal case), this equals inflow_models.len() / n_hydros.
+        let mut stage_ids: Vec<i32> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.hydro_id == system.hydros()[0].id)
+            .map(|m| m.stage_id)
+            .collect();
+        stage_ids.sort_unstable();
+        stage_ids.dedup();
+        let n_seasons = stage_ids.len();
+        let _ = report; // report used for branch selection; detail is in line 3
+        lines.push(format!(
+            "[stochastic] Inflow stats: estimated from inflow_history.parquet \
+             ({n_hydros} hydros, {n_seasons} seasons)"
+        ));
+    } else if manifest.scenarios_inflow_seasonal_stats_parquet {
+        lines.push("[stochastic] Inflow stats: loaded from scenarios/".to_string());
+    } else {
+        lines.push("[stochastic] Inflow stats: none (no history or stats files)".to_string());
+    }
+
+    // ── Line 3: AR coefficients source ────────────────────────────────────────
+    if n_hydros == 0 {
+        lines.push("[stochastic] AR coefficients: none".to_string());
+    } else if let Some(report) = estimation_report {
+        if report.entries.is_empty() {
+            // Fixed-order selection: no per-hydro AIC entries captured
+            let max_order = system
+                .inflow_models()
+                .iter()
+                .map(|m| m.ar_coefficients.len())
+                .max()
+                .unwrap_or(0);
+            lines.push(format!(
+                "[stochastic] AR coefficients: estimated with fixed order (max_order={max_order})"
+            ));
+        } else {
+            // AIC-based selection: list selected_order per hydro by name
+            let order_parts: Vec<String> = system
+                .hydros()
+                .iter()
+                .filter_map(|h| {
+                    report
+                        .entries
+                        .get(&h.id)
+                        .map(|entry| format!("{}={}", h.name, entry.selected_order))
+                })
+                .collect();
+            let orders_str = order_parts.join(", ");
+            lines.push(format!(
+                "[stochastic] AR coefficients: estimated with AIC (orders: {orders_str})"
+            ));
+        }
+    } else if manifest.scenarios_inflow_ar_coefficients_parquet {
+        lines.push("[stochastic] AR coefficients: loaded from scenarios/".to_string());
+    } else {
+        lines.push("[stochastic] AR coefficients: none".to_string());
+    }
+
+    // ── Line 4: Correlation source ────────────────────────────────────────────
+    if manifest.scenarios_correlation_json {
+        lines.push("[stochastic] Correlation: loaded from correlation.json".to_string());
+    } else if estimation_report.is_some() && n_hydros > 0 {
+        lines.push(format!(
+            "[stochastic] Correlation: estimated from residuals ({n_hydros}x{n_hydros})"
+        ));
+    } else {
+        lines.push("[stochastic] Correlation: identity (default)".to_string());
+    }
+
+    // ── Line 5: Opening tree source ───────────────────────────────────────────
+    if user_tree_supplied {
+        lines.push("[stochastic] Opening tree: loaded from noise_openings.parquet".to_string());
+    } else {
+        let openings_per_stage = stochastic.opening_tree().openings_per_stage_slice();
+        let k = openings_per_stage.first().copied().unwrap_or(0);
+        let t = openings_per_stage.len();
+        lines.push(format!(
+            "[stochastic] Opening tree: generated (seed={seed}, {k} openings/stage, {t} stages)"
+        ));
+    }
+
+    // ── Line 6: Load noise ────────────────────────────────────────────────────
+    let n_load_buses = stochastic.n_load_buses();
+    if n_load_buses > 0 {
+        lines.push(format!(
+            "[stochastic] Load noise: {n_load_buses} stochastic buses"
+        ));
+    } else {
+        lines.push("[stochastic] Load noise: none".to_string());
+    }
+
+    // ── Line 7: Noise dimension ───────────────────────────────────────────────
+    let dim = stochastic.dim();
+    let dim_str = match (n_hydros, n_load_buses) {
+        (0, 0) => "0".to_string(),
+        (h, 0) => format!("{dim} ({h} hydros)"),
+        (h, l) => format!("{dim} ({h} hydros + {l} load buses)"),
+    };
+    lines.push(format!("[stochastic] Noise dimension: {dim_str}"));
+
+    lines
+}
+
+/// Print stochastic pipeline diagnostics to stderr.
+///
+/// Delegates to [`format_stochastic_diagnostics`] for testable line formatting,
+/// then prints each line via [`eprintln!`]. Must only be called when
+/// `!quiet && is_root`.
+fn print_stochastic_diagnostics(
+    system: &System,
+    manifest: &cobre_io::FileManifest,
+    estimation_report: Option<&EstimationReport>,
+    user_tree_supplied: bool,
+    stochastic: &cobre_stochastic::StochasticContext,
+    seed: u64,
+    seed_was_explicit: bool,
+) {
+    for line in format_stochastic_diagnostics(
+        system,
+        manifest,
+        estimation_report,
+        user_tree_supplied,
+        stochastic,
+        seed,
+        seed_was_explicit,
+    ) {
+        eprintln!("{line}");
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
@@ -1779,5 +1992,493 @@ mod tests {
 
         assert_eq!(rows[2].lag, 3);
         assert_eq!(rows[2].coefficient, 0.05);
+    }
+
+    // ------------------------------------------------------------------
+    // format_stochastic_diagnostics tests
+    //
+    // These tests exercise the formatting helper directly, avoiding the need
+    // to capture stderr. Each test builds a minimal System and StochasticContext
+    // via cobre-stochastic's public API and verifies line content.
+    // ------------------------------------------------------------------
+
+    /// Build a minimal 2-hydro, 3-stage System for use in diagnostics tests.
+    ///
+    /// Uses 3 stages (id 0,1,2) and 2 hydros (id 1, 2) with identity correlation.
+    /// Inflow models are flat (zero AR coefficients) so `build_stochastic_context`
+    /// succeeds without requiring positive-definite non-trivial correlation.
+    #[allow(clippy::too_many_lines)]
+    fn make_diag_system_2hydros() -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::{
+            entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
+            scenario::{
+                CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+                InflowModel,
+            },
+            temporal::{
+                Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+                StageStateConfig,
+            },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
+        };
+        use std::collections::BTreeMap;
+
+        let make_bus = |id: i32| Bus {
+            id: EntityId(id),
+            name: format!("B{id}"),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let make_hydro = |id: i32| Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(0),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let make_stage = |index: usize, id: i32| {
+            let id_u32 = u32::try_from(id).unwrap();
+            let id_usize = usize::try_from(id).unwrap();
+            Stage {
+                index,
+                id,
+                start_date: NaiveDate::from_ymd_opt(2024, 1 + id_u32, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2 + id_u32, 1).unwrap(),
+                season_id: Some(id_usize),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "SINGLE".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 3,
+                    noise_method: NoiseMethod::Saa,
+                },
+            }
+        };
+
+        let make_inflow = |hydro_id: i32, stage_id: i32| InflowModel {
+            hydro_id: EntityId(hydro_id),
+            stage_id,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+
+        let n = 2usize;
+        let entity_ids = [1i32, 2i32];
+        let matrix: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+            .collect();
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "g1".to_string(),
+                    entities: entity_ids
+                        .iter()
+                        .map(|&id| CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId(id),
+                        })
+                        .collect(),
+                    matrix,
+                }],
+            },
+        );
+        let correlation = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(vec![make_hydro(1), make_hydro(2)])
+            .stages(vec![make_stage(0, 0), make_stage(1, 1), make_stage(2, 2)])
+            .inflow_models(vec![
+                make_inflow(1, 0),
+                make_inflow(1, 1),
+                make_inflow(1, 2),
+                make_inflow(2, 0),
+                make_inflow(2, 1),
+                make_inflow(2, 2),
+            ])
+            .correlation(correlation)
+            .build()
+            .unwrap()
+    }
+
+    /// `format_stochastic_diagnostics` — estimation path: inflow stats estimated.
+    ///
+    /// When an `EstimationReport` is provided (estimation ran), the "Inflow stats"
+    /// line must contain `"estimated from inflow_history.parquet"` with hydro/season
+    /// counts. The seed line must show the default hint when `seed_was_explicit = false`.
+    #[test]
+    fn test_format_diagnostics_estimated_path() {
+        use std::collections::BTreeMap;
+
+        use cobre_core::EntityId;
+        use cobre_io::FileManifest;
+        use cobre_sddp::{estimation::HydroEstimationEntry, EstimationReport};
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = make_diag_system_2hydros();
+        let stochastic = build_stochastic_context(&system, 42, &[], None).unwrap();
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            EntityId(1),
+            HydroEstimationEntry {
+                selected_order: 3,
+                aic_scores: vec![10.0, 9.5, 9.2],
+                coefficients: vec![vec![0.4, -0.1, 0.05]],
+            },
+        );
+        entries.insert(
+            EntityId(2),
+            HydroEstimationEntry {
+                selected_order: 2,
+                aic_scores: vec![12.0, 11.5],
+                coefficients: vec![vec![0.6, -0.2]],
+            },
+        );
+        let report = EstimationReport { entries };
+
+        let manifest = FileManifest {
+            scenarios_inflow_history_parquet: true,
+            scenarios_inflow_seasonal_stats_parquet: false,
+            scenarios_correlation_json: false,
+            ..Default::default()
+        };
+
+        let lines = format_stochastic_diagnostics(
+            &system,
+            &manifest,
+            Some(&report),
+            false,
+            &stochastic,
+            42,
+            false,
+        );
+
+        assert_eq!(lines.len(), 7, "must produce exactly 7 lines");
+        assert!(
+            lines[0].contains("(default"),
+            "default seed must show default hint: got {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("estimated from inflow_history.parquet"),
+            "inflow stats must say estimated: got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[1].contains("2 hydros"),
+            "must include hydro count: got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[1].contains("3 seasons"),
+            "must include season count: got {:?}",
+            lines[1]
+        );
+    }
+
+    /// `format_stochastic_diagnostics` — loaded path: stats files present, no estimation.
+    ///
+    /// When `estimation_report = None` and the manifest has
+    /// `scenarios_inflow_seasonal_stats_parquet = true`, both the inflow stats and
+    /// AR coefficients lines must say "loaded from scenarios/".
+    #[test]
+    fn test_format_diagnostics_loaded_path() {
+        use cobre_io::FileManifest;
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = make_diag_system_2hydros();
+        let stochastic = build_stochastic_context(&system, 99, &[], None).unwrap();
+
+        let manifest = FileManifest {
+            scenarios_inflow_seasonal_stats_parquet: true,
+            scenarios_inflow_ar_coefficients_parquet: true,
+            ..Default::default()
+        };
+
+        let lines =
+            format_stochastic_diagnostics(&system, &manifest, None, false, &stochastic, 99, true);
+
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines[1].contains("loaded from scenarios/"),
+            "inflow stats must say loaded: got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("loaded from scenarios/"),
+            "AR coefficients must say loaded: got {:?}",
+            lines[2]
+        );
+        // Explicit seed must NOT show the default hint
+        assert!(
+            !lines[0].contains("(default"),
+            "explicit seed must not show default hint: got {:?}",
+            lines[0]
+        );
+    }
+
+    /// `format_stochastic_diagnostics` — no hydro plants: both stats lines say "none".
+    ///
+    /// When the system has zero hydro plants, the inflow stats line must say
+    /// "none (no hydro plants)" and the AR coefficients line must say "none".
+    #[test]
+    fn test_format_diagnostics_no_hydros() {
+        use cobre_core::{
+            scenario::CorrelationModel, Bus, DeficitSegment, EntityId, SystemBuilder,
+        };
+        use cobre_io::FileManifest;
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = SystemBuilder::new()
+            .buses(vec![Bus {
+                id: EntityId(0),
+                name: "B0".to_string(),
+                deficit_segments: vec![DeficitSegment {
+                    depth_mw: None,
+                    cost_per_mwh: 1000.0,
+                }],
+                excess_cost: 0.0,
+            }])
+            .correlation(CorrelationModel::default())
+            .build()
+            .unwrap();
+
+        // build_stochastic_context without stages produces a 0-stage tree
+        let stochastic = build_stochastic_context(&system, 1, &[], None).unwrap();
+
+        let manifest = FileManifest::default();
+
+        let lines =
+            format_stochastic_diagnostics(&system, &manifest, None, false, &stochastic, 1, true);
+
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines[1].contains("no hydro plants"),
+            "inflow stats must say no hydro plants: got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("none"),
+            "AR coefficients must say none: got {:?}",
+            lines[2]
+        );
+    }
+
+    /// `format_stochastic_diagnostics` — AIC orders: per-hydro selected orders listed.
+    ///
+    /// When `EstimationReport.entries` is non-empty (AIC ran), the AR coefficients
+    /// line must contain "estimated with AIC" and include the selected order for each
+    /// hydro by name.
+    #[test]
+    fn test_format_diagnostics_aic_orders() {
+        use std::collections::BTreeMap;
+
+        use cobre_core::EntityId;
+        use cobre_io::FileManifest;
+        use cobre_sddp::{estimation::HydroEstimationEntry, EstimationReport};
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = make_diag_system_2hydros();
+        let stochastic = build_stochastic_context(&system, 7, &[], None).unwrap();
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            EntityId(1),
+            HydroEstimationEntry {
+                selected_order: 3,
+                aic_scores: vec![10.0, 9.5, 9.2],
+                coefficients: vec![],
+            },
+        );
+        entries.insert(
+            EntityId(2),
+            HydroEstimationEntry {
+                selected_order: 1,
+                aic_scores: vec![12.0],
+                coefficients: vec![],
+            },
+        );
+        let report = EstimationReport { entries };
+
+        let manifest = FileManifest {
+            scenarios_inflow_history_parquet: true,
+            ..Default::default()
+        };
+
+        let lines = format_stochastic_diagnostics(
+            &system,
+            &manifest,
+            Some(&report),
+            false,
+            &stochastic,
+            7,
+            true,
+        );
+
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines[2].contains("estimated with AIC"),
+            "AR coefficients must say estimated with AIC: got {:?}",
+            lines[2]
+        );
+        assert!(
+            lines[2].contains("H1=3"),
+            "must contain H1=3: got {:?}",
+            lines[2]
+        );
+        assert!(
+            lines[2].contains("H2=1"),
+            "must contain H2=1: got {:?}",
+            lines[2]
+        );
+    }
+
+    /// `format_stochastic_diagnostics` — user tree: opening tree line says "loaded".
+    ///
+    /// When `user_tree_supplied = true`, the opening tree line must say
+    /// `"loaded from noise_openings.parquet"`.
+    #[test]
+    fn test_format_diagnostics_user_tree() {
+        use cobre_io::FileManifest;
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = make_diag_system_2hydros();
+        let stochastic = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let manifest = FileManifest::default();
+
+        let lines = format_stochastic_diagnostics(
+            &system,
+            &manifest,
+            None,
+            true, // user_tree_supplied
+            &stochastic,
+            42,
+            true,
+        );
+
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines[4].contains("loaded from noise_openings.parquet"),
+            "opening tree must say loaded: got {:?}",
+            lines[4]
+        );
+    }
+
+    /// `format_stochastic_diagnostics` — default seed hint present when not explicit.
+    ///
+    /// When `seed_was_explicit = false`, the seed line must contain "(default"
+    /// to hint the user to set `training.seed` for reproducibility.
+    #[test]
+    fn test_format_diagnostics_seed_default() {
+        use cobre_io::FileManifest;
+        use cobre_stochastic::build_stochastic_context;
+
+        use super::format_stochastic_diagnostics;
+
+        let system = make_diag_system_2hydros();
+        let stochastic = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let manifest = FileManifest::default();
+
+        let lines = format_stochastic_diagnostics(
+            &system,
+            &manifest,
+            None,
+            false,
+            &stochastic,
+            42,
+            false, // seed_was_explicit = false
+        );
+
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines[0].contains("(default"),
+            "default seed must contain hint: got {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("42"),
+            "seed line must include the seed value: got {:?}",
+            lines[0]
+        );
+
+        // Verify that explicit seed does NOT show the hint
+        let lines_explicit = format_stochastic_diagnostics(
+            &system,
+            &manifest,
+            None,
+            false,
+            &stochastic,
+            99,
+            true, // seed_was_explicit = true
+        );
+        assert!(
+            !lines_explicit[0].contains("(default"),
+            "explicit seed must not show default hint: got {:?}",
+            lines_explicit[0]
+        );
     }
 }

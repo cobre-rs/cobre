@@ -40,6 +40,7 @@ mpi = ["cobre-comm/mpi"]
 
 [dev-dependencies]
 assert_cmd = "2"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 predicates = "3"
 tempfile = "3"
 

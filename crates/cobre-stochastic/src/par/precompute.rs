@@ -8,14 +8,14 @@
 //! ## Array layout
 //!
 //! All two-dimensional arrays use **stage-major** layout:
-//! `array[stage * n_hydros + hydro]`.
+//! `array[stage * n_series + series_element]`.
 //!
-//! The three-dimensional `psi` array uses **stage-major, hydro-minor, lag-innermost**:
-//! `psi[stage * n_hydros * max_order + hydro * max_order + lag]`.
+//! The three-dimensional `psi` array uses **stage-major, series-minor, lag-innermost**:
+//! `psi[stage * n_series * max_order + series_element * max_order + lag]`.
 //!
 //! This layout is optimal for sequential stage iteration within a scenario trajectory:
-//! all per-stage data for every hydro is contiguous in memory, maximizing cache
-//! utilization during forward/backward LP passes.
+//! all per-stage data for every series element is contiguous in memory, maximizing
+//! cache utilization during forward/backward LP passes.
 //!
 //! ## Coefficient conversion
 //!
@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
+use cobre_core::{scenario::InflowModel, temporal::Stage, EntityId};
 
 use crate::StochasticError;
 
@@ -46,7 +46,7 @@ use crate::StochasticError;
 /// Consumed read-only during iterative optimization.
 ///
 /// All arrays use stage-major layout: outer dimension is stage index,
-/// inner dimension is hydro index (sorted by canonical entity ID order).
+/// inner dimension is series element index (sorted by canonical entity ID order).
 /// This layout is optimal for sequential stage iteration within a
 /// scenario trajectory.
 ///
@@ -91,30 +91,30 @@ use crate::StochasticError;
 #[derive(Debug)]
 pub struct PrecomputedParLp {
     /// Deterministic base `b_{h,m(t)} = μ_{m(t)} - Σ_ℓ ψ_{m(t),ℓ} · μ_{m(t-ℓ)}`.
-    /// Flat array indexed as `[stage * n_hydros + hydro]`.
-    /// Length: `n_stages * n_hydros`.
+    /// Flat array indexed as `[stage * n_series + series_element]`.
+    /// Length: `n_stages * n_series`.
     deterministic_base: Box<[f64]>,
 
-    /// Residual standard deviation `σ_{m(t)}` per (stage, hydro).
+    /// Residual standard deviation `σ_{m(t)}` per (stage, series element).
     /// Derived as `σ = s_m · residual_std_ratio`.
-    /// Flat array indexed as `[stage * n_hydros + hydro]`.
-    /// Length: `n_stages * n_hydros`.
+    /// Flat array indexed as `[stage * n_series + series_element]`.
+    /// Length: `n_stages * n_series`.
     sigma: Box<[f64]>,
 
-    /// AR lag coefficients `ψ_{m(t),ℓ}` in original units per (stage, hydro, lag).
-    /// Flat array indexed as `[stage * n_hydros * max_order + hydro * max_order + lag]`.
-    /// Length: `n_stages * n_hydros * max_order`.
-    /// Padded with `0.0` for hydros with `ar_order < max_order`.
+    /// AR lag coefficients `ψ_{m(t),ℓ}` in original units per (stage, series element, lag).
+    /// Flat array indexed as `[stage * n_series * max_order + series_element * max_order + lag]`.
+    /// Length: `n_stages * n_series * max_order`.
+    /// Padded with `0.0` for series elements with `ar_order < max_order`.
     psi: Box<[f64]>,
 
-    /// AR order per hydro. Length: `n_hydros`.
-    /// `orders[h]` gives the number of meaningful lags in `psi` for hydro `h`.
+    /// AR order per series element. Length: `n_series`.
+    /// `orders[h]` gives the number of meaningful lags in `psi` for series element `h`.
     orders: Box<[usize]>,
 
     /// Number of study stages.
     n_stages: usize,
 
-    /// Number of hydro plants.
+    /// Number of series elements (entities tracked by the PAR model).
     n_hydros: usize,
 
     /// Maximum AR order across all hydros and stages.
@@ -134,7 +134,7 @@ impl PrecomputedParLp {
     ///   from the system. May include pre-study stage models (negative `stage_id`)
     ///   used for lag initialization.
     /// - `stages`: study stages sorted by `index` from the system (non-negative IDs).
-    /// - `hydro_ids`: canonical sorted entity IDs (determines hydro array index order).
+    /// - `hydro_ids`: canonical sorted entity IDs (determines series element array index order).
     ///
     /// # Errors
     ///
@@ -303,7 +303,7 @@ impl PrecomputedParLp {
     // Accessors
     // -----------------------------------------------------------------------
 
-    /// Deterministic base `b_{h,m(t)}` for the given stage and hydro indices.
+    /// Deterministic base `b_{h,m(t)}` for the given stage and series element indices.
     ///
     /// # Panics
     ///
@@ -323,7 +323,7 @@ impl PrecomputedParLp {
         self.deterministic_base[stage * self.n_hydros + hydro]
     }
 
-    /// Residual standard deviation `σ_{m(t)}` for the given stage and hydro indices.
+    /// Residual standard deviation `σ_{m(t)}` for the given stage and series element indices.
     ///
     /// # Panics
     ///
@@ -344,7 +344,7 @@ impl PrecomputedParLp {
     }
 
     /// Slice of AR lag coefficients `ψ_{m(t),ℓ}` (original units) for the given
-    /// stage and hydro indices.
+    /// stage and series element indices.
     ///
     /// The returned slice has length `max_order`. Positions `0..orders[hydro]` contain
     /// the meaningful coefficients; positions `orders[hydro]..max_order` are `0.0`.
@@ -372,9 +372,9 @@ impl PrecomputedParLp {
         &self.psi[start..start + self.max_order]
     }
 
-    /// AR order for the given hydro (maximum across all stages).
+    /// AR order for the given series element (maximum across all stages).
     ///
-    /// Returns the number of meaningful lag entries in `psi_slice` for this hydro.
+    /// Returns the number of meaningful lag entries in `psi_slice` for this series element.
     ///
     /// # Panics
     ///
@@ -395,7 +395,7 @@ impl PrecomputedParLp {
         self.n_stages
     }
 
-    /// Number of hydro plants.
+    /// Number of series elements tracked by the PAR model.
     #[must_use]
     pub fn n_hydros(&self) -> usize {
         self.n_hydros
@@ -409,10 +409,10 @@ impl PrecomputedParLp {
 }
 
 impl Default for PrecomputedParLp {
-    /// Returns an empty [`PrecomputedParLp`] with zero stages and zero hydros.
+    /// Returns an empty [`PrecomputedParLp`] with zero stages and zero series elements.
     ///
-    /// Useful as a sentinel value for callers that do not use PAR inflow models
-    /// (e.g., test fixtures for systems with no hydro plants).
+    /// Useful as a sentinel value for callers that do not use PAR models
+    /// (e.g., test fixtures for systems with no series elements).
     fn default() -> Self {
         Self {
             deterministic_base: Box::new([]),
@@ -434,12 +434,12 @@ impl Default for PrecomputedParLp {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::PrecomputedParLp;

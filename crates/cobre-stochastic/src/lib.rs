@@ -43,20 +43,21 @@ pub mod par;
 pub mod sampling;
 pub mod tree;
 
-pub use context::{StochasticContext, build_stochastic_context};
+pub use context::{build_stochastic_context, StochasticContext};
 pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
 pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
+#[allow(deprecated)]
 pub use par::{
-    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedParLp,
-    SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par_inflow,
-    evaluate_par_inflows, levinson_durbin, solve_par_noise, solve_par_noises,
-    validate_par_parameters,
+    estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par, evaluate_par_batch,
+    evaluate_par_inflow, evaluate_par_inflows, levinson_durbin, solve_par_noise,
+    solve_par_noise_batch, solve_par_noises, validate_par_parameters, ArCoefficientEstimate,
+    LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedParLp, SeasonalStats,
 };
 pub use sampling::insample::sample_forward;
-pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
+pub use tree::{generate_opening_tree, OpeningTree, OpeningTreeView};
 
 #[cfg(test)]
 #[allow(unused_imports)]

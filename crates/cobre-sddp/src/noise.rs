@@ -5,12 +5,12 @@
 //! into the stage LP before each solve.  Extracting them here eliminates the
 //! class of bugs where one call site receives a fix and others are forgotten.
 
-use cobre_stochastic::{StochasticContext, evaluate_par_inflows, solve_par_noises};
+use cobre_stochastic::{evaluate_par_batch, solve_par_noise_batch, StochasticContext};
 
 use crate::{
-    InflowNonNegativityMethod,
     context::{StageContext, TrainingContext},
     workspace::ScratchBuffers,
+    InflowNonNegativityMethod,
 };
 
 /// Transform raw inflow noise `η` into patched water-balance RHS values.
@@ -83,7 +83,7 @@ pub(crate) fn transform_inflow_noise(
             let par_lp = stochastic.par_lp();
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
-            evaluate_par_inflows(
+            evaluate_par_batch(
                 par_lp,
                 stage,
                 &scratch.lag_matrix_buf,
@@ -96,7 +96,7 @@ pub(crate) fn transform_inflow_noise(
                 scratch.eta_floor_buf.clear();
                 scratch.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
                 let zero_targets = &scratch.zero_targets_buf[..n_hydros];
-                solve_par_noises(
+                solve_par_noise_batch(
                     par_lp,
                     stage,
                     &scratch.lag_matrix_buf,
@@ -198,16 +198,16 @@ mod tests {
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::StageTemplate;
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
     use std::collections::BTreeMap;
 
     use crate::{
-        HorizonMode, InflowNonNegativityMethod,
         context::{StageContext, TrainingContext},
         indexer::StageIndexer,
         noise::{transform_inflow_noise, transform_load_noise},
         workspace::ScratchBuffers,
+        HorizonMode, InflowNonNegativityMethod,
     };
 
     // ── helpers ──────────────────────────────────────────────────────────────

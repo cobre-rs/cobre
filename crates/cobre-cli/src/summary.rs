@@ -873,4 +873,285 @@ mod tests {
             "summary must contain 'none' for None inflow source, got: {s}"
         );
     }
+
+    // ── StochasticSource variant display tests ────────────────────────────────
+
+    #[test]
+    fn test_stochastic_source_estimated_renders_estimated() {
+        let summary = StochasticSummary {
+            inflow_source: StochasticSource::Estimated,
+            ..make_stochastic_summary()
+        };
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("estimated"),
+            "Estimated source must render as 'estimated' substring, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_stochastic_source_loaded_renders_loaded() {
+        let summary = StochasticSummary {
+            inflow_source: StochasticSource::Loaded,
+            ..make_stochastic_summary()
+        };
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("loaded"),
+            "Loaded source must render as 'loaded' substring, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_stochastic_source_none_renders_none() {
+        let summary = StochasticSummary {
+            inflow_source: StochasticSource::None,
+            n_hydros: 0,
+            ar_summary: None,
+            ..make_stochastic_summary()
+        };
+        let s = format_stochastic_summary_string(&summary);
+        assert!(
+            s.contains("none"),
+            "None source must render as 'none' substring, got: {s}"
+        );
+    }
+
+    // ── ArOrderSummary::display_string edge cases ─────────────────────────────
+
+    #[test]
+    fn test_ar_order_display_all_same_order() {
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 5],
+            min_order: 1,
+            max_order: 1,
+            n_hydros: 5,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("5x order-1"),
+            "all-same-order compact must show '5x order-1', got: {s}"
+        );
+        // Must not contain a comma (only one entry).
+        assert!(
+            !s.contains(','),
+            "single-order compact format must not contain a comma, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_single_hydro() {
+        let ar = ArOrderSummary {
+            method: "fixed".into(),
+            order_counts: vec![0, 0, 0, 1],
+            min_order: 3,
+            max_order: 3,
+            n_hydros: 1,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("1x order-3"),
+            "single hydro at order 3 must show '1x order-3', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_orders_with_gaps() {
+        // Order 1: 2 hydros, order 2: 0 hydros, order 3: 3 hydros.
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 2, 0, 3],
+            min_order: 1,
+            max_order: 3,
+            n_hydros: 5,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("2x order-1"),
+            "gap case must show '2x order-1', got: {s}"
+        );
+        assert!(
+            s.contains("3x order-3"),
+            "gap case must show '3x order-3', got: {s}"
+        );
+        assert!(
+            !s.contains("order-2"),
+            "gap case must NOT show 'order-2' (count is 0), got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_boundary_exactly_10_compact() {
+        // Exactly 10 hydros: must use compact format (contains "x order-").
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 6, 4],
+            min_order: 1,
+            max_order: 2,
+            n_hydros: 10,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("x order-"),
+            "exactly 10 hydros must use compact format (contains 'x order-'), got: {s}"
+        );
+        assert!(
+            s.contains("6x order-1"),
+            "compact must show '6x order-1', got: {s}"
+        );
+        assert!(
+            s.contains("4x order-2"),
+            "compact must show '4x order-2', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_boundary_exactly_11_range() {
+        // Exactly 11 hydros: must use range format (contains "orders" and "-").
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 7, 4],
+            min_order: 1,
+            max_order: 2,
+            n_hydros: 11,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("orders"),
+            "exactly 11 hydros must use range format (contains 'orders'), got: {s}"
+        );
+        assert!(
+            s.contains('-'),
+            "range format must contain '-' between min and max orders, got: {s}"
+        );
+        assert!(
+            s.contains("11 hydros"),
+            "range format must contain '11 hydros', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_boundary_exactly_30_range() {
+        // Exactly 30 hydros: still range format (upper boundary of range tier).
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 15, 10, 5],
+            min_order: 1,
+            max_order: 3,
+            n_hydros: 30,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("orders"),
+            "exactly 30 hydros must use range format (contains 'orders'), got: {s}"
+        );
+        assert!(
+            s.contains("30 hydros"),
+            "range format must contain '30 hydros', got: {s}"
+        );
+        // Must NOT use histogram format.
+        assert!(
+            !s.contains("order 1:"),
+            "exactly 30 hydros must NOT use histogram format, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_ar_order_display_boundary_exactly_31_histogram() {
+        // Exactly 31 hydros: must use histogram format (contains "order N:").
+        let ar = ArOrderSummary {
+            method: "AIC".into(),
+            order_counts: vec![0, 16, 10, 5],
+            min_order: 1,
+            max_order: 3,
+            n_hydros: 31,
+        };
+        let s = ar.display_string();
+        assert!(
+            s.contains("order 1:"),
+            "exactly 31 hydros must use histogram format (contains 'order 1:'), got: {s}"
+        );
+        assert!(
+            s.contains("31 hydros"),
+            "histogram format must contain '31 hydros', got: {s}"
+        );
+        // Must NOT use range-style "orders N-M" phrase.
+        assert!(
+            !s.contains("orders "),
+            "exactly 31 hydros must NOT use range format, got: {s}"
+        );
+    }
+
+    // ── format_stochastic_summary_string full-output test ─────────────────────
+
+    #[test]
+    fn test_format_stochastic_summary_full_output() {
+        let summary = make_stochastic_summary();
+        let s = format_stochastic_summary_string(&summary);
+
+        // Header line
+        assert!(
+            s.contains("Stochastic preprocessing"),
+            "output must contain header 'Stochastic preprocessing', got: {s}"
+        );
+        // Seed line
+        assert!(
+            s.contains("Seed:"),
+            "output must contain 'Seed:' line, got: {s}"
+        );
+        assert!(
+            s.contains("42"),
+            "output must contain seed value '42', got: {s}"
+        );
+        // Inflow stats line
+        assert!(
+            s.contains("Inflow stats:"),
+            "output must contain 'Inflow stats:' line, got: {s}"
+        );
+        assert!(
+            s.contains("5 hydros"),
+            "output must contain '5 hydros', got: {s}"
+        );
+        assert!(
+            s.contains("12 seasons"),
+            "output must contain '12 seasons', got: {s}"
+        );
+        // AR orders line
+        assert!(
+            s.contains("AR orders:"),
+            "output must contain 'AR orders:' line, got: {s}"
+        );
+        // Correlation line
+        assert!(
+            s.contains("Correlation:"),
+            "output must contain 'Correlation:' line, got: {s}"
+        );
+        assert!(
+            s.contains("5x5"),
+            "output must contain correlation dim '5x5', got: {s}"
+        );
+        // Opening tree line
+        assert!(
+            s.contains("Opening tree:"),
+            "output must contain 'Opening tree:' line, got: {s}"
+        );
+        assert!(
+            s.contains("20 openings/stage"),
+            "output must contain '20 openings/stage', got: {s}"
+        );
+        assert!(
+            s.contains("60 stages"),
+            "output must contain '60 stages', got: {s}"
+        );
+        // Load noise line
+        assert!(
+            s.contains("Load noise:"),
+            "output must contain 'Load noise:' line, got: {s}"
+        );
+        assert!(
+            s.contains("3 stochastic buses"),
+            "output must contain '3 stochastic buses', got: {s}"
+        );
+    }
 }

@@ -575,6 +575,117 @@ mod tests {
         ));
     }
 
+    /// Progress thread receives 5 [`TrainingEvent::SimulationProgress`] events with
+    /// distinct `scenario_cost` values and completes without panic.
+    #[test]
+    fn test_simulation_progress_five_events_no_panic() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, 10, 120);
+
+        let costs = [10_000.0_f64, 20_000.0, 30_000.0, 40_000.0, 50_000.0];
+        for (i, &cost) in costs.iter().enumerate() {
+            let complete = u32::try_from(i + 1).unwrap();
+            tx.send(TrainingEvent::SimulationProgress {
+                scenarios_complete: complete,
+                scenarios_total: 100,
+                elapsed_ms: u64::from(complete) * 50,
+                scenario_cost: cost,
+            })
+            .unwrap();
+        }
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(
+            events.len(),
+            6,
+            "expected 6 events (5 progress + 1 finished), got {}",
+            events.len()
+        );
+        let progress_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
+            .collect();
+        assert_eq!(
+            progress_events.len(),
+            5,
+            "all 5 SimulationProgress events must be collected"
+        );
+    }
+
+    /// Progress thread accumulates 5 events; verifies collected costs match the
+    /// known `scenario_cost` values sent (integration of [`WelfordAccumulator`]
+    /// in the progress thread context).
+    #[test]
+    fn test_simulation_progress_accumulator_costs_collected_correctly() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, 10, 120);
+
+        // Known costs: mean = 300.0, values = [100, 200, 300, 400, 500].
+        let costs = [100.0_f64, 200.0, 300.0, 400.0, 500.0];
+        for (i, &cost) in costs.iter().enumerate() {
+            tx.send(TrainingEvent::SimulationProgress {
+                scenarios_complete: u32::try_from(i + 1).unwrap(),
+                scenarios_total: 5,
+                elapsed_ms: (i as u64 + 1) * 50,
+                scenario_cost: cost,
+            })
+            .unwrap();
+        }
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 6, "expected 6 events");
+
+        // Extract and verify each scenario_cost was delivered unmodified.
+        let collected_costs: Vec<f64> = events
+            .iter()
+            .filter_map(|e| {
+                if let TrainingEvent::SimulationProgress { scenario_cost, .. } = e {
+                    Some(*scenario_cost)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(collected_costs.len(), 5, "must collect 5 scenario costs");
+        for (expected, actual) in costs.iter().zip(collected_costs.iter()) {
+            assert!(
+                (expected - actual).abs() < f64::EPSILON,
+                "scenario_cost mismatch: expected {expected}, got {actual}"
+            );
+        }
+
+        // Independently verify WelfordAccumulator produces the correct mean
+        // for this known sequence (mean of [100, 200, 300, 400, 500] = 300.0).
+        let mut acc = cobre_core::WelfordAccumulator::new();
+        for &c in &costs {
+            acc.update(c);
+        }
+        assert!(
+            (acc.mean() - 300.0).abs() < 1e-9,
+            "WelfordAccumulator mean must be 300.0 for [100..500], got {}",
+            acc.mean()
+        );
+        // WelfordAccumulator.std_dev() uses population variance (m2/n).
+        // Population std dev of [100, 200, 300, 400, 500] = sqrt(20000) ≈ 141.421.
+        let expected_std = (((100.0_f64 - 300.0_f64).powi(2)
+            + (200.0_f64 - 300.0_f64).powi(2)
+            + (300.0_f64 - 300.0_f64).powi(2)
+            + (400.0_f64 - 300.0_f64).powi(2)
+            + (500.0_f64 - 300.0_f64).powi(2))
+            / 5.0_f64)
+            .sqrt();
+        assert!(
+            (acc.std_dev() - expected_std).abs() < 1e-6,
+            "WelfordAccumulator std_dev must be ~{expected_std:.3}, got {}",
+            acc.std_dev()
+        );
+    }
+
     /// Progress thread accumulates 3 [`TrainingEvent::SimulationProgress`] events via
     /// [`WelfordAccumulator`] and completes without panic. Verifies the accumulator path
     /// in the event loop.

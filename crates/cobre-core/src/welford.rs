@@ -6,6 +6,7 @@
 //! is not stored.
 
 /// Online accumulator for running mean and variance using Welford's algorithm.
+#[derive(Debug)]
 pub struct WelfordAccumulator {
     count: u64,
     mean: f64,

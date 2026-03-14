@@ -12,6 +12,7 @@
 use console::Term;
 
 /// Source of stochastic data for a given component.
+#[derive(Debug)]
 pub enum StochasticSource {
     /// Data was estimated from historical records.
     Estimated,
@@ -22,6 +23,7 @@ pub enum StochasticSource {
 }
 
 /// Summary of AR order selection across hydro plants.
+#[derive(Debug)]
 pub struct ArOrderSummary {
     /// Method used for order selection (e.g., `"AIC"`, `"fixed"`).
     pub method: String,
@@ -98,6 +100,7 @@ impl ArOrderSummary {
 }
 
 /// Summary of the stochastic preprocessing pipeline for display.
+#[derive(Debug)]
 pub struct StochasticSummary {
     /// Source of inflow seasonal statistics.
     pub inflow_source: StochasticSource,

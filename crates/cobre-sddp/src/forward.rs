@@ -69,10 +69,10 @@ use rayon::iter::{
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     noise::{transform_inflow_noise, transform_load_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -716,20 +716,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::StochasticContext;
     use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::StochasticContext;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     // ── Mock solver ──────────────────────────────────────────────────────────

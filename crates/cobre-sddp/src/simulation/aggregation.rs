@@ -408,11 +408,11 @@ mod tests {
     use cobre_comm::LocalBackend;
 
     use super::{
-        CVAR_ALPHA, N_CATEGORIES, compute_cvar, compute_local_min_max, compute_mean_std,
-        pack_category_costs,
+        compute_cvar, compute_local_min_max, compute_mean_std, pack_category_costs, CVAR_ALPHA,
+        N_CATEGORIES,
     };
     use crate::{
-        ScenarioCategoryCosts, SimulationConfig, simulation::aggregation::aggregate_simulation,
+        simulation::aggregation::aggregate_simulation, ScenarioCategoryCosts, SimulationConfig,
     };
 
     // ── Helpers ────────────────────────────────────────────────────────────────

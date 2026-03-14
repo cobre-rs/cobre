@@ -1375,7 +1375,7 @@ pub fn build_stage_templates(
 
 #[cfg(test)]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

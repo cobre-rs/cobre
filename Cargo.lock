@@ -445,6 +445,7 @@ name = "cobre-cli"
 version = "0.1.2"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
  "cobre-comm",
  "cobre-core",

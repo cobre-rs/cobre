@@ -1,4 +1,4 @@
-//! Parquet writer for stochastic artifact output files.
+//! Parquet and JSON writers for stochastic artifact output files.
 //!
 //! [`write_noise_openings`] exports an [`OpeningTree`] to
 //! `output/stochastic/noise_openings.parquet` using the 4-column schema
@@ -12,21 +12,80 @@
 //! | `value`         | DOUBLE  | Noise realisation value                      |
 //!
 //! Rows are written in `(stage_id, opening_index, entity_index)` order,
-//! matching the stage-major storage layout of the tree. The file is written
-//! atomically: data is first written to a `.tmp` suffix, then renamed to the
-//! final path.
+//! matching the stage-major storage layout of the tree.
+//!
+//! [`write_inflow_seasonal_stats`] exports fitted seasonal statistics to
+//! `output/stochastic/inflow_seasonal_stats.parquet` using the 4-column
+//! schema matching the corresponding input file:
+//!
+//! | Column     | Type   | Description                         |
+//! |------------|--------|-------------------------------------|
+//! | `hydro_id` | INT32  | Hydro plant ID                      |
+//! | `stage_id` | INT32  | Stage ID                            |
+//! | `mean_m3s` | DOUBLE | Seasonal mean inflow (m³/s)         |
+//! | `std_m3s`  | DOUBLE | Seasonal standard deviation (m³/s)  |
+//!
+//! [`write_inflow_ar_coefficients`] exports fitted AR lag coefficients to
+//! `output/stochastic/inflow_ar_coefficients.parquet` using the 5-column
+//! schema matching the corresponding input file:
+//!
+//! | Column               | Type   | Description                                  |
+//! |----------------------|--------|----------------------------------------------|
+//! | `hydro_id`           | INT32  | Hydro plant ID                               |
+//! | `stage_id`           | INT32  | Stage ID                                     |
+//! | `lag`                | INT32  | Lag index (1-based)                          |
+//! | `coefficient`        | DOUBLE | AR coefficient (standardized, dimensionless) |
+//! | `residual_std_ratio` | DOUBLE | Residual std ratio in (0, 1]                 |
+//!
+//! [`write_correlation_json`] exports a [`CorrelationModel`] to
+//! `output/stochastic/correlation.json` using the same format as the input
+//! `scenarios/correlation.json` so that copying the output file back into
+//! `scenarios/` produces a round-trip-identical model.
+//!
+//! [`write_load_seasonal_stats`] exports per-bus-per-stage load statistics to
+//! `output/stochastic/load_seasonal_stats.parquet` using the 4-column schema
+//! matching the corresponding input file:
+//!
+//! | Column     | Type   | Description                              |
+//! |------------|--------|------------------------------------------|
+//! | `bus_id`   | INT32  | Bus ID                                   |
+//! | `stage_id` | INT32  | Stage ID                                 |
+//! | `mean_mw`  | DOUBLE | Seasonal mean load demand (MW)           |
+//! | `std_mw`   | DOUBLE | Seasonal standard deviation (MW)         |
+//!
+//! [`write_fitting_report`] exports a [`FittingReport`] to
+//! `output/stochastic/fitting_report.json` using the ADR-009 structure:
+//!
+//! ```json
+//! {
+//!   "hydros": {
+//!     "<hydro_id>": {
+//!       "selected_order": 3,
+//!       "aic_scores": [12.4, 11.1, 10.8, 11.3],
+//!       "coefficients": [[0.42, -0.11, 0.07]]
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! All writers use atomic file creation: data is first written to a `.tmp`
+//! suffix, then renamed to the final path.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{Float64Builder, Int32Builder, RecordBatch, UInt32Builder};
 use arrow::datatypes::{DataType, Field, Schema};
+use cobre_core::scenario::{CorrelationModel, CorrelationScheduleEntry};
 use cobre_stochastic::OpeningTree;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
+use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 
 /// Write an [`OpeningTree`] to a Parquet file at `path`.
 ///
@@ -64,15 +123,323 @@ use crate::output::parquet_config::ParquetWriterConfig;
 /// # }
 /// ```
 pub fn write_noise_openings(path: &Path, tree: &OpeningTree) -> Result<(), OutputError> {
-    // Create parent directory if absent.
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| OutputError::io(parent, e))?;
-    }
-
+    ensure_parent_dir(path)?;
     let config = ParquetWriterConfig::default();
     let batch = build_noise_openings_batch(tree)?;
     write_parquet_atomic(path, &batch, &config)
 }
+
+/// Write a slice of [`InflowSeasonalStatsRow`] to a Parquet file at `path`.
+///
+/// The output schema is exactly 4 columns — `hydro_id: Int32`, `stage_id: Int32`,
+/// `mean_m3s: Float64`, `std_m3s: Float64` — in that order, matching the schema
+/// of `scenarios/inflow_seasonal_stats.parquet`. Rows are written in the order
+/// given; the caller is responsible for sorting if canonical ordering is required.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to `path`.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — Arrow/Parquet construction fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::write_inflow_seasonal_stats;
+/// use cobre_io::scenarios::InflowSeasonalStatsRow;
+/// use cobre_core::EntityId;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let rows = vec![
+///     InflowSeasonalStatsRow {
+///         hydro_id: EntityId::from(1),
+///         stage_id: 0,
+///         mean_m3s: 150.0,
+///         std_m3s: 30.0,
+///     },
+/// ];
+/// write_inflow_seasonal_stats(
+///     Path::new("/tmp/out/stochastic/inflow_seasonal_stats.parquet"),
+///     &rows,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_inflow_seasonal_stats(
+    path: &Path,
+    rows: &[InflowSeasonalStatsRow],
+) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let config = ParquetWriterConfig::default();
+    let batch = build_inflow_seasonal_stats_batch(rows)?;
+    write_parquet_atomic(path, &batch, &config)
+}
+
+/// Write a slice of [`InflowArCoefficientRow`] to a Parquet file at `path`.
+///
+/// The output schema is exactly 5 columns — `hydro_id: Int32`, `stage_id: Int32`,
+/// `lag: Int32`, `coefficient: Float64`, `residual_std_ratio: Float64` — in that
+/// order, matching the schema of `scenarios/inflow_ar_coefficients.parquet`.
+/// Rows are written in the order given; the caller is responsible for sorting
+/// if canonical ordering is required.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to `path`.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — Arrow/Parquet construction fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::write_inflow_ar_coefficients;
+/// use cobre_io::scenarios::InflowArCoefficientRow;
+/// use cobre_core::EntityId;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let rows = vec![
+///     InflowArCoefficientRow {
+///         hydro_id: EntityId::from(1),
+///         stage_id: 0,
+///         lag: 1,
+///         coefficient: 0.45,
+///         residual_std_ratio: 0.85,
+///     },
+/// ];
+/// write_inflow_ar_coefficients(
+///     Path::new("/tmp/out/stochastic/inflow_ar_coefficients.parquet"),
+///     &rows,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_inflow_ar_coefficients(
+    path: &Path,
+    rows: &[InflowArCoefficientRow],
+) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let config = ParquetWriterConfig::default();
+    let batch = build_inflow_ar_coefficients_batch(rows)?;
+    write_parquet_atomic(path, &batch, &config)
+}
+
+// ── Intermediate serde types for correlation JSON output ──────────────────────
+
+/// Top-level serialization type for `correlation.json` output.
+///
+/// Uses the same field names and structure as the input format so that
+/// copying the output file back to `scenarios/` produces an identical model.
+/// The `$schema` field is intentionally omitted — it is informational and not
+/// required by [`crate::scenarios::parse_correlation`].
+#[derive(Serialize)]
+struct WriteCorrelationFile {
+    method: String,
+    profiles: BTreeMap<String, WriteProfile>,
+    schedule: Vec<WriteScheduleEntry>,
+}
+
+/// Serialization type for a single named correlation profile.
+///
+/// Uses `correlation_groups` to match the input JSON field name. The
+/// `cobre-core` type uses `groups` internally, so this intermediate type
+/// performs the rename at the serialization boundary.
+#[derive(Serialize)]
+struct WriteProfile {
+    correlation_groups: Vec<WriteCorrelationGroup>,
+}
+
+/// Serialization type for a single correlation group.
+#[derive(Serialize)]
+struct WriteCorrelationGroup {
+    name: String,
+    entities: Vec<WriteEntity>,
+    matrix: Vec<Vec<f64>>,
+}
+
+/// Serialization type for a single entity reference.
+///
+/// Uses `#[serde(rename = "type")]` to match the input JSON field name.
+/// The `cobre-core` type stores the field as `entity_type`, but the input
+/// schema uses `"type"`.
+#[derive(Serialize)]
+struct WriteEntity {
+    #[serde(rename = "type")]
+    entity_type: String,
+    id: i32,
+}
+
+/// Serialization type for a single schedule entry.
+#[derive(Serialize)]
+struct WriteScheduleEntry {
+    stage_id: i32,
+    profile_name: String,
+}
+
+// ── Correlation JSON writer ───────────────────────────────────────────────────
+
+/// Convert a [`CorrelationModel`] to its intermediate write representation.
+///
+/// Profiles are iterated in [`BTreeMap`] order (alphabetical), which preserves
+/// declaration-order invariance across all callers.
+fn to_write_format(model: &CorrelationModel) -> WriteCorrelationFile {
+    let profiles: BTreeMap<String, WriteProfile> = model
+        .profiles
+        .iter()
+        .map(|(name, profile)| {
+            let groups: Vec<WriteCorrelationGroup> = profile
+                .groups
+                .iter()
+                .map(|group| {
+                    let entities: Vec<WriteEntity> = group
+                        .entities
+                        .iter()
+                        .map(|entity| WriteEntity {
+                            entity_type: entity.entity_type.clone(),
+                            id: entity.id.0,
+                        })
+                        .collect();
+                    WriteCorrelationGroup {
+                        name: group.name.clone(),
+                        entities,
+                        matrix: group.matrix.clone(),
+                    }
+                })
+                .collect();
+            (
+                name.clone(),
+                WriteProfile {
+                    correlation_groups: groups,
+                },
+            )
+        })
+        .collect();
+
+    let schedule: Vec<WriteScheduleEntry> = model
+        .schedule
+        .iter()
+        .map(|entry: &CorrelationScheduleEntry| WriteScheduleEntry {
+            stage_id: entry.stage_id,
+            profile_name: entry.profile_name.clone(),
+        })
+        .collect();
+
+    WriteCorrelationFile {
+        method: model.method.clone(),
+        profiles,
+        schedule,
+    }
+}
+
+/// Write a [`CorrelationModel`] to a pretty-printed JSON file at `path`.
+///
+/// The output format matches `scenarios/correlation.json` exactly, using
+/// `"correlation_groups"` (not `"groups"`) and `"type"` (not `"entity_type"`)
+/// as field names, so that copying the output back to `scenarios/` produces
+/// a round-trip-identical model when parsed by [`crate::scenarios::parse_correlation`].
+///
+/// The `$schema` field is omitted — it is informational and not required by
+/// the parser. Profiles appear in alphabetical order (`BTreeMap` iteration
+/// order). Schedule entries preserve the order given in the model.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to
+/// `path`. A partial `.tmp` file may remain on disk if the process is killed
+/// mid-write, but the final path is never partially written.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — JSON serialization fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::write_correlation_json;
+/// use cobre_core::scenario::CorrelationModel;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let model = CorrelationModel::default();
+/// write_correlation_json(Path::new("/tmp/out/stochastic/correlation.json"), &model)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_correlation_json(path: &Path, model: &CorrelationModel) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let write_model = to_write_format(model);
+    let bytes = serde_json::to_vec_pretty(&write_model)
+        .map_err(|e| OutputError::serialization("correlation_json", e.to_string()))?;
+    write_bytes_atomic(path, &bytes)
+}
+
+// ── Load seasonal stats Parquet writer ───────────────────────────────────────
+
+/// Write a slice of [`LoadSeasonalStatsRow`] to a Parquet file at `path`.
+///
+/// The output schema is exactly 4 columns — `bus_id: Int32`, `stage_id: Int32`,
+/// `mean_mw: Float64`, `std_mw: Float64` — in that order, matching the schema
+/// of `scenarios/load_seasonal_stats.parquet`. Rows are written in the order
+/// given; the caller is responsible for sorting if canonical ordering is required.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to `path`.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — Arrow/Parquet construction fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::write_load_seasonal_stats;
+/// use cobre_io::scenarios::LoadSeasonalStatsRow;
+/// use cobre_core::EntityId;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let rows = vec![
+///     LoadSeasonalStatsRow {
+///         bus_id: EntityId::from(1),
+///         stage_id: 0,
+///         mean_mw: 500.0,
+///         std_mw: 50.0,
+///     },
+/// ];
+/// write_load_seasonal_stats(
+///     Path::new("/tmp/out/stochastic/load_seasonal_stats.parquet"),
+///     &rows,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_load_seasonal_stats(
+    path: &Path,
+    rows: &[LoadSeasonalStatsRow],
+) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let config = ParquetWriterConfig::default();
+    let batch = build_load_seasonal_stats_batch(rows)?;
+    write_parquet_atomic(path, &batch, &config)
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Ensure the parent directory of `path` exists, creating it if necessary.
+fn ensure_parent_dir(path: &Path) -> Result<(), OutputError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| OutputError::io(parent, e))?;
+    }
+    Ok(())
+}
+
+// ── Schema builders ───────────────────────────────────────────────────────────
 
 fn noise_openings_schema() -> Schema {
     Schema::new(vec![
@@ -121,15 +488,234 @@ fn build_noise_openings_batch(tree: &OpeningTree) -> Result<RecordBatch, OutputE
     .map_err(|e| OutputError::serialization("noise_openings", e.to_string()))
 }
 
+fn inflow_seasonal_stats_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ])
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+fn build_inflow_seasonal_stats_batch(
+    rows: &[InflowSeasonalStatsRow],
+) -> Result<RecordBatch, OutputError> {
+    let n = rows.len();
+    let mut hydro_id_col = Int32Builder::with_capacity(n);
+    let mut stage_id_col = Int32Builder::with_capacity(n);
+    let mut mean_m3s_col = Float64Builder::with_capacity(n);
+    let mut std_m3s_col = Float64Builder::with_capacity(n);
+
+    for row in rows {
+        hydro_id_col.append_value(row.hydro_id.0);
+        stage_id_col.append_value(row.stage_id);
+        mean_m3s_col.append_value(row.mean_m3s);
+        std_m3s_col.append_value(row.std_m3s);
+    }
+
+    RecordBatch::try_new(
+        Arc::new(inflow_seasonal_stats_schema()),
+        vec![
+            Arc::new(hydro_id_col.finish()),
+            Arc::new(stage_id_col.finish()),
+            Arc::new(mean_m3s_col.finish()),
+            Arc::new(std_m3s_col.finish()),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("inflow_seasonal_stats", e.to_string()))
+}
+
+fn inflow_ar_coefficients_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("lag", DataType::Int32, false),
+        Field::new("coefficient", DataType::Float64, false),
+        Field::new("residual_std_ratio", DataType::Float64, false),
+    ])
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+fn build_inflow_ar_coefficients_batch(
+    rows: &[InflowArCoefficientRow],
+) -> Result<RecordBatch, OutputError> {
+    let n = rows.len();
+    let mut hydro_id_col = Int32Builder::with_capacity(n);
+    let mut stage_id_col = Int32Builder::with_capacity(n);
+    let mut lag_col = Int32Builder::with_capacity(n);
+    let mut coefficient_col = Float64Builder::with_capacity(n);
+    let mut residual_std_ratio_col = Float64Builder::with_capacity(n);
+
+    for row in rows {
+        hydro_id_col.append_value(row.hydro_id.0);
+        stage_id_col.append_value(row.stage_id);
+        lag_col.append_value(row.lag);
+        coefficient_col.append_value(row.coefficient);
+        residual_std_ratio_col.append_value(row.residual_std_ratio);
+    }
+
+    RecordBatch::try_new(
+        Arc::new(inflow_ar_coefficients_schema()),
+        vec![
+            Arc::new(hydro_id_col.finish()),
+            Arc::new(stage_id_col.finish()),
+            Arc::new(lag_col.finish()),
+            Arc::new(coefficient_col.finish()),
+            Arc::new(residual_std_ratio_col.finish()),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("inflow_ar_coefficients", e.to_string()))
+}
+
+fn load_seasonal_stats_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ])
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+fn build_load_seasonal_stats_batch(
+    rows: &[LoadSeasonalStatsRow],
+) -> Result<RecordBatch, OutputError> {
+    let n = rows.len();
+    let mut bus_id_col = Int32Builder::with_capacity(n);
+    let mut stage_id_col = Int32Builder::with_capacity(n);
+    let mut mean_mw_col = Float64Builder::with_capacity(n);
+    let mut std_mw_col = Float64Builder::with_capacity(n);
+
+    for row in rows {
+        bus_id_col.append_value(row.bus_id.0);
+        stage_id_col.append_value(row.stage_id);
+        mean_mw_col.append_value(row.mean_mw);
+        std_mw_col.append_value(row.std_mw);
+    }
+
+    RecordBatch::try_new(
+        Arc::new(load_seasonal_stats_schema()),
+        vec![
+            Arc::new(bus_id_col.finish()),
+            Arc::new(stage_id_col.finish()),
+            Arc::new(mean_mw_col.finish()),
+            Arc::new(std_mw_col.finish()),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("load_seasonal_stats", e.to_string()))
+}
+
+// ── Fitting report types and writer ──────────────────────────────────────────
+
+/// Per-hydro entry in a diagnostic fitting report.
+///
+/// Captures the AIC-selected AR order, the full AIC score vector (one entry
+/// per candidate order), and the per-season AR coefficients produced by the
+/// fitting step.
+///
+/// The `coefficients` field is a nested array: one row per season, each row
+/// containing the AR lag coefficients for that season in lag order.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct HydroFittingEntry {
+    /// AIC-selected AR order for this hydro plant.
+    pub selected_order: u32,
+    /// AIC values for candidate orders 1 through `max_order`.
+    ///
+    /// `aic_scores[i]` is the AIC for order `i + 1`.
+    pub aic_scores: Vec<f64>,
+    /// Per-season AR coefficients.
+    ///
+    /// `coefficients[s]` contains the AR lag coefficients for season `s`,
+    /// with `coefficients[s][k]` being the coefficient for lag `k + 1`.
+    pub coefficients: Vec<Vec<f64>>,
+}
+
+/// Diagnostic fitting report produced after the AR order selection step.
+///
+/// Contains one [`HydroFittingEntry`] per hydro plant that was fitted.
+/// Keys are hydro IDs serialized as strings (e.g., `"1"`, `"5"`) so that
+/// JSON output is readable without a custom serializer. The `BTreeMap`
+/// ensures hydro entries appear in ascending key order regardless of
+/// insertion order.
+///
+/// This type is write-only: `fitting_report.json` is a diagnostic artifact
+/// and is not consumed as input on subsequent runs.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct FittingReport {
+    /// Map from hydro ID string to per-hydro fitting diagnostics.
+    pub hydros: BTreeMap<String, HydroFittingEntry>,
+}
+
+/// Write a [`FittingReport`] to a pretty-printed JSON file at `path`.
+///
+/// The output matches the ADR-009 fitting report schema. Hydro IDs appear as
+/// string keys in ascending sort order (`BTreeMap` iteration order). An empty
+/// report produces `{"hydros":{}}`.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to
+/// `path`. A partial `.tmp` file may remain on disk if the process is killed
+/// mid-write, but the final path is never partially written.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — JSON serialization fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::{write_fitting_report, FittingReport, HydroFittingEntry};
+/// use std::collections::BTreeMap;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let mut hydros = BTreeMap::new();
+/// hydros.insert("1".to_string(), HydroFittingEntry {
+///     selected_order: 3,
+///     aic_scores: vec![12.4, 11.1, 10.8, 11.3],
+///     coefficients: vec![vec![0.42, -0.11, 0.07]],
+/// });
+/// let report = FittingReport { hydros };
+/// write_fitting_report(Path::new("/tmp/out/stochastic/fitting_report.json"), &report)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_fitting_report(path: &Path, report: &FittingReport) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let bytes = serde_json::to_vec_pretty(report)
+        .map_err(|e| OutputError::serialization("fitting_report", e.to_string()))?;
+    write_bytes_atomic(path, &bytes)
+}
+
+/// Write bytes to `path` atomically via a `.tmp` intermediate file.
+///
+/// Creates `{path}.tmp`, writes `bytes`, then renames to `path`.
+/// Parent directory must already exist before calling.
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let tmp_path = match path.extension() {
+        Some(ext) => path.with_extension(format!("{}.tmp", ext.to_string_lossy())),
+        None => path.with_extension("tmp"),
+    };
+
+    std::fs::write(&tmp_path, bytes).map_err(|e| OutputError::io(&tmp_path, e))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| OutputError::io(path, e))?;
+
+    Ok(())
+}
+
 fn write_parquet_atomic(
     path: &Path,
     batch: &RecordBatch,
     config: &ParquetWriterConfig,
 ) -> Result<(), OutputError> {
-    let tmp_path = path.with_extension(path.extension().map_or_else(
-        || "tmp".to_string(),
-        |ext| format!("{}.tmp", ext.to_string_lossy()),
-    ));
+    let tmp_path = match path.extension() {
+        Some(ext) => path.with_extension(format!("{}.tmp", ext.to_string_lossy())),
+        None => path.with_extension("tmp"),
+    };
 
     let props = WriterProperties::builder()
         .set_compression(config.compression)
@@ -138,7 +724,6 @@ fn write_parquet_atomic(
         .build();
 
     let file = std::fs::File::create(&tmp_path).map_err(|e| OutputError::io(&tmp_path, e))?;
-
     let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
         .map_err(|e| OutputError::serialization("parquet_writer", e.to_string()))?;
 
@@ -148,7 +733,6 @@ fn write_parquet_atomic(
         .map_err(|e| OutputError::serialization("parquet_writer", e.to_string()))?;
 
     std::fs::rename(&tmp_path, path).map_err(|e| OutputError::io(path, e))?;
-
     Ok(())
 }
 
@@ -161,6 +745,7 @@ fn write_parquet_atomic(
 )]
 mod tests {
     use super::*;
+    use cobre_core::EntityId;
     use cobre_stochastic::OpeningTree;
 
     fn make_tree_2s_2d() -> OpeningTree {
@@ -186,7 +771,6 @@ mod tests {
         let rows: Vec<NoiseOpeningRow> = parse_noise_openings(&path).expect("parse must succeed");
         let recovered = assemble_opening_tree(rows, tree.dim());
 
-        // Verify structural equality.
         assert_eq!(
             recovered.n_stages(),
             tree.n_stages(),
@@ -198,7 +782,6 @@ mod tests {
             tree.openings_per_stage_slice(),
             "openings_per_stage_slice must be identical"
         );
-        // Verify data equality.
         assert_eq!(
             recovered.data(),
             tree.data(),
@@ -254,7 +837,6 @@ mod tests {
             "schema must have exactly 4 fields"
         );
 
-        // Verify field names and types.
         let fields: Vec<(&str, &DataType)> = schema
             .fields()
             .iter()
@@ -423,5 +1005,905 @@ mod tests {
             .map(|b| b.expect("batch must be Ok").num_rows())
             .sum();
         assert_eq!(total_rows, 0, "empty tree must produce 0-row file");
+    }
+
+    // =========================================================================
+    // write_inflow_seasonal_stats tests
+    // =========================================================================
+
+    fn make_inflow_stats_rows() -> Vec<InflowSeasonalStatsRow> {
+        vec![
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                mean_m3s: 150.0,
+                std_m3s: 30.0,
+            },
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 1,
+                mean_m3s: 160.0,
+                std_m3s: 32.0,
+            },
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId::from(3),
+                stage_id: 0,
+                mean_m3s: 180.0,
+                std_m3s: 35.0,
+            },
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId::from(3),
+                stage_id: 1,
+                mean_m3s: 200.0,
+                std_m3s: 40.0,
+            },
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // write_then_read_inflow_stats_round_trips
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_then_read_inflow_stats_round_trips() {
+        use crate::scenarios::parse_inflow_seasonal_stats;
+
+        let rows = make_inflow_stats_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_seasonal_stats.parquet");
+
+        write_inflow_seasonal_stats(&path, &rows).expect("write must succeed");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered = parse_inflow_seasonal_stats(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.len(), rows.len(), "row count must match");
+        for (original, parsed) in rows.iter().zip(recovered.iter()) {
+            assert_eq!(parsed.hydro_id, original.hydro_id, "hydro_id must match");
+            assert_eq!(parsed.stage_id, original.stage_id, "stage_id must match");
+            assert!(
+                (parsed.mean_m3s - original.mean_m3s).abs() < 1e-10,
+                "mean_m3s must be bit-for-bit identical"
+            );
+            assert!(
+                (parsed.std_m3s - original.std_m3s).abs() < 1e-10,
+                "std_m3s must be bit-for-bit identical"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // write_inflow_stats_creates_parent_directory
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_inflow_stats_creates_parent_directory() {
+        let rows = make_inflow_stats_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp
+            .path()
+            .join("output/stochastic/inflow_seasonal_stats.parquet");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_inflow_seasonal_stats(&path, &rows)
+            .expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_inflow_stats_empty_rows_valid_schema
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_inflow_stats_empty_rows_valid_schema() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_seasonal_stats.parquet");
+
+        write_inflow_seasonal_stats(&path, &[]).expect("write must succeed for empty rows");
+
+        let file = std::fs::File::open(&path).expect("file must open");
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(file).expect("builder must be created");
+        let schema = builder.schema().clone();
+        let reader = builder.build().expect("reader must be created");
+
+        let total_rows: usize = reader
+            .map(|b| b.expect("batch must be Ok").num_rows())
+            .sum();
+        assert_eq!(total_rows, 0, "empty rows must produce 0-row file");
+        assert_eq!(
+            schema.fields().len(),
+            4,
+            "schema must have exactly 4 columns"
+        );
+
+        let fields: Vec<(&str, &DataType)> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+        assert_eq!(fields[0], ("hydro_id", &DataType::Int32));
+        assert_eq!(fields[1], ("stage_id", &DataType::Int32));
+        assert_eq!(fields[2], ("mean_m3s", &DataType::Float64));
+        assert_eq!(fields[3], ("std_m3s", &DataType::Float64));
+    }
+
+    // -------------------------------------------------------------------------
+    // write_inflow_stats_no_tmp_file_remains
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_inflow_stats_no_tmp_file_remains() {
+        let rows = make_inflow_stats_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_seasonal_stats.parquet");
+
+        write_inflow_seasonal_stats(&path, &rows).expect("write must succeed");
+
+        let tmp_path = path.with_extension("parquet.tmp");
+        assert!(
+            !tmp_path.exists(),
+            ".tmp file must not remain after successful atomic write"
+        );
+        assert!(path.exists(), "final file must exist");
+    }
+
+    // =========================================================================
+    // write_inflow_ar_coefficients tests
+    // =========================================================================
+
+    fn make_ar_coefficient_rows() -> Vec<InflowArCoefficientRow> {
+        vec![
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.45,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.20,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                lag: 3,
+                coefficient: 0.10,
+                residual_std_ratio: 0.85,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(2),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.30,
+                residual_std_ratio: 0.75,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(2),
+                stage_id: 0,
+                lag: 2,
+                coefficient: 0.15,
+                residual_std_ratio: 0.75,
+            },
+            InflowArCoefficientRow {
+                hydro_id: EntityId::from(2),
+                stage_id: 0,
+                lag: 3,
+                coefficient: 0.05,
+                residual_std_ratio: 0.75,
+            },
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // write_then_read_ar_coefficients_round_trips
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_then_read_ar_coefficients_round_trips() {
+        use crate::scenarios::parse_inflow_ar_coefficients;
+
+        let rows = make_ar_coefficient_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_ar_coefficients.parquet");
+
+        write_inflow_ar_coefficients(&path, &rows).expect("write must succeed");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered =
+            parse_inflow_ar_coefficients(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.len(), rows.len(), "row count must match");
+        for (original, parsed) in rows.iter().zip(recovered.iter()) {
+            assert_eq!(parsed.hydro_id, original.hydro_id, "hydro_id must match");
+            assert_eq!(parsed.stage_id, original.stage_id, "stage_id must match");
+            assert_eq!(parsed.lag, original.lag, "lag must match");
+            assert!(
+                (parsed.coefficient - original.coefficient).abs() < 1e-10,
+                "coefficient must be bit-for-bit identical"
+            );
+            assert!(
+                (parsed.residual_std_ratio - original.residual_std_ratio).abs() < 1e-10,
+                "residual_std_ratio must be bit-for-bit identical"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // write_ar_coefficients_creates_parent_directory
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_ar_coefficients_creates_parent_directory() {
+        let rows = make_ar_coefficient_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp
+            .path()
+            .join("output/stochastic/inflow_ar_coefficients.parquet");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_inflow_ar_coefficients(&path, &rows)
+            .expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_ar_coefficients_empty_rows_valid_schema
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_ar_coefficients_empty_rows_valid_schema() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_ar_coefficients.parquet");
+
+        write_inflow_ar_coefficients(&path, &[]).expect("write must succeed for empty rows");
+
+        let file = std::fs::File::open(&path).expect("file must open");
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(file).expect("builder must be created");
+        let schema = builder.schema().clone();
+        let reader = builder.build().expect("reader must be created");
+
+        let total_rows: usize = reader
+            .map(|b| b.expect("batch must be Ok").num_rows())
+            .sum();
+        assert_eq!(total_rows, 0, "empty rows must produce 0-row file");
+        assert_eq!(
+            schema.fields().len(),
+            5,
+            "schema must have exactly 5 columns"
+        );
+
+        let fields: Vec<(&str, &DataType)> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+        assert_eq!(fields[0], ("hydro_id", &DataType::Int32));
+        assert_eq!(fields[1], ("stage_id", &DataType::Int32));
+        assert_eq!(fields[2], ("lag", &DataType::Int32));
+        assert_eq!(fields[3], ("coefficient", &DataType::Float64));
+        assert_eq!(fields[4], ("residual_std_ratio", &DataType::Float64));
+    }
+
+    // -------------------------------------------------------------------------
+    // write_ar_coefficients_no_tmp_file_remains
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_ar_coefficients_no_tmp_file_remains() {
+        let rows = make_ar_coefficient_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_ar_coefficients.parquet");
+
+        write_inflow_ar_coefficients(&path, &rows).expect("write must succeed");
+
+        let tmp_path = path.with_extension("parquet.tmp");
+        assert!(
+            !tmp_path.exists(),
+            ".tmp file must not remain after successful atomic write"
+        );
+        assert!(path.exists(), "final file must exist");
+    }
+
+    // =========================================================================
+    // write_correlation_json tests
+    // =========================================================================
+
+    use cobre_core::scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        CorrelationScheduleEntry,
+    };
+    use std::collections::BTreeMap;
+
+    fn make_simple_correlation_model() -> CorrelationModel {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "group_a".to_string(),
+                    entities: vec![
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(1),
+                        },
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(2),
+                        },
+                    ],
+                    matrix: vec![vec![1.0, 0.75], vec![0.75, 1.0]],
+                }],
+            },
+        );
+        CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        }
+    }
+
+    fn make_two_profile_correlation_model() -> CorrelationModel {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "all".to_string(),
+                    entities: vec![
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(1),
+                        },
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(2),
+                        },
+                    ],
+                    matrix: vec![vec![1.0, 0.5], vec![0.5, 1.0]],
+                }],
+            },
+        );
+        profiles.insert(
+            "wet_season".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "southeast".to_string(),
+                    entities: vec![
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(1),
+                        },
+                        CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id: EntityId::from(2),
+                        },
+                    ],
+                    matrix: vec![vec![1.0, 0.9], vec![0.9, 1.0]],
+                }],
+            },
+        );
+        CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![
+                CorrelationScheduleEntry {
+                    stage_id: 0,
+                    profile_name: "wet_season".to_string(),
+                },
+                CorrelationScheduleEntry {
+                    stage_id: 6,
+                    profile_name: "default".to_string(),
+                },
+            ],
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // write_then_read_correlation_json_round_trips_simple
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_then_read_correlation_json_round_trips_simple() {
+        use crate::scenarios::parse_correlation;
+
+        let model = make_simple_correlation_model();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("correlation.json");
+
+        write_correlation_json(&path, &model).expect("write must succeed");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered = parse_correlation(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.method, "cholesky", "method must match");
+        assert_eq!(recovered.profiles.len(), 1, "profiles.len must be 1");
+        assert!(recovered.schedule.is_empty(), "schedule must be empty");
+
+        let profile = &recovered.profiles["default"];
+        assert_eq!(profile.groups.len(), 1);
+        let group = &profile.groups[0];
+        assert_eq!(group.entities.len(), 2);
+        assert_eq!(group.entities[0].entity_type, "inflow");
+        assert_eq!(group.entities[0].id, EntityId::from(1));
+        assert_eq!(group.entities[1].entity_type, "inflow");
+        assert_eq!(group.entities[1].id, EntityId::from(2));
+        assert!((group.matrix[0][1] - 0.75).abs() < 1e-10);
+        assert!((group.matrix[1][0] - 0.75).abs() < 1e-10);
+    }
+
+    // -------------------------------------------------------------------------
+    // write_then_read_correlation_json_round_trips_with_schedule
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_then_read_correlation_json_round_trips_with_schedule() {
+        use crate::scenarios::parse_correlation;
+
+        let model = make_two_profile_correlation_model();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("correlation.json");
+
+        write_correlation_json(&path, &model).expect("write must succeed");
+
+        let recovered = parse_correlation(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.profiles.len(), 2, "profiles.len must be 2");
+        assert_eq!(recovered.schedule.len(), 2, "schedule.len must be 2");
+        assert_eq!(recovered.method, "cholesky");
+
+        let keys: Vec<&String> = recovered.profiles.keys().collect();
+        assert_eq!(keys[0], "default");
+        assert_eq!(keys[1], "wet_season");
+
+        assert_eq!(recovered.schedule[0].stage_id, 0);
+        assert_eq!(recovered.schedule[0].profile_name, "wet_season");
+        assert_eq!(recovered.schedule[1].stage_id, 6);
+        assert_eq!(recovered.schedule[1].profile_name, "default");
+
+        let default_group = &recovered.profiles["default"].groups[0];
+        assert_eq!(default_group.name, "all");
+        assert!((default_group.matrix[0][1] - 0.5).abs() < 1e-10);
+
+        let wet_group = &recovered.profiles["wet_season"].groups[0];
+        assert_eq!(wet_group.name, "southeast");
+        assert!((wet_group.matrix[0][1] - 0.9).abs() < 1e-10);
+    }
+
+    // -------------------------------------------------------------------------
+    // write_correlation_json_field_names_match_input_format
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_correlation_json_field_names_match_input_format() {
+        let model = make_simple_correlation_model();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("correlation.json");
+
+        write_correlation_json(&path, &model).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("file must be readable");
+
+        assert!(
+            content.contains("\"correlation_groups\""),
+            "JSON must use 'correlation_groups' key, not 'groups'"
+        );
+        assert!(
+            content.contains("\"type\""),
+            "JSON must use 'type' key for entity type"
+        );
+        assert!(
+            !content.contains("\"entity_type\""),
+            "JSON must NOT use 'entity_type' key"
+        );
+        assert!(
+            !content.contains("\"groups\""),
+            "JSON must NOT use 'groups' key at the profile level"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_correlation_json_creates_parent_directory
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_correlation_json_creates_parent_directory() {
+        let model = make_simple_correlation_model();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("output/stochastic/correlation.json");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_correlation_json(&path, &model).expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_correlation_json_no_tmp_file_remains
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_correlation_json_no_tmp_file_remains() {
+        let model = make_simple_correlation_model();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("correlation.json");
+
+        write_correlation_json(&path, &model).expect("write must succeed");
+
+        let tmp_path = path.with_extension("json.tmp");
+        assert!(
+            !tmp_path.exists(),
+            ".tmp file must not remain after successful atomic write"
+        );
+        assert!(path.exists(), "final file must exist");
+    }
+
+    // =========================================================================
+    // write_load_seasonal_stats tests
+    // =========================================================================
+
+    fn make_load_stats_rows() -> Vec<LoadSeasonalStatsRow> {
+        vec![
+            LoadSeasonalStatsRow {
+                bus_id: EntityId::from(1),
+                stage_id: 0,
+                mean_mw: 500.0,
+                std_mw: 50.0,
+            },
+            LoadSeasonalStatsRow {
+                bus_id: EntityId::from(1),
+                stage_id: 1,
+                mean_mw: 520.0,
+                std_mw: 52.0,
+            },
+            LoadSeasonalStatsRow {
+                bus_id: EntityId::from(3),
+                stage_id: 0,
+                mean_mw: 700.0,
+                std_mw: 70.0,
+            },
+            LoadSeasonalStatsRow {
+                bus_id: EntityId::from(3),
+                stage_id: 1,
+                mean_mw: 720.0,
+                std_mw: 72.0,
+            },
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // write_then_read_load_stats_round_trips
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_then_read_load_stats_round_trips() {
+        use crate::scenarios::parse_load_seasonal_stats;
+
+        let rows = make_load_stats_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("load_seasonal_stats.parquet");
+
+        write_load_seasonal_stats(&path, &rows).expect("write must succeed");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered = parse_load_seasonal_stats(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.len(), rows.len(), "row count must match");
+        for (original, parsed) in rows.iter().zip(recovered.iter()) {
+            assert_eq!(parsed.bus_id, original.bus_id, "bus_id must match");
+            assert_eq!(parsed.stage_id, original.stage_id, "stage_id must match");
+            assert!(
+                (parsed.mean_mw - original.mean_mw).abs() < 1e-10,
+                "mean_mw must be bit-for-bit identical"
+            );
+            assert!(
+                (parsed.std_mw - original.std_mw).abs() < 1e-10,
+                "std_mw must be bit-for-bit identical"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // write_load_stats_empty_rows_valid_schema
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_load_stats_empty_rows_valid_schema() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("load_seasonal_stats.parquet");
+
+        write_load_seasonal_stats(&path, &[]).expect("write must succeed for empty rows");
+
+        let file = std::fs::File::open(&path).expect("file must open");
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(file).expect("builder must be created");
+        let schema = builder.schema().clone();
+        let reader = builder.build().expect("reader must be created");
+
+        let total_rows: usize = reader
+            .map(|b| b.expect("batch must be Ok").num_rows())
+            .sum();
+        assert_eq!(total_rows, 0, "empty rows must produce 0-row file");
+        assert_eq!(
+            schema.fields().len(),
+            4,
+            "schema must have exactly 4 columns"
+        );
+
+        let fields: Vec<(&str, &DataType)> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+        assert_eq!(fields[0], ("bus_id", &DataType::Int32));
+        assert_eq!(fields[1], ("stage_id", &DataType::Int32));
+        assert_eq!(fields[2], ("mean_mw", &DataType::Float64));
+        assert_eq!(fields[3], ("std_mw", &DataType::Float64));
+    }
+
+    // -------------------------------------------------------------------------
+    // write_load_stats_creates_parent_directory
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_load_stats_creates_parent_directory() {
+        let rows = make_load_stats_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp
+            .path()
+            .join("output/stochastic/load_seasonal_stats.parquet");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_load_seasonal_stats(&path, &rows)
+            .expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // =========================================================================
+    // write_fitting_report tests
+    // =========================================================================
+
+    fn make_two_hydro_report() -> FittingReport {
+        let mut hydros = BTreeMap::new();
+        hydros.insert(
+            "1".to_string(),
+            HydroFittingEntry {
+                selected_order: 3,
+                aic_scores: vec![12.4, 11.1, 10.8, 11.3],
+                coefficients: vec![vec![0.42, -0.11, 0.07], vec![0.35, -0.08, 0.05]],
+            },
+        );
+        hydros.insert(
+            "5".to_string(),
+            HydroFittingEntry {
+                selected_order: 1,
+                aic_scores: vec![8.2, 8.9],
+                coefficients: vec![vec![0.60], vec![0.55]],
+            },
+        );
+        FittingReport { hydros }
+    }
+
+    // -------------------------------------------------------------------------
+    // write_fitting_report_two_hydros
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_fitting_report_two_hydros() {
+        let report = make_two_hydro_report();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("fitting_report.json");
+
+        write_fitting_report(&path, &report).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("file must be readable");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("must be valid JSON");
+
+        let hydros = value["hydros"]
+            .as_object()
+            .expect("hydros must be an object");
+        assert!(hydros.contains_key("1"), "hydros must contain key \"1\"");
+        assert!(hydros.contains_key("5"), "hydros must contain key \"5\"");
+        assert_eq!(hydros.len(), 2, "hydros must have exactly 2 keys");
+
+        assert_eq!(
+            value["hydros"]["1"]["selected_order"].as_u64(),
+            Some(3),
+            "selected_order for hydro 1 must be 3"
+        );
+        let aic = value["hydros"]["1"]["aic_scores"]
+            .as_array()
+            .expect("aic_scores must be an array");
+        assert_eq!(aic.len(), 4, "aic_scores for hydro 1 must have 4 elements");
+
+        let coefficients = value["hydros"]["1"]["coefficients"]
+            .as_array()
+            .expect("coefficients must be an array");
+        assert_eq!(
+            coefficients.len(),
+            2,
+            "coefficients for hydro 1 must have 2 rows"
+        );
+        assert_eq!(
+            coefficients[0]
+                .as_array()
+                .expect("row 0 must be array")
+                .len(),
+            3,
+            "each coefficient row must have 3 elements"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_fitting_report_empty_hydros
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_fitting_report_empty_hydros() {
+        let report = FittingReport {
+            hydros: BTreeMap::new(),
+        };
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("fitting_report.json");
+
+        write_fitting_report(&path, &report).expect("write must succeed for empty report");
+
+        let content = std::fs::read_to_string(&path).expect("file must be readable");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("must be valid JSON");
+
+        let hydros = value["hydros"]
+            .as_object()
+            .expect("hydros must be an object");
+        assert!(
+            hydros.is_empty(),
+            "empty report must produce empty hydros object"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_fitting_report_creates_parent_directory
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_fitting_report_creates_parent_directory() {
+        let report = make_two_hydro_report();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("output/stochastic/fitting_report.json");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_fitting_report(&path, &report).expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // write_fitting_report_no_tmp_file_remains
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_fitting_report_no_tmp_file_remains() {
+        let report = make_two_hydro_report();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("fitting_report.json");
+
+        write_fitting_report(&path, &report).expect("write must succeed");
+
+        let tmp_path = path.with_extension("json.tmp");
+        assert!(
+            !tmp_path.exists(),
+            ".tmp file must not remain after successful atomic write"
+        );
+        assert!(path.exists(), "final file must exist");
+    }
+
+    // -------------------------------------------------------------------------
+    // write_fitting_report_aic_scores_preserved
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_fitting_report_aic_scores_preserved() {
+        let aic_scores = vec![12.4, 11.1, 10.8, 11.3];
+        let coefficients = vec![vec![0.42, -0.11, 0.07], vec![0.35, -0.08, 0.05]];
+        let mut hydros = BTreeMap::new();
+        hydros.insert(
+            "1".to_string(),
+            HydroFittingEntry {
+                selected_order: 3,
+                aic_scores: aic_scores.clone(),
+                coefficients: coefficients.clone(),
+            },
+        );
+        let report = FittingReport { hydros };
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("fitting_report.json");
+
+        write_fitting_report(&path, &report).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("file must be readable");
+        let recovered: FittingReport =
+            serde_json::from_str(&content).expect("must deserialize back");
+        let entry = recovered.hydros.get("1").expect("hydro 1 must be present");
+
+        assert_eq!(
+            entry.aic_scores.len(),
+            aic_scores.len(),
+            "aic_scores length must be preserved"
+        );
+        for (i, (&original, &recovered_val)) in
+            aic_scores.iter().zip(entry.aic_scores.iter()).enumerate()
+        {
+            assert!(
+                (original - recovered_val).abs() < 1e-10,
+                "aic_scores[{i}] must survive JSON round-trip: expected {original}, got {recovered_val}"
+            );
+        }
+
+        assert_eq!(
+            entry.coefficients.len(),
+            coefficients.len(),
+            "coefficients row count must be preserved"
+        );
+        for (row_idx, (orig_row, rec_row)) in coefficients
+            .iter()
+            .zip(entry.coefficients.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                orig_row.len(),
+                rec_row.len(),
+                "coefficients[{row_idx}] length must be preserved"
+            );
+            for (col_idx, (&ov, &rv)) in orig_row.iter().zip(rec_row.iter()).enumerate() {
+                assert!(
+                    (ov - rv).abs() < 1e-10,
+                    "coefficients[{row_idx}][{col_idx}] must survive JSON round-trip: expected {ov}, got {rv}"
+                );
+            }
+        }
     }
 }

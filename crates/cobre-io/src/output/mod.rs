@@ -31,7 +31,11 @@ pub use manifest::{
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use simulation_writer::SimulationParquetWriter;
-pub use stochastic::write_noise_openings;
+pub use stochastic::{
+    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings, FittingReport,
+    HydroFittingEntry,
+};
 pub use training_writer::TrainingParquetWriter;
 
 use cobre_core::System;

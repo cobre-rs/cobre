@@ -521,7 +521,7 @@ fn run_inner(
             .map_err(|msg| format!("cut_selection config error: {msg}"))?;
 
     // Build stochastic context.
-    let stochastic = build_stochastic_context(&system, seed, &[])
+    let stochastic = build_stochastic_context(&system, seed, &[], None)
         .map_err(|e| format!("stochastic context error: {e}"))?;
 
     // Build LP templates.

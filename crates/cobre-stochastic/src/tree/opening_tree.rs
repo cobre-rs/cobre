@@ -49,10 +49,10 @@ impl OpeningTree {
     ///
     /// Panics if `data.len()` does not equal
     /// `openings_per_stage.iter().sum::<usize>() * dim`.
-    pub(crate) fn from_parts(data: Vec<f64>, openings_per_stage: Vec<usize>, dim: usize) -> Self {
+    #[must_use]
+    pub fn from_parts(data: Vec<f64>, openings_per_stage: Vec<usize>, dim: usize) -> Self {
         let n_stages = openings_per_stage.len();
 
-        // Build stage_offsets with sentinel: length is n_stages + 1.
         let mut stage_offsets = Vec::with_capacity(n_stages + 1);
         let mut offset = 0usize;
         stage_offsets.push(offset);
@@ -90,8 +90,6 @@ impl OpeningTree {
     }
 
     /// Return the noise slice for a specific `(stage, opening_idx)` pair.
-    ///
-    /// The returned slice has exactly `dim` elements.
     ///
     /// # Panics
     ///
@@ -158,6 +156,21 @@ impl OpeningTree {
     pub fn size_bytes(&self) -> usize {
         std::mem::size_of_val(&*self.data)
     }
+
+    /// Return a reference to the flat contiguous backing array.
+    ///
+    /// The layout is stage-major: all openings for stage 0, then stage 1, etc.
+    /// Within each stage, openings are contiguous blocks of `dim` f64 values.
+    #[must_use]
+    pub fn data(&self) -> &[f64] {
+        &self.data
+    }
+
+    /// Return a reference to the per-stage branching factor array.
+    #[must_use]
+    pub fn openings_per_stage_slice(&self) -> &[usize] {
+        &self.openings_per_stage
+    }
 }
 
 /// Borrowed read-only view over opening tree data.
@@ -175,8 +188,6 @@ pub struct OpeningTreeView<'a> {
 
 impl OpeningTreeView<'_> {
     /// Return the noise slice for a specific `(stage, opening_idx)` pair.
-    ///
-    /// The returned slice has exactly `dim` elements.
     ///
     /// # Panics
     ///
@@ -243,15 +254,26 @@ impl OpeningTreeView<'_> {
     pub fn size_bytes(&self) -> usize {
         std::mem::size_of_val(self.data)
     }
+
+    /// Return a reference to the flat contiguous backing slice.
+    ///
+    /// The layout is stage-major: all openings for stage 0, then stage 1, etc.
+    /// Within each stage, openings are contiguous blocks of `dim` f64 values.
+    #[must_use]
+    pub fn data(&self) -> &[f64] {
+        self.data
+    }
+
+    /// Return a reference to the per-stage branching factor slice.
+    #[must_use]
+    pub fn openings_per_stage_slice(&self) -> &[usize] {
+        self.openings_per_stage
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
 
     /// Build a tree with uniform branching: `n_stages` stages, each with
     /// `openings` openings, each opening of dimension `dim`.
@@ -265,10 +287,6 @@ mod tests {
         let ops = vec![openings; n_stages];
         OpeningTree::from_parts(data, ops, dim)
     }
-
-    // -----------------------------------------------------------------------
-    // Acceptance criteria tests (from ticket)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn opening_stage0_opening0_returns_first_dim_elements() {
@@ -427,5 +445,29 @@ mod tests {
         let tree = uniform_tree(2, 3, 4);
         let view = tree.view();
         assert_eq!(view.is_empty(), tree.is_empty());
+    }
+
+    #[test]
+    fn data_returns_full_backing_array() {
+        // openings_per_stage=[1,2], dim=2: total = (1+2)*2 = 6 elements
+        let raw = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let tree = OpeningTree::from_parts(raw.clone(), vec![1, 2], 2);
+        assert_eq!(tree.data(), raw.as_slice());
+    }
+
+    #[test]
+    fn openings_per_stage_slice_matches_input() {
+        // openings_per_stage=[1,2], dim=2: total = (1+2)*2 = 6 elements
+        let tree = OpeningTree::from_parts(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![1, 2], 2);
+        assert_eq!(tree.openings_per_stage_slice(), &[1_usize, 2]);
+    }
+
+    #[test]
+    fn view_data_matches_owned_data() {
+        // openings_per_stage=[1,2], dim=2: total = (1+2)*2 = 6 elements
+        let raw = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let tree = OpeningTree::from_parts(raw.clone(), vec![1, 2], 2);
+        let view = tree.view();
+        assert_eq!(view.data(), raw.as_slice());
     }
 }

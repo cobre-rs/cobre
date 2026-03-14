@@ -911,7 +911,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────
@@ -2374,7 +2374,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     /// AC: Given a backward pass with 1 stochastic load bus and opening noise

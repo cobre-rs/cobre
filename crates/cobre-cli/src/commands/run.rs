@@ -18,15 +18,15 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::TrainingEvent;
 use cobre_io::write_results;
 use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    SimulationConfig, SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspacePool, build_stage_templates,
-    build_training_output, simulate, train,
+    build_stage_templates, build_training_output, simulate, train, EntityCounts,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext, WorkspacePool,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
@@ -485,7 +485,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     let seed = bcast_config.seed;
     let stochastic =
-        build_stochastic_context(&system, seed, &[]).map_err(|e| CliError::Internal {
+        build_stochastic_context(&system, seed, &[], None).map_err(|e| CliError::Internal {
             message: format!("stochastic context error: {e}"),
         })?;
 

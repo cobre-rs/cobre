@@ -373,7 +373,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     /// One-hydro, one-load-bus, n-stage `StochasticContext`.
@@ -502,7 +502,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     // ── transform_inflow_noise: None method ──────────────────────────────────

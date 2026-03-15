@@ -46,7 +46,6 @@ struct RunSummary {
     total_time_ms: u64,
     output_dir: PathBuf,
     simulation: Option<SimSummary>,
-    estimation_report: Option<EstimationReport>,
     stochastic: Option<StochasticSummary>,
 }
 
@@ -422,7 +421,6 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: Some(sim_summary),
-            estimation_report,
             stochastic: Some(stochastic_summary),
         })
     } else {
@@ -437,7 +435,6 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: None,
-            estimation_report,
             stochastic: Some(stochastic_summary),
         })
     }

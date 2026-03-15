@@ -76,8 +76,8 @@ const DEFAULT_SEED: u64 = 42;
 /// [`cobre_io::Config`]. Owns all data so it can be held across async
 /// boundaries (e.g., Python GIL release) without lifetime issues.
 ///
-/// Callers build [`TrainingContext`](crate::TrainingContext) and
-/// [`StageContext`](crate::StageContext) by borrowing from `StudySetup`.
+/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
+/// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {
     // ── LP templates ─────────────────────────────────────────────────────────
@@ -216,14 +216,14 @@ impl StudySetup {
     /// [`cobre_io::Config`] (on rank 0) or a broadcast config struct (on non-root
     /// ranks). It performs the expensive computation steps that cannot be serialised:
     ///
-    /// 1. [`build_stage_templates`] — constructs LP skeletons for each stage
-    /// 2. [`StageIndexer::with_equipment`] — computes LP column/row offsets
-    /// 3. [`build_initial_state`] — extracts initial storage from system IC
-    /// 4. [`max_iterations_from_rules`] — sizes the FCF cut pool
-    /// 5. [`FutureCostFunction::new`] — pre-allocates cut storage
-    /// 6. [`HorizonMode::Finite`] — wraps stage count
+    /// 1. `build_stage_templates` — constructs LP skeletons for each stage
+    /// 2. `StageIndexer::with_equipment` — computes LP column/row offsets
+    /// 3. `build_initial_state` — extracts initial storage from system IC
+    /// 4. `max_iterations_from_rules` — sizes the FCF cut pool
+    /// 5. `FutureCostFunction::new` — pre-allocates cut storage
+    /// 6. `HorizonMode::Finite` — wraps stage count
     /// 7. Risk measures from stage configs
-    /// 8. [`build_entity_counts`] — entity ID and productivity vectors
+    /// 8. `build_entity_counts` — entity ID and productivity vectors
     /// 9. Block layout derivation (`block_counts_per_stage`, `max_blocks`)
     ///
     /// # Errors
@@ -631,7 +631,7 @@ impl StudySetup {
 
     // ── Training output method ────────────────────────────────────────────────
 
-    /// Convert a [`TrainingResult`] and event log into the [`TrainingOutput`]
+    /// Convert a [`TrainingResult`] and event log into the training output
     /// required by the output writers in `cobre-io`.
     ///
     /// This is a thin delegation to [`crate::build_training_output`], using

@@ -20,28 +20,25 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator, ReduceOp};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
-    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings, FittingReport,
-    HydroFittingEntry,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
 };
-use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
+use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
-use cobre_sddp::estimation::{estimate_from_history, HydroEstimationEntry};
+use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
-    EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult, StoppingMode,
-    StoppingRule, StoppingRuleSet, StudySetup, DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS,
-    DEFAULT_SEED,
+    DEFAULT_MAX_ITERATIONS, EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult,
+    StoppingMode, StoppingRule, StoppingRuleSet, StudyParams, StudySetup, build_stochastic_summary,
+    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{build_stochastic_context, context::OpeningTree};
 
 use crate::error::CliError;
-use crate::summary::{
-    ArOrderSummary, SimulationSummary, StochasticSource, StochasticSummary, TrainingSummary,
-};
+use crate::summary::{SimulationSummary, TrainingSummary};
 
 // Broadcast types — postcard-safe serializable wrappers for MPI communication
 
@@ -152,42 +149,29 @@ struct BroadcastConfig {
 
 impl BroadcastConfig {
     fn from_config(config: &cobre_io::Config) -> Result<Self, CliError> {
-        use cobre_io::config::StoppingRuleConfig;
+        let params = StudyParams::from_config(config).map_err(CliError::from)?;
 
-        let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
-
-        let forward_passes = config
-            .training
-            .forward_passes
-            .unwrap_or(DEFAULT_FORWARD_PASSES);
-
-        let rule_configs = match &config.training.stopping_rules {
-            Some(rules) if !rules.is_empty() => rules.clone(),
-            _ => vec![StoppingRuleConfig::IterationLimit {
-                limit: u32::try_from(DEFAULT_MAX_ITERATIONS).unwrap_or(u32::MAX),
-            }],
-        };
-
-        let stopping_rules = rule_configs
-            .into_iter()
-            .map(|c| match c {
-                StoppingRuleConfig::IterationLimit { limit } => {
-                    BroadcastStoppingRule::IterationLimit {
-                        limit: u64::from(limit),
-                    }
+        let stopping_rules = params
+            .stopping_rule_set
+            .rules
+            .iter()
+            .map(|r| match r {
+                StoppingRule::IterationLimit { limit } => {
+                    BroadcastStoppingRule::IterationLimit { limit: *limit }
                 }
-                StoppingRuleConfig::TimeLimit { seconds } => {
-                    BroadcastStoppingRule::TimeLimit { seconds }
+                StoppingRule::TimeLimit { seconds } => {
+                    BroadcastStoppingRule::TimeLimit { seconds: *seconds }
                 }
-                StoppingRuleConfig::BoundStalling {
+                StoppingRule::BoundStalling {
                     iterations,
                     tolerance,
                 } => BroadcastStoppingRule::BoundStalling {
-                    iterations: u64::from(iterations),
-                    tolerance,
+                    iterations: *iterations,
+                    tolerance: *tolerance,
                 },
-                StoppingRuleConfig::Simulation { .. } => {
-                    // Not implemented in MVP; fold into iteration limit.
+                // SimulationBased and GracefulShutdown are not representable in
+                // BroadcastStoppingRule; fold into the safety iteration limit.
+                StoppingRule::SimulationBased { .. } | StoppingRule::GracefulShutdown => {
                     BroadcastStoppingRule::IterationLimit {
                         limit: DEFAULT_MAX_ITERATIONS,
                     }
@@ -195,32 +179,22 @@ impl BroadcastConfig {
             })
             .collect();
 
-        let stopping_mode = if config.training.stopping_mode.eq_ignore_ascii_case("all") {
-            BroadcastStoppingMode::All
-        } else {
-            BroadcastStoppingMode::Any
+        let stopping_mode = match params.stopping_rule_set.mode {
+            StoppingMode::All => BroadcastStoppingMode::All,
+            StoppingMode::Any => BroadcastStoppingMode::Any,
         };
 
-        let n_scenarios = if config.simulation.enabled {
-            config.simulation.num_scenarios
-        } else {
-            0
-        };
-
-        let parsed_cut_selection =
-            cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
-                .map_err(|msg| CliError::Validation { report: msg })?;
-        let cut_selection = BroadcastCutSelection::from_strategy(parsed_cut_selection.as_ref());
+        let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
 
         Ok(Self {
-            seed,
-            forward_passes,
+            seed: params.seed,
+            forward_passes: params.forward_passes,
             stopping_rules,
             stopping_mode,
-            n_scenarios,
-            io_channel_capacity: config.simulation.io_channel_capacity,
-            policy_path: config.policy.path.clone(),
-            inflow_method: InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity),
+            n_scenarios: params.n_scenarios,
+            io_channel_capacity: u32::try_from(params.io_channel_capacity).unwrap_or(64),
+            policy_path: params.policy_path,
+            inflow_method: params.inflow_method,
             cut_selection,
         })
     }
@@ -873,7 +847,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
             let mut failed: u32 = 0;
             for scenario_result in all_results {
-                let payload = crate::simulation_io::convert_scenario(scenario_result);
+                let payload = cobre_io::output::simulation_writer::ScenarioWritePayload::from(
+                    scenario_result,
+                );
                 if let Err(e) = sim_writer.write_scenario(payload) {
                     tracing::error!("simulation write error: {e}");
                     failed += 1;
@@ -941,242 +917,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Stochastic summary builder
-// ---------------------------------------------------------------------------
-
-/// Build a [`StochasticSummary`] from the system, stochastic context, and estimation report.
-///
-/// Called on rank 0 after [`build_stochastic_context`] returns and before training
-/// starts. All fields are derived from the already-validated inputs; construction
-/// is infallible.
-///
-/// # Source detection
-///
-/// - `Estimated`: `estimation_report` is `Some(_)` — the estimation pipeline ran
-///   and produced AR coefficients and correlation.
-/// - `Loaded`: no estimation report but hydros are present — seasonal stats were
-///   loaded from pre-supplied files.
-/// - `None`: no hydros in the system.
-fn build_stochastic_summary(
-    system: &System,
-    stochastic: &cobre_stochastic::StochasticContext,
-    estimation_report: Option<&EstimationReport>,
-    seed: u64,
-) -> StochasticSummary {
-    let n_hydros = system.hydros().len();
-
-    // Determine inflow source from estimation report presence.
-    let inflow_source = if estimation_report.is_some() {
-        StochasticSource::Estimated
-    } else if n_hydros > 0 {
-        StochasticSource::Loaded
-    } else {
-        StochasticSource::None
-    };
-
-    // Count distinct stage_id values from the first hydro's inflow models.
-    let n_seasons = if n_hydros > 0 {
-        let first_hydro_id = system.hydros()[0].id;
-        let mut stage_ids: Vec<i32> = system
-            .inflow_models()
-            .iter()
-            .filter(|m| m.hydro_id == first_hydro_id)
-            .map(|m| m.stage_id)
-            .collect();
-        stage_ids.sort_unstable();
-        stage_ids.dedup();
-        stage_ids.len()
-    } else {
-        0
-    };
-
-    // Build AR order summary from estimation report or inflow model coefficients.
-    let ar_summary = if n_hydros > 0 {
-        let (method, orders): (String, Vec<usize>) = if let Some(report) = estimation_report {
-            let orders: Vec<usize> = report
-                .entries
-                .values()
-                .map(|entry| entry.selected_order as usize)
-                .collect();
-            ("AIC".to_string(), orders)
-        } else {
-            // Derive from loaded inflow models: use max AR coefficient length per hydro.
-            let orders: Vec<usize> = system
-                .hydros()
-                .iter()
-                .map(|h| {
-                    system
-                        .inflow_models()
-                        .iter()
-                        .filter(|m| m.hydro_id == h.id)
-                        .map(|m| m.ar_coefficients.len())
-                        .max()
-                        .unwrap_or(0)
-                })
-                .collect();
-            ("fixed".to_string(), orders)
-        };
-
-        let min_order = orders.iter().copied().min().unwrap_or(0);
-        let max_order = orders.iter().copied().max().unwrap_or(0);
-
-        let mut order_counts = vec![0usize; max_order + 1];
-        for &ord in &orders {
-            order_counts[ord] += 1;
-        }
-
-        Some(ArOrderSummary {
-            method,
-            order_counts,
-            min_order,
-            max_order,
-            n_hydros,
-        })
-    } else {
-        None
-    };
-
-    // Correlation source mirrors inflow source (both come from estimation or loaded files).
-    let correlation_source = if estimation_report.is_some() {
-        StochasticSource::Estimated
-    } else if n_hydros > 0 {
-        StochasticSource::Loaded
-    } else {
-        StochasticSource::None
-    };
-
-    // Correlation dimension is n_hydros × n_hydros (hydro-to-hydro spatial correlation).
-    let correlation_dim = if n_hydros > 0 {
-        Some(format!("{n_hydros}x{n_hydros}"))
-    } else {
-        None
-    };
-
-    // Derive opening tree provenance from stochastic context.
-    // The tree was either loaded from scenarios/noise_openings.parquet (if present)
-    // or generated deterministically from the seed. We infer from n_stages: when a
-    // user-supplied tree is present, we cannot distinguish it from generated here
-    // without passing extra state. The tree is always present after build_stochastic_context.
-    // For now: if n_hydros + load buses > 0, the tree was generated; loaded trees are
-    // distinguishable via the fact that the caller passed a user_tree. However, we no
-    // longer have that flag here — we use StochasticSource::Estimated/Loaded/None to
-    // approximate: if the stochastic context has a user-supplied tree, it shows as
-    // dim > 0 regardless. Since we cannot distinguish loaded vs generated tree without
-    // extra state here, we mark it Estimated (generated from seed) as the default.
-    // The tree is always generated (or replaced by a loaded one upstream); we report
-    // StochasticSource::Loaded only when openings came from file.
-    // NOTE: This is a conservative approximation. The full distinction (loaded vs generated)
-    // would require threading the `user_tree_was_present` flag through to this function.
-    // Per the ticket spec, the opening_tree_source comes from stochastic.opening_tree().
-    // We report "loaded" when n_openings > 1 at stage 0 (implies multi-scenario input),
-    // otherwise "estimated" (single opening per stage = generated default).
-    let opening_tree = stochastic.opening_tree();
-    let openings_per_stage: Vec<usize> = opening_tree.openings_per_stage_slice().to_vec();
-    // A loaded opening tree typically has many openings; the default generated tree
-    // has exactly 1 per stage. Use the max across stages for the heuristic.
-    let max_openings = openings_per_stage.iter().copied().max().unwrap_or(0);
-    let opening_tree_source = if max_openings > 1 {
-        StochasticSource::Loaded
-    } else {
-        StochasticSource::Estimated
-    };
-
-    let n_stages = stochastic.n_stages();
-    let n_load_buses = stochastic.n_load_buses();
-
-    StochasticSummary {
-        inflow_source,
-        n_hydros,
-        n_seasons,
-        ar_summary,
-        correlation_source,
-        correlation_dim,
-        opening_tree_source,
-        openings_per_stage,
-        n_stages,
-        n_load_buses,
-        seed,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Stochastic artifact export helpers
-// ---------------------------------------------------------------------------
-
-/// Convert an [`EstimationReport`] to a [`FittingReport`] for serialization.
-///
-/// Maps each `(EntityId, HydroEstimationEntry)` pair to a `(String, HydroFittingEntry)` pair.
-/// The entity ID is serialized as its inner `i32` value converted to a string (e.g., `"1"`).
-/// Fields are copied 1:1 — `selected_order`, `aic_scores`, `coefficients`.
-fn estimation_report_to_fitting_report(report: &EstimationReport) -> FittingReport {
-    let hydros = report
-        .entries
-        .iter()
-        .map(
-            |(id, entry): (&cobre_core::EntityId, &HydroEstimationEntry)| {
-                (
-                    id.0.to_string(),
-                    HydroFittingEntry {
-                        selected_order: entry.selected_order,
-                        aic_scores: entry.aic_scores.clone(),
-                        coefficients: entry.coefficients.clone(),
-                    },
-                )
-            },
-        )
-        .collect();
-    FittingReport { hydros }
-}
-
-/// Convert a slice of [`cobre_core::scenario::InflowModel`] to [`InflowSeasonalStatsRow`] records.
-///
-/// One row per model entry — `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` fields map 1:1.
-fn inflow_models_to_stats_rows(
-    models: &[cobre_core::scenario::InflowModel],
-) -> Vec<InflowSeasonalStatsRow> {
-    models
-        .iter()
-        .map(|m| InflowSeasonalStatsRow {
-            hydro_id: m.hydro_id,
-            stage_id: m.stage_id,
-            mean_m3s: m.mean_m3s,
-            std_m3s: m.std_m3s,
-        })
-        .collect()
-}
-
-/// Convert a slice of [`cobre_core::scenario::InflowModel`] to [`InflowArCoefficientRow`] records.
-///
-/// Expands each model's `ar_coefficients` into one row per lag (1-based lag numbering).
-/// Models with empty `ar_coefficients` (white noise, AR order 0) contribute no rows.
-/// The `residual_std_ratio` is repeated across all lag rows of the same `(hydro_id, stage_id)`.
-fn inflow_models_to_ar_rows(
-    models: &[cobre_core::scenario::InflowModel],
-) -> Vec<InflowArCoefficientRow> {
-    models
-        .iter()
-        .flat_map(|m| {
-            m.ar_coefficients
-                .iter()
-                .enumerate()
-                .map(move |(i, &coefficient)| {
-                    // AR order is bounded by a small integer (typical range 1-12);
-                    // the cast from usize to i32 is safe in practice.
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                    let lag = (i + 1) as i32;
-                    InflowArCoefficientRow {
-                        hydro_id: m.hydro_id,
-                        stage_id: m.stage_id,
-                        lag,
-                        coefficient,
-                        residual_std_ratio: m.residual_std_ratio,
-                    }
-                })
-        })
-        .collect()
 }
 
 /// Write all applicable stochastic preprocessing artifacts to `{output_dir}/stochastic/`.
@@ -1297,7 +1037,7 @@ fn export_stochastic_artifacts(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{broadcast_value, resolve_thread_count, BroadcastOpeningTree};
+    use super::{BroadcastOpeningTree, broadcast_value, resolve_thread_count};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1501,7 +1241,7 @@ mod tests {
     fn load_user_opening_tree_returns_none_when_file_absent() {
         use super::load_user_opening_tree;
         use cobre_core::{
-            scenario::CorrelationModel, Bus, DeficitSegment, EntityId, SystemBuilder,
+            Bus, DeficitSegment, EntityId, SystemBuilder, scenario::CorrelationModel,
         };
         use std::fs;
         use tempfile::TempDir;
@@ -1543,430 +1283,6 @@ mod tests {
         assert!(
             result.is_none(),
             "must return Ok(None) when noise_openings.parquet is absent"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Stochastic artifact conversion helper tests
-    // ------------------------------------------------------------------
-
-    /// `estimation_report_to_fitting_report` maps 2-hydro `EstimationReport`
-    /// to `FittingReport` preserving all fields and using string entity IDs as keys.
-    #[test]
-    fn estimation_report_to_fitting_report_two_hydros() {
-        use std::collections::BTreeMap;
-
-        use cobre_core::EntityId;
-        use cobre_sddp::estimation::HydroEstimationEntry;
-        use cobre_sddp::EstimationReport;
-
-        use super::estimation_report_to_fitting_report;
-
-        let mut entries = BTreeMap::new();
-        entries.insert(
-            EntityId(1),
-            HydroEstimationEntry {
-                selected_order: 3,
-                aic_scores: vec![10.0, 9.5, 9.2, 9.8],
-                coefficients: vec![vec![0.4, -0.1, 0.05], vec![0.3, -0.08, 0.04]],
-            },
-        );
-        entries.insert(
-            EntityId(5),
-            HydroEstimationEntry {
-                selected_order: 2,
-                aic_scores: vec![12.1, 11.3, 11.5],
-                coefficients: vec![vec![0.6, -0.2]],
-            },
-        );
-        let report = EstimationReport { entries };
-        let fitting = estimation_report_to_fitting_report(&report);
-
-        assert_eq!(
-            fitting.hydros.len(),
-            2,
-            "FittingReport must contain exactly 2 hydro entries"
-        );
-
-        let h1 = fitting.hydros.get("1").unwrap();
-        assert_eq!(h1.selected_order, 3);
-        assert_eq!(h1.aic_scores, vec![10.0, 9.5, 9.2, 9.8]);
-        assert_eq!(h1.coefficients.len(), 2);
-
-        let h5 = fitting.hydros.get("5").unwrap();
-        assert_eq!(h5.selected_order, 2);
-        assert_eq!(h5.aic_scores, vec![12.1, 11.3, 11.5]);
-        assert_eq!(h5.coefficients, vec![vec![0.6, -0.2]]);
-    }
-
-    /// `inflow_models_to_stats_rows` produces the correct number of rows and
-    /// preserves `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` field values.
-    #[test]
-    fn inflow_models_to_stats_rows_field_values() {
-        use cobre_core::scenario::InflowModel;
-        use cobre_core::EntityId;
-
-        use super::inflow_models_to_stats_rows;
-
-        let models = vec![
-            InflowModel {
-                hydro_id: EntityId(1),
-                stage_id: 0,
-                mean_m3s: 150.0,
-                std_m3s: 30.0,
-                ar_coefficients: vec![0.5],
-                residual_std_ratio: 0.87,
-            },
-            InflowModel {
-                hydro_id: EntityId(2),
-                stage_id: 1,
-                mean_m3s: 200.0,
-                std_m3s: 40.0,
-                ar_coefficients: vec![],
-                residual_std_ratio: 1.0,
-            },
-        ];
-        let rows = inflow_models_to_stats_rows(&models);
-
-        assert_eq!(rows.len(), 2, "must produce one row per model");
-        assert_eq!(rows[0].hydro_id, EntityId(1));
-        assert_eq!(rows[0].stage_id, 0);
-        assert_eq!(rows[0].mean_m3s, 150.0);
-        assert_eq!(rows[0].std_m3s, 30.0);
-        assert_eq!(rows[1].hydro_id, EntityId(2));
-        assert_eq!(rows[1].mean_m3s, 200.0);
-    }
-
-    /// `inflow_models_to_ar_rows` produces 1-based lag numbering and the correct
-    /// total row count (sum of AR orders across all models).
-    ///
-    /// A model with 3 AR coefficients produces 3 rows with lags 1, 2, 3.
-    /// A white-noise model (order 0) produces no rows.
-    #[test]
-    fn inflow_models_to_ar_rows_lag_numbering_and_count() {
-        use cobre_core::scenario::InflowModel;
-        use cobre_core::EntityId;
-
-        use super::inflow_models_to_ar_rows;
-
-        let models = vec![
-            InflowModel {
-                hydro_id: EntityId(1),
-                stage_id: 0,
-                mean_m3s: 100.0,
-                std_m3s: 20.0,
-                ar_coefficients: vec![0.4, -0.1, 0.05],
-                residual_std_ratio: 0.92,
-            },
-            InflowModel {
-                hydro_id: EntityId(2),
-                stage_id: 0,
-                mean_m3s: 80.0,
-                std_m3s: 15.0,
-                ar_coefficients: vec![],
-                residual_std_ratio: 1.0,
-            },
-        ];
-        let rows = inflow_models_to_ar_rows(&models);
-
-        // 3 rows for hydro 1 (order 3), 0 rows for hydro 2 (order 0).
-        assert_eq!(rows.len(), 3, "must produce 3 rows total (3 + 0)");
-
-        assert_eq!(rows[0].hydro_id, EntityId(1));
-        assert_eq!(rows[0].lag, 1, "first lag must be 1 (1-based)");
-        assert_eq!(rows[0].coefficient, 0.4);
-        assert_eq!(rows[0].residual_std_ratio, 0.92);
-
-        assert_eq!(rows[1].lag, 2);
-        assert_eq!(rows[1].coefficient, -0.1);
-
-        assert_eq!(rows[2].lag, 3);
-        assert_eq!(rows[2].coefficient, 0.05);
-    }
-
-    // ------------------------------------------------------------------
-    // build_stochastic_summary tests
-    // ------------------------------------------------------------------
-
-    /// Helper: build a minimal `System` with one hydro, one bus, two study stages,
-    /// and two `InflowModel` entries (one per stage, AR order 2).
-    #[allow(clippy::too_many_lines)]
-    fn make_system_with_hydro() -> cobre_core::System {
-        use chrono::NaiveDate;
-        use cobre_core::{
-            entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
-            scenario::{CorrelationModel, InflowModel},
-            temporal::{
-                Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-                StageStateConfig,
-            },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
-        };
-
-        let bus = Bus {
-            id: EntityId(1),
-            name: "B1".to_string(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-
-        let hydro = Hydro {
-            id: EntityId(10),
-            name: "H1".to_string(),
-            bus_id: EntityId(1),
-            downstream_id: None,
-            entry_stage_id: None,
-            exit_stage_id: None,
-            min_storage_hm3: 0.0,
-            max_storage_hm3: 100.0,
-            min_outflow_m3s: 0.0,
-            max_outflow_m3s: None,
-            generation_model: HydroGenerationModel::ConstantProductivity {
-                productivity_mw_per_m3s: 0.95,
-            },
-            min_turbined_m3s: 0.0,
-            max_turbined_m3s: 100.0,
-            min_generation_mw: 0.0,
-            max_generation_mw: 100.0,
-            tailrace: None,
-            hydraulic_losses: None,
-            efficiency: None,
-            evaporation_coefficients_mm: None,
-            diversion: None,
-            filling: None,
-            penalties: HydroPenalties {
-                spillage_cost: 0.0,
-                diversion_cost: 0.0,
-                fpha_turbined_cost: 0.0,
-                storage_violation_below_cost: 0.0,
-                filling_target_violation_cost: 0.0,
-                turbined_violation_below_cost: 0.0,
-                outflow_violation_below_cost: 0.0,
-                outflow_violation_above_cost: 0.0,
-                generation_violation_below_cost: 0.0,
-                evaporation_violation_cost: 0.0,
-                water_withdrawal_violation_cost: 0.0,
-            },
-        };
-
-        let make_stage = |idx: usize, id: i32| Stage {
-            index: idx,
-            id,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(id.unsigned_abs() as usize),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 3,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-
-        let stages = vec![make_stage(0, 0), make_stage(1, 1)];
-
-        let inflow_models = vec![
-            InflowModel {
-                hydro_id: EntityId(10),
-                stage_id: 0,
-                mean_m3s: 50.0,
-                std_m3s: 10.0,
-                ar_coefficients: vec![0.5, 0.3],
-                residual_std_ratio: 0.8,
-            },
-            InflowModel {
-                hydro_id: EntityId(10),
-                stage_id: 1,
-                mean_m3s: 60.0,
-                std_m3s: 12.0,
-                ar_coefficients: vec![0.4, 0.2],
-                residual_std_ratio: 0.85,
-            },
-        ];
-
-        SystemBuilder::new()
-            .buses(vec![bus])
-            .hydros(vec![hydro])
-            .stages(stages)
-            .inflow_models(inflow_models)
-            .correlation(CorrelationModel::default())
-            .build()
-            .unwrap()
-    }
-
-    /// `build_stochastic_summary` with no estimation report yields `Loaded` inflow source.
-    #[test]
-    fn build_stochastic_summary_loaded_source_when_no_estimation_report() {
-        use super::build_stochastic_summary;
-        use cobre_stochastic::build_stochastic_context;
-
-        let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 42, &[], None).unwrap();
-        let summary = build_stochastic_summary(&system, &stochastic, None, 42);
-
-        assert!(
-            matches!(
-                summary.inflow_source,
-                crate::summary::StochasticSource::Loaded
-            ),
-            "inflow_source must be Loaded when no estimation report is present"
-        );
-        assert_eq!(summary.n_hydros, 1, "n_hydros must be 1");
-        assert_eq!(
-            summary.n_seasons, 2,
-            "n_seasons must be 2 (stage 0 and stage 1)"
-        );
-        assert_eq!(summary.seed, 42, "seed must be 42");
-    }
-
-    /// `build_stochastic_summary` with an estimation report yields `Estimated` inflow source
-    /// and populates `ar_summary` with AIC method.
-    #[test]
-    fn build_stochastic_summary_estimated_source_with_estimation_report() {
-        use std::collections::BTreeMap;
-
-        use super::build_stochastic_summary;
-        use cobre_core::EntityId;
-        use cobre_sddp::estimation::HydroEstimationEntry;
-        use cobre_sddp::EstimationReport;
-        use cobre_stochastic::build_stochastic_context;
-
-        let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 7, &[], None).unwrap();
-
-        let mut entries = BTreeMap::new();
-        entries.insert(
-            EntityId(10),
-            HydroEstimationEntry {
-                selected_order: 2,
-                aic_scores: vec![-10.0, -12.0],
-                coefficients: vec![vec![0.5, 0.3], vec![0.4, 0.2]],
-            },
-        );
-        let report = EstimationReport { entries };
-
-        let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 7);
-
-        assert!(
-            matches!(
-                summary.inflow_source,
-                crate::summary::StochasticSource::Estimated
-            ),
-            "inflow_source must be Estimated when estimation report is present"
-        );
-        assert!(
-            matches!(
-                summary.correlation_source,
-                crate::summary::StochasticSource::Estimated
-            ),
-            "correlation_source must be Estimated when estimation report is present"
-        );
-        let ar = summary.ar_summary.as_ref().unwrap();
-        assert_eq!(ar.method, "AIC", "AR method must be AIC");
-        assert_eq!(ar.max_order, 2, "max AR order must be 2");
-        assert_eq!(summary.seed, 7, "seed must be 7");
-    }
-
-    /// `build_stochastic_summary` with no hydros yields `None` source and no AR summary.
-    #[test]
-    fn build_stochastic_summary_no_hydros_yields_none_source() {
-        use chrono::NaiveDate;
-        use cobre_core::{
-            scenario::CorrelationModel,
-            temporal::{
-                Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-                StageStateConfig,
-            },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
-        };
-        use cobre_stochastic::build_stochastic_context;
-
-        use super::build_stochastic_summary;
-
-        let bus = Bus {
-            id: EntityId(1),
-            name: "B1".to_string(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let stages = vec![Stage {
-            index: 0,
-            id: 0,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 3,
-                noise_method: NoiseMethod::Saa,
-            },
-        }];
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .stages(stages)
-            .correlation(CorrelationModel::default())
-            .build()
-            .unwrap();
-
-        let stochastic = build_stochastic_context(&system, 0, &[], None).unwrap();
-        let summary = build_stochastic_summary(&system, &stochastic, None, 0);
-
-        assert!(
-            matches!(
-                summary.inflow_source,
-                crate::summary::StochasticSource::None
-            ),
-            "inflow_source must be None when there are no hydros"
-        );
-        assert_eq!(summary.n_hydros, 0, "n_hydros must be 0");
-        assert!(
-            summary.ar_summary.is_none(),
-            "ar_summary must be None with no hydros"
-        );
-    }
-
-    /// `build_stochastic_summary` derives `n_stages` and `n_load_buses` from stochastic context.
-    #[test]
-    fn build_stochastic_summary_stages_and_load_buses() {
-        use super::build_stochastic_summary;
-        use cobre_stochastic::build_stochastic_context;
-
-        let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 1, &[], None).unwrap();
-        let summary = build_stochastic_summary(&system, &stochastic, None, 1);
-
-        assert_eq!(
-            summary.n_stages, 2,
-            "n_stages must match stochastic context"
-        );
-        assert_eq!(
-            summary.n_load_buses, 0,
-            "n_load_buses must be 0 (no stochastic load)"
         );
     }
 }

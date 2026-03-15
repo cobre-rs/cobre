@@ -37,24 +37,24 @@
 //! # }
 //! ```
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use cobre_comm::Communicator;
-use cobre_core::{entities::hydro::HydroGenerationModel, System, TrainingEvent};
+use cobre_core::{System, TrainingEvent, entities::hydro::HydroGenerationModel};
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    build_stage_templates,
-    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
-    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
-    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
     SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
+    build_stage_templates,
+    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -67,68 +67,53 @@ pub const DEFAULT_MAX_ITERATIONS: u64 = 100;
 pub const DEFAULT_SEED: u64 = 42;
 
 // ---------------------------------------------------------------------------
-// StudySetup
+// StudyParams
 // ---------------------------------------------------------------------------
 
-/// All precomputed study state built once before training and simulation.
+/// Scalar parameters extracted from a [`cobre_io::Config`].
 ///
-/// Constructed by [`StudySetup::new`] from a validated [`System`] and
-/// [`cobre_io::Config`]. Owns all data so it can be held across async
-/// boundaries (e.g., Python GIL release) without lifetime issues.
+/// `StudyParams` centralises the config-to-domain conversion that was previously
+/// duplicated between `StudySetup::new()` (cobre-sddp) and
+/// `BroadcastConfig::from_config()` (cobre-cli). Both callers now delegate
+/// to `StudyParams::from_config()` and then convert the resulting fields to
+/// their respective target representations.
 ///
-/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
-/// from `StudySetup`.
-#[derive(Debug)]
-pub struct StudySetup {
-    // ── LP templates ─────────────────────────────────────────────────────────
-    stage_templates: StageTemplates,
-
-    // ── Algorithm state ──────────────────────────────────────────────────────
-    stochastic: StochasticContext,
-    indexer: StageIndexer,
-    fcf: FutureCostFunction,
-    initial_state: Vec<f64>,
-    horizon: HorizonMode,
-    risk_measures: Vec<RiskMeasure>,
-    entity_counts: EntityCounts,
-
-    // ── Derived layout values ─────────────────────────────────────────────────
-    block_counts_per_stage: Vec<usize>,
-    max_blocks: usize,
-
-    // ── Config-derived scalars ────────────────────────────────────────────────
-    seed: u64,
-    forward_passes: u32,
-    max_iterations: u64,
-    n_scenarios: u32,
-    io_channel_capacity: usize,
-    policy_path: String,
-    inflow_method: InflowNonNegativityMethod,
-    cut_selection: Option<CutSelectionStrategy>,
-    stopping_rule_set: StoppingRuleSet,
+/// The struct owns all values so it can be passed by value to constructors
+/// and broadcast helpers without lifetime dependencies.
+#[derive(Debug, Clone)]
+pub struct StudyParams {
+    /// Random seed for noise generation.
+    pub seed: u64,
+    /// Number of forward-pass trajectories per training iteration.
+    pub forward_passes: u32,
+    /// Stopping rule set (rules + mode) governing when training halts.
+    pub stopping_rule_set: StoppingRuleSet,
+    /// Number of simulation scenarios (0 if simulation is disabled).
+    pub n_scenarios: u32,
+    /// Buffer capacity for the simulation output channel.
+    pub io_channel_capacity: usize,
+    /// Policy directory path string.
+    pub policy_path: String,
+    /// Inflow non-negativity enforcement method.
+    pub inflow_method: InflowNonNegativityMethod,
+    /// Optional cut selection strategy (None means cut selection is disabled).
+    pub cut_selection: Option<CutSelectionStrategy>,
 }
 
-impl StudySetup {
-    /// Build all precomputed study state from a validated system and config.
+impl StudyParams {
+    /// Extract study parameters from a validated [`cobre_io::Config`].
     ///
-    /// The constructor performs:
-    /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
-    /// 2. Delegates to [`StudySetup::from_broadcast_params`] with the extracted values.
+    /// This method contains the full config-to-domain conversion logic:
+    /// seed derivation, forward passes defaulting, stopping rule conversion,
+    /// stopping mode parsing, `n_scenarios` conditional, `io_channel_capacity`
+    /// conversion, policy path extraction, inflow method construction, and
+    /// cut selection parsing.
     ///
     /// # Errors
     ///
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
-    ///   `build_stage_templates` on LP construction failure.
-    /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
-    ///   an invalid config string.
-    pub fn new(
-        system: &System,
-        config: &cobre_io::Config,
-        stochastic: StochasticContext,
-    ) -> Result<Self, SddpError> {
-        // ── Config extraction ─────────────────────────────────────────────────
+    /// - [`SddpError::Validation`] if `parse_cut_selection_config` returns an
+    ///   error for an unrecognised cut selection config string.
+    pub fn from_config(config: &cobre_io::Config) -> Result<Self, SddpError> {
         use cobre_io::config::StoppingRuleConfig;
 
         let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
@@ -196,9 +181,7 @@ impl StudySetup {
         let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
             .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
 
-        Self::from_broadcast_params(
-            system,
-            stochastic,
+        Ok(Self {
             seed,
             forward_passes,
             stopping_rule_set,
@@ -207,6 +190,84 @@ impl StudySetup {
             policy_path,
             inflow_method,
             cut_selection,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StudySetup
+// ---------------------------------------------------------------------------
+
+/// All precomputed study state built once before training and simulation.
+///
+/// Constructed by [`StudySetup::new`] from a validated [`System`] and
+/// [`cobre_io::Config`]. Owns all data so it can be held across async
+/// boundaries (e.g., Python GIL release) without lifetime issues.
+///
+/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
+/// from `StudySetup`.
+#[derive(Debug)]
+pub struct StudySetup {
+    // ── LP templates ─────────────────────────────────────────────────────────
+    stage_templates: StageTemplates,
+
+    // ── Algorithm state ──────────────────────────────────────────────────────
+    stochastic: StochasticContext,
+    indexer: StageIndexer,
+    fcf: FutureCostFunction,
+    initial_state: Vec<f64>,
+    horizon: HorizonMode,
+    risk_measures: Vec<RiskMeasure>,
+    entity_counts: EntityCounts,
+
+    // ── Derived layout values ─────────────────────────────────────────────────
+    block_counts_per_stage: Vec<usize>,
+    max_blocks: usize,
+
+    // ── Config-derived scalars ────────────────────────────────────────────────
+    seed: u64,
+    forward_passes: u32,
+    max_iterations: u64,
+    n_scenarios: u32,
+    io_channel_capacity: usize,
+    policy_path: String,
+    inflow_method: InflowNonNegativityMethod,
+    cut_selection: Option<CutSelectionStrategy>,
+    stopping_rule_set: StoppingRuleSet,
+}
+
+impl StudySetup {
+    /// Build all precomputed study state from a validated system and config.
+    ///
+    /// The constructor performs:
+    /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
+    /// 2. Delegates to [`StudySetup::from_broadcast_params`] with the extracted values.
+    ///
+    /// # Errors
+    ///
+    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
+    ///   the template list is empty ("system has no study stages").
+    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
+    ///   `build_stage_templates` on LP construction failure.
+    /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
+    ///   an invalid config string.
+    pub fn new(
+        system: &System,
+        config: &cobre_io::Config,
+        stochastic: StochasticContext,
+    ) -> Result<Self, SddpError> {
+        let params = StudyParams::from_config(config)?;
+        Self::from_broadcast_params(
+            system,
+            stochastic,
+            params.seed,
+            params.forward_passes,
+            params.stopping_rule_set,
+            params.n_scenarios,
+            params.io_channel_capacity,
+            params.policy_path,
+            params.inflow_method,
+            params.cut_selection,
         )
     }
 
@@ -802,6 +863,12 @@ mod tests {
     use super::StudySetup;
 
     use cobre_core::{
+        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
+        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
+    };
+    use cobre_core::{
+        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -812,12 +879,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId, SystemBuilder,
-    };
-    use cobre_core::{
-        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
-        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -1465,5 +1526,162 @@ mod tests {
             !costs.is_empty(),
             "simulate must return at least one cost entry"
         );
+    }
+
+    /// Given a config with no overrides, `StudyParams::from_config` returns the
+    /// default values for all fields.
+    #[test]
+    fn study_params_from_config_defaults() {
+        use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
+        use crate::stopping_rule::StoppingMode;
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
+            TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        let config = Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "none".to_string(),
+                    penalty_cost: 0.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: None,
+                forward_passes: None,
+                stopping_rules: None,
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        };
+
+        let params = StudyParams::from_config(&config).expect("from_config");
+
+        assert_eq!(
+            params.seed, DEFAULT_SEED,
+            "seed should default to DEFAULT_SEED"
+        );
+        assert_eq!(
+            params.forward_passes, DEFAULT_FORWARD_PASSES,
+            "forward_passes should default to DEFAULT_FORWARD_PASSES"
+        );
+        // When no stopping rules are specified, a single IterationLimit rule is inserted.
+        assert_eq!(
+            params.stopping_rule_set.rules.len(),
+            1,
+            "expected exactly 1 default stopping rule"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[0],
+                crate::stopping_rule::StoppingRule::IterationLimit { .. }
+            ),
+            "default rule should be IterationLimit"
+        );
+        assert!(
+            matches!(params.stopping_rule_set.mode, StoppingMode::Any),
+            "default stopping mode should be Any"
+        );
+        // Simulation is disabled by default.
+        assert_eq!(
+            params.n_scenarios, 0,
+            "n_scenarios should be 0 when simulation disabled"
+        );
+        assert!(
+            params.cut_selection.is_none(),
+            "cut_selection should be None by default"
+        );
+    }
+
+    /// Given a config with explicit values for all fields, `StudyParams::from_config`
+    /// extracts them correctly.
+    #[test]
+    fn study_params_from_config_explicit() {
+        use super::StudyParams;
+        use crate::stopping_rule::{StoppingMode, StoppingRule};
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig,
+            StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        let config = Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "penalty".to_string(),
+                    penalty_cost: 999.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: Some(1234),
+                forward_passes: Some(5),
+                stopping_rules: Some(vec![
+                    StoppingRuleConfig::IterationLimit { limit: 50 },
+                    StoppingRuleConfig::TimeLimit { seconds: 60.0 },
+                ]),
+                stopping_mode: "all".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig {
+                path: "./my_policy".to_string(),
+                ..PolicyConfig::default()
+            },
+            simulation: IoSimulationConfig {
+                enabled: true,
+                num_scenarios: 200,
+                ..IoSimulationConfig::default()
+            },
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        };
+
+        let params = StudyParams::from_config(&config).expect("from_config");
+
+        // Seed: i64::unsigned_abs(1234) == 1234
+        assert_eq!(params.seed, 1234, "seed mismatch");
+        assert_eq!(params.forward_passes, 5, "forward_passes mismatch");
+        // Two stopping rules must be preserved.
+        assert_eq!(
+            params.stopping_rule_set.rules.len(),
+            2,
+            "stopping rule count mismatch"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[0],
+                StoppingRule::IterationLimit { limit: 50 }
+            ),
+            "first rule should be IterationLimit(50)"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[1],
+                StoppingRule::TimeLimit { seconds } if (seconds - 60.0).abs() < 1e-9
+            ),
+            "second rule should be TimeLimit(60.0)"
+        );
+        assert!(
+            matches!(params.stopping_rule_set.mode, StoppingMode::All),
+            "stopping mode should be All"
+        );
+        assert_eq!(params.n_scenarios, 200, "n_scenarios mismatch");
+        assert_eq!(params.policy_path, "./my_policy", "policy_path mismatch");
     }
 }

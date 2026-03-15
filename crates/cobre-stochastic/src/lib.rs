@@ -40,6 +40,7 @@ pub mod correlation;
 pub mod noise;
 pub mod normal;
 pub mod par;
+pub mod provenance;
 pub mod sampling;
 pub mod tree;
 
@@ -56,6 +57,7 @@ pub use par::{
     evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, levinson_durbin,
     solve_par_noise, solve_par_noise_batch, solve_par_noises, validate_par_parameters,
 };
+pub use provenance::{ComponentProvenance, StochasticProvenance};
 pub use sampling::insample::sample_forward;
 pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
 

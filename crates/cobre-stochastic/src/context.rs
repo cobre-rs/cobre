@@ -27,6 +27,7 @@ use crate::{
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormalLp},
     par::{precompute::PrecomputedParLp, validation::validate_par_parameters},
+    provenance::{ComponentProvenance, StochasticProvenance},
     tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
 };
 
@@ -165,6 +166,7 @@ pub struct StochasticContext {
     base_seed: u64,
     dim: usize,
     n_load_buses: usize,
+    provenance: StochasticProvenance,
 }
 
 const _: () = {
@@ -237,6 +239,16 @@ impl StochasticContext {
     pub fn n_stages(&self) -> usize {
         self.opening_tree.n_stages()
     }
+
+    /// Returns provenance metadata recording how each component was obtained.
+    ///
+    /// Callers can use this to determine whether the opening tree was user-supplied
+    /// or generated from the base seed, whether correlation was decomposed from
+    /// system data, and whether inflow PAR models are present.
+    #[must_use]
+    pub fn provenance(&self) -> &StochasticProvenance {
+        &self.provenance
+    }
 }
 
 /// Initialize the full stochastic pipeline from a [`System`] reference.
@@ -308,6 +320,35 @@ pub fn build_stochastic_context(
 
     let dim = hydro_ids.len() + n_load_buses;
 
+    // Compute provenance BEFORE consuming `user_opening_tree` by pattern match.
+    let provenance = {
+        let opening_tree_prov = if user_opening_tree.is_some() {
+            ComponentProvenance::UserSupplied
+        } else if dim > 0 {
+            ComponentProvenance::Generated
+        } else {
+            ComponentProvenance::NotApplicable
+        };
+
+        let correlation_prov = if !system.correlation().profiles.is_empty() && dim > 0 {
+            ComponentProvenance::Generated
+        } else {
+            ComponentProvenance::NotApplicable
+        };
+
+        let inflow_prov = if hydro_ids.is_empty() {
+            ComponentProvenance::NotApplicable
+        } else {
+            ComponentProvenance::Generated
+        };
+
+        StochasticProvenance {
+            opening_tree: opening_tree_prov,
+            correlation: correlation_prov,
+            inflow_model: inflow_prov,
+        }
+    };
+
     let par_lp = PrecomputedParLp::build(system.inflow_models(), &study_stages, &hydro_ids)?;
 
     let mut correlation = if dim == 0 || system.correlation().profiles.is_empty() {
@@ -356,6 +397,7 @@ pub fn build_stochastic_context(
         base_seed,
         dim,
         n_load_buses,
+        provenance,
     })
 }
 

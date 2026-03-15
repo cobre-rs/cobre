@@ -38,6 +38,7 @@ pub mod backward;
 pub mod config;
 pub mod context;
 pub mod convergence;
+pub mod conversion;
 pub mod cut;
 pub mod cut_selection;
 pub mod cut_sync;
@@ -54,43 +55,50 @@ pub mod risk_measure;
 pub mod setup;
 pub mod simulation;
 pub mod state_exchange;
+pub mod stochastic_summary;
 pub mod stopping_rule;
 pub mod training;
 pub mod training_output;
 pub mod trajectory;
 pub mod workspace;
 
-pub use backward::{run_backward_pass, BackwardPassSpec, BackwardResult};
+pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::TrainingConfig;
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction};
 pub use cut_selection::{
-    parse_cut_selection_config, CutMetadata, CutSelectionStrategy, DeactivationSet,
+    CutMetadata, CutSelectionStrategy, DeactivationSet, parse_cut_selection_config,
 };
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
 pub use estimation::{EstimationError, EstimationReport};
-pub use forward::{run_forward_pass, sync_forward, ForwardResult, SyncResult};
+pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
 pub use inflow_method::InflowNonNegativityMethod;
-pub use lower_bound::{evaluate_lower_bound, LbEvalSpec};
-pub use lp_builder::{ar_dynamics_row_offset, build_stage_templates, PatchBuffer, StageTemplates};
+pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
+pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
-pub use setup::{StudySetup, DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED};
+pub use setup::{
+    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, StudyParams, StudySetup,
+};
 pub use simulation::{
-    accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
-    simulate, CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult,
-    SimulationConfig, SimulationContractResult, SimulationCostResult, SimulationError,
-    SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
-    SimulationInflowLagResult, SimulationNonControllableResult, SimulationOutputSpec,
-    SimulationPumpingResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
-    SimulationThermalResult, StageSummaryStats,
+    CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
+    SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
+    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
+    SimulationNonControllableResult, SimulationOutputSpec, SimulationPumpingResult,
+    SimulationScenarioResult, SimulationStageResult, SimulationSummary, SimulationThermalResult,
+    StageSummaryStats, accumulate_category_costs, aggregate_simulation, assign_scenarios,
+    extract_stage_result, simulate,
 };
 pub use state_exchange::ExchangeBuffers;
+pub use stochastic_summary::{
+    ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,
+    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+};
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
-pub use training::{train, TrainingResult};
+pub use training::{TrainingResult, train};
 pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
 pub use workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace, WorkspacePool};

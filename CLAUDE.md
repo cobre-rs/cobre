@@ -227,6 +227,8 @@ types from the start (avoids first-time integration surprises).
 - `unwrap_used = "deny"` -- no `.unwrap()` in library code (ok in tests)
 - `clippy::all` and `clippy::pedantic` at `warn` level
 - `missing_docs = "warn"` -- all public items should have doc comments
+- **`cargo fmt` must pass** -- run `cargo fmt --all` after every implementation ticket
+  and before committing. CI enforces `cargo fmt --all -- --check`.
 
 ### Performance rules
 

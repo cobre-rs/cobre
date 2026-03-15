@@ -116,8 +116,8 @@ pub struct StochasticSummary {
     pub correlation_dim: Option<String>,
     /// Source of the opening tree.
     pub opening_tree_source: StochasticSource,
-    /// Number of openings per stage (from stage 0).
-    pub openings_per_stage: usize,
+    /// Number of openings at each stage.
+    pub openings_per_stage: Vec<usize>,
     /// Number of stages in the stochastic context.
     pub n_stages: usize,
     /// Number of buses with stochastic load noise.
@@ -132,6 +132,24 @@ fn source_label(source: &StochasticSource) -> &'static str {
         StochasticSource::Estimated => "estimated",
         StochasticSource::Loaded => "loaded",
         StochasticSource::None => "none",
+    }
+}
+
+/// Format the openings-per-stage information compactly.
+///
+/// - All stages same count: `"20 openings/stage"`
+/// - Varying counts: `"10-20 openings/stage"`
+/// - Empty: `"0 openings/stage"`
+fn format_openings_per_stage(openings: &[usize]) -> String {
+    if openings.is_empty() {
+        return "0 openings/stage".to_string();
+    }
+    let min = openings.iter().copied().min().unwrap_or(0);
+    let max = openings.iter().copied().max().unwrap_or(0);
+    if min == max {
+        format!("{min} openings/stage")
+    } else {
+        format!("{min}-{max} openings/stage")
     }
 }
 
@@ -166,10 +184,10 @@ pub fn print_stochastic_summary(stderr: &Term, summary: &StochasticSummary) {
         None => source_label(&summary.correlation_source).to_string(),
     };
     let _ = stderr.write_line(&format!("  Correlation:   {correlation_detail}"));
+    let openings_detail = format_openings_per_stage(&summary.openings_per_stage);
     let _ = stderr.write_line(&format!(
-        "  Opening tree:  {} ({} openings/stage, {} stages)",
+        "  Opening tree:  {} ({openings_detail}, {} stages)",
         source_label(&summary.opening_tree_source),
-        summary.openings_per_stage,
         summary.n_stages,
     ));
     let _ = stderr.write_line(&format!(
@@ -204,10 +222,10 @@ pub fn format_stochastic_summary_string(summary: &StochasticSummary) -> String {
         None => source_label(&summary.correlation_source).to_string(),
     };
     lines.push(format!("  Correlation:   {correlation_detail}"));
+    let openings_detail = format_openings_per_stage(&summary.openings_per_stage);
     lines.push(format!(
-        "  Opening tree:  {} ({} openings/stage, {} stages)",
+        "  Opening tree:  {} ({openings_detail}, {} stages)",
         source_label(&summary.opening_tree_source),
-        summary.openings_per_stage,
         summary.n_stages,
     ));
     lines.push(format!(
@@ -759,7 +777,7 @@ mod tests {
             correlation_source: StochasticSource::Estimated,
             correlation_dim: Some("5x5".into()),
             opening_tree_source: StochasticSource::Loaded,
-            openings_per_stage: 20,
+            openings_per_stage: vec![20; 60],
             n_stages: 60,
             n_load_buses: 3,
             seed: 42,

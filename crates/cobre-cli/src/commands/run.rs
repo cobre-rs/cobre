@@ -1082,14 +1082,11 @@ fn build_stochastic_summary(
     // We report "loaded" when n_openings > 1 at stage 0 (implies multi-scenario input),
     // otherwise "estimated" (single opening per stage = generated default).
     let opening_tree = stochastic.opening_tree();
-    let openings_per_stage = if opening_tree.n_stages() > 0 {
-        opening_tree.n_openings(0)
-    } else {
-        0
-    };
+    let openings_per_stage: Vec<usize> = opening_tree.openings_per_stage_slice().to_vec();
     // A loaded opening tree typically has many openings; the default generated tree
-    // has exactly 1 per stage. Use that heuristic to set the source label.
-    let opening_tree_source = if openings_per_stage > 1 {
+    // has exactly 1 per stage. Use the max across stages for the heuristic.
+    let max_openings = openings_per_stage.iter().copied().max().unwrap_or(0);
+    let opening_tree_source = if max_openings > 1 {
         StochasticSource::Loaded
     } else {
         StochasticSource::Estimated

@@ -59,12 +59,15 @@ jobs:
           publish cobre-core || exit 1
           sleep 30
 
-          # Layer 2: depends on cobre-core only
-          publish cobre-io || exit 1
+          # Layer 2a: depends on cobre-core only
           publish cobre-stochastic || exit 1
           publish cobre-solver || exit 1
           publish cobre-comm || exit 1
           publish cobre-tui || exit 1
+          sleep 30
+
+          # Layer 2b: depends on cobre-core + cobre-stochastic
+          publish cobre-io || exit 1
           sleep 30
 
           # Layer 3: depends on infrastructure crates

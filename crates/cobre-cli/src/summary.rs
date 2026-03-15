@@ -9,124 +9,13 @@
 //! Each function prints its section independently so the caller can display
 //! results at the right point in the execution flow.
 
+// Re-export data types from cobre-sddp so callers can import them from this module.
+// ArOrderSummary is not referenced directly in non-test code here (only via StochasticSummary
+// fields), so suppress the false-positive unused-import warning on the pub use.
+#[allow(unused_imports)]
+pub use cobre_sddp::{ArOrderSummary, StochasticSource, StochasticSummary};
 use console::Term;
 
-/// Source of stochastic data for a given component.
-#[derive(Debug)]
-pub enum StochasticSource {
-    /// Data was estimated from historical records.
-    Estimated,
-    /// Data was loaded from user-supplied files.
-    Loaded,
-    /// No data available (component not modeled).
-    None,
-}
-
-/// Summary of AR order selection across hydro plants.
-#[derive(Debug)]
-pub struct ArOrderSummary {
-    /// Method used for order selection (e.g., `"AIC"`, `"fixed"`).
-    pub method: String,
-    /// Count of hydros at each AR order. Index = order, value = count.
-    ///
-    /// For example, `[0, 3, 2]` means 0 hydros at order 0, 3 at order 1,
-    /// 2 at order 2.
-    pub order_counts: Vec<usize>,
-    /// Minimum AR order across all hydros.
-    pub min_order: usize,
-    /// Maximum AR order across all hydros.
-    pub max_order: usize,
-    /// Number of hydro plants included in the summary.
-    pub n_hydros: usize,
-}
-
-impl ArOrderSummary {
-    /// Render a compact human-readable string describing the AR order
-    /// distribution.
-    ///
-    /// Three tiers based on the number of hydro plants:
-    ///
-    /// - **≤10 hydros**: compact distribution, e.g. `"AIC (3x order-1, 2x order-2)"`.
-    /// - **11–30 hydros**: range format, e.g. `"AIC (orders 1-4, 15 hydros)"`.
-    /// - **31+ hydros**: histogram format, e.g. `"AIC (order 1: 12, order 2: 8, 31 hydros)"`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cobre_cli::summary::ArOrderSummary;
-    ///
-    /// let s = ArOrderSummary {
-    ///     method: "AIC".into(),
-    ///     order_counts: vec![0, 3, 2],
-    ///     min_order: 1,
-    ///     max_order: 2,
-    ///     n_hydros: 5,
-    /// };
-    /// let text = s.display_string();
-    /// assert!(text.contains("3x order-1"));
-    /// assert!(text.contains("2x order-2"));
-    /// ```
-    pub fn display_string(&self) -> String {
-        if self.n_hydros <= 10 {
-            let parts: Vec<String> = self
-                .order_counts
-                .iter()
-                .enumerate()
-                .filter(|&(_, count)| *count > 0)
-                .map(|(order, count)| format!("{count}x order-{order}"))
-                .collect();
-            format!("{} ({})", self.method, parts.join(", "))
-        } else if self.n_hydros <= 30 {
-            format!(
-                "{} (orders {}-{}, {} hydros)",
-                self.method, self.min_order, self.max_order, self.n_hydros
-            )
-        } else {
-            let parts: Vec<String> = self
-                .order_counts
-                .iter()
-                .enumerate()
-                .filter(|&(_, count)| *count > 0)
-                .map(|(order, count)| format!("order {order}: {count}"))
-                .collect();
-            format!(
-                "{} ({}, {} hydros)",
-                self.method,
-                parts.join(", "),
-                self.n_hydros
-            )
-        }
-    }
-}
-
-/// Summary of the stochastic preprocessing pipeline for display.
-#[derive(Debug)]
-pub struct StochasticSummary {
-    /// Source of inflow seasonal statistics.
-    pub inflow_source: StochasticSource,
-    /// Number of hydro plants in the system.
-    pub n_hydros: usize,
-    /// Number of seasons in the PAR model.
-    pub n_seasons: usize,
-    /// AR order summary (`None` if no hydros or no AR model).
-    pub ar_summary: Option<ArOrderSummary>,
-    /// Source of correlation data.
-    pub correlation_source: StochasticSource,
-    /// Dimension of the correlation matrix (e.g., `"5x5"`).
-    pub correlation_dim: Option<String>,
-    /// Source of the opening tree.
-    pub opening_tree_source: StochasticSource,
-    /// Number of openings at each stage.
-    pub openings_per_stage: Vec<usize>,
-    /// Number of stages in the stochastic context.
-    pub n_stages: usize,
-    /// Number of buses with stochastic load noise.
-    pub n_load_buses: usize,
-    /// Random seed used for noise generation.
-    pub seed: u64,
-}
-
-/// Format a [`StochasticSource`] variant as a short label string.
 fn source_label(source: &StochasticSource) -> &'static str {
     match source {
         StochasticSource::Estimated => "estimated",
@@ -135,11 +24,6 @@ fn source_label(source: &StochasticSource) -> &'static str {
     }
 }
 
-/// Format the openings-per-stage information compactly.
-///
-/// - All stages same count: `"20 openings/stage"`
-/// - Varying counts: `"10-20 openings/stage"`
-/// - Empty: `"0 openings/stage"`
 fn format_openings_per_stage(openings: &[usize]) -> String {
     if openings.is_empty() {
         return "0 openings/stage".to_string();
@@ -236,7 +120,6 @@ pub fn format_stochastic_summary_string(summary: &StochasticSummary) -> String {
     lines.join("\n")
 }
 
-/// Format a floating-point value as scientific notation with 6 significant digits.
 fn fmt_sci(v: f64) -> String {
     let raw = format!("{v:.5e}");
     if let Some(pos) = raw.find('e') {
@@ -318,11 +201,6 @@ pub struct RunSummary {
     pub output_dir: std::path::PathBuf,
 }
 
-/// Format a millisecond duration as a human-readable string.
-///
-/// - Under 60 s: `"12.3s"` (one decimal place using tenths of a second).
-/// - Under 1 h: `"3m 42s"`.
-/// - 1 h or more: `"1h 23m"`.
 fn format_duration(ms: u64) -> String {
     let total_secs = ms / 1000;
     if total_secs < 60 {
@@ -339,10 +217,6 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
-/// Build the convergence detail fragment for the first summary line.
-///
-/// When `converged` is `true` and `converged_at` is `Some(iter)`, returns
-/// `"converged at iter {iter}"`. Otherwise returns the raw `reason` string.
 fn format_convergence_detail(converged: bool, converged_at: Option<u64>, reason: &str) -> String {
     if converged {
         if let Some(iter) = converged_at {
@@ -784,6 +658,7 @@ mod tests {
         }
     }
 
+    // Compact format used when n_hydros <= 10.
     #[test]
     fn test_ar_order_display_compact_10_or_fewer_hydros() {
         let ar = ArOrderSummary {
@@ -804,6 +679,7 @@ mod tests {
         );
     }
 
+    // Range format used when 11 <= n_hydros <= 30.
     #[test]
     fn test_ar_order_display_range_11_to_30_hydros() {
         let ar = ArOrderSummary {
@@ -824,6 +700,7 @@ mod tests {
         );
     }
 
+    // Histogram format used when n_hydros >= 31.
     #[test]
     fn test_ar_order_display_histogram_31_plus_hydros() {
         let ar = ArOrderSummary {

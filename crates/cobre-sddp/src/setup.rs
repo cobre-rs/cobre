@@ -37,15 +37,17 @@
 //! # }
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
-use cobre_core::{System, TrainingEvent, entities::hydro::HydroGenerationModel};
+use cobre_core::{EntityId, System, TrainingEvent, entities::hydro::HydroGenerationModel};
 use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::StochasticContext;
+use cobre_stochastic::{StochasticContext, context::OpeningTree};
 
 use crate::{
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
@@ -58,77 +60,62 @@ use crate::{
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
-const DEFAULT_FORWARD_PASSES: u32 = 1;
+pub const DEFAULT_FORWARD_PASSES: u32 = 1;
 
 /// Default maximum iterations when no stopping rule specifies an iteration limit.
-const DEFAULT_MAX_ITERATIONS: u64 = 100;
+pub const DEFAULT_MAX_ITERATIONS: u64 = 100;
 
 /// Default random seed for stochastic scenario generation.
-const DEFAULT_SEED: u64 = 42;
+pub const DEFAULT_SEED: u64 = 42;
 
 // ---------------------------------------------------------------------------
-// StudySetup
+// StudyParams
 // ---------------------------------------------------------------------------
 
-/// All precomputed study state built once before training and simulation.
+/// Scalar parameters extracted from a [`cobre_io::Config`].
 ///
-/// Constructed by [`StudySetup::new`] from a validated [`System`] and
-/// [`cobre_io::Config`]. Owns all data so it can be held across async
-/// boundaries (e.g., Python GIL release) without lifetime issues.
+/// `StudyParams` centralises the config-to-domain conversion that was previously
+/// duplicated between `StudySetup::new()` (cobre-sddp) and
+/// `BroadcastConfig::from_config()` (cobre-cli). Both callers now delegate
+/// to `StudyParams::from_config()` and then convert the resulting fields to
+/// their respective target representations.
 ///
-/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
-/// from `StudySetup`.
-#[derive(Debug)]
-pub struct StudySetup {
-    // ── LP templates ─────────────────────────────────────────────────────────
-    stage_templates: StageTemplates,
-
-    // ── Algorithm state ──────────────────────────────────────────────────────
-    stochastic: StochasticContext,
-    indexer: StageIndexer,
-    fcf: FutureCostFunction,
-    initial_state: Vec<f64>,
-    horizon: HorizonMode,
-    risk_measures: Vec<RiskMeasure>,
-    entity_counts: EntityCounts,
-
-    // ── Derived layout values ─────────────────────────────────────────────────
-    block_counts_per_stage: Vec<usize>,
-    max_blocks: usize,
-
-    // ── Config-derived scalars ────────────────────────────────────────────────
-    seed: u64,
-    forward_passes: u32,
-    max_iterations: u64,
-    n_scenarios: u32,
-    io_channel_capacity: usize,
-    policy_path: String,
-    inflow_method: InflowNonNegativityMethod,
-    cut_selection: Option<CutSelectionStrategy>,
-    stopping_rule_set: StoppingRuleSet,
+/// The struct owns all values so it can be passed by value to constructors
+/// and broadcast helpers without lifetime dependencies.
+#[derive(Debug, Clone)]
+pub struct StudyParams {
+    /// Random seed for noise generation.
+    pub seed: u64,
+    /// Number of forward-pass trajectories per training iteration.
+    pub forward_passes: u32,
+    /// Stopping rule set (rules + mode) governing when training halts.
+    pub stopping_rule_set: StoppingRuleSet,
+    /// Number of simulation scenarios (0 if simulation is disabled).
+    pub n_scenarios: u32,
+    /// Buffer capacity for the simulation output channel.
+    pub io_channel_capacity: usize,
+    /// Policy directory path string.
+    pub policy_path: String,
+    /// Inflow non-negativity enforcement method.
+    pub inflow_method: InflowNonNegativityMethod,
+    /// Optional cut selection strategy (None means cut selection is disabled).
+    pub cut_selection: Option<CutSelectionStrategy>,
 }
 
-impl StudySetup {
-    /// Build all precomputed study state from a validated system and config.
+impl StudyParams {
+    /// Extract study parameters from a validated [`cobre_io::Config`].
     ///
-    /// The constructor performs:
-    /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
-    /// 2. Delegates to [`StudySetup::from_broadcast_params`] with the extracted values.
+    /// This method contains the full config-to-domain conversion logic:
+    /// seed derivation, forward passes defaulting, stopping rule conversion,
+    /// stopping mode parsing, `n_scenarios` conditional, `io_channel_capacity`
+    /// conversion, policy path extraction, inflow method construction, and
+    /// cut selection parsing.
     ///
     /// # Errors
     ///
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
-    ///   `build_stage_templates` on LP construction failure.
-    /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
-    ///   an invalid config string.
-    pub fn new(
-        system: &System,
-        config: &cobre_io::Config,
-        stochastic: StochasticContext,
-    ) -> Result<Self, SddpError> {
-        // ── Config extraction ─────────────────────────────────────────────────
+    /// - [`SddpError::Validation`] if `parse_cut_selection_config` returns an
+    ///   error for an unrecognised cut selection config string.
+    pub fn from_config(config: &cobre_io::Config) -> Result<Self, SddpError> {
         use cobre_io::config::StoppingRuleConfig;
 
         let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
@@ -196,9 +183,7 @@ impl StudySetup {
         let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
             .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
 
-        Self::from_broadcast_params(
-            system,
-            stochastic,
+        Ok(Self {
             seed,
             forward_passes,
             stopping_rule_set,
@@ -207,6 +192,84 @@ impl StudySetup {
             policy_path,
             inflow_method,
             cut_selection,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StudySetup
+// ---------------------------------------------------------------------------
+
+/// All precomputed study state built once before training and simulation.
+///
+/// Constructed by [`StudySetup::new`] from a validated [`System`] and
+/// [`cobre_io::Config`]. Owns all data so it can be held across async
+/// boundaries (e.g., Python GIL release) without lifetime issues.
+///
+/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
+/// from `StudySetup`.
+#[derive(Debug)]
+pub struct StudySetup {
+    // ── LP templates ─────────────────────────────────────────────────────────
+    stage_templates: StageTemplates,
+
+    // ── Algorithm state ──────────────────────────────────────────────────────
+    stochastic: StochasticContext,
+    indexer: StageIndexer,
+    fcf: FutureCostFunction,
+    initial_state: Vec<f64>,
+    horizon: HorizonMode,
+    risk_measures: Vec<RiskMeasure>,
+    entity_counts: EntityCounts,
+
+    // ── Derived layout values ─────────────────────────────────────────────────
+    block_counts_per_stage: Vec<usize>,
+    max_blocks: usize,
+
+    // ── Config-derived scalars ────────────────────────────────────────────────
+    seed: u64,
+    forward_passes: u32,
+    max_iterations: u64,
+    n_scenarios: u32,
+    io_channel_capacity: usize,
+    policy_path: String,
+    inflow_method: InflowNonNegativityMethod,
+    cut_selection: Option<CutSelectionStrategy>,
+    stopping_rule_set: StoppingRuleSet,
+}
+
+impl StudySetup {
+    /// Build all precomputed study state from a validated system and config.
+    ///
+    /// The constructor performs:
+    /// 1. Config field extraction (seed, forward passes, stopping rules, etc.)
+    /// 2. Delegates to [`StudySetup::from_broadcast_params`] with the extracted values.
+    ///
+    /// # Errors
+    ///
+    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
+    ///   the template list is empty ("system has no study stages").
+    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
+    ///   `build_stage_templates` on LP construction failure.
+    /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
+    ///   an invalid config string.
+    pub fn new(
+        system: &System,
+        config: &cobre_io::Config,
+        stochastic: StochasticContext,
+    ) -> Result<Self, SddpError> {
+        let params = StudyParams::from_config(config)?;
+        Self::from_broadcast_params(
+            system,
+            stochastic,
+            params.seed,
+            params.forward_passes,
+            params.stopping_rule_set,
+            params.n_scenarios,
+            params.io_channel_capacity,
+            params.policy_path,
+            params.inflow_method,
+            params.cut_selection,
         )
     }
 
@@ -488,6 +551,35 @@ impl StudySetup {
         &self.stopping_rule_set
     }
 
+    // ── Context constructors ──────────────────────────────────────────────────
+
+    /// Construct a [`StageContext`] borrowing from this setup.
+    #[must_use]
+    pub fn stage_ctx(&self) -> StageContext<'_> {
+        StageContext {
+            templates: &self.stage_templates.templates,
+            base_rows: &self.stage_templates.base_rows,
+            noise_scale: &self.stage_templates.noise_scale,
+            n_hydros: self.stage_templates.n_hydros,
+            n_load_buses: self.stage_templates.n_load_buses,
+            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
+            load_bus_indices: &self.stage_templates.load_bus_indices,
+            block_counts_per_stage: &self.block_counts_per_stage,
+        }
+    }
+
+    /// Construct a [`TrainingContext`] borrowing from this setup.
+    #[must_use]
+    pub fn training_ctx(&self) -> TrainingContext<'_> {
+        TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+        }
+    }
+
     // ── Training method ───────────────────────────────────────────────────────
 
     /// Execute the training loop using the precomputed study state.
@@ -522,14 +614,12 @@ impl StudySetup {
             event_sender,
         };
 
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-        };
-
+        // Both context structs must be constructed inline in train(): the
+        // stage_ctx() and training_ctx() methods take &self, which would
+        // conflict with &mut self.fcf at the crate::train call site.
+        // Direct field borrows let the borrow checker see that self.fcf is
+        // disjoint from the fields borrowed by each context.
+        // (In simulate(), which is &self throughout, the methods are used instead.)
         let stage_ctx = StageContext {
             templates: &self.stage_templates.templates,
             base_rows: &self.stage_templates.base_rows,
@@ -539,6 +629,14 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+        };
+
+        let training_ctx = TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
         };
 
         crate::train(
@@ -589,24 +687,8 @@ impl StudySetup {
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
     ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
-        let stage_ctx = StageContext {
-            templates: &self.stage_templates.templates,
-            base_rows: &self.stage_templates.base_rows,
-            noise_scale: &self.stage_templates.noise_scale,
-            n_hydros: self.stage_templates.n_hydros,
-            n_load_buses: self.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
-            load_bus_indices: &self.stage_templates.load_bus_indices,
-            block_counts_per_stage: &self.block_counts_per_stage,
-        };
-
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-        };
+        let stage_ctx = self.stage_ctx();
+        let training_ctx = self.training_ctx();
 
         let sim_config = self.simulation_config();
 
@@ -772,6 +854,136 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
     }
 
     state
+}
+
+// ---------------------------------------------------------------------------
+// PrepareStochasticResult + prepare_stochastic
+// ---------------------------------------------------------------------------
+
+/// Result of the stochastic preprocessing pipeline.
+///
+/// Bundles the outputs of [`prepare_stochastic`] so that callers do not have
+/// to handle three separate return values.
+#[derive(Debug)]
+pub struct PrepareStochasticResult {
+    /// Updated system with estimated PAR models (if estimation ran).
+    pub system: System,
+    /// Built stochastic context, ready to pass to [`StudySetup::new`].
+    pub stochastic: StochasticContext,
+    /// Estimation report (`Some` if `inflow_history.parquet` was present and
+    /// `inflow_seasonal_stats.parquet` was absent, triggering auto-estimation).
+    pub estimation_report: Option<crate::EstimationReport>,
+}
+
+/// Load, validate, and assemble a user-supplied opening tree from the case directory.
+///
+/// Checks whether `scenarios/noise_openings.parquet` is present using
+/// [`cobre_io::validate_structure`]. If absent, returns `Ok(None)`.
+/// If present, loads the rows, validates dimensions and stage consistency,
+/// and assembles an [`OpeningTree`].
+///
+/// # Errors
+///
+/// - [`SddpError::Io`] if the Parquet file cannot be read.
+/// - [`SddpError::Io`] if rows fail dimension or stage consistency checks.
+fn load_user_opening_tree_inner(
+    case_dir: &Path,
+    system: &System,
+) -> Result<Option<OpeningTree>, SddpError> {
+    let mut ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
+
+    if !manifest.scenarios_noise_openings_parquet {
+        return Ok(None);
+    }
+
+    let path = case_dir.join("scenarios").join("noise_openings.parquet");
+
+    let rows = cobre_io::scenarios::load_noise_openings(Some(&path))?;
+
+    let n_hydros = system.hydros().len();
+    let mut load_bus_ids: Vec<EntityId> = system
+        .load_models()
+        .iter()
+        .filter(|m| m.std_mw > 0.0)
+        .map(|m| m.bus_id)
+        .collect();
+    load_bus_ids.sort_unstable_by_key(|id| id.0);
+    load_bus_ids.dedup();
+    let n_load_buses = load_bus_ids.len();
+    let expected_dim = n_hydros + n_load_buses;
+
+    let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+    let mut openings_by_stage: BTreeMap<i32, BTreeSet<u32>> = BTreeMap::new();
+    for row in &rows {
+        openings_by_stage
+            .entry(row.stage_id)
+            .or_default()
+            .insert(row.opening_index);
+    }
+    let openings_per_stage: Vec<usize> = openings_by_stage.values().map(BTreeSet::len).collect();
+
+    cobre_io::scenarios::validate_noise_openings(
+        &rows,
+        expected_dim,
+        expected_stages,
+        &openings_per_stage,
+    )?;
+
+    let tree = cobre_io::scenarios::assemble_opening_tree(rows, expected_dim);
+    Ok(Some(tree))
+}
+
+/// Prepare the stochastic pipeline: estimate PAR from history (if applicable),
+/// load a user-supplied opening tree (if present), and build the
+/// [`StochasticContext`].
+///
+/// This function encapsulates the pre-setup orchestration that would otherwise
+/// be duplicated across entry points (CLI, Python bindings). It is intended to
+/// be called once per entry point before constructing [`StudySetup`].
+///
+/// ## Input path matrix
+///
+/// | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | Behaviour |
+/// |---|---|---|
+/// | absent | any | System unchanged; `estimation_report = None`. |
+/// | present | present | System unchanged; estimation skipped. |
+/// | present | absent | PAR estimation runs; system updated. |
+///
+/// If `scenarios/noise_openings.parquet` is present, it is loaded, validated,
+/// and passed as the user opening tree to [`cobre_stochastic::build_stochastic_context`].
+///
+/// ## MPI note
+///
+/// Under MPI, this function must only be called on rank 0. Non-root ranks
+/// should receive the opening tree via broadcast and call
+/// [`cobre_stochastic::build_stochastic_context`] directly.
+///
+/// # Errors
+///
+/// - [`SddpError::Io`] — file read, parse, or validation failure from either
+///   `estimate_from_history` or opening tree loading.
+/// - [`SddpError::Stochastic`] — PAR parameter validation or Cholesky
+///   decomposition failure from `build_stochastic_context` or estimation.
+pub fn prepare_stochastic(
+    system: System,
+    case_dir: &Path,
+    config: &cobre_io::Config,
+    seed: u64,
+) -> Result<PrepareStochasticResult, SddpError> {
+    let (system, estimation_report) =
+        crate::estimation::estimate_from_history(system, case_dir, config)?;
+
+    let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
+
+    let stochastic =
+        cobre_stochastic::build_stochastic_context(&system, seed, &[], user_opening_tree)?;
+
+    Ok(PrepareStochasticResult {
+        system,
+        stochastic,
+        estimation_report,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,6 +1389,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stage_ctx_fields_match_study_setup() {
+        let n_stages = 3;
+        let system = minimal_system(n_stages);
+        let config = minimal_config(2, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let ctx = setup.stage_ctx();
+
+        assert_eq!(
+            ctx.templates.len(),
+            setup.stage_templates().len(),
+            "templates length mismatch"
+        );
+        assert_eq!(
+            ctx.base_rows.len(),
+            setup.base_rows().len(),
+            "base_rows length mismatch"
+        );
+        assert_eq!(
+            ctx.noise_scale.len(),
+            setup.noise_scale().len(),
+            "noise_scale length mismatch"
+        );
+        assert_eq!(
+            ctx.n_hydros,
+            setup.entity_counts().hydro_ids.len(),
+            "n_hydros mismatch"
+        );
+        assert_eq!(
+            ctx.block_counts_per_stage.len(),
+            setup.block_counts_per_stage().len(),
+            "block_counts_per_stage length mismatch"
+        );
+    }
+
+    #[test]
+    fn training_ctx_fields_match_study_setup() {
+        let n_stages = 3;
+        let system = minimal_system(n_stages);
+        let config = minimal_config(2, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let ctx = setup.training_ctx();
+
+        assert_eq!(
+            ctx.horizon.num_stages(),
+            setup.horizon().num_stages(),
+            "horizon num_stages mismatch"
+        );
+        assert_eq!(
+            ctx.indexer.n_state,
+            setup.indexer().n_state,
+            "indexer n_state mismatch"
+        );
+        assert_eq!(
+            ctx.initial_state.len(),
+            setup.initial_state().len(),
+            "initial_state length mismatch"
+        );
+    }
+
     /// Given a 1-hydro, 1-thermal, 1-bus, 2-stage system with an iteration
     /// limit of 3, when `train()` is called, then it completes successfully
     /// with `result.iterations <= 3`.
@@ -1379,6 +1657,310 @@ mod tests {
         assert!(
             !costs.is_empty(),
             "simulate must return at least one cost entry"
+        );
+    }
+
+    /// Given a config with no overrides, `StudyParams::from_config` returns the
+    /// default values for all fields.
+    #[test]
+    fn study_params_from_config_defaults() {
+        use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
+        use crate::stopping_rule::StoppingMode;
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
+            TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        let config = Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "none".to_string(),
+                    penalty_cost: 0.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: None,
+                forward_passes: None,
+                stopping_rules: None,
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        };
+
+        let params = StudyParams::from_config(&config).expect("from_config");
+
+        assert_eq!(
+            params.seed, DEFAULT_SEED,
+            "seed should default to DEFAULT_SEED"
+        );
+        assert_eq!(
+            params.forward_passes, DEFAULT_FORWARD_PASSES,
+            "forward_passes should default to DEFAULT_FORWARD_PASSES"
+        );
+        // When no stopping rules are specified, a single IterationLimit rule is inserted.
+        assert_eq!(
+            params.stopping_rule_set.rules.len(),
+            1,
+            "expected exactly 1 default stopping rule"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[0],
+                crate::stopping_rule::StoppingRule::IterationLimit { .. }
+            ),
+            "default rule should be IterationLimit"
+        );
+        assert!(
+            matches!(params.stopping_rule_set.mode, StoppingMode::Any),
+            "default stopping mode should be Any"
+        );
+        // Simulation is disabled by default.
+        assert_eq!(
+            params.n_scenarios, 0,
+            "n_scenarios should be 0 when simulation disabled"
+        );
+        assert!(
+            params.cut_selection.is_none(),
+            "cut_selection should be None by default"
+        );
+    }
+
+    /// Given a config with explicit values for all fields, `StudyParams::from_config`
+    /// extracts them correctly.
+    #[test]
+    fn study_params_from_config_explicit() {
+        use super::StudyParams;
+        use crate::stopping_rule::{StoppingMode, StoppingRule};
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig,
+            StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        let config = Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "penalty".to_string(),
+                    penalty_cost: 999.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: Some(1234),
+                forward_passes: Some(5),
+                stopping_rules: Some(vec![
+                    StoppingRuleConfig::IterationLimit { limit: 50 },
+                    StoppingRuleConfig::TimeLimit { seconds: 60.0 },
+                ]),
+                stopping_mode: "all".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig {
+                path: "./my_policy".to_string(),
+                ..PolicyConfig::default()
+            },
+            simulation: IoSimulationConfig {
+                enabled: true,
+                num_scenarios: 200,
+                ..IoSimulationConfig::default()
+            },
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        };
+
+        let params = StudyParams::from_config(&config).expect("from_config");
+
+        // Seed: i64::unsigned_abs(1234) == 1234
+        assert_eq!(params.seed, 1234, "seed mismatch");
+        assert_eq!(params.forward_passes, 5, "forward_passes mismatch");
+        // Two stopping rules must be preserved.
+        assert_eq!(
+            params.stopping_rule_set.rules.len(),
+            2,
+            "stopping rule count mismatch"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[0],
+                StoppingRule::IterationLimit { limit: 50 }
+            ),
+            "first rule should be IterationLimit(50)"
+        );
+        assert!(
+            matches!(
+                params.stopping_rule_set.rules[1],
+                StoppingRule::TimeLimit { seconds } if (seconds - 60.0).abs() < 1e-9
+            ),
+            "second rule should be TimeLimit(60.0)"
+        );
+        assert!(
+            matches!(params.stopping_rule_set.mode, StoppingMode::All),
+            "stopping mode should be All"
+        );
+        assert_eq!(params.n_scenarios, 200, "n_scenarios mismatch");
+        assert_eq!(params.policy_path, "./my_policy", "policy_path mismatch");
+    }
+
+    // ── prepare_stochastic tests ──────────────────────────────────────────────
+
+    /// Build a minimal case directory with required structural files present so
+    /// that `validate_structure` does not fail. The optional estimation and
+    /// opening tree files are NOT created here; tests add them as needed.
+    fn write_minimal_case_dir(root: &std::path::Path) {
+        use std::fs;
+
+        fs::create_dir_all(root.join("system")).unwrap();
+        fs::write(root.join("config.json"), b"{}").unwrap();
+        fs::write(root.join("penalties.json"), b"{}").unwrap();
+        fs::write(root.join("stages.json"), b"{}").unwrap();
+        fs::write(root.join("initial_conditions.json"), b"{}").unwrap();
+        fs::write(root.join("system/buses.json"), b"{}").unwrap();
+        fs::write(root.join("system/lines.json"), b"{}").unwrap();
+        fs::write(root.join("system/hydros.json"), b"{}").unwrap();
+        fs::write(root.join("system/thermals.json"), b"{}").unwrap();
+    }
+
+    /// Build a minimal [`cobre_io::Config`] with no estimation or seed overrides.
+    fn minimal_prepare_config() -> cobre_io::Config {
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
+            TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "none".to_string(),
+                    penalty_cost: 0.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: None,
+                forward_passes: None,
+                stopping_rules: None,
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        }
+    }
+
+    /// Given a case directory with no `inflow_history.parquet` and no
+    /// `scenarios/noise_openings.parquet`, `prepare_stochastic` returns
+    /// `estimation_report = None` and a stochastic context with generated provenance.
+    #[test]
+    fn prepare_stochastic_no_history_no_tree_returns_none_report_and_generated_provenance() {
+        use super::prepare_stochastic;
+        use cobre_stochastic::provenance::ComponentProvenance;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+        let seed = 42_u64;
+
+        let result = prepare_stochastic(system, root, &config, seed)
+            .expect("prepare_stochastic should succeed with no optional files");
+
+        assert!(
+            result.estimation_report.is_none(),
+            "estimation_report must be None when no inflow_history.parquet is present"
+        );
+        assert_eq!(
+            result.stochastic.provenance().opening_tree,
+            ComponentProvenance::Generated,
+            "opening_tree provenance must be Generated when no user tree is supplied"
+        );
+    }
+
+    /// Given a case directory with `inflow_seasonal_stats.parquet` present
+    /// alongside `inflow_history.parquet`, estimation is skipped and
+    /// `estimation_report` is `None`.
+    #[test]
+    fn prepare_stochastic_with_stats_file_present_skips_estimation() {
+        use super::prepare_stochastic;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        // Place both files so that the "explicit stats present" branch is taken
+        // and estimation is skipped. The file content is empty bytes — `validate_structure`
+        // only checks existence, not content.
+        fs::create_dir_all(root.join("scenarios")).unwrap();
+        fs::write(root.join("scenarios/inflow_history.parquet"), b"").unwrap();
+        fs::write(root.join("scenarios/inflow_seasonal_stats.parquet"), b"").unwrap();
+        fs::write(root.join("scenarios/inflow_ar_coefficients.parquet"), b"").unwrap();
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+        let seed = 42_u64;
+
+        let result = prepare_stochastic(system, root, &config, seed)
+            .expect("prepare_stochastic should succeed when stats file is present");
+
+        assert!(
+            result.estimation_report.is_none(),
+            "estimation_report must be None when inflow_seasonal_stats.parquet is present"
+        );
+    }
+
+    /// Given a case directory with no `scenarios/noise_openings.parquet`,
+    /// `load_user_opening_tree_inner` returns `None`.
+    ///
+    /// This is tested indirectly via `prepare_stochastic` by checking that the
+    /// returned stochastic context does not claim `UserSupplied` provenance.
+    #[test]
+    fn prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance() {
+        use super::prepare_stochastic;
+        use cobre_stochastic::provenance::ComponentProvenance;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+
+        let result = prepare_stochastic(system, root, &config, 0)
+            .expect("prepare_stochastic must succeed with no opening tree file");
+
+        assert_ne!(
+            result.stochastic.provenance().opening_tree,
+            ComponentProvenance::UserSupplied,
+            "opening_tree provenance must not be UserSupplied when file is absent"
         );
     }
 }

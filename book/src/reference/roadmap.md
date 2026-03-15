@@ -42,6 +42,34 @@ The following features were delivered in v0.1.2:
   user-supply, stochastic artifact export, complete tree work distribution,
   and per-stage warm-start cuts.
 
+## v0.1.3 Deliverables
+
+The following features were delivered in v0.1.3:
+
+- **`StudySetup` extraction** -- Case-loading logic deduplicated into a shared
+  `StudySetup` struct, eliminating divergence between the training and simulation
+  pipelines.
+- **Noise transformation deduplication** -- PAR noise draw logic consolidated
+  into `noise.rs`, removing duplicated transformation paths across the forward
+  pass and scenario generation.
+- **CLI flag cleanup** -- Four flags removed (`--skip-simulation`, `--no-banner`,
+  `--verbose`, `--export-stochastic`) in favour of structured configuration,
+  reducing CLI surface and simplifying the execution lifecycle.
+- **Stochastic summary module** -- Scenario statistics reporting extracted into
+  `summary.rs` for cleaner separation from the training loop.
+- **Simulation progress fix** -- `WelfordAccumulator` moved to `cobre-core` and
+  per-worker accumulation bug corrected, restoring accurate progress reporting
+  during the simulation pipeline.
+- **User-supplied opening tree (ADR-008)** -- Callers can now supply a custom
+  opening tree instead of the auto-generated one, enabling reproducible scenario
+  studies with fixed initial conditions.
+- **Stochastic artifact export (ADR-009)** -- The forward pass can export sampled
+  scenario trajectories as Parquet artifacts for offline analysis and validation.
+- **`ScratchBuffers` separation** -- Per-iteration scratch memory separated from
+  training state, reducing allocation pressure on the hot path.
+- **`StageContext` and `TrainingContext` structs** -- Structured context types
+  introduced at pass boundaries to replace ad-hoc parameter threading.
+
 ## Sections
 
 The roadmap is organized into four areas:

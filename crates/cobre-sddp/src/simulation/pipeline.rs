@@ -17,8 +17,8 @@
 //!
 //! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
 //! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
-//! distributes scenarios across [`SolverWorkspace`] instances. Per-worker basis
-//! caches enable warm-starting across consecutive scenarios. Results are sorted
+//! distributes scenarios across [`SolverWorkspace`] instances. Each stage LP
+//! is cold-started to guarantee thread-count-independent determinism. Results are sorted
 //! by `scenario_id` for deterministic MPI aggregation.
 //!
 //! ## Seed domain separation
@@ -33,8 +33,7 @@
 //!
 //! No allocations occur per scenario or per stage during the inner loops.
 //! Each [`SolverWorkspace`] pre-allocates its [`crate::PatchBuffer`] and
-//! `current_state`. The per-worker `basis_cache` (`Vec<Option<Basis>>`) is
-//! allocated once per parallel worker before the scenario loop. The
+//! `current_state`. The
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
@@ -44,7 +43,7 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -161,14 +160,13 @@ struct SimStageIds {
 /// Solve one stage for one simulation scenario, updating workspace in-place.
 ///
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
-/// and returns `(immediate_cost, SimulationStageResult)`. Updates `basis_entry`
-/// for warm-starting on the next scenario.
+/// and returns `(immediate_cost, SimulationStageResult)`. Always cold-starts
+/// the LP to guarantee thread-count-independent determinism.
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     cut_batch: &RowBatch,
-    basis_entry: &mut Option<Basis>,
     output: &SimulationOutputSpec<'_>,
     ids: &SimStageIds,
 ) -> Result<(f64, SimulationStageResult), SimulationError> {
@@ -199,24 +197,17 @@ fn solve_simulation_stage<S: SolverInterface>(
         &ws.patch_buf.upper[..pc],
     );
 
-    let view = (match basis_entry.as_ref() {
-        Some(rb) => ws.solver.solve_with_basis(rb),
-        None => ws.solver.solve(),
-    })
-    .map_err(|e| {
-        *basis_entry = None;
-        match e {
-            SolverError::Infeasible => SimulationError::LpInfeasible {
-                scenario_id: ids.scenario_id,
-                stage_id: ids.stage_id_u32,
-                solver_message: "LP infeasible".to_string(),
-            },
-            other => SimulationError::SolverError {
-                scenario_id: ids.scenario_id,
-                stage_id: ids.stage_id_u32,
-                solver_message: other.to_string(),
-            },
-        }
+    let view = ws.solver.solve().map_err(|e| match e {
+        SolverError::Infeasible => SimulationError::LpInfeasible {
+            scenario_id: ids.scenario_id,
+            stage_id: ids.stage_id_u32,
+            solver_message: "LP infeasible".to_string(),
+        },
+        other => SimulationError::SolverError {
+            scenario_id: ids.scenario_id,
+            stage_id: ids.stage_id_u32,
+            solver_message: other.to_string(),
+        },
     })?;
 
     let immediate_cost = view.objective - view.primal[indexer.theta];
@@ -270,13 +261,6 @@ fn solve_simulation_stage<S: SolverInterface>(
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&view.primal[..indexer.n_state]);
-    if let Some(rb) = basis_entry.as_mut() {
-        ws.solver.get_basis(rb);
-    } else {
-        let mut rb = Basis::new(ctx.templates[t].num_cols, ctx.templates[t].num_rows);
-        ws.solver.get_basis(&mut rb);
-        *basis_entry = Some(rb);
-    }
     Ok((immediate_cost, result))
 }
 
@@ -285,7 +269,6 @@ fn process_scenario_stages<S: SolverInterface>(
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     cut_batches: &[RowBatch],
-    basis_cache: &mut [Option<Basis>],
     output: &SimulationOutputSpec<'_>,
     ids: &ScenarioIds,
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
@@ -303,6 +286,7 @@ fn process_scenario_stages<S: SolverInterface>(
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
+    #[allow(clippy::needless_range_loop)] // t indexes cut_batches, ctx arrays, and SimStageIds
     for t in 0..ids.num_stages {
         #[allow(clippy::cast_possible_truncation)]
         let stage_id_u32 = t as u32;
@@ -340,7 +324,6 @@ fn process_scenario_stages<S: SolverInterface>(
             ctx,
             training_ctx,
             &cut_batches[t],
-            &mut basis_cache[t],
             output,
             &SimStageIds {
                 t,
@@ -422,8 +405,8 @@ fn dispatch_scenario_result(
 /// Distributes locally assigned scenarios across worker threads using the same
 /// static partitioning as the training forward pass. Each [`SolverWorkspace`]
 /// owns its solver, patch buffer, and current-state buffer exclusively — there
-/// is no shared mutable state between workers. A per-worker basis cache
-/// (`Vec<Option<Basis>>`) is created locally for warm-starting across scenarios.
+/// is no shared mutable state between workers. Each stage LP is cold-started
+/// to guarantee determinism regardless of thread count.
 ///
 /// `SyncSender::send()` is thread-safe; each worker sends its
 /// [`SimulationScenarioResult`] through `result_tx` as it completes each
@@ -513,7 +496,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         .map(|(w, ws)| {
             let (start_local, end_local) = partition(local_count, n_workers, w);
             let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
-            let mut basis_cache: Vec<Option<Basis>> = vec![None; num_stages];
             let mut worker_costs = Vec::with_capacity(end_local - start_local);
 
             for local_idx in start_local..end_local {
@@ -525,7 +507,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     ctx,
                     training_ctx,
                     &cut_batches,
-                    &mut basis_cache,
                     &output,
                     &ScenarioIds {
                         scenario_id,

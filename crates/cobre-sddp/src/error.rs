@@ -9,6 +9,8 @@ use cobre_io::LoadError;
 use cobre_solver::SolverError;
 use cobre_stochastic::StochasticError;
 
+use crate::estimation::EstimationError;
+
 /// Unified error type for SDDP algorithm operations.
 ///
 /// All fallible methods in `cobre-sddp` return `Result<T, SddpError>`.
@@ -94,6 +96,15 @@ pub enum SddpError {
 impl From<cobre_comm::CommError> for SddpError {
     fn from(err: cobre_comm::CommError) -> Self {
         Self::Communication(err.to_string())
+    }
+}
+
+impl From<EstimationError> for SddpError {
+    fn from(err: EstimationError) -> Self {
+        match err {
+            EstimationError::Load(load_err) => Self::Io(load_err),
+            EstimationError::Stochastic(stoch_err) => Self::Stochastic(stoch_err),
+        }
     }
 }
 

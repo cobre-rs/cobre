@@ -36,6 +36,12 @@ impl WelfordAccumulator {
         self.m2 += delta * delta2;
     }
 
+    /// Number of observations accumulated so far.
+    #[must_use]
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
     /// Running mean of all observed values, or `0.0` if no observations.
     #[must_use]
     pub fn mean(&self) -> f64 {
@@ -143,5 +149,16 @@ mod tests {
             0.0,
             "std_dev must be 0.0 with no observations"
         );
+    }
+
+    /// `count()` returns 0 before any updates and tracks each update correctly.
+    #[test]
+    fn welford_count_tracks_updates() {
+        let mut acc = WelfordAccumulator::new();
+        assert_eq!(acc.count(), 0, "count must be 0 before any updates");
+        acc.update(1.0);
+        acc.update(2.0);
+        acc.update(3.0);
+        assert_eq!(acc.count(), 3, "count must be 3 after 3 updates");
     }
 }

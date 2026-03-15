@@ -38,6 +38,7 @@ pub mod backward;
 pub mod config;
 pub mod context;
 pub mod convergence;
+pub mod conversion;
 pub mod cut;
 pub mod cut_selection;
 pub mod cut_sync;
@@ -54,6 +55,7 @@ pub mod risk_measure;
 pub mod setup;
 pub mod simulation;
 pub mod state_exchange;
+pub mod stochastic_summary;
 pub mod stopping_rule;
 pub mod training;
 pub mod training_output;
@@ -78,7 +80,10 @@ pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
-pub use setup::StudySetup;
+pub use setup::{
+    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,
+    StudyParams, StudySetup, prepare_stochastic,
+};
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
     SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
@@ -89,6 +94,10 @@ pub use simulation::{
     extract_stage_result, simulate,
 };
 pub use state_exchange::ExchangeBuffers;
+pub use stochastic_summary::{
+    ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,
+    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+};
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
 pub use training::{TrainingResult, train};
 pub use training_output::build_training_output;

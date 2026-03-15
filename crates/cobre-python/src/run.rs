@@ -27,18 +27,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use cobre_comm::LocalBackend;
-use cobre_io::output::simulation_writer::{
-    BusWriteRecord, ContractWriteRecord, CostWriteRecord, ExchangeWriteRecord,
-    GenericViolationWriteRecord, HydroWriteRecord, InflowLagWriteRecord,
-    NonControllableWriteRecord, PumpingWriteRecord, ScenarioWritePayload, SimulationParquetWriter,
-    StageWritePayload, ThermalWriteRecord,
-};
+use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{write_results, ParquetWriterConfig};
-use cobre_sddp::{FutureCostFunction, SimulationScenarioResult, SimulationStageResult, StudySetup};
+use cobre_sddp::{
+    build_stochastic_summary, prepare_stochastic, ArOrderSummary, EstimationReport,
+    FutureCostFunction, SimulationScenarioResult, StochasticSource, StochasticSummary, StudySetup,
+    DEFAULT_SEED,
+};
 use cobre_solver::HighsSolver;
-use cobre_stochastic::build_stochastic_context;
-
-const DEFAULT_SEED: u64 = 42;
 
 /// Summary returned by [`run_inner`] on success.
 struct RunSummary {
@@ -50,6 +46,7 @@ struct RunSummary {
     total_time_ms: u64,
     output_dir: PathBuf,
     simulation: Option<SimSummary>,
+    stochastic: Option<StochasticSummary>,
 }
 
 struct SimSummary {
@@ -63,179 +60,6 @@ fn init_rayon(threads: Option<u32>) {
         .num_threads(n)
         .build_global()
         .unwrap_or(());
-}
-
-fn convert_stage(src: SimulationStageResult) -> StageWritePayload {
-    StageWritePayload {
-        stage_id: src.stage_id,
-        costs: src
-            .costs
-            .into_iter()
-            .map(|s| CostWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                total_cost: s.total_cost,
-                immediate_cost: s.immediate_cost,
-                future_cost: s.future_cost,
-                discount_factor: s.discount_factor,
-                thermal_cost: s.thermal_cost,
-                contract_cost: s.contract_cost,
-                deficit_cost: s.deficit_cost,
-                excess_cost: s.excess_cost,
-                storage_violation_cost: s.storage_violation_cost,
-                filling_target_cost: s.filling_target_cost,
-                hydro_violation_cost: s.hydro_violation_cost,
-                inflow_penalty_cost: s.inflow_penalty_cost,
-                generic_violation_cost: s.generic_violation_cost,
-                spillage_cost: s.spillage_cost,
-                fpha_turbined_cost: s.fpha_turbined_cost,
-                curtailment_cost: s.curtailment_cost,
-                exchange_cost: s.exchange_cost,
-                pumping_cost: s.pumping_cost,
-            })
-            .collect(),
-        hydros: src
-            .hydros
-            .into_iter()
-            .map(|s| HydroWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                hydro_id: s.hydro_id,
-                turbined_m3s: s.turbined_m3s,
-                spillage_m3s: s.spillage_m3s,
-                evaporation_m3s: s.evaporation_m3s,
-                diverted_inflow_m3s: s.diverted_inflow_m3s,
-                diverted_outflow_m3s: s.diverted_outflow_m3s,
-                incremental_inflow_m3s: s.incremental_inflow_m3s,
-                inflow_m3s: s.inflow_m3s,
-                storage_initial_hm3: s.storage_initial_hm3,
-                storage_final_hm3: s.storage_final_hm3,
-                generation_mw: s.generation_mw,
-                productivity_mw_per_m3s: s.productivity_mw_per_m3s,
-                spillage_cost: s.spillage_cost,
-                water_value_per_hm3: s.water_value_per_hm3,
-                storage_binding_code: s.storage_binding_code,
-                operative_state_code: s.operative_state_code,
-                turbined_slack_m3s: s.turbined_slack_m3s,
-                outflow_slack_below_m3s: s.outflow_slack_below_m3s,
-                outflow_slack_above_m3s: s.outflow_slack_above_m3s,
-                generation_slack_mw: s.generation_slack_mw,
-                storage_violation_below_hm3: s.storage_violation_below_hm3,
-                filling_target_violation_hm3: s.filling_target_violation_hm3,
-                evaporation_violation_m3s: s.evaporation_violation_m3s,
-                inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
-            })
-            .collect(),
-        thermals: src
-            .thermals
-            .into_iter()
-            .map(|s| ThermalWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                thermal_id: s.thermal_id,
-                generation_mw: s.generation_mw,
-                generation_cost: s.generation_cost,
-                is_gnl: s.is_gnl,
-                gnl_committed_mw: s.gnl_committed_mw,
-                gnl_decision_mw: s.gnl_decision_mw,
-                operative_state_code: s.operative_state_code,
-            })
-            .collect(),
-        exchanges: src
-            .exchanges
-            .into_iter()
-            .map(|s| ExchangeWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                line_id: s.line_id,
-                direct_flow_mw: s.direct_flow_mw,
-                reverse_flow_mw: s.reverse_flow_mw,
-                exchange_cost: s.exchange_cost,
-                operative_state_code: s.operative_state_code,
-            })
-            .collect(),
-        buses: src
-            .buses
-            .into_iter()
-            .map(|s| BusWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                bus_id: s.bus_id,
-                load_mw: s.load_mw,
-                deficit_mw: s.deficit_mw,
-                excess_mw: s.excess_mw,
-                spot_price: s.spot_price,
-            })
-            .collect(),
-        pumping_stations: src
-            .pumping_stations
-            .into_iter()
-            .map(|s| PumpingWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                pumping_station_id: s.pumping_station_id,
-                pumped_flow_m3s: s.pumped_flow_m3s,
-                power_consumption_mw: s.power_consumption_mw,
-                pumping_cost: s.pumping_cost,
-                operative_state_code: s.operative_state_code,
-            })
-            .collect(),
-        contracts: src
-            .contracts
-            .into_iter()
-            .map(|s| ContractWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                contract_id: s.contract_id,
-                power_mw: s.power_mw,
-                price_per_mwh: s.price_per_mwh,
-                total_cost: s.total_cost,
-                operative_state_code: s.operative_state_code,
-            })
-            .collect(),
-        non_controllables: src
-            .non_controllables
-            .into_iter()
-            .map(|s| NonControllableWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                non_controllable_id: s.non_controllable_id,
-                generation_mw: s.generation_mw,
-                available_mw: s.available_mw,
-                curtailment_mw: s.curtailment_mw,
-                curtailment_cost: s.curtailment_cost,
-                operative_state_code: s.operative_state_code,
-            })
-            .collect(),
-        inflow_lags: src
-            .inflow_lags
-            .into_iter()
-            .map(|s| InflowLagWriteRecord {
-                stage_id: s.stage_id,
-                hydro_id: s.hydro_id,
-                lag_index: s.lag_index,
-                inflow_m3s: s.inflow_m3s,
-            })
-            .collect(),
-        generic_violations: src
-            .generic_violations
-            .into_iter()
-            .map(|s| GenericViolationWriteRecord {
-                stage_id: s.stage_id,
-                block_id: s.block_id,
-                constraint_id: s.constraint_id,
-                slack_value: s.slack_value,
-                slack_cost: s.slack_cost,
-            })
-            .collect(),
-    }
-}
-
-fn convert_scenario(src: SimulationScenarioResult) -> ScenarioWritePayload {
-    ScenarioWritePayload {
-        scenario_id: src.scenario_id,
-        stages: src.stages.into_iter().map(convert_stage).collect(),
-    }
 }
 
 #[allow(
@@ -373,6 +197,99 @@ fn write_policy_checkpoint(
         .map_err(|e| e.to_string())
 }
 
+/// Write all applicable stochastic preprocessing artifacts to `{output_dir}/stochastic/`.
+///
+/// Called when `exports.stochastic` is `true` in `config.json`. Each writer call is
+/// independent: failure is logged to stderr as a warning and does not prevent the remaining
+/// files or training from proceeding.
+///
+/// Files written:
+/// - `noise_openings.parquet` — always
+/// - `inflow_seasonal_stats.parquet` — always
+/// - `inflow_ar_coefficients.parquet` — always
+/// - `correlation.json` — always
+/// - `load_seasonal_stats.parquet` — only when any load model has `std_mw > 0`
+/// - `fitting_report.json` — only when `estimation_report` is `Some`
+fn export_stochastic_artifacts_py(
+    output_dir: &std::path::Path,
+    stochastic: &cobre_stochastic::StochasticContext,
+    system: &cobre_core::System,
+    estimation_report: Option<&EstimationReport>,
+) {
+    use cobre_core::scenario::LoadModel;
+    use cobre_io::output::{
+        write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+        write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
+    };
+    use cobre_io::scenarios::LoadSeasonalStatsRow;
+    use cobre_sddp::{
+        estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    };
+
+    let stochastic_dir = output_dir.join("stochastic");
+
+    if let Err(e) = write_noise_openings(
+        &stochastic_dir.join("noise_openings.parquet"),
+        stochastic.opening_tree(),
+    ) {
+        eprintln!("cobre-python: stochastic export warning: noise_openings: {e}");
+    }
+
+    let stats_rows = inflow_models_to_stats_rows(system.inflow_models());
+    if let Err(e) = write_inflow_seasonal_stats(
+        &stochastic_dir.join("inflow_seasonal_stats.parquet"),
+        &stats_rows,
+    ) {
+        eprintln!("cobre-python: stochastic export warning: inflow_seasonal_stats: {e}");
+    }
+
+    let ar_rows = inflow_models_to_ar_rows(system.inflow_models());
+    if let Err(e) = write_inflow_ar_coefficients(
+        &stochastic_dir.join("inflow_ar_coefficients.parquet"),
+        &ar_rows,
+    ) {
+        eprintln!("cobre-python: stochastic export warning: inflow_ar_coefficients: {e}");
+    }
+
+    if let Err(e) = write_correlation_json(
+        &stochastic_dir.join("correlation.json"),
+        system.correlation(),
+    ) {
+        eprintln!("cobre-python: stochastic export warning: correlation: {e}");
+    }
+
+    let has_stochastic_load = system
+        .load_models()
+        .iter()
+        .any(|m: &LoadModel| m.std_mw > 0.0);
+    if has_stochastic_load {
+        let load_rows: Vec<LoadSeasonalStatsRow> = system
+            .load_models()
+            .iter()
+            .map(|m| LoadSeasonalStatsRow {
+                bus_id: m.bus_id,
+                stage_id: m.stage_id,
+                mean_mw: m.mean_mw,
+                std_mw: m.std_mw,
+            })
+            .collect();
+        if let Err(e) = write_load_seasonal_stats(
+            &stochastic_dir.join("load_seasonal_stats.parquet"),
+            &load_rows,
+        ) {
+            eprintln!("cobre-python: stochastic export warning: load_seasonal_stats: {e}");
+        }
+    }
+
+    if let Some(report) = estimation_report {
+        let fitting = estimation_report_to_fitting_report(report);
+        if let Err(e) = write_fitting_report(&stochastic_dir.join("fitting_report.json"), &fitting)
+        {
+            eprintln!("cobre-python: stochastic export warning: fitting_report: {e}");
+        }
+    }
+}
+
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
 fn run_inner(
     case_dir: &std::path::Path,
@@ -392,10 +309,23 @@ fn run_inner(
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
-    let stochastic = build_stochastic_context(&system, seed, &[], None)
-        .map_err(|e| format!("stochastic context error: {e}"))?;
+    let result = prepare_stochastic(system, case_dir, &config, seed)
+        .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
+    let system = result.system;
+    let estimation_report = result.estimation_report;
 
-    let mut setup = StudySetup::new(&system, &config, stochastic).map_err(|e| e.to_string())?;
+    let mut setup =
+        StudySetup::new(&system, &config, result.stochastic).map_err(|e| e.to_string())?;
+
+    // Export stochastic artifacts when requested.
+    if config.exports.stochastic {
+        export_stochastic_artifacts_py(
+            &output_dir,
+            setup.stochastic(),
+            &system,
+            estimation_report.as_ref(),
+        );
+    }
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
@@ -430,6 +360,13 @@ fn run_inner(
     let gap_percent = Some(training_result.final_gap * 100.0);
     let total_time_ms = training_result.total_time_ms;
 
+    let stochastic_summary = build_stochastic_summary(
+        &system,
+        setup.stochastic(),
+        estimation_report.as_ref(),
+        seed,
+    );
+
     if should_simulate {
         let io_capacity = setup.simulation_config().io_channel_capacity;
         let mut sim_pool = setup
@@ -456,7 +393,7 @@ fn run_inner(
                 .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
         let mut failed: u32 = 0;
         for scenario_result in local_results {
-            if let Err(e) = sim_writer.write_scenario(convert_scenario(scenario_result)) {
+            if let Err(e) = sim_writer.write_scenario(ScenarioWritePayload::from(scenario_result)) {
                 eprintln!("cobre-python: simulation write warning: {e}");
                 failed += 1;
             }
@@ -484,6 +421,7 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: Some(sim_summary),
+            stochastic: Some(stochastic_summary),
         })
     } else {
         write_results(&output_dir, &training_output, None, &system, &config)
@@ -497,14 +435,72 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: None,
+            stochastic: Some(stochastic_summary),
         })
     }
+}
+
+/// Convert a [`StochasticSource`] enum variant to a Python string or `None`.
+fn stochastic_source_str(source: &StochasticSource) -> Option<&'static str> {
+    match source {
+        StochasticSource::Estimated => Some("estimated"),
+        StochasticSource::Loaded => Some("loaded"),
+        StochasticSource::None => None,
+    }
+}
+
+/// Convert an [`ArOrderSummary`] to a Python dict.
+fn ar_order_to_dict<'py>(
+    py: Python<'py>,
+    summary: &ArOrderSummary,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("method", &summary.method)?;
+    dict.set_item("min_order", summary.min_order)?;
+    dict.set_item("max_order", summary.max_order)?;
+    dict.set_item("n_hydros", summary.n_hydros)?;
+    dict.set_item("order_counts", summary.order_counts.clone())?;
+    Ok(dict)
+}
+
+/// Convert a [`StochasticSummary`] to a Python dict.
+fn stochastic_summary_to_dict<'py>(
+    py: Python<'py>,
+    summary: &StochasticSummary,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item(
+        "inflow_source",
+        stochastic_source_str(&summary.inflow_source),
+    )?;
+    dict.set_item("n_hydros", summary.n_hydros)?;
+    dict.set_item("n_seasons", summary.n_seasons)?;
+    if let Some(ar) = &summary.ar_summary {
+        let ar_dict = ar_order_to_dict(py, ar)?;
+        dict.set_item("ar_order", ar_dict)?;
+    } else {
+        dict.set_item("ar_order", py.None())?;
+    }
+    dict.set_item(
+        "correlation_source",
+        stochastic_source_str(&summary.correlation_source),
+    )?;
+    dict.set_item("correlation_dim", summary.correlation_dim.as_deref())?;
+    dict.set_item(
+        "opening_tree_source",
+        stochastic_source_str(&summary.opening_tree_source),
+    )?;
+    dict.set_item("openings_per_stage", summary.openings_per_stage.clone())?;
+    dict.set_item("n_stages", summary.n_stages)?;
+    dict.set_item("n_load_buses", summary.n_load_buses)?;
+    dict.set_item("seed", summary.seed)?;
+    Ok(dict)
 }
 
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
 /// Returns a dict with keys: "converged", "iterations", "lower_bound", "upper_bound",
-/// "gap_percent", "total_time_ms", "output_dir", "simulation".
+/// "gap_percent", "total_time_ms", "output_dir", "simulation", "stochastic".
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -546,6 +542,13 @@ pub fn run(
                 dict.set_item("simulation", sim_dict)?;
             } else {
                 dict.set_item("simulation", py.None())?;
+            }
+
+            if let Some(stoch) = &summary.stochastic {
+                let stoch_dict = stochastic_summary_to_dict(py, stoch)?;
+                dict.set_item("stochastic", stoch_dict)?;
+            } else {
+                dict.set_item("stochastic", py.None())?;
             }
 
             Ok(dict.into())

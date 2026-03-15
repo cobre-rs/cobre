@@ -35,7 +35,6 @@ use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
 use cobre_solver::Basis;
 use cobre_solver::SolverInterface;
-use cobre_solver::StageTemplate;
 use cobre_stochastic::OpeningTree;
 
 use crate::{
@@ -231,8 +230,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     solver: &mut S,
     config: TrainingConfig,
     fcf: &mut FutureCostFunction,
-    templates: &[StageTemplate],
-    base_rows: &[usize],
+    stage_ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     opening_tree: &OpeningTree,
     risk_measures: &[RiskMeasure],
@@ -242,13 +240,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     comm: &C,
     n_fwd_threads: usize,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
-    noise_scale: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
     max_blocks: usize,
-    load_balance_row_starts: &[usize],
-    load_bus_indices: &[usize],
-    block_counts_per_stage: &[usize],
 ) -> Result<TrainingResult, SddpError> {
     let horizon = training_ctx.horizon;
     let indexer = training_ctx.indexer;
@@ -285,7 +277,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         indexer.hydro_count,
         indexer.max_par_order,
         n_state,
-        n_load_buses,
+        stage_ctx.n_load_buses,
         max_blocks,
         solver_factory,
     )
@@ -307,20 +299,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
     let start_time = Instant::now();
-
-    // Bundle the per-stage LP layout and noise scaling parameters into a
-    // single context struct. Constructed once here and passed by reference to
-    // the forward pass inside the iteration loop.
-    let stage_ctx = StageContext {
-        templates,
-        base_rows,
-        noise_scale,
-        n_hydros,
-        n_load_buses,
-        load_balance_row_starts,
-        load_bus_indices,
-        block_counts_per_stage,
-    };
 
     let TrainingConfig {
         forward_passes: config_forward_passes,
@@ -370,7 +348,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let forward_result = run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
-            &stage_ctx,
+            stage_ctx,
             fcf,
             training_ctx,
             &fwd_batch,
@@ -420,7 +398,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let backward_result = run_backward_pass(
             &mut fwd_pool.workspaces,
             &basis_store,
-            &stage_ctx,
+            stage_ctx,
             fcf,
             training_ctx,
             &bwd_spec,
@@ -496,10 +474,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         }
         let lb_solves_before = solver.statistics().solve_count;
         let lb_spec = LbEvalSpec {
-            template: &templates[0],
-            base_row: base_rows[0],
-            noise_scale,
-            n_hydros,
+            template: &stage_ctx.templates[0],
+            base_row: stage_ctx.base_rows[0],
+            noise_scale: stage_ctx.noise_scale,
+            n_hydros: stage_ctx.n_hydros,
             opening_tree,
             risk_measure: &risk_measures[0],
         };
@@ -635,8 +613,9 @@ mod tests {
 
     use super::train;
     use crate::{
-        context::TrainingContext, cut::fcf::FutureCostFunction, HorizonMode,
-        InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
+        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
         StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
@@ -1050,12 +1029,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1071,13 +1059,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1116,12 +1098,21 @@ mod tests {
         let mut solver = MockSolver::infeasible();
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1137,13 +1128,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::infeasible()),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         );
 
         assert!(
@@ -1191,12 +1176,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1212,13 +1206,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1311,12 +1299,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1332,13 +1329,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1376,12 +1367,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1397,13 +1397,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         );
 
         assert!(result.is_ok(), "train with no event_sender must not panic");
@@ -1439,12 +1433,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1460,13 +1463,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1509,12 +1506,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1530,13 +1536,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1592,12 +1592,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1613,13 +1622,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1694,12 +1697,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1715,13 +1727,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 
@@ -1785,12 +1791,21 @@ mod tests {
         let mut solver = MockSolver::with_fixed(100.0);
         let comm = StubComm;
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1806,13 +1821,7 @@ mod tests {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[],
-            0,
-            0,
             1,
-            &[],
-            &[],
-            &[1usize, 1],
         )
         .unwrap();
 

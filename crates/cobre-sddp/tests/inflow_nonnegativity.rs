@@ -38,25 +38,25 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
-    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
+    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    lp_builder::build_stage_templates, simulate, train,
+    lp_builder::build_stage_templates, simulate, train, EntityCounts, FutureCostFunction,
+    HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTree, PrecomputedParLp, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree, OpeningTree, PrecomputedParLp, StochasticContext,
 };
 
 // ===========================================================================
@@ -507,6 +507,16 @@ fn train_fixture(
         .collect();
     let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
 
+    let stage_ctx = StageContext {
+        templates: &fx.stage_templates.templates,
+        base_rows: &fx.stage_templates.base_rows,
+        noise_scale: &fx.stage_templates.noise_scale,
+        n_hydros: fx.stage_templates.n_hydros,
+        n_load_buses: fx.stage_templates.n_load_buses,
+        load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
+        load_bus_indices: &fx.stage_templates.load_bus_indices,
+        block_counts_per_stage: &block_counts,
+    };
     train(
         &mut solver,
         TrainingConfig {
@@ -517,8 +527,7 @@ fn train_fixture(
             event_sender: None,
         },
         &mut fcf,
-        &fx.stage_templates.templates,
-        &fx.stage_templates.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -537,13 +546,7 @@ fn train_fixture(
         &comm,
         1,
         HighsSolver::new,
-        &fx.stage_templates.noise_scale,
-        fx.stage_templates.n_hydros,
-        fx.stage_templates.n_load_buses,
         max_blocks,
-        &fx.stage_templates.load_balance_row_starts,
-        &fx.stage_templates.load_bus_indices,
-        &block_counts,
     )
 }
 

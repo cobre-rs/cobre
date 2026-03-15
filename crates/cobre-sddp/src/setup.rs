@@ -505,7 +505,6 @@ impl StudySetup {
     /// solution. Returns `Err(SddpError::Solver(_))` for other solver failures.
     /// Returns `Err(SddpError::Communication(_))` when a collective operation
     /// fails.
-    #[allow(clippy::too_many_arguments)]
     pub fn train<S: SolverInterface + Send, C: Communicator>(
         &mut self,
         solver: &mut S,
@@ -531,12 +530,22 @@ impl StudySetup {
             initial_state: &self.initial_state,
         };
 
+        let stage_ctx = StageContext {
+            templates: &self.stage_templates.templates,
+            base_rows: &self.stage_templates.base_rows,
+            noise_scale: &self.stage_templates.noise_scale,
+            n_hydros: self.stage_templates.n_hydros,
+            n_load_buses: self.stage_templates.n_load_buses,
+            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
+            load_bus_indices: &self.stage_templates.load_bus_indices,
+            block_counts_per_stage: &self.block_counts_per_stage,
+        };
+
         crate::train(
             solver,
             training_config,
             &mut self.fcf,
-            &self.stage_templates.templates,
-            &self.stage_templates.base_rows,
+            &stage_ctx,
             &training_ctx,
             self.stochastic.opening_tree(),
             &self.risk_measures,
@@ -546,13 +555,7 @@ impl StudySetup {
             comm,
             n_threads,
             solver_factory,
-            &self.stage_templates.noise_scale,
-            self.stage_templates.n_hydros,
-            self.stage_templates.n_load_buses,
             self.max_blocks,
-            &self.stage_templates.load_balance_row_starts,
-            &self.stage_templates.load_bus_indices,
-            &self.block_counts_per_stage,
         )
     }
 

@@ -29,25 +29,25 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId,
 };
 use cobre_sddp::{
-    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext, simulate, sync_forward, train,
+    simulate, sync_forward, train, EntityCounts, ForwardResult, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree, OpeningTree, StochasticContext,
 };
 
 // ===========================================================================
@@ -247,9 +247,9 @@ fn make_opening_tree_3h(n_openings: usize) -> OpeningTree {
 /// Uses PAR(0) (no AR lags) and a single opening per stage so the fixture
 /// remains small while still exercising more code paths than a 1-hydro system.
 fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let zero_penalties = || HydroPenalties {
         spillage_cost: 0.0,
@@ -535,14 +535,23 @@ fn run_training(
         .build()
         .unwrap();
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize; 5],
+    };
     let result = pool
         .install(|| {
             train(
                 &mut primary_solver,
                 config,
                 &mut fcf,
-                &fx.templates,
-                &fx.base_rows,
+                &stage_ctx,
                 &TrainingContext {
                     horizon: &fx.horizon,
                     indexer: &fx.indexer,
@@ -558,13 +567,7 @@ fn run_training(
                 &comm,
                 n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
-                &[],
-                0,
-                0,
                 1,
-                &[],
-                &[],
-                &[1usize; 5],
             )
         })
         .unwrap();

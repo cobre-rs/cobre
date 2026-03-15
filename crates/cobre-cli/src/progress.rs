@@ -161,6 +161,7 @@ pub fn resolve_term_width() -> u16 {
 /// `term_width` overrides the terminal width reported to `indicatif` for correct
 /// cursor math under MPI (where stderr is a pipe, not a TTY). Use
 /// [`resolve_term_width`] on the main thread before spawning.
+#[allow(clippy::too_many_lines)]
 pub fn run_progress_thread(
     receiver: mpsc::Receiver<TrainingEvent>,
     max_iterations: u64,
@@ -242,7 +243,21 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationFinished { scenarios, .. } => {
                         if let Some(bar) = simulation_bar.take() {
                             bar.set_position(u64::from(scenarios));
-                            bar.finish_with_message("complete");
+                            let final_msg = if let Some(ref acc) = sim_acc {
+                                if scenarios >= 2 {
+                                    format!(
+                                        "mean: {}  std: {}  CI95: +/-{}",
+                                        fmt_sci(acc.mean()),
+                                        fmt_sci(acc.std_dev()),
+                                        fmt_sci(acc.ci_95_half_width())
+                                    )
+                                } else {
+                                    format!("mean: {}", fmt_sci(acc.mean()))
+                                }
+                            } else {
+                                "complete".to_string()
+                            };
+                            bar.finish_with_message(final_msg);
                             let _ = Term::stderr().write_line("");
                         }
                     }

@@ -29,8 +29,7 @@ use cobre_io::output::{
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
 use cobre_sddp::{
-    DEFAULT_MAX_ITERATIONS, EstimationReport, InflowNonNegativityMethod, PrepareStochasticResult,
-    SimulationScenarioResult, StoppingMode, StoppingRule, StoppingRuleSet, StudyParams, StudySetup,
+    EstimationReport, PrepareStochasticResult, SimulationScenarioResult, StudySetup,
     build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_stochastic,
 };
@@ -42,207 +41,10 @@ use cobre_stochastic::{
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
-// Broadcast types — postcard-safe serializable wrappers for MPI communication
-
-/// Postcard-serializable stopping rule.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-enum BroadcastStoppingRule {
-    IterationLimit { limit: u64 },
-    TimeLimit { seconds: f64 },
-    BoundStalling { iterations: u64, tolerance: f64 },
-}
-
-/// Postcard-serializable stopping mode.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-enum BroadcastStoppingMode {
-    Any,
-    All,
-}
-
-/// Postcard-serializable cut selection strategy.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-enum BroadcastCutSelection {
-    Disabled,
-    Level1 {
-        threshold: u64,
-        check_frequency: u64,
-    },
-    Lml1 {
-        memory_window: u64,
-        check_frequency: u64,
-    },
-    Dominated {
-        threshold: f64,
-        check_frequency: u64,
-    },
-}
-
-impl BroadcastCutSelection {
-    fn from_strategy(strategy: Option<&cobre_sddp::CutSelectionStrategy>) -> Self {
-        use cobre_sddp::CutSelectionStrategy;
-        match strategy {
-            None => Self::Disabled,
-            Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }) => Self::Level1 {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }) => Self::Lml1 {
-                memory_window: *memory_window,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }) => Self::Dominated {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-        }
-    }
-
-    fn into_strategy(self) -> Option<cobre_sddp::CutSelectionStrategy> {
-        use cobre_sddp::CutSelectionStrategy;
-        match self {
-            Self::Disabled => None,
-            Self::Level1 {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }),
-            Self::Lml1 {
-                memory_window,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }),
-            Self::Dominated {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }),
-        }
-    }
-}
-
-/// Configuration snapshot broadcast from rank 0 to all ranks.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct BroadcastConfig {
-    seed: u64,
-    forward_passes: u32,
-    stopping_rules: Vec<BroadcastStoppingRule>,
-    stopping_mode: BroadcastStoppingMode,
-    n_scenarios: u32,
-    io_channel_capacity: u32,
-    policy_path: String,
-    inflow_method: InflowNonNegativityMethod,
-    cut_selection: BroadcastCutSelection,
-}
-
-impl BroadcastConfig {
-    fn from_config(config: &cobre_io::Config) -> Result<Self, CliError> {
-        let params = StudyParams::from_config(config).map_err(CliError::from)?;
-
-        let stopping_rules = params
-            .stopping_rule_set
-            .rules
-            .iter()
-            .map(|r| match r {
-                StoppingRule::IterationLimit { limit } => {
-                    BroadcastStoppingRule::IterationLimit { limit: *limit }
-                }
-                StoppingRule::TimeLimit { seconds } => {
-                    BroadcastStoppingRule::TimeLimit { seconds: *seconds }
-                }
-                StoppingRule::BoundStalling {
-                    iterations,
-                    tolerance,
-                } => BroadcastStoppingRule::BoundStalling {
-                    iterations: *iterations,
-                    tolerance: *tolerance,
-                },
-                // SimulationBased and GracefulShutdown are not representable in
-                // BroadcastStoppingRule; fold into the safety iteration limit.
-                StoppingRule::SimulationBased { .. } | StoppingRule::GracefulShutdown => {
-                    BroadcastStoppingRule::IterationLimit {
-                        limit: DEFAULT_MAX_ITERATIONS,
-                    }
-                }
-            })
-            .collect();
-
-        let stopping_mode = match params.stopping_rule_set.mode {
-            StoppingMode::All => BroadcastStoppingMode::All,
-            StoppingMode::Any => BroadcastStoppingMode::Any,
-        };
-
-        let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
-
-        Ok(Self {
-            seed: params.seed,
-            forward_passes: params.forward_passes,
-            stopping_rules,
-            stopping_mode,
-            n_scenarios: params.n_scenarios,
-            io_channel_capacity: u32::try_from(params.io_channel_capacity).unwrap_or(64),
-            policy_path: params.policy_path,
-            inflow_method: params.inflow_method,
-            cut_selection,
-        })
-    }
-}
-
-/// Postcard-serializable wrapper for [`OpeningTree`] broadcast.
-///
-/// [`OpeningTree`] does not implement `serde::Serialize + Deserialize` to avoid
-/// adding a serde dependency to `cobre-stochastic`. This wrapper holds the three
-/// constituent parts (`data`, `openings_per_stage`, `dim`) that are sufficient
-/// to reconstruct the tree via [`OpeningTree::from_parts`] on all ranks.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct BroadcastOpeningTree {
-    data: Vec<f64>,
-    openings_per_stage: Vec<usize>,
-    dim: usize,
-}
-
-fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRuleSet {
-    let rules = cfg
-        .stopping_rules
-        .iter()
-        .map(|r| match r {
-            BroadcastStoppingRule::IterationLimit { limit } => {
-                StoppingRule::IterationLimit { limit: *limit }
-            }
-            BroadcastStoppingRule::TimeLimit { seconds } => {
-                StoppingRule::TimeLimit { seconds: *seconds }
-            }
-            BroadcastStoppingRule::BoundStalling {
-                iterations,
-                tolerance,
-            } => StoppingRule::BoundStalling {
-                iterations: *iterations,
-                tolerance: *tolerance,
-            },
-        })
-        .collect();
-
-    let mode = match cfg.stopping_mode {
-        BroadcastStoppingMode::All => StoppingMode::All,
-        BroadcastStoppingMode::Any => StoppingMode::Any,
-    };
-
-    StoppingRuleSet { rules, mode }
-}
+use super::broadcast::{
+    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
+    stopping_rules_from_broadcast,
+};
 
 /// Arguments for the `cobre run` subcommand.
 #[derive(Debug, Args)]
@@ -282,66 +84,6 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
         }
     }
     1
-}
-
-/// Broadcast a serializable value from rank 0 to all ranks.
-///
-/// Serializes on rank 0, broadcasts length and bytes. Non-rank-0 deserializes.
-/// A length of 0 signals failure on rank 0, allowing all ranks to participate.
-///
-/// # Errors
-///
-/// Returns [`CliError::Internal`] on serialization, broadcast, or deserialization failure.
-fn broadcast_value<T, C>(value: Option<T>, comm: &C) -> Result<T, CliError>
-where
-    T: serde::Serialize + serde::de::DeserializeOwned,
-    C: cobre_comm::Communicator,
-{
-    let is_root = comm.rank() == 0;
-
-    let serialized: Vec<u8> = if is_root {
-        match value {
-            Some(ref v) => postcard::to_allocvec(v).map_err(|e| CliError::Internal {
-                message: format!("serialization error: {e}"),
-            })?,
-            None => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
-
-    let raw_len = serialized.len();
-    #[allow(clippy::cast_possible_truncation)]
-    let mut len_buf = [raw_len as u64];
-    comm.broadcast(&mut len_buf, 0)
-        .map_err(|e| CliError::Internal {
-            message: format!("broadcast error (length): {e}"),
-        })?;
-
-    let len = usize::try_from(len_buf[0]).map_err(|e| CliError::Internal {
-        message: format!("broadcast error (length conversion): {e}"),
-    })?;
-    if len == 0 {
-        return Err(CliError::Internal {
-            message: "rank 0 signaled broadcast failure (length 0)".to_string(),
-        });
-    }
-
-    let mut bytes = if is_root { serialized } else { vec![0u8; len] };
-    comm.broadcast(&mut bytes, 0)
-        .map_err(|e| CliError::Internal {
-            message: format!("broadcast error (data): {e}"),
-        })?;
-
-    if is_root {
-        value.ok_or_else(|| CliError::Internal {
-            message: "broadcast_value: root value disappeared after serialization".to_string(),
-        })
-    } else {
-        postcard::from_bytes(&bytes).map_err(|e| CliError::Internal {
-            message: format!("deserialization error: {e}"),
-        })
-    }
 }
 
 /// Return type of [`load_case_and_config`]: the values loaded on rank 0.
@@ -713,45 +455,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         #[allow(clippy::cast_possible_truncation)]
         let sim_time_ms = sim_start.elapsed().as_millis() as u64;
 
-        let local_bytes =
-            postcard::to_allocvec(&local_results).map_err(|e| CliError::Internal {
-                message: format!("simulation result serialization error: {e}"),
-            })?;
-
-        let n_ranks = comm.size();
-        #[allow(clippy::cast_possible_truncation)]
-        let send_len = [local_bytes.len() as u64];
-        let mut all_lens = vec![0u64; n_ranks];
-        let len_counts: Vec<usize> = vec![1; n_ranks];
-        let len_displs: Vec<usize> = (0..n_ranks).collect();
-        comm.allgatherv(&send_len, &mut all_lens, &len_counts, &len_displs)
-            .map_err(|e| CliError::Internal {
-                message: format!("simulation result length exchange error: {e}"),
-            })?;
-
-        let recv_counts: Vec<usize> = all_lens
-            .iter()
-            .map(|&l| {
-                usize::try_from(l).map_err(|e| CliError::Internal {
-                    message: format!("simulation result byte count exceeds usize: {e}"),
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let recv_displs: Vec<usize> = recv_counts
-            .iter()
-            .scan(0usize, |acc, &c| {
-                let displ = *acc;
-                *acc += c;
-                Some(displ)
-            })
-            .collect();
-        let total_bytes: usize = recv_counts.iter().sum();
-
-        let mut all_bytes = vec![0u8; total_bytes];
-        comm.allgatherv(&local_bytes, &mut all_bytes, &recv_counts, &recv_displs)
-            .map_err(|e| CliError::Internal {
-                message: format!("simulation result gather error: {e}"),
-            })?;
+        let all_results = gather_simulation_results(&comm, &local_results)?;
 
         comm.barrier().map_err(|e| CliError::Internal {
             message: format!("post-simulation barrier error: {e}"),
@@ -774,26 +478,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let config = root_config.ok_or_else(|| CliError::Internal {
                 message: "root_config was None on rank 0 — internal invariant violated".to_string(),
             })?;
-            if !quiet {
-                use std::io::Write;
-                let _ = stderr.write_line("Writing outputs...");
-                let _ = std::io::stderr().flush();
-            }
-            let write_start = std::time::Instant::now();
-
-            let mut all_results: Vec<SimulationScenarioResult> =
-                Vec::with_capacity(n_scenarios as usize);
-            let mut offset = 0;
-            for &count in &recv_counts {
-                let partition: Vec<SimulationScenarioResult> =
-                    postcard::from_bytes(&all_bytes[offset..offset + count]).map_err(|e| {
-                        CliError::Internal {
-                            message: format!("simulation result deserialization error: {e}"),
-                        }
-                    })?;
-                all_results.extend(partition);
-                offset += count;
-            }
 
             let parquet_config = cobre_io::ParquetWriterConfig::default();
             let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
@@ -816,62 +500,148 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize();
             sim_output.failed = failed;
 
-            let policy_dir = output_dir.join(setup.policy_path());
-            crate::policy_io::write_checkpoint(
-                &policy_dir,
-                setup.fcf(),
-                &training_result,
-                &crate::policy_io::CheckpointParams {
-                    max_iterations: setup.max_iterations(),
-                    forward_passes: setup.forward_passes(),
-                    seed: setup.seed(),
-                },
-            )?;
-
-            write_results(
+            write_outputs(
                 &output_dir,
-                &training_output,
-                Some(&sim_output),
                 &system,
                 &config,
-            )
-            .map_err(CliError::from)?;
-
-            if !quiet {
-                let write_secs = write_start.elapsed().as_secs_f64();
-                crate::summary::print_output_path(&stderr, &output_dir, write_secs);
-            }
+                &training_output,
+                Some(&sim_output),
+                &setup,
+                &training_result,
+                quiet,
+                &stderr,
+            )?;
         }
     } else if is_root {
         let config = root_config.ok_or_else(|| CliError::Internal {
             message: "root_config was None on rank 0 — internal invariant violated".to_string(),
         })?;
-        if !quiet {
-            use std::io::Write;
-            let _ = stderr.write_line("Writing outputs...");
-            let _ = std::io::stderr().flush();
-        }
-        let write_start = std::time::Instant::now();
 
-        let policy_dir = output_dir.join(setup.policy_path());
-        crate::policy_io::write_checkpoint(
-            &policy_dir,
-            setup.fcf(),
+        write_outputs(
+            &output_dir,
+            &system,
+            &config,
+            &training_output,
+            None,
+            &setup,
             &training_result,
-            &crate::policy_io::CheckpointParams {
-                max_iterations: setup.max_iterations(),
-                forward_passes: setup.forward_passes(),
-                seed: setup.seed(),
-            },
+            quiet,
+            &stderr,
         )?;
+    }
 
-        write_results(&output_dir, &training_output, None, &system, &config)
-            .map_err(CliError::from)?;
+    Ok(())
+}
 
-        if !quiet {
-            let write_secs = write_start.elapsed().as_secs_f64();
-            crate::summary::print_output_path(&stderr, &output_dir, write_secs);
-        }
+/// Gather simulation results from all MPI ranks into a single `Vec`.
+///
+/// Extracted from `execute()` so that the allgatherv + deserialization pattern has
+/// a clear name and boundary. Runs on all ranks: each rank serializes its local
+/// results, exchanges byte-count lengths via `allgatherv`, exchanges the raw bytes
+/// via a second `allgatherv`, then deserializes each rank's partition into the
+/// returned `Vec`. All ranks return the complete set of results.
+fn gather_simulation_results<C: Communicator>(
+    comm: &C,
+    local_results: &[SimulationScenarioResult],
+) -> Result<Vec<SimulationScenarioResult>, CliError> {
+    let local_bytes = postcard::to_allocvec(local_results).map_err(|e| CliError::Internal {
+        message: format!("simulation result serialization error: {e}"),
+    })?;
+
+    let n_ranks = comm.size();
+    #[allow(clippy::cast_possible_truncation)]
+    let send_len = [local_bytes.len() as u64];
+    let mut all_lens = vec![0u64; n_ranks];
+    let len_counts: Vec<usize> = vec![1; n_ranks];
+    let len_displs: Vec<usize> = (0..n_ranks).collect();
+    comm.allgatherv(&send_len, &mut all_lens, &len_counts, &len_displs)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation result length exchange error: {e}"),
+        })?;
+
+    let recv_counts: Vec<usize> = all_lens
+        .iter()
+        .map(|&l| {
+            usize::try_from(l).map_err(|e| CliError::Internal {
+                message: format!("simulation result byte count exceeds usize: {e}"),
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let recv_displs: Vec<usize> = recv_counts
+        .iter()
+        .scan(0usize, |acc, &c| {
+            let displ = *acc;
+            *acc += c;
+            Some(displ)
+        })
+        .collect();
+    let total_bytes: usize = recv_counts.iter().sum();
+
+    let mut all_bytes = vec![0u8; total_bytes];
+    comm.allgatherv(&local_bytes, &mut all_bytes, &recv_counts, &recv_displs)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation result gather error: {e}"),
+        })?;
+
+    let mut all_results: Vec<SimulationScenarioResult> = Vec::new();
+    let mut offset = 0;
+    for &count in &recv_counts {
+        let partition: Vec<SimulationScenarioResult> =
+            postcard::from_bytes(&all_bytes[offset..offset + count]).map_err(|e| {
+                CliError::Internal {
+                    message: format!("simulation result deserialization error: {e}"),
+                }
+            })?;
+        all_results.extend(partition);
+        offset += count;
+    }
+
+    Ok(all_results)
+}
+
+/// Write training checkpoint and results to the output directory.
+///
+/// Extracted from `execute()` to give the output-writing step a clear boundary.
+/// Handles both the with-simulation path (`sim_output = Some(...)`) and the
+/// training-only path (`sim_output = None`). Prints "Writing outputs..." and
+/// the output path with timing when `quiet` is false.
+#[allow(clippy::too_many_arguments)]
+fn write_outputs(
+    output_dir: &Path,
+    system: &System,
+    config: &cobre_io::Config,
+    training_output: &cobre_io::TrainingOutput,
+    sim_output: Option<&cobre_io::SimulationOutput>,
+    setup: &StudySetup,
+    training_result: &cobre_sddp::TrainingResult,
+    quiet: bool,
+    stderr: &Term,
+) -> Result<(), CliError> {
+    if !quiet {
+        use std::io::Write;
+        let _ = stderr.write_line("Writing outputs...");
+        let _ = std::io::stderr().flush();
+    }
+    let write_start = std::time::Instant::now();
+
+    let policy_dir = output_dir.join(setup.policy_path());
+    crate::policy_io::write_checkpoint(
+        &policy_dir,
+        setup.fcf(),
+        training_result,
+        &crate::policy_io::CheckpointParams {
+            max_iterations: setup.max_iterations(),
+            forward_passes: setup.forward_passes(),
+            seed: setup.seed(),
+        },
+    )?;
+
+    write_results(output_dir, training_output, sim_output, system, config)
+        .map_err(CliError::from)?;
+
+    if !quiet {
+        let write_secs = write_start.elapsed().as_secs_f64();
+        crate::summary::print_output_path(stderr, output_dir, write_secs);
     }
 
     Ok(())
@@ -993,96 +763,8 @@ fn export_stochastic_artifacts(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{BroadcastOpeningTree, broadcast_value, resolve_thread_count};
-
-    /// A minimal serializable struct for testing the broadcast helper.
-    #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-    struct Simple {
-        x: f64,
-        label: String,
-    }
-
-    /// `broadcast_value` with `LocalBackend` (single rank) round-trips a struct.
-    ///
-    /// With `LocalBackend`, broadcast is a no-op and the root-path code path is
-    /// exercised: the function returns the original `Some(value)` unchanged after
-    /// verifying that serialization succeeds (len > 0).
-    #[test]
-    fn broadcast_value_local_round_trips_simple() {
-        let comm = cobre_comm::LocalBackend;
-        let original = Simple {
-            x: std::f64::consts::PI,
-            label: "test".to_string(),
-        };
-        let result = broadcast_value(Some(original.clone()), &comm).unwrap();
-        assert_eq!(result, original);
-    }
-
-    /// `broadcast_value` with `LocalBackend` round-trips a `Vec<f64>`.
-    ///
-    /// Verifies that the helper handles collection types that postcard can serialize.
-    #[test]
-    fn broadcast_value_local_round_trips_vec() {
-        let comm = cobre_comm::LocalBackend;
-        let original: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0];
-        let result = broadcast_value(Some(original.clone()), &comm).unwrap();
-        assert_eq!(result, original);
-    }
-
-    /// `broadcast_value` with `LocalBackend` round-trips a nested struct matching
-    /// the shape of `cobre_io::config::TrainingConfig`.
-    ///
-    /// Uses a locally defined struct to avoid a test dependency on cobre-io internals.
-    #[test]
-    fn broadcast_value_local_round_trips_config_like() {
-        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-        struct ConfigLike {
-            forward_passes: u32,
-            seed: Option<i64>,
-        }
-
-        let comm = cobre_comm::LocalBackend;
-        let original = ConfigLike {
-            forward_passes: 4,
-            seed: Some(42),
-        };
-        let result = broadcast_value(Some(original.clone()), &comm).unwrap();
-        assert_eq!(result, original);
-    }
-
-    /// `broadcast_value` returns `CliError::Internal` when `None` is passed on root.
-    ///
-    /// Root rank must always supply `Some(value)`. Passing `None` on the only rank
-    /// (`LocalBackend`, rank 0 == root) triggers the internal error path, returning
-    /// [`crate::error::CliError::Internal`] rather than panicking.
-    #[test]
-    fn broadcast_value_returns_err_when_root_passes_none() {
-        let comm = cobre_comm::LocalBackend;
-        let result: Result<Simple, _> = broadcast_value(None, &comm);
-        assert!(result.is_err(), "expected Err when root passes None");
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, crate::error::CliError::Internal { .. }),
-            "expected CliError::Internal, got: {err:?}"
-        );
-    }
-
-    /// `broadcast_value` with `LocalBackend` round-trips a `u64` value.
-    ///
-    /// Verifies the broadcast helper serializes and deserializes primitive
-    /// integer types correctly. Gated behind the `mpi` feature because this
-    /// test exercises the same code path invoked by MPI-enabled runs (the
-    /// `LocalBackend` substitutes for the real MPI communicator in tests).
-    #[cfg(feature = "mpi")]
-    #[test]
-    fn broadcast_value_round_trips_u64() {
-        let comm = cobre_comm::LocalBackend;
-        let value: u64 = 42;
-        let result = broadcast_value(Some(value), &comm).unwrap();
-        assert_eq!(result, 42u64);
-    }
+    use super::resolve_thread_count;
 
     // ------------------------------------------------------------------
     // resolve_thread_count tests
@@ -1111,77 +793,6 @@ mod tests {
             resolve_thread_count(Some(1)),
             1,
             "single-thread CLI value must produce 1"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // BroadcastOpeningTree tests
-    // ------------------------------------------------------------------
-
-    /// `BroadcastOpeningTree` round-trips through postcard serialization.
-    ///
-    /// Verifies that the wrapper type is fully postcard-compatible and that
-    /// no field is lost during the serialize → deserialize round-trip.
-    #[test]
-    fn broadcast_opening_tree_round_trips_via_postcard() {
-        let original = BroadcastOpeningTree {
-            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            openings_per_stage: vec![2, 1],
-            dim: 3,
-        };
-        let bytes = postcard::to_allocvec(&original).unwrap();
-        let decoded: BroadcastOpeningTree = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.data, original.data, "data must survive round-trip");
-        assert_eq!(
-            decoded.openings_per_stage, original.openings_per_stage,
-            "openings_per_stage must survive round-trip"
-        );
-        assert_eq!(decoded.dim, original.dim, "dim must survive round-trip");
-    }
-
-    /// `BroadcastOpeningTree` wrapped in `Option` round-trips via `broadcast_value`
-    /// with `LocalBackend`. Covers both the `None` and `Some` cases.
-    ///
-    /// `Some(None)` represents "no user-supplied tree" and `Some(Some(...))` represents
-    /// a valid user tree. Both must survive the broadcast without data loss.
-    #[test]
-    fn broadcast_optional_opening_tree_local_round_trips() {
-        use cobre_stochastic::context::OpeningTree;
-
-        let comm = cobre_comm::LocalBackend;
-
-        // Case 1: no user tree — broadcast Some(None)
-        let no_tree: Option<BroadcastOpeningTree> = None;
-        let result = broadcast_value(Some(no_tree), &comm).unwrap();
-        assert!(result.is_none(), "Some(None) must round-trip to None");
-
-        // Case 2: user tree present — broadcast Some(Some(...))
-        let data = vec![1.0, 2.0, 3.0, 4.0];
-        let ops = vec![2];
-        let dim = 2usize;
-        let source_tree = OpeningTree::from_parts(data.clone(), ops.clone(), dim);
-        let bcast = Some(BroadcastOpeningTree {
-            data: source_tree.data().to_vec(),
-            openings_per_stage: source_tree.openings_per_stage_slice().to_vec(),
-            dim: source_tree.dim(),
-        });
-        let result = broadcast_value(Some(bcast), &comm).unwrap();
-        let bt = result.unwrap();
-        let reconstructed = OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim);
-        assert_eq!(
-            reconstructed.data(),
-            source_tree.data(),
-            "reconstructed tree data must match source"
-        );
-        assert_eq!(
-            reconstructed.dim(),
-            source_tree.dim(),
-            "reconstructed tree dim must match source"
-        );
-        assert_eq!(
-            reconstructed.openings_per_stage_slice(),
-            source_tree.openings_per_stage_slice(),
-            "reconstructed tree openings_per_stage must match source"
         );
     }
 }

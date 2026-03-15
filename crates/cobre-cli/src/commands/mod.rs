@@ -4,6 +4,7 @@
 //! that performs the subcommand's work and returns a [`crate::error::CliError`]
 //! on failure.
 
+pub(crate) mod broadcast;
 pub mod init;
 pub mod report;
 pub mod run;

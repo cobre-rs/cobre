@@ -28,14 +28,16 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
-use cobre_sddp::estimation::estimate_from_history;
 use cobre_sddp::{
-    DEFAULT_MAX_ITERATIONS, EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult,
-    StoppingMode, StoppingRule, StoppingRuleSet, StudyParams, StudySetup, build_stochastic_summary,
-    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    DEFAULT_MAX_ITERATIONS, EstimationReport, InflowNonNegativityMethod, PrepareStochasticResult,
+    SimulationScenarioResult, StoppingMode, StoppingRule, StoppingRuleSet, StudyParams, StudySetup,
+    build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
+    inflow_models_to_stats_rows, prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
-use cobre_stochastic::{build_stochastic_context, context::OpeningTree};
+use cobre_stochastic::{
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+};
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
@@ -213,78 +215,6 @@ struct BroadcastOpeningTree {
     dim: usize,
 }
 
-/// Load, validate, and assemble a user-supplied opening tree from the case directory.
-///
-/// Called on rank 0 inside [`load_case_and_config`]. Runs [`validate_structure`]
-/// to check whether `scenarios/noise_openings.parquet` is present. If absent,
-/// returns `Ok(None)`. If present, parses the rows, validates them against the
-/// system dimensions, and assembles an [`OpeningTree`].
-///
-/// # Expected dimension
-///
-/// The noise dimension matches what [`build_stochastic_context`] computes:
-/// `n_hydros + n_load_buses`, where `n_load_buses` is the count of distinct bus
-/// IDs that have at least one [`LoadModel`] entry with `std_mw > 0`.
-///
-/// # Errors
-///
-/// - [`CliError::Io`] if the Parquet file cannot be read.
-/// - [`CliError::Validation`] if rows fail dimension or stage consistency checks.
-///
-/// [`LoadModel`]: cobre_core::scenario::LoadModel
-fn load_user_opening_tree(
-    case_dir: &Path,
-    system: &System,
-) -> Result<Option<OpeningTree>, CliError> {
-    let mut ctx = cobre_io::ValidationContext::new();
-    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
-
-    if !manifest.scenarios_noise_openings_parquet {
-        return Ok(None);
-    }
-
-    let path = case_dir.join("scenarios").join("noise_openings.parquet");
-
-    let rows = cobre_io::load_noise_openings(Some(&path)).map_err(CliError::from)?;
-
-    let n_hydros = system.hydros().len();
-    let mut load_bus_ids: Vec<cobre_core::EntityId> = system
-        .load_models()
-        .iter()
-        .filter(|m| m.std_mw > 0.0)
-        .map(|m| m.bus_id)
-        .collect();
-    load_bus_ids.sort_unstable_by_key(|id| id.0);
-    load_bus_ids.dedup();
-    let n_load_buses = load_bus_ids.len();
-    let expected_dim = n_hydros + n_load_buses;
-
-    let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
-    let mut openings_by_stage: std::collections::BTreeMap<i32, std::collections::BTreeSet<u32>> =
-        std::collections::BTreeMap::new();
-    for row in &rows {
-        openings_by_stage
-            .entry(row.stage_id)
-            .or_default()
-            .insert(row.opening_index);
-    }
-    let openings_per_stage: Vec<usize> = openings_by_stage
-        .values()
-        .map(std::collections::BTreeSet::len)
-        .collect();
-
-    cobre_io::scenarios::validate_noise_openings(
-        &rows,
-        expected_dim,
-        expected_stages,
-        &openings_per_stage,
-    )
-    .map_err(CliError::from)?;
-
-    let tree = cobre_io::scenarios::assemble_opening_tree(rows, expected_dim);
-    Ok(Some(tree))
-}
-
 fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRuleSet {
     let rules = cfg
         .stopping_rules
@@ -414,14 +344,11 @@ where
     }
 }
 
-/// Return type of [`load_case_and_config`]: the five values loaded on rank 0.
-type LoadedCase = (
-    cobre_core::System,
-    BroadcastConfig,
-    cobre_io::Config,
-    Option<EstimationReport>,
-    Option<OpeningTree>,
-);
+/// Return type of [`load_case_and_config`]: the values loaded on rank 0.
+///
+/// The [`PrepareStochasticResult`] bundles the updated system, built stochastic
+/// context, and optional estimation report from the pre-setup pipeline.
+type LoadedCase = (PrepareStochasticResult, BroadcastConfig, cobre_io::Config);
 
 /// Load the case directory and parse the config on rank 0.
 ///
@@ -449,13 +376,11 @@ fn load_case_and_config(
     let system = cobre_io::load_case(&args.case_dir)?;
     let config_path = args.case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path)?;
-    let (system, estimation_report) = estimate_from_history(system, &args.case_dir, &config)
-        .map_err(|e| CliError::Internal {
-            message: format!("estimation error: {e}"),
-        })?;
-    let user_opening_tree = load_user_opening_tree(&args.case_dir, &system)?;
     let bcast = BroadcastConfig::from_config(&config)?;
-    Ok((system, bcast, config, estimation_report, user_opening_tree))
+    let seed = bcast.seed;
+    let prepared =
+        prepare_stochastic(system, &args.case_dir, &config, seed).map_err(CliError::from)?;
+    Ok((prepared, bcast, config))
 }
 
 /// Execute the `run` subcommand.
@@ -508,30 +433,60 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
 
-    // Only rank 0 accesses the filesystem. Config is converted to BroadcastConfig
-    // (postcard-safe) and broadcast. Root config stays on rank 0 for output writing.
-    // The estimation report is rank-0-only and is NOT broadcast.
+    // Only rank 0 accesses the filesystem. `prepare_stochastic` runs the full
+    // pre-setup pipeline (estimation + opening tree loading + stochastic context
+    // construction) on rank 0. The system and BroadcastConfig are then broadcast
+    // to all ranks. The estimation report and rank-0 stochastic context are
+    // rank-0-only and are NOT broadcast.
+    // Destructure the prepared result so that `system` can be moved into
+    // `broadcast_value` while `stochastic` and `estimation_report` remain
+    // available. `System` does not implement `Clone`, so destructuring is the
+    // only way to move each field independently.
     let (
         raw_system,
         raw_bcast_config,
         root_config,
+        root_stochastic,
         root_estimation_report,
-        raw_opening_tree,
+        raw_bcast_tree,
         load_err,
     ) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
-            Ok((system, bcast, config, estimation_report, user_opening_tree)) => (
-                Some(system),
-                Some(bcast),
-                Some(config),
-                Some(estimation_report),
-                Some(user_opening_tree),
-                None,
-            ),
-            Err(e) => (None, None, None, None, None, Some(e)),
+            Ok((prepared, bcast, config)) => {
+                // Extract the opening tree for broadcast to non-root ranks.
+                // If the stochastic context was built from a user-supplied tree,
+                // re-serialize it into BroadcastOpeningTree; otherwise broadcast None.
+                let bcast_tree = if prepared.stochastic.provenance().opening_tree
+                    == ComponentProvenance::UserSupplied
+                {
+                    let t = prepared.stochastic.opening_tree();
+                    Some(BroadcastOpeningTree {
+                        data: t.data().to_vec(),
+                        openings_per_stage: t.openings_per_stage_slice().to_vec(),
+                        dim: t.dim(),
+                    })
+                } else {
+                    None
+                };
+                let cobre_sddp::PrepareStochasticResult {
+                    system,
+                    stochastic,
+                    estimation_report,
+                } = prepared;
+                (
+                    Some(system),
+                    Some(bcast),
+                    Some(config),
+                    Some(stochastic),
+                    Some(estimation_report),
+                    Some(bcast_tree),
+                    None,
+                )
+            }
+            Err(e) => (None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None)
+        (None, None, None, None, None, None, None)
     };
     let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
@@ -541,13 +496,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     // Broadcast the optional opening tree. Wrap in Option<BroadcastOpeningTree> so that
     // both the "no user tree" (None) and "user tree present" (Some) cases can be broadcast
     // as a single postcard-serializable value. postcard supports Option natively.
-    let raw_bcast_tree: Option<Option<BroadcastOpeningTree>> = raw_opening_tree.map(|tree_opt| {
-        tree_opt.map(|t| BroadcastOpeningTree {
-            data: t.data().to_vec(),
-            openings_per_stage: t.openings_per_stage_slice().to_vec(),
-            dim: t.dim(),
-        })
-    });
     let tree_result = broadcast_value(raw_bcast_tree, &comm);
 
     if let Some(e) = load_err {
@@ -555,18 +503,28 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     }
     let system = system_result?;
     let mut bcast_config = bcast_config_result?;
-    let user_tree: Option<OpeningTree> =
-        tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
 
     // Consume args here — no fields are needed after output_dir is resolved.
     let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
 
     let seed = bcast_config.seed;
-    let stochastic = build_stochastic_context(&system, seed, &[], user_tree).map_err(|e| {
-        CliError::Internal {
+
+    // Rank 0 uses the stochastic context already built by `prepare_stochastic`.
+    // Non-root ranks reconstruct it from the broadcast opening tree.
+    let stochastic = if is_root {
+        // tree_result was produced by the broadcast collective above; discard it here
+        // since rank 0 already has the stochastic context from `prepare_stochastic`.
+        drop(tree_result);
+        root_stochastic.ok_or_else(|| CliError::Internal {
+            message: "stochastic context missing on rank 0 after successful load".to_string(),
+        })?
+    } else {
+        let user_tree: Option<OpeningTree> =
+            tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
+        build_stochastic_context(&system, seed, &[], user_tree).map_err(|e| CliError::Internal {
             message: format!("stochastic context error: {e}"),
-        }
-    })?;
+        })?
+    };
 
     // Construct StudySetup on all ranks from broadcast parameters.
     // Ownership of stochastic moves into setup; use setup.stochastic() for all
@@ -1224,65 +1182,6 @@ mod tests {
             reconstructed.openings_per_stage_slice(),
             source_tree.openings_per_stage_slice(),
             "reconstructed tree openings_per_stage must match source"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // load_user_opening_tree tests
-    // ------------------------------------------------------------------
-
-    /// `load_user_opening_tree` returns `Ok(None)` when no `noise_openings.parquet`
-    /// is present in the case directory.
-    ///
-    /// `load_user_opening_tree` checks the manifest before using the `system`
-    /// parameter, so a minimal system (one bus, no stages) suffices — the function
-    /// returns `Ok(None)` before any field of `system` is accessed.
-    #[test]
-    fn load_user_opening_tree_returns_none_when_file_absent() {
-        use super::load_user_opening_tree;
-        use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder, scenario::CorrelationModel,
-        };
-        use std::fs;
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-
-        // Create all required structural files so validate_structure reports no
-        // errors for missing required files. The optional noise_openings.parquet
-        // is intentionally absent.
-        fs::create_dir_all(root.join("system")).unwrap();
-        fs::write(root.join("config.json"), b"{}").unwrap();
-        fs::write(root.join("penalties.json"), b"{}").unwrap();
-        fs::write(root.join("stages.json"), b"{}").unwrap();
-        fs::write(root.join("initial_conditions.json"), b"{}").unwrap();
-        fs::write(root.join("system/buses.json"), b"{}").unwrap();
-        fs::write(root.join("system/lines.json"), b"{}").unwrap();
-        fs::write(root.join("system/hydros.json"), b"{}").unwrap();
-        fs::write(root.join("system/thermals.json"), b"{}").unwrap();
-
-        // A minimal system with one bus, no stages. The system is not consulted
-        // because load_user_opening_tree returns Ok(None) before the manifest check.
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .correlation(CorrelationModel::default())
-            .build()
-            .unwrap();
-
-        let result = load_user_opening_tree(root, &system).unwrap();
-        assert!(
-            result.is_none(),
-            "must return Ok(None) when noise_openings.parquet is absent"
         );
     }
 }

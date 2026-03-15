@@ -29,9 +29,12 @@ use pyo3::types::PyDict;
 use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{write_results, ParquetWriterConfig};
-use cobre_sddp::{FutureCostFunction, SimulationScenarioResult, StudySetup, DEFAULT_SEED};
+use cobre_sddp::{
+    build_stochastic_summary, prepare_stochastic, ArOrderSummary, EstimationReport,
+    FutureCostFunction, SimulationScenarioResult, StochasticSource, StochasticSummary, StudySetup,
+    DEFAULT_SEED,
+};
 use cobre_solver::HighsSolver;
-use cobre_stochastic::build_stochastic_context;
 
 /// Summary returned by [`run_inner`] on success.
 struct RunSummary {
@@ -43,6 +46,8 @@ struct RunSummary {
     total_time_ms: u64,
     output_dir: PathBuf,
     simulation: Option<SimSummary>,
+    estimation_report: Option<EstimationReport>,
+    stochastic: Option<StochasticSummary>,
 }
 
 struct SimSummary {
@@ -193,6 +198,99 @@ fn write_policy_checkpoint(
         .map_err(|e| e.to_string())
 }
 
+/// Write all applicable stochastic preprocessing artifacts to `{output_dir}/stochastic/`.
+///
+/// Called when `exports.stochastic` is `true` in `config.json`. Each writer call is
+/// independent: failure is logged to stderr as a warning and does not prevent the remaining
+/// files or training from proceeding.
+///
+/// Files written:
+/// - `noise_openings.parquet` — always
+/// - `inflow_seasonal_stats.parquet` — always
+/// - `inflow_ar_coefficients.parquet` — always
+/// - `correlation.json` — always
+/// - `load_seasonal_stats.parquet` — only when any load model has `std_mw > 0`
+/// - `fitting_report.json` — only when `estimation_report` is `Some`
+fn export_stochastic_artifacts_py(
+    output_dir: &std::path::Path,
+    stochastic: &cobre_stochastic::StochasticContext,
+    system: &cobre_core::System,
+    estimation_report: Option<&EstimationReport>,
+) {
+    use cobre_core::scenario::LoadModel;
+    use cobre_io::output::{
+        write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+        write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
+    };
+    use cobre_io::scenarios::LoadSeasonalStatsRow;
+    use cobre_sddp::{
+        estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    };
+
+    let stochastic_dir = output_dir.join("stochastic");
+
+    if let Err(e) = write_noise_openings(
+        &stochastic_dir.join("noise_openings.parquet"),
+        stochastic.opening_tree(),
+    ) {
+        eprintln!("cobre-python: stochastic export warning: noise_openings: {e}");
+    }
+
+    let stats_rows = inflow_models_to_stats_rows(system.inflow_models());
+    if let Err(e) = write_inflow_seasonal_stats(
+        &stochastic_dir.join("inflow_seasonal_stats.parquet"),
+        &stats_rows,
+    ) {
+        eprintln!("cobre-python: stochastic export warning: inflow_seasonal_stats: {e}");
+    }
+
+    let ar_rows = inflow_models_to_ar_rows(system.inflow_models());
+    if let Err(e) = write_inflow_ar_coefficients(
+        &stochastic_dir.join("inflow_ar_coefficients.parquet"),
+        &ar_rows,
+    ) {
+        eprintln!("cobre-python: stochastic export warning: inflow_ar_coefficients: {e}");
+    }
+
+    if let Err(e) = write_correlation_json(
+        &stochastic_dir.join("correlation.json"),
+        system.correlation(),
+    ) {
+        eprintln!("cobre-python: stochastic export warning: correlation: {e}");
+    }
+
+    let has_stochastic_load = system
+        .load_models()
+        .iter()
+        .any(|m: &LoadModel| m.std_mw > 0.0);
+    if has_stochastic_load {
+        let load_rows: Vec<LoadSeasonalStatsRow> = system
+            .load_models()
+            .iter()
+            .map(|m| LoadSeasonalStatsRow {
+                bus_id: m.bus_id,
+                stage_id: m.stage_id,
+                mean_mw: m.mean_mw,
+                std_mw: m.std_mw,
+            })
+            .collect();
+        if let Err(e) = write_load_seasonal_stats(
+            &stochastic_dir.join("load_seasonal_stats.parquet"),
+            &load_rows,
+        ) {
+            eprintln!("cobre-python: stochastic export warning: load_seasonal_stats: {e}");
+        }
+    }
+
+    if let Some(report) = estimation_report {
+        let fitting = estimation_report_to_fitting_report(report);
+        if let Err(e) = write_fitting_report(&stochastic_dir.join("fitting_report.json"), &fitting)
+        {
+            eprintln!("cobre-python: stochastic export warning: fitting_report: {e}");
+        }
+    }
+}
+
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
 fn run_inner(
     case_dir: &std::path::Path,
@@ -212,10 +310,23 @@ fn run_inner(
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
-    let stochastic = build_stochastic_context(&system, seed, &[], None)
-        .map_err(|e| format!("stochastic context error: {e}"))?;
+    let result = prepare_stochastic(system, case_dir, &config, seed)
+        .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
+    let system = result.system;
+    let estimation_report = result.estimation_report;
 
-    let mut setup = StudySetup::new(&system, &config, stochastic).map_err(|e| e.to_string())?;
+    let mut setup =
+        StudySetup::new(&system, &config, result.stochastic).map_err(|e| e.to_string())?;
+
+    // Export stochastic artifacts when requested.
+    if config.exports.stochastic {
+        export_stochastic_artifacts_py(
+            &output_dir,
+            setup.stochastic(),
+            &system,
+            estimation_report.as_ref(),
+        );
+    }
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
@@ -249,6 +360,13 @@ fn run_inner(
     let upper_bound = Some(training_result.final_ub);
     let gap_percent = Some(training_result.final_gap * 100.0);
     let total_time_ms = training_result.total_time_ms;
+
+    let stochastic_summary = build_stochastic_summary(
+        &system,
+        setup.stochastic(),
+        estimation_report.as_ref(),
+        seed,
+    );
 
     if should_simulate {
         let io_capacity = setup.simulation_config().io_channel_capacity;
@@ -304,6 +422,8 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: Some(sim_summary),
+            estimation_report,
+            stochastic: Some(stochastic_summary),
         })
     } else {
         write_results(&output_dir, &training_output, None, &system, &config)
@@ -317,14 +437,73 @@ fn run_inner(
             total_time_ms,
             output_dir,
             simulation: None,
+            estimation_report,
+            stochastic: Some(stochastic_summary),
         })
     }
+}
+
+/// Convert a [`StochasticSource`] enum variant to a Python string or `None`.
+fn stochastic_source_str(source: &StochasticSource) -> Option<&'static str> {
+    match source {
+        StochasticSource::Estimated => Some("estimated"),
+        StochasticSource::Loaded => Some("loaded"),
+        StochasticSource::None => None,
+    }
+}
+
+/// Convert an [`ArOrderSummary`] to a Python dict.
+fn ar_order_to_dict<'py>(
+    py: Python<'py>,
+    summary: &ArOrderSummary,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("method", &summary.method)?;
+    dict.set_item("min_order", summary.min_order)?;
+    dict.set_item("max_order", summary.max_order)?;
+    dict.set_item("n_hydros", summary.n_hydros)?;
+    dict.set_item("order_counts", summary.order_counts.clone())?;
+    Ok(dict)
+}
+
+/// Convert a [`StochasticSummary`] to a Python dict.
+fn stochastic_summary_to_dict<'py>(
+    py: Python<'py>,
+    summary: &StochasticSummary,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item(
+        "inflow_source",
+        stochastic_source_str(&summary.inflow_source),
+    )?;
+    dict.set_item("n_hydros", summary.n_hydros)?;
+    dict.set_item("n_seasons", summary.n_seasons)?;
+    if let Some(ar) = &summary.ar_summary {
+        let ar_dict = ar_order_to_dict(py, ar)?;
+        dict.set_item("ar_order", ar_dict)?;
+    } else {
+        dict.set_item("ar_order", py.None())?;
+    }
+    dict.set_item(
+        "correlation_source",
+        stochastic_source_str(&summary.correlation_source),
+    )?;
+    dict.set_item("correlation_dim", summary.correlation_dim.as_deref())?;
+    dict.set_item(
+        "opening_tree_source",
+        stochastic_source_str(&summary.opening_tree_source),
+    )?;
+    dict.set_item("openings_per_stage", summary.openings_per_stage.clone())?;
+    dict.set_item("n_stages", summary.n_stages)?;
+    dict.set_item("n_load_buses", summary.n_load_buses)?;
+    dict.set_item("seed", summary.seed)?;
+    Ok(dict)
 }
 
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
 /// Returns a dict with keys: "converged", "iterations", "lower_bound", "upper_bound",
-/// "gap_percent", "total_time_ms", "output_dir", "simulation".
+/// "gap_percent", "total_time_ms", "output_dir", "simulation", "stochastic".
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -366,6 +545,13 @@ pub fn run(
                 dict.set_item("simulation", sim_dict)?;
             } else {
                 dict.set_item("simulation", py.None())?;
+            }
+
+            if let Some(stoch) = &summary.stochastic {
+                let stoch_dict = stochastic_summary_to_dict(py, stoch)?;
+                dict.set_item("stochastic", stoch_dict)?;
+            } else {
+                dict.set_item("stochastic", py.None())?;
             }
 
             Ok(dict.into())

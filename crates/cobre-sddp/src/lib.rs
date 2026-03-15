@@ -81,7 +81,8 @@ pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use setup::{
-    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, StudyParams, StudySetup,
+    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,
+    StudyParams, StudySetup, prepare_stochastic,
 };
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,

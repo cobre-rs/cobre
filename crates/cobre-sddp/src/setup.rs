@@ -37,15 +37,17 @@
 //! # }
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
-use cobre_core::{System, TrainingEvent, entities::hydro::HydroGenerationModel};
+use cobre_core::{EntityId, System, TrainingEvent, entities::hydro::HydroGenerationModel};
 use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::StochasticContext;
+use cobre_stochastic::{StochasticContext, context::OpeningTree};
 
 use crate::{
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
@@ -852,6 +854,136 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
     }
 
     state
+}
+
+// ---------------------------------------------------------------------------
+// PrepareStochasticResult + prepare_stochastic
+// ---------------------------------------------------------------------------
+
+/// Result of the stochastic preprocessing pipeline.
+///
+/// Bundles the outputs of [`prepare_stochastic`] so that callers do not have
+/// to handle three separate return values.
+#[derive(Debug)]
+pub struct PrepareStochasticResult {
+    /// Updated system with estimated PAR models (if estimation ran).
+    pub system: System,
+    /// Built stochastic context, ready to pass to [`StudySetup::new`].
+    pub stochastic: StochasticContext,
+    /// Estimation report (`Some` if `inflow_history.parquet` was present and
+    /// `inflow_seasonal_stats.parquet` was absent, triggering auto-estimation).
+    pub estimation_report: Option<crate::EstimationReport>,
+}
+
+/// Load, validate, and assemble a user-supplied opening tree from the case directory.
+///
+/// Checks whether `scenarios/noise_openings.parquet` is present using
+/// [`cobre_io::validate_structure`]. If absent, returns `Ok(None)`.
+/// If present, loads the rows, validates dimensions and stage consistency,
+/// and assembles an [`OpeningTree`].
+///
+/// # Errors
+///
+/// - [`SddpError::Io`] if the Parquet file cannot be read.
+/// - [`SddpError::Io`] if rows fail dimension or stage consistency checks.
+fn load_user_opening_tree_inner(
+    case_dir: &Path,
+    system: &System,
+) -> Result<Option<OpeningTree>, SddpError> {
+    let mut ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
+
+    if !manifest.scenarios_noise_openings_parquet {
+        return Ok(None);
+    }
+
+    let path = case_dir.join("scenarios").join("noise_openings.parquet");
+
+    let rows = cobre_io::scenarios::load_noise_openings(Some(&path))?;
+
+    let n_hydros = system.hydros().len();
+    let mut load_bus_ids: Vec<EntityId> = system
+        .load_models()
+        .iter()
+        .filter(|m| m.std_mw > 0.0)
+        .map(|m| m.bus_id)
+        .collect();
+    load_bus_ids.sort_unstable_by_key(|id| id.0);
+    load_bus_ids.dedup();
+    let n_load_buses = load_bus_ids.len();
+    let expected_dim = n_hydros + n_load_buses;
+
+    let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+    let mut openings_by_stage: BTreeMap<i32, BTreeSet<u32>> = BTreeMap::new();
+    for row in &rows {
+        openings_by_stage
+            .entry(row.stage_id)
+            .or_default()
+            .insert(row.opening_index);
+    }
+    let openings_per_stage: Vec<usize> = openings_by_stage.values().map(BTreeSet::len).collect();
+
+    cobre_io::scenarios::validate_noise_openings(
+        &rows,
+        expected_dim,
+        expected_stages,
+        &openings_per_stage,
+    )?;
+
+    let tree = cobre_io::scenarios::assemble_opening_tree(rows, expected_dim);
+    Ok(Some(tree))
+}
+
+/// Prepare the stochastic pipeline: estimate PAR from history (if applicable),
+/// load a user-supplied opening tree (if present), and build the
+/// [`StochasticContext`].
+///
+/// This function encapsulates the pre-setup orchestration that would otherwise
+/// be duplicated across entry points (CLI, Python bindings). It is intended to
+/// be called once per entry point before constructing [`StudySetup`].
+///
+/// ## Input path matrix
+///
+/// | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | Behaviour |
+/// |---|---|---|
+/// | absent | any | System unchanged; `estimation_report = None`. |
+/// | present | present | System unchanged; estimation skipped. |
+/// | present | absent | PAR estimation runs; system updated. |
+///
+/// If `scenarios/noise_openings.parquet` is present, it is loaded, validated,
+/// and passed as the user opening tree to [`cobre_stochastic::build_stochastic_context`].
+///
+/// ## MPI note
+///
+/// Under MPI, this function must only be called on rank 0. Non-root ranks
+/// should receive the opening tree via broadcast and call
+/// [`cobre_stochastic::build_stochastic_context`] directly.
+///
+/// # Errors
+///
+/// - [`SddpError::Io`] — file read, parse, or validation failure from either
+///   `estimate_from_history` or opening tree loading.
+/// - [`SddpError::Stochastic`] — PAR parameter validation or Cholesky
+///   decomposition failure from `build_stochastic_context` or estimation.
+pub fn prepare_stochastic(
+    system: System,
+    case_dir: &Path,
+    config: &cobre_io::Config,
+    seed: u64,
+) -> Result<PrepareStochasticResult, SddpError> {
+    let (system, estimation_report) =
+        crate::estimation::estimate_from_history(system, case_dir, config)?;
+
+    let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
+
+    let stochastic =
+        cobre_stochastic::build_stochastic_context(&system, seed, &[], user_opening_tree)?;
+
+    Ok(PrepareStochasticResult {
+        system,
+        stochastic,
+        estimation_report,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1683,5 +1815,152 @@ mod tests {
         );
         assert_eq!(params.n_scenarios, 200, "n_scenarios mismatch");
         assert_eq!(params.policy_path, "./my_policy", "policy_path mismatch");
+    }
+
+    // ── prepare_stochastic tests ──────────────────────────────────────────────
+
+    /// Build a minimal case directory with required structural files present so
+    /// that `validate_structure` does not fail. The optional estimation and
+    /// opening tree files are NOT created here; tests add them as needed.
+    fn write_minimal_case_dir(root: &std::path::Path) {
+        use std::fs;
+
+        fs::create_dir_all(root.join("system")).unwrap();
+        fs::write(root.join("config.json"), b"{}").unwrap();
+        fs::write(root.join("penalties.json"), b"{}").unwrap();
+        fs::write(root.join("stages.json"), b"{}").unwrap();
+        fs::write(root.join("initial_conditions.json"), b"{}").unwrap();
+        fs::write(root.join("system/buses.json"), b"{}").unwrap();
+        fs::write(root.join("system/lines.json"), b"{}").unwrap();
+        fs::write(root.join("system/hydros.json"), b"{}").unwrap();
+        fs::write(root.join("system/thermals.json"), b"{}").unwrap();
+    }
+
+    /// Build a minimal [`cobre_io::Config`] with no estimation or seed overrides.
+    fn minimal_prepare_config() -> cobre_io::Config {
+        use cobre_io::config::{
+            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
+            TrainingSolverConfig, UpperBoundEvaluationConfig,
+        };
+
+        Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "none".to_string(),
+                    penalty_cost: 0.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                seed: None,
+                forward_passes: None,
+                stopping_rules: None,
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig::default(),
+                solver: TrainingSolverConfig::default(),
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        }
+    }
+
+    /// Given a case directory with no `inflow_history.parquet` and no
+    /// `scenarios/noise_openings.parquet`, `prepare_stochastic` returns
+    /// `estimation_report = None` and a stochastic context with generated provenance.
+    #[test]
+    fn prepare_stochastic_no_history_no_tree_returns_none_report_and_generated_provenance() {
+        use super::prepare_stochastic;
+        use cobre_stochastic::provenance::ComponentProvenance;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+        let seed = 42_u64;
+
+        let result = prepare_stochastic(system, root, &config, seed)
+            .expect("prepare_stochastic should succeed with no optional files");
+
+        assert!(
+            result.estimation_report.is_none(),
+            "estimation_report must be None when no inflow_history.parquet is present"
+        );
+        assert_eq!(
+            result.stochastic.provenance().opening_tree,
+            ComponentProvenance::Generated,
+            "opening_tree provenance must be Generated when no user tree is supplied"
+        );
+    }
+
+    /// Given a case directory with `inflow_seasonal_stats.parquet` present
+    /// alongside `inflow_history.parquet`, estimation is skipped and
+    /// `estimation_report` is `None`.
+    #[test]
+    fn prepare_stochastic_with_stats_file_present_skips_estimation() {
+        use super::prepare_stochastic;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        // Place both files so that the "explicit stats present" branch is taken
+        // and estimation is skipped. The file content is empty bytes — `validate_structure`
+        // only checks existence, not content.
+        fs::create_dir_all(root.join("scenarios")).unwrap();
+        fs::write(root.join("scenarios/inflow_history.parquet"), b"").unwrap();
+        fs::write(root.join("scenarios/inflow_seasonal_stats.parquet"), b"").unwrap();
+        fs::write(root.join("scenarios/inflow_ar_coefficients.parquet"), b"").unwrap();
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+        let seed = 42_u64;
+
+        let result = prepare_stochastic(system, root, &config, seed)
+            .expect("prepare_stochastic should succeed when stats file is present");
+
+        assert!(
+            result.estimation_report.is_none(),
+            "estimation_report must be None when inflow_seasonal_stats.parquet is present"
+        );
+    }
+
+    /// Given a case directory with no `scenarios/noise_openings.parquet`,
+    /// `load_user_opening_tree_inner` returns `None`.
+    ///
+    /// This is tested indirectly via `prepare_stochastic` by checking that the
+    /// returned stochastic context does not claim `UserSupplied` provenance.
+    #[test]
+    fn prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance() {
+        use super::prepare_stochastic;
+        use cobre_stochastic::provenance::ComponentProvenance;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        let system = minimal_system(2);
+        let config = minimal_prepare_config();
+
+        let result = prepare_stochastic(system, root, &config, 0)
+            .expect("prepare_stochastic must succeed with no opening tree file");
+
+        assert_ne!(
+            result.stochastic.provenance().opening_tree,
+            ComponentProvenance::UserSupplied,
+            "opening_tree provenance must not be UserSupplied when file is absent"
+        );
     }
 }

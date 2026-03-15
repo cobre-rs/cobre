@@ -1,6 +1,6 @@
 //! Pre-computation of normal noise model parameter arrays for LP RHS patching.
 //!
-//! This module provides [`PrecomputedNormalLp`], the performance-adapted cache built
+//! This module provides [`PrecomputedNormal`], the performance-adapted cache built
 //! once during initialization from raw normal noise model parameters. It exposes flat,
 //! contiguous arrays in stage-major layout so the calling algorithm can patch LP
 //! right-hand sides without per-scenario recomputation.
@@ -36,20 +36,20 @@ use crate::StochasticError;
 // Helper types
 // ---------------------------------------------------------------------------
 
-/// A `(block_id, factor)` pair used as input to [`PrecomputedNormalLp::build`].
+/// A `(block_id, factor)` pair used as input to [`PrecomputedNormal::build`].
 ///
 /// `block_id` is the 0-based block index; `factor` is the multiplicative
 /// scaling applied to the stage-level noise realization for that block.
 pub type BlockFactorPair = (i32, f64);
 
-/// A single entity-stage factor entry used as input to [`PrecomputedNormalLp::build`].
+/// A single entity-stage factor entry used as input to [`PrecomputedNormal::build`].
 ///
 /// The tuple contains `(entity_id, stage_id, block_factors)` where
 /// `block_factors` is a slice of [`BlockFactorPair`] values.
 pub type EntityFactorEntry<'a> = (EntityId, i32, &'a [BlockFactorPair]);
 
 // ---------------------------------------------------------------------------
-// PrecomputedNormalLp
+// PrecomputedNormal
 // ---------------------------------------------------------------------------
 
 /// Cache-friendly normal noise model data for LP RHS patching.
@@ -69,7 +69,7 @@ pub type EntityFactorEntry<'a> = (EntityId, i32, &'a [BlockFactorPair]);
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::LoadModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
+/// use cobre_stochastic::normal::precompute::PrecomputedNormal;
 /// use chrono::NaiveDate;
 ///
 /// let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -93,7 +93,7 @@ pub type EntityFactorEntry<'a> = (EntityId, i32, &'a [BlockFactorPair]);
 ///     std_mw: 20.0,
 /// };
 ///
-/// let lp = PrecomputedNormalLp::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
+/// let lp = PrecomputedNormal::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
 /// assert_eq!(lp.n_stages(), 1);
 /// assert_eq!(lp.n_entities(), 1);
 /// assert!((lp.mean(0, 0) - 100.0).abs() < f64::EPSILON);
@@ -102,7 +102,7 @@ pub type EntityFactorEntry<'a> = (EntityId, i32, &'a [BlockFactorPair]);
 /// ```
 #[must_use]
 #[derive(Debug)]
-pub struct PrecomputedNormalLp {
+pub struct PrecomputedNormal {
     /// Stage-level mean per (stage, entity).
     /// Flat array indexed as `[stage * n_entities + entity_idx]`.
     /// Length: `n_stages * n_entities`.
@@ -129,12 +129,12 @@ pub struct PrecomputedNormalLp {
     max_blocks: usize,
 }
 
-impl PrecomputedNormalLp {
+impl PrecomputedNormal {
     // -----------------------------------------------------------------------
     // Builder
     // -----------------------------------------------------------------------
 
-    /// Build a [`PrecomputedNormalLp`] from raw normal noise model parameters.
+    /// Build a [`PrecomputedNormal`] from raw normal noise model parameters.
     ///
     /// # Parameters
     ///
@@ -324,8 +324,8 @@ impl PrecomputedNormalLp {
     }
 }
 
-impl Default for PrecomputedNormalLp {
-    /// Returns an empty [`PrecomputedNormalLp`] with zero stages, entities, and blocks.
+impl Default for PrecomputedNormal {
+    /// Returns an empty [`PrecomputedNormal`] with zero stages, entities, and blocks.
     ///
     /// Useful as a sentinel value for callers that do not use the normal noise
     /// model (e.g., test fixtures for systems with no stochastic entities of
@@ -358,7 +358,7 @@ mod tests {
         },
     };
 
-    use super::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
+    use super::{BlockFactorPair, EntityFactorEntry, PrecomputedNormal};
 
     fn dummy_date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -407,7 +407,7 @@ mod tests {
         let stages = [make_stage(0, 0)];
         let entity_ids = [EntityId(1)];
 
-        let lp = PrecomputedNormalLp::build(&[], &[], &stages, &entity_ids, 2).unwrap();
+        let lp = PrecomputedNormal::build(&[], &[], &stages, &entity_ids, 2).unwrap();
 
         assert_eq!(lp.n_stages(), 1);
         assert_eq!(lp.n_entities(), 1);
@@ -449,7 +449,7 @@ mod tests {
             make_model(20, 2, 195.0, 28.0),
         ];
 
-        let lp = PrecomputedNormalLp::build(&models, &[], &stages, &entity_ids, 1).unwrap();
+        let lp = PrecomputedNormal::build(&models, &[], &stages, &entity_ids, 1).unwrap();
 
         assert_eq!(lp.n_stages(), 3);
         assert_eq!(lp.n_entities(), 2);
@@ -480,7 +480,7 @@ mod tests {
         let block_factors_entity2: &[BlockFactorPair] = &[(0, 0.85), (1, 1.15)];
         let factors: &[EntityFactorEntry<'_>] = &[(EntityId(2), 0, block_factors_entity2)];
 
-        let lp = PrecomputedNormalLp::build(&[], factors, &stages, &entity_ids, 2).unwrap();
+        let lp = PrecomputedNormal::build(&[], factors, &stages, &entity_ids, 2).unwrap();
 
         // entity_ids[0] = EntityId(1), entity_ids[1] = EntityId(2)
         // entity 1 (EntityId(2)) has factors for stage 0
@@ -516,7 +516,7 @@ mod tests {
         // Only entity 1 at stage 0 has a model
         let models = [make_model(1, 0, 150.0, 25.0)];
 
-        let lp = PrecomputedNormalLp::build(&models, &[], &stages, &entity_ids, 1).unwrap();
+        let lp = PrecomputedNormal::build(&models, &[], &stages, &entity_ids, 1).unwrap();
 
         // Present entry
         assert!((lp.mean(0, 0) - 150.0).abs() < f64::EPSILON);
@@ -564,7 +564,7 @@ mod tests {
         let present_factors: &[BlockFactorPair] = &[(0, 0.9)];
         let factors: &[EntityFactorEntry<'_>] = &[(EntityId(1), 0, present_factors)];
 
-        let lp = PrecomputedNormalLp::build(&[], factors, &stages, &entity_ids, 3).unwrap();
+        let lp = PrecomputedNormal::build(&[], factors, &stages, &entity_ids, 3).unwrap();
 
         // Present entry
         assert!((lp.block_factor(0, 0, 0) - 0.9).abs() < f64::EPSILON);
@@ -605,7 +605,7 @@ mod tests {
         let factors: &[EntityFactorEntry<'_>] =
             &[(EntityId(5), 1, bf_e0_s1), (EntityId(7), 2, bf_e1_s2)];
 
-        let lp = PrecomputedNormalLp::build(&models, factors, &stages, &entity_ids, 2).unwrap();
+        let lp = PrecomputedNormal::build(&models, factors, &stages, &entity_ids, 2).unwrap();
 
         assert_eq!(lp.n_stages(), 3);
         assert_eq!(lp.n_entities(), 2);
@@ -657,7 +657,7 @@ mod tests {
             make_model(9, 2, 210.0, 18.0),
         ];
 
-        let lp = PrecomputedNormalLp::build(&models, &[], &stages, &entity_ids, 1).unwrap();
+        let lp = PrecomputedNormal::build(&models, &[], &stages, &entity_ids, 1).unwrap();
 
         // mean(1, 0): stage_idx=1 corresponds to study_stages[1] (id=1),
         //             entity_idx=0 corresponds to entity_ids[0] = EntityId(3)
@@ -681,7 +681,7 @@ mod tests {
         // Models provided in reverse entity order
         let models = vec![make_model(7, 0, 200.0, 30.0), make_model(3, 0, 100.0, 15.0)];
 
-        let lp = PrecomputedNormalLp::build(&models, &[], &[stage], &entity_ids, 1).unwrap();
+        let lp = PrecomputedNormal::build(&models, &[], &[stage], &entity_ids, 1).unwrap();
 
         // entity_ids[0] = EntityId(3) → mean 100.0
         // entity_ids[1] = EntityId(7) → mean 200.0
@@ -706,7 +706,7 @@ mod tests {
     fn mean_out_of_bounds_panics() {
         let stage = make_stage(0, 0);
         let model = make_model(1, 0, 100.0, 20.0);
-        let lp = PrecomputedNormalLp::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
+        let lp = PrecomputedNormal::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
         let _ = lp.mean(1, 0);
     }
 
@@ -715,7 +715,7 @@ mod tests {
     fn mean_entity_out_of_bounds_panics() {
         let stage = make_stage(0, 0);
         let model = make_model(1, 0, 100.0, 20.0);
-        let lp = PrecomputedNormalLp::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
+        let lp = PrecomputedNormal::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
         let _ = lp.mean(0, 1);
     }
 
@@ -724,7 +724,7 @@ mod tests {
     fn std_out_of_bounds_panics() {
         let stage = make_stage(0, 0);
         let model = make_model(1, 0, 100.0, 20.0);
-        let lp = PrecomputedNormalLp::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
+        let lp = PrecomputedNormal::build(&[model], &[], &[stage], &[EntityId(1)], 1).unwrap();
         let _ = lp.std(1, 0);
     }
 
@@ -732,7 +732,7 @@ mod tests {
     #[should_panic(expected = "block index 1 is out of bounds")]
     fn block_factor_out_of_bounds_panics() {
         let stage = make_stage(0, 0);
-        let lp = PrecomputedNormalLp::build(&[], &[], &[stage], &[EntityId(1)], 1).unwrap();
+        let lp = PrecomputedNormal::build(&[], &[], &[stage], &[EntityId(1)], 1).unwrap();
         let _ = lp.block_factor(0, 0, 1);
     }
 
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn default_is_empty() {
-        let lp = PrecomputedNormalLp::default();
+        let lp = PrecomputedNormal::default();
         assert_eq!(lp.n_stages(), 0);
         assert_eq!(lp.n_entities(), 0);
         assert_eq!(lp.max_blocks(), 0);

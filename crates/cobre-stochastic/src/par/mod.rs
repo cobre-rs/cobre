@@ -32,5 +32,5 @@ pub use fitting::{
     estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats, find_season_for_date,
     levinson_durbin, select_order_aic,
 };
-pub use precompute::PrecomputedParLp;
+pub use precompute::PrecomputedPar;
 pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

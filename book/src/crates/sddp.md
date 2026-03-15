@@ -249,7 +249,7 @@ allocation-free on the hot path.
 ## Load noise integration
 
 When `load_seasonal_stats.parquet` is present in the case directory, the
-`cobre-io` loader populates a `PrecomputedNormalLp` (from `cobre-stochastic`)
+`cobre-io` loader populates a `PrecomputedNormal` (from `cobre-stochastic`)
 alongside the PAR model. This object stores the per-stage, per-bus mean and
 standard deviation for stochastic bus demand and the per-block load factors
 derived from the seasonal statistics.

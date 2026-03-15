@@ -55,7 +55,7 @@ use cobre_sddp::{
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTree, PrecomputedParLp, StochasticContext, build_stochastic_context,
+    OpeningTree, PrecomputedPar, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -419,7 +419,7 @@ fn build_fixture() -> Fixture {
     let system = build_system();
     let inflow_method = InflowNonNegativityMethod::Penalty { cost: 1000.0 };
 
-    let par_lp = PrecomputedParLp::build(
+    let par_lp = PrecomputedPar::build(
         system.inflow_models(),
         &system
             .stages()
@@ -435,7 +435,7 @@ fn build_fixture() -> Fixture {
         &system,
         &inflow_method,
         &par_lp,
-        &cobre_stochastic::normal::precompute::PrecomputedNormalLp::default(),
+        &cobre_stochastic::normal::precompute::PrecomputedNormal::default(),
     )
     .expect("no FPHA plants in integration test fixture");
     let stochastic = build_stochastic();

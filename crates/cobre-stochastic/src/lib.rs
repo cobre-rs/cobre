@@ -49,10 +49,10 @@ pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::rng::rng_from_seed;
 pub use noise::seed::{derive_forward_seed, derive_opening_seed};
-pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
+pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormal};
 #[allow(deprecated)]
 pub use par::{
-    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedParLp,
+    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedPar,
     SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par,
     evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, levinson_durbin,
     solve_par_noise, solve_par_noise_batch, solve_par_noises, validate_par_parameters,

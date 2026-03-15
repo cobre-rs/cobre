@@ -19,11 +19,11 @@ for deterministic noise generation.
 
 | Module          | Purpose                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedParLp` cache                             |
+| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedPar` cache                               |
 | `par::evaluate` | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                          |
 | `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, AIC order selection |
 | `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                            |
-| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormalLp` cache with stage-major layout                            |
+| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                              |
 | `correlation`   | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                    |
 | `tree`          | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                      |
 | `sampling`      | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage                            |
@@ -39,7 +39,7 @@ structure of hydro inflow time series. Each hydro plant at each stage has an
 `InflowModel` with a mean (`mean_m3s`), a standard deviation (`std_m3s`), and
 a vector of AR coefficients in standardized form (`ar_coefficients`).
 
-`PrecomputedParLp` is built once at initialization from raw `InflowModel`
+`PrecomputedPar` is built once at initialization from raw `InflowModel`
 parameters. It converts AR coefficients from **standardized form** (ψ\*,
 direct Yule-Walker output) to **original-unit form** at build time:
 
@@ -138,7 +138,7 @@ data[stage_offsets[stage] + opening_idx * dim .. + dim]
 The `stage_offsets` array has length `n_stages + 1`. The sentinel entry
 `stage_offsets[n_stages]` equals `data.len()`, making bounds checks exact
 without special-casing the last stage. This sentinel pattern is used
-consistently in `PrecomputedParLp`, `OpeningTree`, and throughout
+consistently in `PrecomputedPar`, `OpeningTree`, and throughout
 `StochasticContext`.
 
 Pre-study stages (those with negative `stage.id`) are excluded from the
@@ -149,7 +149,7 @@ opening tree but remain in `inflow_models` for PAR lag initialization.
 `StochasticContext` bundles the three independently-built components into a
 single ready-to-use value:
 
-1. `PrecomputedParLp` — PAR coefficient cache for LP RHS patching.
+1. `PrecomputedPar` — PAR coefficient cache for LP RHS patching.
 2. `DecomposedCorrelation` — pre-decomposed Cholesky factors for all profiles.
 3. `OpeningTree` — pre-generated noise realizations for the backward pass.
 
@@ -184,7 +184,7 @@ a_h = deterministic_base + Σ_{l=0}^{order-1} psi[l] * lags[l] + sigma * eta
 ```
 
 where `deterministic_base` is the precomputed intercept `μ_m − Σ ψ_{m,l} μ_{m−l}`
-(stored in `PrecomputedParLp`), `psi[l]` are the AR coefficients in original
+(stored in `PrecomputedPar`), `psi[l]` are the AR coefficients in original
 units, `lags[l]` are the observed inflow values at lag positions 1..p, `sigma`
 is the residual standard deviation, and `eta` is the standardized noise draw.
 
@@ -300,26 +300,26 @@ decomposition.
 
 ### `StochasticContext`
 
-Owns all three preprocessing pipeline outputs: `PrecomputedParLp`,
+Owns all three preprocessing pipeline outputs: `PrecomputedPar`,
 `DecomposedCorrelation`, and `OpeningTree`. Constructed by
 `build_stochastic_context` and then consumed read-only. Accessors:
-`par_lp()`, `correlation()`, `opening_tree()`, `tree_view()`, `base_seed()`,
+`par()`, `correlation()`, `opening_tree()`, `tree_view()`, `base_seed()`,
 `dim()`, `n_stages()`. Both `Send` and `Sync`.
 
-### `PrecomputedParLp`
+### `PrecomputedPar`
 
 Cache-friendly PAR(p) model data for LP RHS patching. Stores means, standard
 deviations, original-unit AR coefficients (ψ), and intercept terms (base) in
-stage-major flat arrays (`Box<[f64]>`). Built via `PrecomputedParLp::build`.
+stage-major flat arrays (`Box<[f64]>`). Built via `PrecomputedPar::build`.
 Accessors: `n_hydros()`, `n_stages()`, `max_order()`, `mean()`, `std()`,
 `base()`, `psi()`.
 
-### `PrecomputedNormalLp`
+### `PrecomputedNormal`
 
 Cache-friendly normal noise model data for LP RHS patching, analogous to
-`PrecomputedParLp` for entities following a simple i.i.d. Gaussian model
+`PrecomputedPar` for entities following a simple i.i.d. Gaussian model
 (`x = μ + σ · f_b · ε`). Built once at initialization from raw `LoadModel`
-parameters via `PrecomputedNormalLp::build`. The three-dimensional factor
+parameters via `PrecomputedNormal::build`. The three-dimensional factor
 array supports per-(stage, entity, block) scaling and defaults to `1.0` for
 any (stage, entity, block) combination not explicitly provided.
 
@@ -375,7 +375,7 @@ Implements `std::error::Error`, `Send`, and `Sync`.
 Return type of `validate_par_parameters`. Contains a list of `ParWarning`
 values for non-fatal issues (e.g., high AR coefficients that may indicate
 numerical instability) that the caller can inspect or log before proceeding
-to `PrecomputedParLp::build`.
+to `PrecomputedPar::build`.
 
 ### `ParWarning`
 
@@ -464,7 +464,7 @@ for (stage_idx, stage) in study_stages.iter().enumerate() {
     );
 
     // `noise_slice` has length `ctx.dim()` (one value per hydro plant).
-    // Pass to LP RHS patching together with `ctx.par_lp()`.
+    // Pass to LP RHS patching together with `ctx.par()`.
     let _ = (opening_idx, noise_slice);
 }
 # Ok::<(), cobre_stochastic::StochasticError>(())
@@ -506,7 +506,7 @@ substitution.
 
 ### `Box<[f64]>` for the no-resize invariant
 
-All fixed-size hot-path arrays in `PrecomputedParLp`, `PrecomputedNormalLp`,
+All fixed-size hot-path arrays in `PrecomputedPar`, `PrecomputedNormal`,
 `OpeningTree`, and `CholeskyFactor` use `Box<[f64]>` rather than `Vec<f64>`.
 The boxed-slice type communicates that these arrays are immutable after
 construction, eliminates the capacity word from each allocation, and allows
@@ -599,22 +599,9 @@ use length-based domain separation rather than an explicit prefix byte, which
 is slightly more efficient and equally correct given that the two sets of
 input tuples have different shapes and lengths.
 
-### Planned type renames (0.2.0)
+### Type renames (completed in v0.1.3)
 
-Two types in `cobre-stochastic` carry an `Lp` suffix that incorrectly implies
-coupling to a specific solver backend. Because `cobre-stochastic` is
-deliberately solver-agnostic (it has no dependency on `cobre-solver`), the
-suffix is misleading — these types are general-purpose coefficient caches, not
-LP-specific structures.
-
-The following renames are planned for the 0.2.0 release (a minor-version bump,
-as the old names will be deprecated before removal):
-
-| Current name          | Planned name        | Reason                                                               |
-| --------------------- | ------------------- | -------------------------------------------------------------------- |
-| `PrecomputedParLp`    | `PrecomputedPar`    | The `Lp` suffix implies solver coupling; the type is solver-agnostic |
-| `PrecomputedNormalLp` | `PrecomputedNormal` | Same reason as above                                                 |
-
-Until 0.2.0, the existing names remain the canonical public API. No code
-changes are required at this stage. The rename will be accompanied by
-`#[deprecated]` annotations on the old names and a CHANGELOG entry.
+Two types previously carried an `Lp` suffix (`PrecomputedParLp`,
+`PrecomputedNormalLp`) that incorrectly implied coupling to a specific solver
+backend. Since `cobre-stochastic` is deliberately solver-agnostic, these were
+renamed to `PrecomputedPar` and `PrecomputedNormal` in v0.1.3.

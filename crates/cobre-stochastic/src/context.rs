@@ -10,10 +10,10 @@
 //! well-defined order:
 //!
 //! 1. Validate PAR model parameters (fatal errors stop the pipeline).
-//! 2. Build the [`PrecomputedParLp`] coefficient cache.
+//! 2. Build the [`PrecomputedPar`] coefficient cache.
 //! 3. Decompose the spatial correlation matrix via Cholesky.
 //! 4. Generate the opening scenario tree.
-//! 5. Build the [`PrecomputedNormalLp`] cache for stochastic load buses.
+//! 5. Build the [`PrecomputedNormal`] cache for stochastic load buses.
 //!
 //! The caller is responsible for providing the `base_seed` as an explicit
 //! `u64`. Seed extraction from external configuration — including handling
@@ -25,8 +25,8 @@ use cobre_core::{EntityId, System};
 use crate::{
     StochasticError,
     correlation::resolve::DecomposedCorrelation,
-    normal::precompute::{EntityFactorEntry, PrecomputedNormalLp},
-    par::{precompute::PrecomputedParLp, validation::validate_par_parameters},
+    normal::precompute::{EntityFactorEntry, PrecomputedNormal},
+    par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
     tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
 };
@@ -159,10 +159,10 @@ pub use crate::tree::opening_tree::OpeningTree;
 /// ```
 #[derive(Debug)]
 pub struct StochasticContext {
-    par_lp: PrecomputedParLp,
+    par_lp: PrecomputedPar,
     correlation: DecomposedCorrelation,
     opening_tree: OpeningTree,
-    normal_lp: PrecomputedNormalLp,
+    normal_lp: PrecomputedNormal,
     base_seed: u64,
     dim: usize,
     n_load_buses: usize,
@@ -177,7 +177,7 @@ const _: () = {
 impl StochasticContext {
     /// Returns a reference to the PAR(p) LP coefficient cache.
     #[must_use]
-    pub fn par_lp(&self) -> &PrecomputedParLp {
+    pub fn par(&self) -> &PrecomputedPar {
         &self.par_lp
     }
 
@@ -230,7 +230,7 @@ impl StochasticContext {
     /// for all stochastic load buses (those with `std_mw > 0`). The entity
     /// order matches the load bus IDs appended to `entity_order` during context
     /// construction, sorted by `EntityId`.
-    pub fn normal_lp(&self) -> &PrecomputedNormalLp {
+    pub fn normal(&self) -> &PrecomputedNormal {
         &self.normal_lp
     }
 
@@ -261,11 +261,11 @@ impl StochasticContext {
 /// 4. Collect stochastic load bus IDs (buses with at least one [`LoadModel`]
 ///    entry where `std_mw > 0`), sorted by [`EntityId`] for declaration-order
 ///    invariance.
-/// 5. Build [`PrecomputedParLp`] from PAR model parameters and study stages.
+/// 5. Build [`PrecomputedPar`] from PAR model parameters and study stages.
 /// 6. Build [`DecomposedCorrelation`] from the system correlation model.
 /// 7. Generate the opening scenario tree from the expanded entity order
 ///    (`hydro_ids` followed by `load_bus_ids`) with `dim = n_hydros + n_load_buses`.
-/// 8. Build [`PrecomputedNormalLp`] for the stochastic load buses.
+/// 8. Build [`PrecomputedNormal`] for the stochastic load buses.
 ///
 /// The `base_seed` parameter must be supplied explicitly by the caller.
 /// Converting `ScenarioSource.seed: Option<i64>` to a `u64` — including
@@ -273,7 +273,7 @@ impl StochasticContext {
 /// belongs in the calling crate, not in this infrastructure crate.
 ///
 /// The `load_factors` parameter provides per-`(entity_id, stage_id, block_factors)`
-/// scaling entries consumed by [`PrecomputedNormalLp`]. Pass an empty slice when
+/// scaling entries consumed by [`PrecomputedNormal`]. Pass an empty slice when
 /// no load factor file was loaded; all block factors then default to `1.0`. The
 /// caller is responsible for converting any external load factor representation
 /// into [`EntityFactorEntry`] slices before calling this function.
@@ -349,7 +349,7 @@ pub fn build_stochastic_context(
         }
     };
 
-    let par_lp = PrecomputedParLp::build(system.inflow_models(), &study_stages, &hydro_ids)?;
+    let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids)?;
 
     let mut correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()
@@ -381,7 +381,7 @@ pub fn build_stochastic_context(
         .max()
         .unwrap_or(0);
 
-    let normal_lp = PrecomputedNormalLp::build(
+    let normal_lp = PrecomputedNormal::build(
         system.load_models(),
         load_factors,
         &study_stages,
@@ -609,8 +609,8 @@ mod tests {
 
         let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
 
-        assert_eq!(ctx.par_lp().n_hydros(), 2);
-        assert_eq!(ctx.par_lp().n_stages(), 3);
+        assert_eq!(ctx.par().n_hydros(), 2);
+        assert_eq!(ctx.par().n_stages(), 3);
     }
 
     /// AC: `opening_tree()` has the expected stage and dimension counts.
@@ -996,7 +996,7 @@ mod tests {
         );
     }
 
-    /// AC: `normal_lp()` accessor returns correctly built `PrecomputedNormalLp`.
+    /// AC: `normal_lp()` accessor returns correctly built `PrecomputedNormal`.
     #[test]
     fn normal_lp_accessible_from_context() {
         let hydros = vec![make_hydro(1)];
@@ -1029,7 +1029,7 @@ mod tests {
         let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
 
         assert_eq!(ctx.n_load_buses(), 1);
-        let nlp = ctx.normal_lp();
+        let nlp = ctx.normal();
         assert_eq!(nlp.n_stages(), 3);
         assert_eq!(nlp.n_entities(), 1, "one stochastic load bus");
         // Stage 0, entity 0 (bus 10) — mean and std from load_models.
@@ -1162,12 +1162,12 @@ mod tests {
 
         // par_lp, correlation, and normal_lp must still be built from the system.
         assert_eq!(
-            ctx.par_lp().n_hydros(),
+            ctx.par().n_hydros(),
             2,
             "par_lp must still reflect system hydros"
         );
         assert_eq!(
-            ctx.par_lp().n_stages(),
+            ctx.par().n_stages(),
             3,
             "par_lp must still reflect system study stages"
         );

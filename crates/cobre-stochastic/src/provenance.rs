@@ -1,11 +1,11 @@
 //! Provenance metadata for stochastic pipeline components.
 //!
-//! [`ComponentProvenance`] records whether a component of a [`StochasticContext`]
+//! [`ComponentProvenance`] records whether a component of a [`StochasticContext`](crate::StochasticContext)
 //! was computed internally from system data, provided by the caller as an
 //! external override, or is absent because the system has no relevant entities.
 //!
 //! [`StochasticProvenance`] groups per-component provenance into a single value
-//! stored on [`StochasticContext`] and returned by its `provenance()` accessor.
+//! stored on [`StochasticContext`](crate::StochasticContext) and returned by its `provenance()` accessor.
 
 /// Origin of a single stochastic pipeline component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub enum ComponentProvenance {
     NotApplicable,
 }
 
-/// Provenance records for all components of a [`StochasticContext`].
+/// Provenance records for all components of a [`StochasticContext`](crate::StochasticContext).
 ///
 /// Set once during construction; never mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -46,11 +45,12 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use crate::{
+        context::{build_stochastic_context, OpeningTree},
         ComponentProvenance,
-        context::{OpeningTree, build_stochastic_context},
     };
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {

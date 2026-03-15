@@ -490,6 +490,9 @@ pub struct ExportsConfig {
     /// Export per-scenario backward-pass detail.
     pub backward_detail: bool,
 
+    /// Export stochastic preprocessing artifacts to `output/stochastic/`.
+    pub stochastic: bool,
+
     /// Compression algorithm for output files: `"zstd"`, `"lz4"`, or `"none"`.
     pub compression: Option<String>,
 }
@@ -504,6 +507,7 @@ impl Default for ExportsConfig {
             simulation: true,
             forward_detail: false,
             backward_detail: false,
+            stochastic: false,
             compression: None,
         }
     }
@@ -1007,5 +1011,42 @@ mod tests {
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }
+    }
+
+    /// `exports.stochastic: true` deserializes correctly.
+    ///
+    /// Verifies that a `config.json` with `"exports": {"stochastic": true}` round-trips
+    /// the field as `true` in `ExportsConfig`.
+    #[test]
+    fn test_exports_stochastic_explicit_true() {
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
+            "exports": {"stochastic": true}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.exports.stochastic,
+            "exports.stochastic should be true when set in config"
+        );
+    }
+
+    /// `exports.stochastic` defaults to `false` when the field is absent.
+    ///
+    /// Verifies that a `config.json` without the `stochastic` field in the
+    /// `exports` section resolves to `false` via `#[serde(default)]`.
+    #[test]
+    fn test_exports_stochastic_defaults_to_false() {
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            !cfg.exports.stochastic,
+            "exports.stochastic should default to false when absent"
+        );
     }
 }

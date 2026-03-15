@@ -51,7 +51,7 @@ pub(crate) fn render_banner_string(use_color: bool) -> String {
 ///
 /// Write errors are silently ignored — banner rendering is fire-and-forget.
 /// The caller is responsible for the display conditions (`--quiet`,
-/// `--no-banner`, terminal detection).
+/// terminal detection).
 pub fn print_banner(stderr: &Term) {
     let use_color = console::colors_enabled_stderr() && std::env::var_os("NO_COLOR").is_none();
     let banner = render_banner_string(use_color);

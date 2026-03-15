@@ -270,7 +270,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         apply_opening_noise_and_patch(ws, ctx, training_ctx, succ.cut_batch, raw_noise, x_hat, s);
 
         let warm = if omega == 0 {
-            succ.basis_store.get(scenario, s)
+            succ.basis_store.get(m, s)
         } else {
             working_basis.as_ref()
         };
@@ -911,7 +911,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────
@@ -2374,7 +2374,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[]).unwrap()
+        build_stochastic_context(&system, 42, &[], None).unwrap()
     }
 
     /// AC: Given a backward pass with 1 stochastic load bus and opening noise

@@ -391,7 +391,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[]).unwrap()
+    build_stochastic_context(&system, 42, &[], None).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
@@ -535,14 +535,23 @@ fn run_training(
         .build()
         .unwrap();
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize; 5],
+    };
     let result = pool
         .install(|| {
             train(
                 &mut primary_solver,
                 config,
                 &mut fcf,
-                &fx.templates,
-                &fx.base_rows,
+                &stage_ctx,
                 &TrainingContext {
                     horizon: &fx.horizon,
                     indexer: &fx.indexer,
@@ -558,13 +567,7 @@ fn run_training(
                 &comm,
                 n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
-                &[],
-                0,
-                0,
                 1,
-                &[],
-                &[],
-                &[1usize; 5],
             )
         })
         .unwrap();

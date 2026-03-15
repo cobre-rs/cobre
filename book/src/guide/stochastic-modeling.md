@@ -372,6 +372,77 @@ OS entropy at startup.
 
 ---
 
+## User-Supplied Opening Trees
+
+By default, Cobre generates the backward-pass opening tree internally using
+SipHash-derived seeds and the spatial correlation Cholesky factor. If you need
+to supply your own noise realizations — for cross-tool comparison, sensitivity
+analysis, or round-trip replay — you can place `scenarios/noise_openings.parquet`
+in the case directory before running.
+
+When the file is present, Cobre loads the opening tree from it instead of
+calling the internal generator. When the file is absent, the default generator
+runs as usual.
+
+### Schema
+
+The file has exactly four columns:
+
+| Column          | Type   | Required | Description                                                                    |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------ |
+| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                                     |
+| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1)        |
+| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order                               |
+| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple                     |
+
+### Entity ordering
+
+The `entity_index` column follows the system dimension convention:
+
+1. Hydro entities, sorted by canonical ID (ascending)
+2. Load buses, sorted by canonical ID (ascending)
+
+This matches the ordering used by Cobre's internal opening tree generator. The
+file stores only indices, not entity identifiers, so an incorrect ordering
+causes silent value misassignment rather than a schema error. Double-check the
+entity ordering when constructing the file externally.
+
+### Use cases
+
+- **Cross-tool comparison.** Generate a set of noise realizations in an external
+  tool and inject them into Cobre to compare policy quality on identical scenarios.
+- **Sensitivity analysis.** Construct an extreme scenario (for example, all
+  hydros at minimum inflow for the entire study) and evaluate how the policy
+  responds.
+- **Round-trip replay.** Export the opening tree that Cobre used in a training
+  run with `--export-stochastic`, copy `output/stochastic/noise_openings.parquet`
+  to `scenarios/`, and re-run to reproduce the exact same backward-pass context.
+  See [Exporting Stochastic Artifacts](./running-studies.md#exporting-stochastic-artifacts)
+  for the complete workflow.
+
+### Interaction with `base_seed`
+
+The `training.seed` field in `config.json` remains required even when a
+user-supplied opening tree is present. The opening tree and forward-pass noise
+are independent: `training.seed` governs the forward-pass scenario sampling
+performed by `sample_forward()`, which uses SipHash seeds derived independently
+of the opening tree. Supplying a custom opening tree has no effect on forward-pass
+noise.
+
+### Limitations
+
+- Partial-stage override is not supported. You must supply openings for all
+  study stages. If you want to replace a subset of stages while keeping the rest
+  internally generated, you must supply a complete tree and duplicate the
+  internally generated values for the unmodified stages.
+- User-supplied noise is used as-is. The Cholesky spatial correlation factor
+  is not applied again. You are responsible for any spatial correlation structure
+  encoded in the values you supply.
+
+For design rationale, see [ADR-008](../../docs/adr/008-user-supplied-opening-tree.md).
+
+---
+
 ## Inflow Non-Negativity
 
 Normal distributions used in PAR(p) models have unbounded support: even with

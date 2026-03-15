@@ -51,6 +51,7 @@ pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
 pub mod risk_measure;
+pub mod setup;
 pub mod simulation;
 pub mod state_exchange;
 pub mod stopping_rule;
@@ -69,7 +70,7 @@ pub use cut_selection::{
 };
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
-pub use estimation::EstimationError;
+pub use estimation::{EstimationError, EstimationReport};
 pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use indexer::StageIndexer;
@@ -77,6 +78,7 @@ pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use setup::StudySetup;
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
     SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,

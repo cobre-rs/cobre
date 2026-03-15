@@ -85,6 +85,13 @@ will not produce `simulation/pumping_stations/`.
       generic/
         scenario_id=0000/data.parquet
         ...
+  stochastic/
+    inflow_seasonal_stats.parquet    (when estimation was performed)
+    inflow_ar_coefficients.parquet   (when estimation was performed)
+    correlation.json                 (always)
+    fitting_report.json              (when estimation was performed)
+    noise_openings.parquet           (always)
+    load_seasonal_stats.parquet      (when load buses exist)
 ```
 
 ---
@@ -775,3 +782,86 @@ cobre report results/ | jq '.training.convergence.termination_reason'
 status=$(cobre report results/ | jq -r '.status')
 [ "$status" = "complete" ] || exit 1
 ```
+
+---
+
+## Stochastic Artifacts
+
+When `--export-stochastic` is passed to `cobre run`, or when `exports.stochastic:
+true` is set in `config.json`, Cobre writes the stochastic preprocessing artifacts
+to `output/stochastic/` before training begins.
+
+The directory is not written when neither the flag nor the config field is set.
+Export is off by default in v0.1.x.
+
+### Exported files
+
+| File path                                          | Export condition          | Schema source                                            |
+| -------------------------------------------------- | ------------------------- | -------------------------------------------------------- |
+| `stochastic/inflow_seasonal_stats.parquet`         | Estimation was performed  | Same as input `scenarios/inflow_seasonal_stats.parquet`  |
+| `stochastic/inflow_ar_coefficients.parquet`        | Estimation was performed  | Same as input `scenarios/inflow_ar_coefficients.parquet` |
+| `stochastic/correlation.json`                      | Always                    | Same as input `scenarios/correlation.json`               |
+| `stochastic/fitting_report.json`                   | Estimation was performed  | JSON diagnostic report (see below)                       |
+| `stochastic/noise_openings.parquet`                | Always                    | Same schema as `scenarios/noise_openings.parquet`        |
+| `stochastic/load_seasonal_stats.parquet`           | Load buses exist          | Same as input `scenarios/load_seasonal_stats.parquet`    |
+
+"Estimation was performed" means the user did not supply the corresponding
+scenario file directly; Cobre derived it from `inflow_history.parquet`.
+
+### `stochastic/noise_openings.parquet`
+
+The opening tree used during the training run, written in the same schema as
+the input file `scenarios/noise_openings.parquet`. See the
+[Case Format Reference](./case-format.md#scenariosnoise_openingsparquet) for
+the 4-column schema (`stage_id`, `opening_index`, `entity_index`, `value`).
+
+### `stochastic/fitting_report.json`
+
+A JSON diagnostic report for the PAR model fitting. This file is written only
+when Cobre performed estimation from `inflow_history.parquet`.
+
+**Structure:**
+
+```json
+{
+  "hydros": {
+    "<hydro_id>": {
+      "selected_order": 3,
+      "aic_scores": [12.4, 11.1, 10.8, 11.3],
+      "coefficients": [[0.42, -0.11, 0.07]]
+    }
+  }
+}
+```
+
+| Field            | Type             | Description                                                                      |
+| ---------------- | ---------------- | -------------------------------------------------------------------------------- |
+| `selected_order` | integer          | AIC-selected AR order for this hydro plant                                       |
+| `aic_scores`     | number array     | AIC score for each candidate order; `aic_scores[i]` is the score for order `i+1` |
+| `coefficients`   | nested array     | One row per season; each row contains the AR coefficients for that season         |
+
+This file is diagnostic only. It is not consumed as input on subsequent runs.
+
+### Round-trip workflow
+
+Every exported Parquet and JSON file uses the exact same column names, types,
+and layout as the corresponding input file. To replay a run with identical
+stochastic context:
+
+```bash
+# Export artifacts from an initial run
+cobre run my_case --export-stochastic
+
+# Copy exported artifacts to scenarios/
+cp -r my_case/output/stochastic/* my_case/scenarios/
+
+# Re-run: the loader finds the files already present and skips estimation
+cobre run my_case
+```
+
+The re-run produces bit-for-bit identical stochastic artifacts because the
+round-trip eliminates the estimation step. The opening tree is loaded directly
+from `scenarios/noise_openings.parquet` instead of being regenerated.
+
+See [Exporting Stochastic Artifacts](../guide/running-studies.md#exporting-stochastic-artifacts)
+in the Running Studies guide for the end-to-end workflow.

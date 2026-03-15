@@ -27,7 +27,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use cobre_comm::LocalBackend;
-use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_io::output::simulation_writer::{
     BusWriteRecord, ContractWriteRecord, CostWriteRecord, ExchangeWriteRecord,
     GenericViolationWriteRecord, HydroWriteRecord, InflowLagWriteRecord,
@@ -35,18 +34,10 @@ use cobre_io::output::simulation_writer::{
     StageWritePayload, ThermalWriteRecord,
 };
 use cobre_io::{write_results, ParquetWriterConfig};
-use cobre_sddp::{
-    build_stage_templates, build_training_output, simulate, train, EntityCounts,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SimulationScenarioResult, SimulationStageResult, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    WorkspacePool,
-};
+use cobre_sddp::{FutureCostFunction, SimulationScenarioResult, SimulationStageResult, StudySetup};
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
 
-const DEFAULT_FORWARD_PASSES: u32 = 1;
-const DEFAULT_MAX_ITERATIONS: u64 = 100;
 const DEFAULT_SEED: u64 = 42;
 
 /// Summary returned by [`run_inner`] on success.
@@ -72,107 +63,6 @@ fn init_rayon(threads: Option<u32>) {
         .num_threads(n)
         .build_global()
         .unwrap_or(());
-}
-
-fn resolve_stopping_rules(config: &cobre_io::Config) -> StoppingRuleSet {
-    use cobre_io::config::StoppingRuleConfig;
-
-    let rule_configs = match &config.training.stopping_rules {
-        Some(rules) if !rules.is_empty() => rules.clone(),
-        _ => vec![StoppingRuleConfig::IterationLimit {
-            limit: u32::try_from(DEFAULT_MAX_ITERATIONS).unwrap_or(u32::MAX),
-        }],
-    };
-
-    let rules: Vec<StoppingRule> = rule_configs
-        .into_iter()
-        .map(|c| match c {
-            StoppingRuleConfig::IterationLimit { limit } => StoppingRule::IterationLimit {
-                limit: u64::from(limit),
-            },
-            StoppingRuleConfig::TimeLimit { seconds } => StoppingRule::TimeLimit { seconds },
-            StoppingRuleConfig::BoundStalling {
-                iterations,
-                tolerance,
-            } => StoppingRule::BoundStalling {
-                iterations: u64::from(iterations),
-                tolerance,
-            },
-            StoppingRuleConfig::Simulation { .. } => {
-                // Simulation stopping rule requires upper-bound evaluation;
-                // not implemented in the MVP — fold into iteration limit.
-                StoppingRule::IterationLimit {
-                    limit: DEFAULT_MAX_ITERATIONS,
-                }
-            }
-        })
-        .collect();
-
-    let mode = if config.training.stopping_mode.eq_ignore_ascii_case("all") {
-        StoppingMode::All
-    } else {
-        StoppingMode::Any
-    };
-
-    StoppingRuleSet { rules, mode }
-}
-
-fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
-    rules
-        .rules
-        .iter()
-        .filter_map(|r| {
-            if let StoppingRule::IterationLimit { limit } = r {
-                Some(*limit)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(DEFAULT_MAX_ITERATIONS)
-}
-
-fn build_initial_state(system: &cobre_core::System, indexer: &StageIndexer) -> Vec<f64> {
-    let mut state = vec![0.0_f64; indexer.n_state];
-    let hydros = system.hydros();
-    let ic = system.initial_conditions();
-
-    for hs in &ic.storage {
-        if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
-            state[idx] = hs.value_hm3;
-        }
-    }
-
-    state
-}
-
-fn build_entity_counts(system: &cobre_core::System) -> EntityCounts {
-    EntityCounts {
-        hydro_ids: system.hydros().iter().map(|h| h.id.0).collect(),
-        hydro_productivities: system
-            .hydros()
-            .iter()
-            .map(|h| match &h.generation_model {
-                HydroGenerationModel::ConstantProductivity {
-                    productivity_mw_per_m3s,
-                }
-                | HydroGenerationModel::LinearizedHead {
-                    productivity_mw_per_m3s,
-                } => *productivity_mw_per_m3s,
-                HydroGenerationModel::Fpha => 0.0,
-            })
-            .collect(),
-        thermal_ids: system.thermals().iter().map(|t| t.id.0).collect(),
-        line_ids: system.lines().iter().map(|l| l.id.0).collect(),
-        bus_ids: system.buses().iter().map(|b| b.id.0).collect(),
-        pumping_station_ids: system.pumping_stations().iter().map(|p| p.id.0).collect(),
-        contract_ids: system.contracts().iter().map(|c| c.id.0).collect(),
-        non_controllable_ids: system
-            .non_controllable_sources()
-            .iter()
-            .map(|n| n.id.0)
-            .collect(),
-    }
 }
 
 fn convert_stage(src: SimulationStageResult) -> StageWritePayload {
@@ -484,175 +374,55 @@ fn write_policy_checkpoint(
 }
 
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
-#[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
     output_dir: PathBuf,
     threads: Option<u32>,
     skip_simulation: bool,
 ) -> Result<RunSummary, String> {
-    // Initialize rayon before any parallel work.
     init_rayon(threads);
     let n_threads = threads.map_or(1, |t| t as usize);
 
-    // Load case.
     let system = cobre_io::load_case(case_dir).map_err(|e| e.to_string())?;
+    let config = cobre_io::parse_config(&case_dir.join("config.json"))
+        .map_err(|e| format!("config parse error: {e}"))?;
 
-    // Parse config.
-    let config_path = case_dir.join("config.json");
-    let config =
-        cobre_io::parse_config(&config_path).map_err(|e| format!("config parse error: {e}"))?;
-
-    // Resolve config fields needed here.
-    let inflow_method = InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity);
+    // Seed must be extracted before config is moved into StudySetup.
+    let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
-    let n_scenarios = config.simulation.num_scenarios;
-    let io_capacity = config.simulation.io_channel_capacity as usize;
-    let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
-    let forward_passes = config
-        .training
-        .forward_passes
-        .unwrap_or(DEFAULT_FORWARD_PASSES);
-    let stopping_rules = resolve_stopping_rules(&config);
-    let max_iterations = max_iterations_from_rules(&stopping_rules);
-    let cut_selection_strategy =
-        cobre_sddp::parse_cut_selection_config(&config.training.cut_selection)
-            .map_err(|msg| format!("cut_selection config error: {msg}"))?;
 
-    // Build stochastic context.
-    let stochastic = build_stochastic_context(&system, seed, &[])
+    let stochastic = build_stochastic_context(&system, seed, &[], None)
         .map_err(|e| format!("stochastic context error: {e}"))?;
 
-    // Build LP templates.
-    let stage_templates = build_stage_templates(
-        &system,
-        &inflow_method,
-        stochastic.par_lp(),
-        stochastic.normal_lp(),
-    )
-    .map_err(|e| e.to_string())?;
-    if stage_templates.templates.is_empty() {
-        return Err("system has no study stages — cannot train".to_string());
-    }
-
-    let stage_templates_ref = &stage_templates.templates;
-    let base_rows = &stage_templates.base_rows;
-    let noise_scale = &stage_templates.noise_scale;
-    let zeta_per_stage = &stage_templates.zeta_per_stage;
-    let block_hours_per_stage = &stage_templates.block_hours_per_stage;
-    let n_hydros_lp = stage_templates.n_hydros;
-
-    // Build stage indexer.
-    let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
-    let has_inflow_penalty =
-        inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
-    let indexer = StageIndexer::with_equipment(
-        stage_templates_ref[0].n_hydro,
-        stage_templates_ref[0].max_par_order,
-        system.thermals().len(),
-        system.lines().len(),
-        system.buses().len(),
-        n_blks_stage0,
-        has_inflow_penalty,
-    );
-    let initial_state = build_initial_state(&system, &indexer);
-
-    let n_stages = stage_templates_ref.len();
-    let fcf_capacity_iterations = max_iterations.saturating_add(1);
-    let mut fcf = FutureCostFunction::new(
-        n_stages,
-        indexer.n_state,
-        forward_passes,
-        fcf_capacity_iterations,
-        0,
-    );
-
-    let horizon = HorizonMode::Finite {
-        num_stages: n_stages,
-    };
-    let risk_measures: Vec<RiskMeasure> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| RiskMeasure::from(s.risk_config))
-        .collect();
+    let mut setup = StudySetup::new(&system, &config, stochastic).map_err(|e| e.to_string())?;
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
-
-    // Training: no event sender (no progress callbacks in MVP).
     let (event_tx, event_rx) = mpsc::channel();
-    let sim_event_tx = event_tx.clone();
-    let training_config = TrainingConfig {
-        forward_passes,
-        max_iterations,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(event_tx),
-    };
+    let training_result = setup
+        .train(
+            &mut solver,
+            &LocalBackend,
+            n_threads,
+            HighsSolver::new,
+            Some(event_tx),
+            None,
+        )
+        .map_err(|e| format!("training error: {e}"))?;
 
-    let comm = LocalBackend;
-
-    let n_load_buses = stage_templates.n_load_buses;
-    let max_blocks = block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(0);
-    let block_counts_per_stage: Vec<usize> = block_hours_per_stage.iter().map(Vec::len).collect();
-    let load_balance_row_starts = &stage_templates.load_balance_row_starts;
-    let load_bus_indices = &stage_templates.load_bus_indices;
-
-    let training_ctx = TrainingContext {
-        horizon: &horizon,
-        indexer: &indexer,
-        inflow_method: &inflow_method,
-        stochastic: &stochastic,
-        initial_state: &initial_state,
-    };
-
-    let training_result = train(
-        &mut solver,
-        training_config,
-        &mut fcf,
-        stage_templates_ref,
-        base_rows,
-        &training_ctx,
-        stochastic.opening_tree(),
-        &risk_measures,
-        stopping_rules,
-        cut_selection_strategy.as_ref(),
-        None,
-        &comm,
-        n_threads,
-        HighsSolver::new,
-        noise_scale,
-        n_hydros_lp,
-        n_load_buses,
-        max_blocks,
-        load_balance_row_starts,
-        load_bus_indices,
-        &block_counts_per_stage,
-    )
-    .map_err(|e| format!("training error: {e}"))?;
-
-    // Drain events (no progress thread — just discard).
     let events: Vec<_> = event_rx.try_iter().collect();
-    let training_output = build_training_output(&training_result, &events, &fcf);
+    let training_output = setup.build_training_output(&training_result, &events);
 
-    // Policy checkpoint.
-    let policy_dir = output_dir.join(&config.policy.path);
     write_policy_checkpoint(
-        &policy_dir,
-        &fcf,
+        &output_dir.join(setup.policy_path()),
+        setup.fcf(),
         &training_result,
-        max_iterations,
-        forward_passes,
+        setup.max_iterations(),
+        setup.forward_passes(),
         seed,
     )
     .map_err(|e| format!("policy checkpoint error: {e}"))?;
 
-    // Build the summary fields extracted from training results.
     let converged = training_output.converged;
     let iterations = training_result.iterations;
     let lower_bound = training_result.final_lb;
@@ -661,79 +431,32 @@ fn run_inner(
     let total_time_ms = training_result.total_time_ms;
 
     if should_simulate {
-        let sim_config = SimulationConfig {
-            n_scenarios,
-            io_channel_capacity: io_capacity,
-        };
-
-        let entity_counts = build_entity_counts(&system);
-
-        let mut sim_pool = WorkspacePool::try_new(
-            n_threads,
-            indexer.hydro_count,
-            indexer.max_par_order,
-            indexer.n_state,
-            0,
-            0,
-            HighsSolver::new,
-        )
-        .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
-
+        let io_capacity = setup.simulation_config().io_channel_capacity;
+        let mut sim_pool = setup
+            .create_workspace_pool(n_threads, HighsSolver::new)
+            .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
-
-        // Background drain thread: prevents bounded-channel deadlock when
-        // n_scenarios > io_capacity.
+        // Drain thread prevents bounded-channel deadlock when n_scenarios > io_capacity.
         let drain_handle = std::thread::spawn(move || {
             result_rx
                 .into_iter()
                 .collect::<Vec<SimulationScenarioResult>>()
         });
-
-        let sim_result = simulate(
-            &mut sim_pool.workspaces,
-            &StageContext {
-                templates: stage_templates_ref,
-                base_rows,
-                noise_scale,
-                n_hydros: n_hydros_lp,
-                n_load_buses,
-                load_balance_row_starts,
-                load_bus_indices,
-                block_counts_per_stage: &block_counts_per_stage,
-            },
-            &fcf,
-            &training_ctx,
-            &sim_config,
-            SimulationOutputSpec {
-                result_tx: &result_tx,
-                zeta_per_stage,
-                block_hours_per_stage,
-                entity_counts: &entity_counts,
-                event_sender: Some(sim_event_tx),
-            },
-            &comm,
-        )
-        .map_err(|e| format!("simulation error: {e}"));
-
-        // Drop result_tx before joining drain_handle to unblock the drain loop.
+        let sim_result = setup
+            .simulate(&mut sim_pool.workspaces, &LocalBackend, &result_tx, None)
+            .map_err(|e| format!("simulation error: {e}"));
         drop(result_tx);
-        // Join drain thread regardless of sim_result; avoid thread leak.
         let local_results = drain_handle
             .join()
             .map_err(|_| "drain thread panicked".to_string())?;
-
-        // Propagate any simulation error after the drain completes.
         sim_result?;
 
-        // Write simulation results via SimulationParquetWriter.
-        let parquet_config = ParquetWriterConfig::default();
-        let mut sim_writer = SimulationParquetWriter::new(&output_dir, &system, &parquet_config)
-            .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
-
+        let mut sim_writer =
+            SimulationParquetWriter::new(&output_dir, &system, &ParquetWriterConfig::default())
+                .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
         let mut failed: u32 = 0;
         for scenario_result in local_results {
-            let payload = convert_scenario(scenario_result);
-            if let Err(e) = sim_writer.write_scenario(payload) {
+            if let Err(e) = sim_writer.write_scenario(convert_scenario(scenario_result)) {
                 eprintln!("cobre-python: simulation write warning: {e}");
                 failed += 1;
             }
@@ -744,7 +467,6 @@ fn run_inner(
             n_scenarios: sim_out.n_scenarios,
             completed: sim_out.completed,
         };
-
         write_results(
             &output_dir,
             &training_output,
@@ -753,7 +475,6 @@ fn run_inner(
             &config,
         )
         .map_err(|e| format!("output write error: {e}"))?;
-
         Ok(RunSummary {
             converged,
             iterations,
@@ -767,7 +488,6 @@ fn run_inner(
     } else {
         write_results(&output_dir, &training_output, None, &system, &config)
             .map_err(|e| format!("output write error: {e}"))?;
-
         Ok(RunSummary {
             converged,
             iterations,

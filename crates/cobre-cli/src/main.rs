@@ -21,7 +21,6 @@
 mod banner;
 mod commands;
 mod error;
-mod logging;
 mod policy_io;
 mod progress;
 mod simulation_io;
@@ -125,9 +124,6 @@ fn main() {
     // Apply color setting before any output is written so that the banner,
     // progress bars, and error messages all honour the chosen setting.
     resolve_color(cli.color);
-
-    let verbose = matches!(&cli.command, Command::Run(args) if args.verbose);
-    logging::init_logging(verbose);
 
     let result = match cli.command {
         Command::Init(args) => init::execute(args),

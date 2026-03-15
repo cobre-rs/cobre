@@ -33,13 +33,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 mpi = ["cobre-comm/mpi"]
 
 [dev-dependencies]
 assert_cmd = "2"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 predicates = "3"
 tempfile = "3"
 

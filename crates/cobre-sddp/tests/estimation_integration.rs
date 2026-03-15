@@ -321,7 +321,7 @@ fn test_estimate_from_history_fixed_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("estimation should succeed with 15 years of monthly data");
 
     // One InflowModel per (hydro_id, stage_id) pair, but estimation groups by
@@ -382,7 +382,7 @@ fn test_estimate_from_history_aic_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("AIC estimation should succeed with 15 years of monthly data");
 
     let models = updated.inflow_models();
@@ -699,7 +699,7 @@ fn test_estimation_round_trip_par1() {
     let system = build_system_for_par1(1);
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with N=200 per season should succeed");
 
     let models = updated.inflow_models();
@@ -791,7 +791,7 @@ fn test_estimation_round_trip_two_hydros() {
     let system = build_system_for_par1(N_HYDROS);
     let config = parse_config(case_dir);
 
-    let updated = estimate_from_history(system, case_dir, &config)
+    let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with 2 hydros should succeed");
 
     let models = updated.inflow_models();

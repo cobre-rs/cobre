@@ -15,6 +15,7 @@ pub mod parquet_config;
 pub mod policy;
 pub(crate) mod schemas;
 pub mod simulation_writer;
+pub mod stochastic;
 pub mod training_writer;
 
 pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
@@ -29,6 +30,11 @@ pub use manifest::{
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use simulation_writer::SimulationParquetWriter;
+pub use stochastic::{
+    FittingReport, HydroFittingEntry, write_correlation_json, write_fitting_report,
+    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
+    write_noise_openings,
+};
 pub use training_writer::TrainingParquetWriter;
 
 use cobre_core::System;

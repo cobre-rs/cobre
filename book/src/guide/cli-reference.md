@@ -14,13 +14,50 @@ cobre [--color <WHEN>] <SUBCOMMAND> [OPTIONS]
 
 ## Subcommands
 
-| Subcommand | Synopsis                         | Description                                                          |
-| ---------- | -------------------------------- | -------------------------------------------------------------------- |
-| `run`      | `cobre run <CASE_DIR> [OPTIONS]` | Load, train, simulate, and write results                             |
-| `validate` | `cobre validate <CASE_DIR>`      | Validate a case directory and print a diagnostic report              |
-| `report`   | `cobre report <RESULTS_DIR>`     | Query results from a completed run and print JSON to stdout          |
-| `summary`  | `cobre summary <OUTPUT_DIR>`     | Display the post-run summary table from a completed output directory |
-| `version`  | `cobre version`                  | Print version, solver backend, and build information                 |
+| Subcommand | Synopsis                           | Description                                                    |
+| ---------- | ---------------------------------- | -------------------------------------------------------------- |
+| `init`     | `cobre init [OPTIONS] [DIRECTORY]` | Scaffold a new case directory from an embedded template        |
+| `run`      | `cobre run <CASE_DIR> [OPTIONS]`   | Load, train, simulate, and write results                       |
+| `validate` | `cobre validate <CASE_DIR>`        | Validate a case directory and print a diagnostic report        |
+| `report`   | `cobre report <RESULTS_DIR>`       | Query results from a completed run and print JSON to stdout    |
+| `summary`  | `cobre summary <OUTPUT_DIR>`       | Display the post-run summary from a completed output directory |
+| `schema`   | `cobre schema <COMMAND>`           | Manage JSON Schema files for case directory input types        |
+| `version`  | `cobre version`                    | Print version, solver backend, and build information           |
+
+---
+
+## `cobre init`
+
+Scaffolds a new case directory from an embedded template. Creates all required
+input files (`config.json`, `penalties.json`, `stages.json`, system files, etc.)
+so a new user can start from a working example.
+
+### Arguments
+
+| Argument      | Type | Description                                           |
+| ------------- | ---- | ----------------------------------------------------- |
+| `[DIRECTORY]` | Path | Target directory where template files will be written |
+
+### Options
+
+| Option              | Type   | Default | Description                                      |
+| ------------------- | ------ | ------- | ------------------------------------------------ |
+| `--template <NAME>` | string | —       | Template name to scaffold (e.g., `1dtoy`)        |
+| `--list`            | flag   | off     | List all available templates and exit            |
+| `--force`           | flag   | off     | Overwrite existing files in the target directory |
+
+### Examples
+
+```bash
+# List available templates
+cobre init --list
+
+# Scaffold the 1dtoy example in a new directory
+cobre init --template 1dtoy my_study
+
+# Overwrite files in an existing directory
+cobre init --template 1dtoy --force my_study
+```
 
 ---
 
@@ -33,6 +70,9 @@ Executes the full solve lifecycle for a case directory:
 3. **Simulate** — (optional) evaluates the trained policy over simulation scenarios
 4. **Write** — writes all output files to the results directory
 
+Whether simulation runs is controlled by `simulation.enabled` in `config.json`.
+Stochastic artifact export is controlled by `exports.stochastic` in `config.json`.
+
 ### Arguments
 
 | Argument     | Type | Description                                                              |
@@ -41,14 +81,25 @@ Executes the full solve lifecycle for a case directory:
 
 ### Options
 
-| Option              | Type    | Default              | Description                                                                                                                                                            |
-| ------------------- | ------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--output <DIR>`    | Path    | `<CASE_DIR>/output/` | Output directory for results                                                                                                                                           |
-| `--threads <N>`     | integer | `1`                  | Number of worker threads per MPI rank. Each thread solves its own LP instances; scenarios are distributed across threads. Resolves: `--threads` > `COBRE_THREADS` > 1. |
-| `--skip-simulation` | flag    | off                  | Train only; skip the post-training simulation phase                                                                                                                    |
-| `--quiet`           | flag    | off                  | Suppress the banner and progress bars. Errors still go to stderr                                                                                                       |
-| `--no-banner`       | flag    | off                  | Suppress the startup banner but keep progress bars                                                                                                                     |
-| `--verbose`         | flag    | off                  | Enable debug-level logging for `cobre_cli`; info-level for library crates                                                                                              |
+| Option           | Type    | Default              | Description                                                                                                                                                            |
+| ---------------- | ------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--output <DIR>` | Path    | `<CASE_DIR>/output/` | Output directory for results                                                                                                                                           |
+| `--threads <N>`  | integer | `1`                  | Number of worker threads per MPI rank. Each thread solves its own LP instances; scenarios are distributed across threads. Resolves: `--threads` > `COBRE_THREADS` > 1. |
+| `--quiet`        | flag    | off                  | Suppress the banner and progress bars. Errors still go to stderr                                                                                                       |
+
+### Config-First Principle
+
+The CLI follows a **config-first** design: `config.json` defines _what_ to compute,
+CLI flags define _how_ to run it. A study is fully specified by its case directory —
+the same case produces the same results regardless of which CLI flags are used.
+
+| Concern                    | Controlled by                                     |
+| -------------------------- | ------------------------------------------------- |
+| Simulation on/off          | `simulation.enabled` in `config.json`             |
+| Stochastic export on/off   | `exports.stochastic` in `config.json`             |
+| Forward passes, iterations | `training.*` in `config.json`                     |
+| Cut selection              | `training.cut_selection` in `config.json`         |
+| Inflow method              | `modeling.inflow_non_negativity` in `config.json` |
 
 ### Examples
 
@@ -59,9 +110,6 @@ cobre run /data/cases/hydro_study
 # Write results to a custom directory
 cobre run /data/cases/hydro_study --output /data/results/run_001
 
-# Train only, no simulation
-cobre run /data/cases/hydro_study --skip-simulation
-
 # Use 4 worker threads per MPI rank
 cobre run /data/cases/hydro_study --threads 4
 
@@ -71,8 +119,8 @@ cobre run /data/cases/hydro_study --quiet
 # Force color output when running under mpiexec
 cobre --color always run /data/cases/hydro_study
 
-# Enable verbose logging to diagnose solver issues
-cobre run /data/cases/hydro_study --verbose
+# Run with MPI across 4 ranks
+mpiexec -np 4 cobre run /data/cases/hydro_study
 ```
 
 ---
@@ -91,9 +139,7 @@ Valid case: 3 buses, 12 hydros, 8 thermals, 4 lines
   lines: 4
 ```
 
-On failure, prints each error prefixed with `error:` and exits with code 1:
-
-![Validation Error Demo](../images/validation-error.gif)
+On failure, prints each error prefixed with `error:` and exits with code 1.
 
 ### Arguments
 
@@ -134,7 +180,7 @@ The output has the following top-level shape:
 ```
 
 `simulation` and `metadata` are `null` when the corresponding files are absent
-(e.g., when `--skip-simulation` was used).
+(e.g., when simulation was disabled in `config.json`).
 
 ### Arguments
 
@@ -197,7 +243,7 @@ Simulation complete in 0.0s (200 scenarios)
 ```
 
 The simulation section is omitted when `simulation/_manifest.json` is absent
-(e.g., the run used `--skip-simulation`).
+(e.g., when simulation was disabled in `config.json`).
 
 ### Arguments
 
@@ -221,6 +267,29 @@ cobre summary /data/results/run_001
 
 ---
 
+## `cobre schema`
+
+Manages JSON Schema files for case directory input types. Currently supports
+exporting schemas.
+
+### Subcommands
+
+| Subcommand | Synopsis                           | Description                                  |
+| ---------- | ---------------------------------- | -------------------------------------------- |
+| `export`   | `cobre schema export [OUTPUT_DIR]` | Export JSON Schema files for all input types |
+
+### Examples
+
+```bash
+# Export schemas to the current directory
+cobre schema export
+
+# Export schemas to a specific directory
+cobre schema export /data/schemas
+```
+
+---
+
 ## `cobre version`
 
 Prints the binary version, active solver and communication backends, compression
@@ -229,7 +298,7 @@ support, host architecture, and build profile.
 ### Output Format
 
 ```
-cobre   v0.1.0
+cobre   v0.1.2
 solver: HiGHS
 comm:   local
 zstd:   enabled
@@ -276,11 +345,11 @@ See [Error Codes](../reference/error-codes.md) for a detailed catalog.
 
 ## Environment Variables
 
-| Variable             | Description                                                                                                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COBRE_COMM_BACKEND` | Override the communication backend at runtime. Set to `local` to force the local backend even when the binary was compiled with `mpi` support.                                   |
-| `COBRE_THREADS`      | Number of worker threads per MPI rank for `cobre run`. Overridden by the `--threads` flag. Must be a positive integer.                                                           |
-| `COBRE_COLOR`        | Override color output when `--color auto` is in effect. Set to `always` or `never`. Ignored if `--color always` or `--color never` is given explicitly.                          |
-| `FORCE_COLOR`        | Force color output on (any non-empty value). Checked after `COBRE_COLOR`. See [force-color.org](https://force-color.org).                                                        |
-| `NO_COLOR`           | Disable colored terminal output. Respected by the banner and error formatters. Set to any non-empty value.                                                                       |
-| `RUST_LOG`           | Control the tracing subscriber log level using standard `env_logger` syntax (e.g., `RUST_LOG=debug`, `RUST_LOG=cobre_sddp=trace`). Takes effect when `--verbose` is also passed. |
+| Variable             | Description                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COBRE_COMM_BACKEND` | Override the communication backend at runtime. Set to `local` to force the local backend even when the binary was compiled with `mpi` support.          |
+| `COBRE_THREADS`      | Number of worker threads per MPI rank for `cobre run`. Overridden by the `--threads` flag. Must be a positive integer.                                  |
+| `COBRE_COLOR`        | Override color output when `--color auto` is in effect. Set to `always` or `never`. Ignored if `--color always` or `--color never` is given explicitly. |
+| `FORCE_COLOR`        | Force color output on (any non-empty value). Checked after `COBRE_COLOR`. See [force-color.org](https://force-color.org).                               |
+| `NO_COLOR`           | Disable colored terminal output. Respected by the banner and error formatters. Set to any non-empty value. See [no-color.org](https://no-color.org).    |
+| `COLUMNS`            | Terminal width hint. Used by progress bars under MPI (where stderr is a pipe) to compute correct cursor movement. Inherited from the launching shell.   |

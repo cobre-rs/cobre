@@ -263,7 +263,9 @@ pub enum TrainingEvent {
     /// Emitted periodically during policy simulation (not during training).
     ///
     /// Consumers can use this to display a progress indicator during the
-    /// simulation phase, including live cost statistics as scenarios complete.
+    /// simulation phase. Each event carries the cost of the most recently
+    /// completed scenario; the progress thread accumulates statistics across
+    /// events (see ticket-007).
     SimulationProgress {
         /// Number of simulation scenarios completed so far.
         scenarios_complete: u32,
@@ -271,20 +273,9 @@ pub enum TrainingEvent {
         scenarios_total: u32,
         /// Wall-clock time since simulation started, in milliseconds.
         elapsed_ms: u64,
-        /// Running mean of total scenario costs computed so far, in cost units.
-        ///
-        /// Populated by the emitter after each batch of completed scenarios.
-        mean_cost: f64,
-        /// Running standard deviation of total scenario costs.
-        ///
-        /// Set to `0.0` when `scenarios_complete < 2` (insufficient data for
-        /// variance estimation).
-        std_cost: f64,
-        /// Half-width of the 95% confidence interval, in cost units.
-        ///
-        /// Computed as `1.96 * std_cost / sqrt(scenarios_complete)`.
-        /// Set to `0.0` when `scenarios_complete < 2`.
-        ci_95_half_width: f64,
+        /// Total cost of the most recently completed simulation scenario,
+        /// in cost units.
+        scenario_cost: f64,
     },
 
     /// Emitted once when policy simulation completes.
@@ -387,9 +378,7 @@ mod tests {
                 scenarios_complete: 50,
                 scenarios_total: 200,
                 elapsed_ms: 5_000,
-                mean_cost: 45_230.0,
-                std_cost: 3_100.0,
-                ci_95_half_width: 430.0,
+                scenario_cost: 45_230.0,
             },
             TrainingEvent::SimulationFinished {
                 scenarios: 200,
@@ -556,22 +545,18 @@ mod tests {
     }
 
     #[test]
-    fn simulation_progress_statistics_fields_accessible() {
+    fn simulation_progress_scenario_cost_field_accessible() {
         let event = TrainingEvent::SimulationProgress {
             scenarios_complete: 100,
             scenarios_total: 500,
             elapsed_ms: 10_000,
-            mean_cost: 45_230.0,
-            std_cost: 3_100.0,
-            ci_95_half_width: 430.0,
+            scenario_cost: 45_230.0,
         };
         let TrainingEvent::SimulationProgress {
             scenarios_complete,
             scenarios_total,
             elapsed_ms,
-            mean_cost,
-            std_cost,
-            ci_95_half_width,
+            scenario_cost,
         } = event
         else {
             panic!("wrong variant")
@@ -579,31 +564,21 @@ mod tests {
         assert_eq!(scenarios_complete, 100);
         assert_eq!(scenarios_total, 500);
         assert_eq!(elapsed_ms, 10_000);
-        assert!((mean_cost - 45_230.0).abs() < f64::EPSILON);
-        assert!((std_cost - 3_100.0).abs() < f64::EPSILON);
-        assert!((ci_95_half_width - 430.0).abs() < f64::EPSILON);
+        assert!((scenario_cost - 45_230.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn simulation_progress_zero_stats_when_insufficient_data() {
-        // When scenarios_complete < 2, std_cost and ci_95_half_width must be 0.0.
+    fn simulation_progress_first_scenario_cost_carried() {
+        // The first scenario's cost is emitted directly — no aggregation needed.
         let event = TrainingEvent::SimulationProgress {
             scenarios_complete: 1,
             scenarios_total: 200,
             elapsed_ms: 100,
-            mean_cost: 50_000.0,
-            std_cost: 0.0,
-            ci_95_half_width: 0.0,
+            scenario_cost: 50_000.0,
         };
-        let TrainingEvent::SimulationProgress {
-            std_cost,
-            ci_95_half_width,
-            ..
-        } = event
-        else {
+        let TrainingEvent::SimulationProgress { scenario_cost, .. } = event else {
             panic!("wrong variant")
         };
-        assert_eq!(std_cost, 0.0);
-        assert_eq!(ci_95_half_width, 0.0);
+        assert!((scenario_cost - 50_000.0).abs() < f64::EPSILON);
     }
 }

@@ -46,9 +46,9 @@ use cobre_stochastic::{
 };
 
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
-    train,
+    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageContext, StageIndexer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -413,7 +413,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[]).unwrap()
+    build_stochastic_context(&system, 42, &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -510,12 +510,21 @@ fn train_converges_with_mock_solver() {
         event_sender: None,
     };
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result = train(
         &mut solver,
         config,
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -531,13 +540,7 @@ fn train_converges_with_mock_solver() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -558,6 +561,16 @@ fn train_deterministic_with_same_seed() {
     let mut solver1 = MockSolver::with_fixed(50.0);
     let comm = StubComm;
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result1 = train(
         &mut solver1,
         TrainingConfig {
@@ -568,8 +581,7 @@ fn train_deterministic_with_same_seed() {
             event_sender: None,
         },
         &mut fcf1,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -585,13 +597,7 @@ fn train_deterministic_with_same_seed() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(50.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -600,6 +606,16 @@ fn train_deterministic_with_same_seed() {
     let opening_tree2 = make_opening_tree(1);
     let stochastic2 = make_stochastic_context(fx.n_stages, 1);
 
+    let stage_ctx2 = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result2 = train(
         &mut solver2,
         TrainingConfig {
@@ -610,8 +626,7 @@ fn train_deterministic_with_same_seed() {
             event_sender: None,
         },
         &mut fcf2,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx2,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -627,13 +642,7 @@ fn train_deterministic_with_same_seed() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(50.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -662,12 +671,21 @@ fn train_lb_monotonically_nondecreasing() {
         event_sender: Some(tx),
     };
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     train(
         &mut solver,
         config,
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -683,13 +701,7 @@ fn train_lb_monotonically_nondecreasing() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -730,12 +742,21 @@ fn train_emits_correct_event_sequence() {
         event_sender: Some(tx),
     };
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     train(
         &mut solver,
         config,
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -752,13 +773,7 @@ fn train_emits_correct_event_sequence() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -794,6 +809,16 @@ fn train_stops_at_iteration_limit() {
     let mut solver = MockSolver::with_fixed(100.0);
     let comm = StubComm;
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -804,8 +829,7 @@ fn train_stops_at_iteration_limit() {
             event_sender: None,
         },
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -821,13 +845,7 @@ fn train_stops_at_iteration_limit() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -854,6 +872,16 @@ fn train_stops_on_graceful_shutdown() {
         mode: StoppingMode::Any,
     };
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -864,8 +892,7 @@ fn train_stops_on_graceful_shutdown() {
             event_sender: None,
         },
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -881,13 +908,7 @@ fn train_stops_on_graceful_shutdown() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     )
     .unwrap();
 
@@ -904,6 +925,16 @@ fn train_propagates_infeasible_error() {
     let mut solver = MockSolver::infeasible_on_first();
     let comm = StubComm;
 
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+    };
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -914,8 +945,7 @@ fn train_propagates_infeasible_error() {
             event_sender: None,
         },
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -931,13 +961,7 @@ fn train_propagates_infeasible_error() {
         &comm,
         1,
         || Ok(MockSolver::infeasible_on_first()),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &[1usize, 1],
     );
 
     assert!(matches!(

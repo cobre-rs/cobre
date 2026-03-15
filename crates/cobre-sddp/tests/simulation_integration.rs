@@ -313,7 +313,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[]).unwrap()
+    build_stochastic_context(&system, 42, &[], None).unwrap()
 }
 
 fn minimal_template() -> StageTemplate {
@@ -577,12 +577,21 @@ fn train_simulate_write_cycle() {
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &block_counts_per_stage,
+    };
     let result = train(
         &mut solver,
         training_config,
         &mut fcf,
-        &fx.templates,
-        &fx.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -598,13 +607,7 @@ fn train_simulate_write_cycle() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[],
-        0,
-        0,
         1,
-        &[],
-        &[],
-        &block_counts_per_stage,
     )
     .expect("train must succeed");
 

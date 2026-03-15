@@ -49,6 +49,7 @@ pub mod system;
 pub mod temporal;
 pub mod topology;
 pub mod training_event;
+pub mod welford;
 
 pub use entities::{
     Bus, ContractType, DeficitSegment, DiversionChannel, EfficiencyModel, EnergyContract,
@@ -85,3 +86,4 @@ pub use temporal::{
 };
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};
 pub use training_event::{StoppingRuleResult, TrainingEvent};
+pub use welford::WelfordAccumulator;

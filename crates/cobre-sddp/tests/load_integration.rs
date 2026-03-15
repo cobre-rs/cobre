@@ -38,8 +38,9 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
+    HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageContext, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
+    train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -343,7 +344,7 @@ fn build_context_with_load(
     load_std_mw: f64,
 ) -> StochasticContext {
     let system = build_system_with_load(n_stages, 1, load_mean_mw, load_std_mw);
-    build_stochastic_context(&system, 42, &[]).unwrap()
+    build_stochastic_context(&system, 42, &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -454,12 +455,21 @@ fn test_stochastic_load_training_completes() {
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize; n_stages];
 
+    let stage_ctx = StageContext {
+        templates: &templates,
+        base_rows: &base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses,
+        load_balance_row_starts: &load_balance_row_starts,
+        load_bus_indices: &load_bus_indices,
+        block_counts_per_stage: &block_counts_per_stage,
+    };
     let result = train(
         &mut solver,
         config,
         &mut fcf,
-        &templates,
-        &base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &horizon,
             indexer: &indexer,
@@ -475,13 +485,7 @@ fn test_stochastic_load_training_completes() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
-        0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
-        n_load_buses,
         1, // max_blocks
-        &load_balance_row_starts,
-        &load_bus_indices,
-        &block_counts_per_stage,
     )
     .expect("train must succeed with stochastic load");
 
@@ -543,6 +547,16 @@ fn test_deterministic_load_training_matches_baseline() {
 
     let block_counts_per_stage = vec![1usize; n_stages];
 
+    let stage_ctx = StageContext {
+        templates: &templates,
+        base_rows: &base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &block_counts_per_stage,
+    };
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -553,8 +567,7 @@ fn test_deterministic_load_training_matches_baseline() {
             event_sender: None,
         },
         &mut fcf,
-        &templates,
-        &base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &horizon,
             indexer: &indexer,
@@ -570,13 +583,7 @@ fn test_deterministic_load_training_matches_baseline() {
         &comm,
         1,
         || Ok(MockSolver::with_fixed(100.0)),
-        &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
-        0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
-        0,   // n_load_buses=0 (deterministic: std_mw=0.0 excluded bus from stochastic)
-        1,   // max_blocks
-        &[], // load_balance_row_starts (empty, no stochastic buses)
-        &[], // load_bus_indices (empty)
-        &block_counts_per_stage,
+        1, // max_blocks
     )
     .expect("train must succeed with deterministic load");
 
@@ -623,12 +630,21 @@ fn test_stochastic_load_seed_determinism() {
         let load_bus_indices = vec![0usize];
         let block_counts_per_stage = vec![1usize; n_stages];
 
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses,
+            load_balance_row_starts: &load_balance_row_starts,
+            load_bus_indices: &load_bus_indices,
+            block_counts_per_stage: &block_counts_per_stage,
+        };
         let result = train(
             &mut solver,
             config,
             &mut fcf,
-            &templates,
-            &base_rows,
+            &stage_ctx,
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -644,13 +660,7 @@ fn test_stochastic_load_seed_determinism() {
             &comm,
             1,
             || Ok(MockSolver::with_fixed(100.0)),
-            &[], // noise_scale (empty: inflow noise loop skipped when n_hydros=0)
-            0,   // n_hydros=0: bypasses row_lower indexing in the inflow path
-            n_load_buses,
             1, // max_blocks
-            &load_balance_row_starts,
-            &load_bus_indices,
-            &block_counts_per_stage,
         )
         .expect("train must succeed");
 

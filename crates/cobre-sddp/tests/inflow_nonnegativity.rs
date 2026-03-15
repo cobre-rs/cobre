@@ -334,7 +334,7 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42, &[]).unwrap()
+    build_stochastic_context(&system, 42, &[], None).unwrap()
 }
 
 /// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
@@ -507,6 +507,16 @@ fn train_fixture(
         .collect();
     let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
 
+    let stage_ctx = StageContext {
+        templates: &fx.stage_templates.templates,
+        base_rows: &fx.stage_templates.base_rows,
+        noise_scale: &fx.stage_templates.noise_scale,
+        n_hydros: fx.stage_templates.n_hydros,
+        n_load_buses: fx.stage_templates.n_load_buses,
+        load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
+        load_bus_indices: &fx.stage_templates.load_bus_indices,
+        block_counts_per_stage: &block_counts,
+    };
     train(
         &mut solver,
         TrainingConfig {
@@ -517,8 +527,7 @@ fn train_fixture(
             event_sender: None,
         },
         &mut fcf,
-        &fx.stage_templates.templates,
-        &fx.stage_templates.base_rows,
+        &stage_ctx,
         &TrainingContext {
             horizon: &fx.horizon,
             indexer: &fx.indexer,
@@ -537,13 +546,7 @@ fn train_fixture(
         &comm,
         1,
         HighsSolver::new,
-        &fx.stage_templates.noise_scale,
-        fx.stage_templates.n_hydros,
-        fx.stage_templates.n_load_buses,
         max_blocks,
-        &fx.stage_templates.load_balance_row_starts,
-        &fx.stage_templates.load_bus_indices,
-        &block_counts,
     )
 }
 

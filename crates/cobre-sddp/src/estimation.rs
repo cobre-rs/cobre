@@ -23,7 +23,7 @@
 //! best order and truncates the AR coefficient vector accordingly.
 //! This avoids changing `ArCoefficientEstimate`'s public API.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -38,8 +38,9 @@ use cobre_io::{
 use cobre_stochastic::{
     StochasticError,
     par::fitting::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
-        estimate_seasonal_stats, find_season_for_date, levinson_durbin, select_order_aic,
+        AicSelectionResult, ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients,
+        estimate_correlation, estimate_seasonal_stats, find_season_for_date, levinson_durbin,
+        select_order_aic,
     },
 };
 
@@ -53,6 +54,43 @@ pub enum EstimationError {
     /// Estimation failed due to insufficient data.
     #[error("estimation failed: {0}")]
     Stochastic(#[from] StochasticError),
+}
+
+/// Per-hydro AIC diagnostic data captured during AIC-based AR order selection.
+///
+/// Holds the AIC-selected order, AIC scores for each candidate order, and the
+/// fitted AR coefficients for each season at the selected order.
+#[derive(Debug, Clone)]
+pub struct HydroEstimationEntry {
+    /// The AIC-selected AR order for this hydro plant (maximum across all seasons).
+    ///
+    /// This is the maximum of the per-season selected orders, which determines
+    /// the coefficient vector length in the output.
+    pub selected_order: u32,
+    /// AIC values for AR orders 1 through `max_order` (order 0 excluded).
+    ///
+    /// `aic_scores[i]` is the AIC for AR order `i+1`. The order-0 white-noise
+    /// baseline is omitted because it is always 0.0 and carries no diagnostic
+    /// value. These scores are taken from season 0 as a representative sample.
+    pub aic_scores: Vec<f64>,
+    /// Fitted AR lag coefficients, one inner vector per season sorted by `season_id` ascending.
+    ///
+    /// Each inner vector holds the coefficients at the AIC-selected order for
+    /// that season. Seasons where AIC was skipped (zero std, insufficient
+    /// observations) use the original `estimate_ar_coefficients` output.
+    pub coefficients: Vec<Vec<f64>>,
+}
+
+/// Computation-side summary of the AIC-based AR estimation pipeline.
+///
+/// Contains one [`HydroEstimationEntry`] per hydro plant that was fitted,
+/// keyed by [`EntityId`] for canonical deterministic ordering. When the
+/// `Fixed` order-selection method is used, `entries` is empty.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct EstimationReport {
+    /// Per-hydro AIC diagnostic entries, keyed by entity ID.
+    pub entries: BTreeMap<EntityId, HydroEstimationEntry>,
 }
 
 /// Estimate PAR(p) model parameters from inflow history when explicit stats are absent.
@@ -84,31 +122,32 @@ pub fn estimate_from_history(
     system: System,
     case_dir: &Path,
     config: &Config,
-) -> Result<System, EstimationError> {
+) -> Result<(System, Option<EstimationReport>), EstimationError> {
     // ── Step 1: resolve file manifest ────────────────────────────────────────
     let mut ctx = ValidationContext::new();
     let manifest = validate_structure(case_dir, &mut ctx);
 
     // Abort early if structural validation found errors.
     if ctx.into_result().is_err() {
-        return Ok(system);
+        return Ok((system, None));
     }
 
     // ── Step 2: input path matrix ────────────────────────────────────────────
     if !manifest.scenarios_inflow_history_parquet {
         // No history file — nothing to estimate.
-        return Ok(system);
+        return Ok((system, None));
     }
 
     if manifest.scenarios_inflow_seasonal_stats_parquet
         && manifest.scenarios_inflow_ar_coefficients_parquet
     {
         // Explicit stats provided — skip estimation.
-        return Ok(system);
+        return Ok((system, None));
     }
 
     // History present, stats absent — run estimation.
-    run_estimation(system, case_dir, config, &manifest)
+    let (system, report) = run_estimation(system, case_dir, config, &manifest)?;
+    Ok((system, Some(report)))
 }
 
 /// Inner function that runs the full estimation pipeline once path conditions are met.
@@ -117,7 +156,7 @@ fn run_estimation(
     case_dir: &Path,
     config: &Config,
     manifest: &FileManifest,
-) -> Result<System, EstimationError> {
+) -> Result<(System, EstimationReport), EstimationError> {
     // ── Step 3: load inflow history ──────────────────────────────────────────
     let history_path = case_dir.join("scenarios/inflow_history.parquet");
     let history = parse_inflow_history(&history_path)?;
@@ -139,7 +178,7 @@ fn run_estimation(
 
     // ── Step 5: estimate AR coefficients ────────────────────────────────────
     let max_order = config.estimation.max_order as usize;
-    let ar_estimates = estimate_ar_coefficients_with_selection(
+    let (ar_estimates, estimation_report) = estimate_ar_coefficients_with_selection(
         &observations,
         &seasonal_stats,
         stages,
@@ -168,7 +207,10 @@ fn run_estimation(
 
     let inflow_models = assemble_inflow_models(stats_rows, coeff_rows)?;
 
-    Ok(system.with_scenario_models(inflow_models, correlation))
+    Ok((
+        system.with_scenario_models(inflow_models, correlation),
+        estimation_report,
+    ))
 }
 
 /// Estimate AR coefficients with the configured order selection method.
@@ -185,10 +227,20 @@ fn estimate_ar_coefficients_with_selection(
     hydro_ids: &[EntityId],
     max_order: usize,
     method: &OrderSelectionMethod,
-) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
+) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     match method {
         OrderSelectionMethod::Fixed => {
-            estimate_ar_coefficients(observations, seasonal_stats, stages, hydro_ids, max_order)
+            let estimates = estimate_ar_coefficients(
+                observations,
+                seasonal_stats,
+                stages,
+                hydro_ids,
+                max_order,
+            )?;
+            let report = EstimationReport {
+                entries: BTreeMap::new(),
+            };
+            Ok((estimates, report))
         }
         OrderSelectionMethod::Aic => {
             estimate_ar_with_aic(observations, seasonal_stats, stages, hydro_ids, max_order)
@@ -211,13 +263,16 @@ fn estimate_ar_with_aic(
     stages: &[cobre_core::temporal::Stage],
     hydro_ids: &[EntityId],
     max_order: usize,
-) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
+) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     // Get full-order estimates first.
     let mut estimates =
         estimate_ar_coefficients(observations, seasonal_stats, stages, hydro_ids, max_order)?;
 
     if max_order == 0 {
-        return Ok(estimates);
+        let report = EstimationReport {
+            entries: BTreeMap::new(),
+        };
+        return Ok((estimates, report));
     }
 
     // Build (entity_id, season_id) -> observations map for per-pair AIC.
@@ -267,6 +322,9 @@ fn estimate_ar_with_aic(
         }
         max_season
     };
+
+    // Capture AIC results per (entity_id, season_id) for building the report.
+    let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
 
     // For each estimate, run levinson_durbin independently to get sigma2_per_order.
     for est in &mut estimates {
@@ -325,6 +383,7 @@ fn estimate_ar_with_aic(
         let effective_n = n_obs.saturating_sub(actual_order);
         let aic_result = select_order_aic(&ld.sigma2_per_order, effective_n);
         let selected = aic_result.selected_order;
+        aic_results.insert((est.hydro_id, est.season_id), aic_result);
 
         if selected < actual_order {
             // Truncate coefficients to AIC-selected order.
@@ -342,7 +401,75 @@ fn estimate_ar_with_aic(
         }
     }
 
-    Ok(estimates)
+    let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+    Ok((estimates, report))
+}
+
+/// Build an [`EstimationReport`] from AIC-truncated AR estimates and captured
+/// per-`(entity, season)` [`AicSelectionResult`] values.
+///
+/// This function is infallible: it only reorganises already-computed data.
+/// For each hydro plant the selected order is the **maximum** across all
+/// seasons, and the representative AIC scores are taken from season 0
+/// (the first season). These choices align with how the I/O layer
+/// (`FittingReport`) expects a single order and a single AIC vector per hydro.
+fn build_estimation_report(
+    estimates: &[ArCoefficientEstimate],
+    aic_results: &HashMap<(EntityId, usize), AicSelectionResult>,
+    n_seasons: usize,
+) -> EstimationReport {
+    // Group coefficient vectors by hydro_id (estimates are already sorted by
+    // (hydro_id, season_id) from estimate_ar_coefficients).
+    let mut hydro_coeffs: BTreeMap<EntityId, Vec<(usize, Vec<f64>)>> = BTreeMap::new();
+    for est in estimates {
+        hydro_coeffs
+            .entry(est.hydro_id)
+            .or_default()
+            .push((est.season_id, est.coefficients.clone()));
+    }
+
+    let mut entries: BTreeMap<EntityId, HydroEstimationEntry> = BTreeMap::new();
+
+    for (hydro_id, mut season_coeffs) in hydro_coeffs {
+        // Sort by season_id ascending (should already be sorted, but ensure it).
+        season_coeffs.sort_by_key(|(season_id, _)| *season_id);
+
+        // Compute max selected_order across all seasons for this hydro.
+        let selected_order = season_coeffs
+            .iter()
+            .map(|(season_id, _)| {
+                aic_results
+                    .get(&(hydro_id, *season_id))
+                    .map_or(0, |r| r.selected_order)
+            })
+            .max()
+            .unwrap_or(0);
+
+        // AIC scores from season 0 (representative; excludes order-0 baseline).
+        let aic_scores = aic_results
+            .get(&(hydro_id, 0))
+            .map(|r| r.aic_values[1..].to_vec())
+            .unwrap_or_default();
+
+        // Build per-season coefficient vectors, filling missing seasons with empty vecs.
+        // The season_coeffs may not cover all n_seasons if some were skipped.
+        let season_map: HashMap<usize, Vec<f64>> = season_coeffs.into_iter().collect();
+        let coefficients: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|sid| season_map.get(&sid).cloned().unwrap_or_default())
+            .collect();
+
+        #[allow(clippy::cast_possible_truncation)]
+        entries.insert(
+            hydro_id,
+            HydroEstimationEntry {
+                selected_order: selected_order as u32,
+                aic_scores,
+                coefficients,
+            },
+        );
+    }
+
+    EstimationReport { entries }
 }
 
 /// Compute normalised cross-seasonal autocorrelations `ρ_m(1)..ρ_m(max_order)` for
@@ -631,12 +758,16 @@ mod tests {
         let original_len = system.inflow_models().len();
 
         let config = default_config();
-        let result = estimate_from_history(system, case_dir, &config).unwrap();
+        let (result, report) = estimate_from_history(system, case_dir, &config).unwrap();
 
         assert_eq!(
             result.inflow_models().len(),
             original_len,
             "explicit stats: system must be unchanged"
+        );
+        assert!(
+            report.is_none(),
+            "explicit stats path must return None report"
         );
     }
 
@@ -664,13 +795,14 @@ mod tests {
         let original_len = system.inflow_models().len();
 
         let config = default_config();
-        let result = estimate_from_history(system, case_dir, &config).unwrap();
+        let (result, report) = estimate_from_history(system, case_dir, &config).unwrap();
 
         assert_eq!(
             result.inflow_models().len(),
             original_len,
             "no history: system must be unchanged"
         );
+        assert!(report.is_none(), "no history path must return None report");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -710,5 +842,130 @@ mod tests {
         write("system/lines.json");
         write("system/hydros.json");
         write("system/thermals.json");
+    }
+
+    // ── EstimationReport unit tests ───────────────────────────────────────────
+
+    /// Construct mock `ArCoefficientEstimate` and `AicSelectionResult` entries for
+    /// 2 hydros with 3 seasons each, call `build_estimation_report`, and verify
+    /// that the report contains exactly 2 entries with the expected structure.
+    #[test]
+    fn test_estimation_report_from_aic() {
+        use cobre_stochastic::par::fitting::AicSelectionResult;
+
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let n_seasons = 3_usize;
+
+        // Build mock estimates: 2 hydros x 3 seasons, max order 2.
+        let mut estimates = Vec::new();
+        for &hydro_id in &[h1, h2] {
+            for season_id in 0..n_seasons {
+                estimates.push(ArCoefficientEstimate {
+                    hydro_id,
+                    season_id,
+                    coefficients: vec![0.5, 0.3],
+                    residual_std_ratio: 0.9,
+                });
+            }
+        }
+
+        // Build mock AIC results: selected_order=2, aic_values for orders 0..=2.
+        let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+        for &hydro_id in &[h1, h2] {
+            for season_id in 0..n_seasons {
+                aic_results.insert(
+                    (hydro_id, season_id),
+                    AicSelectionResult {
+                        selected_order: 2,
+                        aic_values: vec![0.0, 12.4, 11.1],
+                    },
+                );
+            }
+        }
+
+        let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+
+        assert_eq!(report.entries.len(), 2, "expected 2 hydro entries");
+
+        for &hydro_id in &[h1, h2] {
+            let entry = report.entries.get(&hydro_id).expect("entry must exist");
+            assert_eq!(entry.selected_order, 2, "selected_order must be 2");
+            // aic_scores excludes order 0: [12.4, 11.1]
+            assert_eq!(
+                entry.aic_scores.len(),
+                2,
+                "aic_scores must have 2 values (orders 1..=2)"
+            );
+            assert_eq!(
+                entry.coefficients.len(),
+                n_seasons,
+                "one coefficient vec per season"
+            );
+        }
+    }
+
+    /// When `OrderSelectionMethod::Fixed` is used, the returned `EstimationReport`
+    /// must have an empty entries map.
+    #[test]
+    fn test_estimation_report_empty_for_fixed() {
+        use cobre_core::temporal::Stage;
+        use cobre_io::config::OrderSelectionMethod;
+
+        let method = OrderSelectionMethod::Fixed;
+        let observations: Vec<(EntityId, chrono::NaiveDate, f64)> = vec![];
+        let seasonal_stats: Vec<SeasonalStats> = vec![];
+        let stages: Vec<Stage> = vec![];
+        let hydro_ids: Vec<EntityId> = vec![];
+        let max_order = 2;
+
+        let (_, report) = estimate_ar_coefficients_with_selection(
+            &observations,
+            &seasonal_stats,
+            &stages,
+            &hydro_ids,
+            max_order,
+            &method,
+        )
+        .unwrap();
+
+        assert!(
+            report.entries.is_empty(),
+            "Fixed method must produce empty EstimationReport"
+        );
+    }
+
+    /// Verify that `aic_scores` excludes the order-0 white-noise baseline value.
+    #[test]
+    fn test_estimation_report_aic_scores_exclude_order_zero() {
+        use cobre_stochastic::par::fitting::AicSelectionResult;
+
+        let hydro_id = EntityId(1);
+        let n_seasons = 1_usize;
+
+        let estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![0.6, 0.2, 0.1],
+            residual_std_ratio: 0.85,
+        }];
+
+        let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+        aic_results.insert(
+            (hydro_id, 0),
+            AicSelectionResult {
+                selected_order: 3,
+                aic_values: vec![0.0, 12.4, 11.1, 10.8],
+            },
+        );
+
+        let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+
+        let entry = report.entries.get(&hydro_id).expect("entry must exist");
+        assert_eq!(
+            entry.aic_scores,
+            vec![12.4, 11.1, 10.8],
+            "aic_scores must exclude order-0 baseline"
+        );
     }
 }

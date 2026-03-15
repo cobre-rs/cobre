@@ -8,7 +8,7 @@
 //!
 //! - AC-1: Valid case directory → exit 0, `training/convergence.parquet` and
 //!   `training/_manifest.json` exist in the default output directory.
-//! - AC-2: `--skip-simulation` → exit 0, no `simulation/_manifest.json`.
+//! - AC-2: `simulation.enabled: false` in config → exit 0, no `simulation/_manifest.json`.
 //! - AC-3: `--output <custom_dir>` → output written to the specified directory.
 //! - AC-4: Invalid case directory (missing required files) → exit 1, stderr
 //!   contains a validation error message.
@@ -30,27 +30,12 @@ fn cobre() -> Command {
 }
 
 /// Minimal `config.json` with `forward_passes` and `stopping_rules`.
-/// Uses a single iteration limit so tests run fast.
-/// `training.seed` is absent, so the CLI will use the default seed (42) and
-/// emit a warning to stderr.
 const CONFIG_JSON: &str = r#"{
     "training": {
         "forward_passes": 1,
         "stopping_rules": [
             { "type": "iteration_limit", "limit": 2 }
         ]
-    }
-}"#;
-
-/// Variant of `CONFIG_JSON` with an explicit `training.seed`.
-/// The CLI must not emit the "no random seed specified" warning.
-const CONFIG_WITH_SEED_JSON: &str = r#"{
-    "training": {
-        "forward_passes": 1,
-        "stopping_rules": [
-            { "type": "iteration_limit", "limit": 2 }
-        ],
-        "seed": 99
     }
 }"#;
 
@@ -143,7 +128,6 @@ fn valid_case_exits_0() {
             "--output",
             out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success();
@@ -162,7 +146,6 @@ fn valid_case_creates_training_manifest() {
             "--output",
             out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success();
@@ -183,7 +166,6 @@ fn valid_case_creates_convergence_parquet() {
             "--output",
             out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success();
@@ -192,7 +174,7 @@ fn valid_case_creates_convergence_parquet() {
 }
 
 #[test]
-fn skip_simulation_does_not_produce_simulation_manifest() {
+fn disabled_simulation_does_not_produce_manifest() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);
     let out = TempDir::new().unwrap();
@@ -204,7 +186,6 @@ fn skip_simulation_does_not_produce_simulation_manifest() {
             "--output",
             out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success();
@@ -226,7 +207,6 @@ fn custom_output_dir_receives_training_artifacts() {
             "--output",
             custom_out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success();
@@ -282,7 +262,7 @@ fn nonexistent_path_stderr_contains_io_error() {
 }
 
 #[test]
-fn test_run_quiet_no_banner_no_summary() {
+fn test_run_quiet_suppresses_banner_and_summary() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);
     let out = TempDir::new().unwrap();
@@ -293,87 +273,9 @@ fn test_run_quiet_no_banner_no_summary() {
             "--output",
             out.path().to_str().unwrap(),
             "--quiet",
-            "--skip-simulation",
         ])
         .assert()
         .success()
         .stderr(predicate::str::contains("COBRE v").not())
         .stderr(predicate::str::contains("Training complete in").not());
-}
-
-#[test]
-fn test_run_no_banner_flag_suppresses_banner() {
-    let dir = TempDir::new().unwrap();
-    make_valid_case(&dir);
-    let out = TempDir::new().unwrap();
-    cobre()
-        .args([
-            "run",
-            dir.path().to_str().unwrap(),
-            "--output",
-            out.path().to_str().unwrap(),
-            "--no-banner",
-            "--skip-simulation",
-        ])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("COBRE v").not())
-        .stderr(predicate::str::contains("Training complete in"));
-}
-
-/// Write a valid case directory using the supplied `config.json` content.
-fn make_valid_case_with_config(dir: &TempDir, config_content: &str) {
-    let root = dir.path();
-    write_file(root, "config.json", config_content);
-    write_file(root, "penalties.json", PENALTIES_JSON);
-    write_file(root, "stages.json", STAGES_JSON);
-    write_file(root, "initial_conditions.json", INITIAL_CONDITIONS_JSON);
-    write_file(root, "system/buses.json", BUSES_JSON);
-    write_file(root, "system/lines.json", LINES_JSON);
-    write_file(root, "system/hydros.json", HYDROS_JSON);
-    write_file(root, "system/thermals.json", THERMALS_JSON);
-}
-
-// ---- Seed-warning tests --------------------------------------------------
-
-/// AC: When `training.seed` is absent, stderr contains "no random seed specified"
-/// and the run exits 0.
-#[test]
-fn no_seed_in_config_emits_warning_on_stderr() {
-    let dir = TempDir::new().unwrap();
-    make_valid_case_with_config(&dir, CONFIG_JSON);
-    let out = TempDir::new().unwrap();
-
-    cobre()
-        .args([
-            "run",
-            dir.path().to_str().unwrap(),
-            "--output",
-            out.path().to_str().unwrap(),
-            "--skip-simulation",
-        ])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("no random seed specified"));
-}
-
-/// AC: When `training.seed` is explicitly set, stderr does NOT contain the
-/// "no random seed specified" warning.
-#[test]
-fn explicit_seed_in_config_suppresses_warning() {
-    let dir = TempDir::new().unwrap();
-    make_valid_case_with_config(&dir, CONFIG_WITH_SEED_JSON);
-    let out = TempDir::new().unwrap();
-
-    cobre()
-        .args([
-            "run",
-            dir.path().to_str().unwrap(),
-            "--output",
-            out.path().to_str().unwrap(),
-            "--skip-simulation",
-        ])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("no random seed specified").not());
 }

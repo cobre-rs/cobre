@@ -131,3 +131,65 @@ Suppresses banner and progress output, suitable for batch scripts.
 | `4`       | Internal error   | Check environment; report at the issue tracker |
 
 See [CLI Reference](./cli-reference.md#exit-codes) for the full exit code table.
+
+---
+
+## Exporting Stochastic Artifacts
+
+Pass `--export-stochastic` to `cobre run` to write the stochastic preprocessing
+artifacts to `output/stochastic/` before training begins:
+
+```bash
+cobre run /path/to/my_study --export-stochastic
+```
+
+The same behavior can be enabled persistently via `config.json`:
+
+```json
+{
+  "exports": {
+    "stochastic": true
+  }
+}
+```
+
+The CLI flag takes priority over the config field.
+
+### What is exported
+
+| File                                          | Written when                     |
+| --------------------------------------------- | -------------------------------- |
+| `output/stochastic/inflow_seasonal_stats.parquet`  | Estimation was performed    |
+| `output/stochastic/inflow_ar_coefficients.parquet` | Estimation was performed    |
+| `output/stochastic/correlation.json`               | Always                      |
+| `output/stochastic/fitting_report.json`            | Estimation was performed    |
+| `output/stochastic/noise_openings.parquet`         | Always                      |
+| `output/stochastic/load_seasonal_stats.parquet`    | Load buses exist            |
+
+"Estimation was performed" means the user did not supply the corresponding
+scenario file; Cobre derived it from `inflow_history.parquet`.
+
+### Round-trip workflow
+
+Because every exported file uses the exact same schema as the corresponding
+input file, you can copy the exported artifacts back to `scenarios/` and
+re-run to reproduce the identical stochastic context without re-running
+estimation:
+
+```bash
+# Step 1: initial run with export
+cobre run my_case --export-stochastic
+
+# Step 2: copy artifacts to scenarios/
+cp -r my_case/output/stochastic/* my_case/scenarios/
+
+# Step 3: re-run — estimation is skipped, opening tree is loaded directly
+cobre run my_case
+```
+
+The re-run is faster (no Levinson-Durbin fitting or Cholesky decomposition)
+and produces bit-for-bit identical stochastic artifacts.
+
+For the complete schema of each exported file, see
+[Stochastic Artifacts](../reference/output-format.md#stochastic-artifacts) in
+the Output Format Reference.

@@ -5,12 +5,12 @@
 //! into the stage LP before each solve.  Extracting them here eliminates the
 //! class of bugs where one call site receives a fix and others are forgotten.
 
-use cobre_stochastic::{evaluate_par_batch, solve_par_noise_batch, StochasticContext};
+use cobre_stochastic::{StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
 use crate::{
+    InflowNonNegativityMethod,
     context::{StageContext, TrainingContext},
     workspace::ScratchBuffers,
-    InflowNonNegativityMethod,
 };
 
 /// Transform raw inflow noise `η` into patched water-balance RHS values.
@@ -198,16 +198,16 @@ mod tests {
     };
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::StageTemplate;
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
     use std::collections::BTreeMap;
 
     use crate::{
+        HorizonMode, InflowNonNegativityMethod,
         context::{StageContext, TrainingContext},
         indexer::StageIndexer,
         noise::{transform_inflow_noise, transform_load_noise},
         workspace::ScratchBuffers,
-        HorizonMode, InflowNonNegativityMethod,
     };
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -32,12 +32,12 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::NaiveDate;
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, SystemBuilder,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, SystemBuilder,
 };
 use cobre_io::Config;
 use cobre_sddp::estimation::estimate_from_history;
@@ -468,7 +468,7 @@ fn generate_par1_interleaved(
     n_per_season: usize,
     seed: u64,
 ) -> Vec<f64> {
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
     use rand_distr::{Distribution, Normal};
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -554,12 +554,12 @@ fn write_par1_inflow_history(path: &Path, n_hydros: usize) {
 /// 15th of January or February) falls within a stage's `[1st, 1st-of-next)` window.
 fn build_system_for_par1(n_hydros: usize) -> cobre_core::System {
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     let bus = Bus {

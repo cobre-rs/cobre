@@ -22,7 +22,7 @@ use clap::Args;
 use serde::Serialize;
 
 use cobre_io::{
-    read_training_manifest, OutputError, SimulationManifest, TrainingManifest, TrainingMetadata,
+    OutputError, SimulationManifest, TrainingManifest, TrainingMetadata, read_training_manifest,
 };
 
 use crate::error::CliError;

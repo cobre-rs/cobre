@@ -26,13 +26,13 @@
 
 use std::ops::Range;
 
+use crate::StageIndexer;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
     SimulationThermalResult,
 };
-use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -753,11 +753,11 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::{
-        accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts,
-        SolutionView, StageExtractionSpec,
+        EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
+        assign_scenarios, extract_stage_result,
     };
-    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
     use crate::StageIndexer;
+    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -991,7 +991,7 @@ mod tests {
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-                                                 // Hydro 10, lag 0 → primal[2] = 50.0
+        // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);

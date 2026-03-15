@@ -64,9 +64,9 @@ pub use generic_constraint::{
 };
 pub use initial_conditions::{HydroStorage, InitialConditions};
 pub use penalty::{
-    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
-    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
-    HydroPenaltyOverrides,
+    GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
+    resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
+    resolve_ncs_curtailment_cost,
 };
 pub use resolved::{
     BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,

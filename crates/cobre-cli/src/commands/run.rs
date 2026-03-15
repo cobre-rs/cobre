@@ -20,16 +20,16 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator, ReduceOp};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
-    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
-    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings, FittingReport,
-    HydroFittingEntry,
+    FittingReport, HydroFittingEntry, write_correlation_json, write_fitting_report,
+    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
+    write_noise_openings,
 };
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 use cobre_io::write_results;
-use cobre_sddp::estimation::{estimate_from_history, HydroEstimationEntry};
+use cobre_sddp::estimation::{HydroEstimationEntry, estimate_from_history};
 use cobre_sddp::{
     EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult, StoppingMode,
     StoppingRule, StoppingRuleSet, StudySetup,
@@ -1281,7 +1281,7 @@ fn export_stochastic_artifacts(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{broadcast_value, resolve_thread_count, BroadcastOpeningTree};
+    use super::{BroadcastOpeningTree, broadcast_value, resolve_thread_count};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1485,7 +1485,7 @@ mod tests {
     fn load_user_opening_tree_returns_none_when_file_absent() {
         use super::load_user_opening_tree;
         use cobre_core::{
-            scenario::CorrelationModel, Bus, DeficitSegment, EntityId, SystemBuilder,
+            Bus, DeficitSegment, EntityId, SystemBuilder, scenario::CorrelationModel,
         };
         use std::fs;
         use tempfile::TempDir;
@@ -1541,8 +1541,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         use cobre_core::EntityId;
-        use cobre_sddp::estimation::HydroEstimationEntry;
         use cobre_sddp::EstimationReport;
+        use cobre_sddp::estimation::HydroEstimationEntry;
 
         use super::estimation_report_to_fitting_report;
 
@@ -1587,8 +1587,8 @@ mod tests {
     /// preserves `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` field values.
     #[test]
     fn inflow_models_to_stats_rows_field_values() {
-        use cobre_core::scenario::InflowModel;
         use cobre_core::EntityId;
+        use cobre_core::scenario::InflowModel;
 
         use super::inflow_models_to_stats_rows;
 
@@ -1628,8 +1628,8 @@ mod tests {
     /// A white-noise model (order 0) produces no rows.
     #[test]
     fn inflow_models_to_ar_rows_lag_numbering_and_count() {
-        use cobre_core::scenario::InflowModel;
         use cobre_core::EntityId;
+        use cobre_core::scenario::InflowModel;
 
         use super::inflow_models_to_ar_rows;
 
@@ -1678,13 +1678,13 @@ mod tests {
     fn make_system_with_hydro() -> cobre_core::System {
         use chrono::NaiveDate;
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
             scenario::{CorrelationModel, InflowModel},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
 
         let bus = Bus {
@@ -1823,8 +1823,8 @@ mod tests {
 
         use super::build_stochastic_summary;
         use cobre_core::EntityId;
-        use cobre_sddp::estimation::HydroEstimationEntry;
         use cobre_sddp::EstimationReport;
+        use cobre_sddp::estimation::HydroEstimationEntry;
         use cobre_stochastic::build_stochastic_context;
 
         let system = make_system_with_hydro();
@@ -1868,12 +1868,12 @@ mod tests {
     fn build_stochastic_summary_no_hydros_yields_none_source() {
         use chrono::NaiveDate;
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::CorrelationModel,
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::build_stochastic_context;
 

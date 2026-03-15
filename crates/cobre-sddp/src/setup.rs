@@ -37,24 +37,24 @@
 //! # }
 //! ```
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use cobre_comm::Communicator;
-use cobre_core::{entities::hydro::HydroGenerationModel, System, TrainingEvent};
+use cobre_core::{System, TrainingEvent, entities::hydro::HydroGenerationModel};
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
-    build_stage_templates,
-    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
-    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
-    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
     SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
+    build_stage_templates,
+    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -783,6 +783,12 @@ mod tests {
     use super::StudySetup;
 
     use cobre_core::{
+        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
+        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
+    };
+    use cobre_core::{
+        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -793,12 +799,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId, SystemBuilder,
-    };
-    use cobre_core::{
-        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
-        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,

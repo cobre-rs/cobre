@@ -514,8 +514,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
-        TrainingSummary,
+        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
+        print_summary,
     };
 
     fn make_training_summary() -> TrainingSummary {
@@ -758,8 +758,8 @@ mod tests {
     // ── StochasticSummary tests ────────────────────────────────────────────
 
     use super::{
-        format_stochastic_summary_string, print_stochastic_summary, ArOrderSummary,
-        StochasticSource, StochasticSummary,
+        ArOrderSummary, StochasticSource, StochasticSummary, format_stochastic_summary_string,
+        print_stochastic_summary,
     };
 
     fn make_stochastic_summary() -> StochasticSummary {

@@ -262,6 +262,13 @@ u32, f64, Vec<f64>)>` that is immediately re-mapped to `Vec<(u32, u32, u32, f64,
   effective sample (observations with lag predecessors). AIC penalty is underweighted, biasing toward
   higher-order models. Fix: use `pair_obs.len().saturating_sub(actual_order)` as approximation.
 
+### v0.1.3 stochastic-io plan key facts
+
+See [v013_review_facts.md](v013_review_facts.md) for details on noise_openings parser/validator/assembler,
+BroadcastOpeningTree MPI correctness, EstimationReport -> FittingReport conversion, ScenarioData.noise_openings
+design, and EntityId Ord derive. Key confirmed finding: "backward-pass" in `cobre-io/src/scenarios/noise_openings.rs`
+line 1 violates the infrastructure genericity rule.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

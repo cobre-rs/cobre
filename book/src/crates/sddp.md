@@ -461,7 +461,7 @@ of `cobre-comm`).
 
 ### Test suite overview
 
-The crate has 607 tests across 15 source modules covering:
+The crate has 645 tests across 17 source modules covering:
 
 - Unit tests for each module's core logic.
 - Integration tests using `LocalBackend` (single-rank) for the

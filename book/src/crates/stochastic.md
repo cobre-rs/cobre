@@ -536,8 +536,8 @@ No external dependencies or system libraries are required. All dependencies
 
 ### Test suite overview
 
-The crate has 227 tests total covering unit tests, conformance integration
-tests, reproducibility integration tests, and doc-tests. New tests were added
+The crate has 239 tests total covering unit tests, conformance integration
+tests, reproducibility integration tests, and doc-tests. Tests were added
 in v0.1.1 for the PAR evaluation functions, normal noise precomputation, and
 the estimation pipeline.
 

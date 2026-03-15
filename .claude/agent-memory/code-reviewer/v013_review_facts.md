@@ -140,3 +140,44 @@ but is NOT in the v013_review_facts.md list because it belongs to the review rep
 
 **Why:** Captured during code review of v0.1.3 plan assessment phase to avoid re-investigation.
 **How to apply:** Use when reviewing follow-on v0.1.3 work or PRs touching StudySetup, BasisStore, SimulationProgress, or WelfordAccumulator.
+
+---
+
+### v0.1.3 pre-release plan review (epic-01 through epic-04)
+
+**Git range**: main..HEAD (4 commits, branch feat/v0.1.3-pre-release)
+
+#### StudyParams extraction
+
+- `StudyParams::from_config()` extracts scalars from `cobre_io::Config`. No `max_iterations` field — it is derived by `StudySetup::from_broadcast_params` via `max_iterations_from_rules()`. `StudyParams` does NOT have a `max_iterations` field; only `stopping_rule_set` is stored.
+- All 3 constants (`DEFAULT_FORWARD_PASSES`, `DEFAULT_MAX_ITERATIONS`, `DEFAULT_SEED`) are now `pub const` in `cobre-sddp::setup`. `cobre-python/src/run.rs` still imports `DEFAULT_SEED` from `cobre_sddp` for extracting seed before config is moved into setup.
+
+#### StochasticProvenance correctness
+
+- Provenance is computed BEFORE `user_opening_tree` is consumed (the comment says so explicitly).
+- `correlation_prov` uses `system.correlation().profiles.is_empty()` AND `dim > 0`. If dim > 0 but profiles empty → `NotApplicable`. If dim > 0 and profiles non-empty → `Generated`. `UserSupplied` is never set by `build_stochastic_context` — the CorrelationModel always comes from the System.
+- `inflow_prov` uses `hydro_ids.is_empty()` (hydro_ids are computed inside `build_stochastic_context` from the system). This is consistent with the stochastic context's internal dim computation.
+
+#### broadcast_value sentinel analysis
+
+- Zero-length sentinel conflict: types used at all three call sites (System, BroadcastConfig, Option<BroadcastOpeningTree>) all serialize to >0 bytes. `postcard` encodes `Option::None` as a single tag byte. The sentinel is safe for all current call sites but is a generic footgun.
+
+#### correlation_dim display is correct
+
+- `correlation_dim = Some(format!("{n_hydros}x{n_hydros}"))` is correct because the spatial correlation model covers only inflow entities (entity_type = "inflow"), not load buses. Load noise is always independent. The comment on line 251 of stochastic_summary.rs is accurate.
+
+#### BroadcastStoppingRule silent data loss for SimulationBased/GracefulShutdown
+
+- `BroadcastConfig::from_config()` folds `SimulationBased` and `GracefulShutdown` rules into `IterationLimit { DEFAULT_MAX_ITERATIONS }` silently. These variants are not yet in production configs (deferred), so risk is low. If they were user-configured, the behaviour change would be silent.
+
+#### gather_simulation_results reviewed
+
+- `gather_simulation_results` correctly uses two allgatherv calls (lengths then data). `recv_counts` is `Result`-mapped for u64→usize conversion. `recv_displs` is computed via `scan`. `offset` tracking is correct (no off-by-one: `offset += count` after using `all_bytes[offset..offset+count]`). No panic paths.
+
+#### stage_ctx / training_ctx duplication pattern in StudySetup::train()
+
+- `train()` cannot call `stage_ctx()` and `training_ctx()` because both take `&self` while `train()` also needs `&mut self.fcf`. The fix is correct: inline field borrows for `train()`, method calls for `simulate()`. The comment in setup.rs explains this.
+
+#### n_seasons display heuristic
+
+- Uses `system.hydros()[0].id` as representative hydro. Safe: guarded by `n_hydros > 0`. If all hydros have the same seasonal coverage (guaranteed by cobre-io validation), this is correct. If coverage differs, it would show the first hydro's count. Not a bug for current validation rules.

@@ -19,7 +19,7 @@
 //! - [`CorrelationModel`] — named correlation profiles with entity groups
 //!   and correlation matrices
 //!
-//! Performance-adapted views (`PrecomputedParLp`, Cholesky-decomposed matrices)
+//! Performance-adapted views (`PrecomputedPar`, Cholesky-decomposed matrices)
 //! belong in downstream solver crates (`cobre-stochastic`).
 //!
 //! ## Declaration-order invariance
@@ -150,7 +150,7 @@ pub struct ScenarioSource {
 /// `σ_m` / `s_m` so that downstream crates can recover the runtime residual std as
 /// `std_m3s * residual_std_ratio` without re-deriving it from the coefficients.
 ///
-/// The performance-adapted view (`PrecomputedParLp`) is built from these
+/// The performance-adapted view (`PrecomputedPar`) is built from these
 /// parameters once at solver initialisation and belongs to downstream solver crates.
 ///
 /// ## Declaration-order invariance

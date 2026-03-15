@@ -108,8 +108,8 @@ use cobre_core::{
     Stage, System, Thermal,
 };
 use cobre_solver::StageTemplate;
-use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
-use cobre_stochastic::par::precompute::PrecomputedParLp;
+use cobre_stochastic::normal::precompute::PrecomputedNormal;
+use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::error::SddpError;
 use crate::indexer::StageIndexer;
@@ -624,7 +624,7 @@ struct TemplateBuildCtx<'a> {
     hydro_pos: HashMap<EntityId, usize>,
     bus_pos: HashMap<EntityId, usize>,
     inflow_method: &'a InflowNonNegativityMethod,
-    par_lp: &'a PrecomputedParLp,
+    par_lp: &'a PrecomputedPar,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
@@ -1140,7 +1140,7 @@ fn build_single_stage_template(
 fn compute_noise_scale(
     study_stages: &[&Stage],
     n_hydros: usize,
-    par_lp: &PrecomputedParLp,
+    par_lp: &PrecomputedPar,
 ) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
     let n = study_stages.len();
     let mut noise_scale = vec![0.0_f64; n * n_hydros];
@@ -1247,7 +1247,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
 /// use cobre_sddp::InflowNonNegativityMethod;
 /// use cobre_sddp::lp_builder::build_stage_templates;
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 ///
 /// let bus = Bus {
 ///     id: EntityId(1),
@@ -1257,8 +1257,8 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// };
 /// let system = SystemBuilder::new().buses(vec![bus]).build().expect("valid");
 /// let method = InflowNonNegativityMethod::None;
-/// let par_lp = PrecomputedParLp::build(&[], &[], &[]).expect("empty ok");
-/// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormalLp::default();
+/// let par_lp = PrecomputedPar::build(&[], &[], &[]).expect("empty ok");
+/// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormal::default();
 /// // No stages → empty result.
 /// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp)
 ///     .expect("no FPHA plants");
@@ -1267,8 +1267,8 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
-    par_lp: &PrecomputedParLp,
-    normal_lp: &PrecomputedNormalLp,
+    par_lp: &PrecomputedPar,
+    normal_lp: &PrecomputedNormal,
 ) -> Result<StageTemplates, SddpError> {
     // Validate: FPHA generation model is not yet implemented.
     for hydro in system.hydros() {
@@ -1307,11 +1307,11 @@ pub fn build_stage_templates(
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos);
     let n_load_buses = load_bus_indices.len();
-    // Consistency gate: a non-empty PrecomputedNormalLp must have the same
+    // Consistency gate: a non-empty PrecomputedNormal must have the same
     // entity count as the stochastic load buses derived from the system.
     debug_assert!(
         normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormalLp has {} entities but system has {} stochastic load buses",
+        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
         normal_lp.n_entities(),
         n_load_buses
     );
@@ -1850,8 +1850,8 @@ mod tests {
         HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
         PumpingStageBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder, ThermalStageBounds,
     };
-    use cobre_stochastic::normal::precompute::PrecomputedNormalLp;
-    use cobre_stochastic::par::precompute::PrecomputedParLp;
+    use cobre_stochastic::normal::precompute::PrecomputedNormal;
+    use cobre_stochastic::par::precompute::PrecomputedPar;
 
     /// Method with no penalty — used in structural tests that check exact
     /// column/row counts that would change if penalty columns were added.
@@ -2178,8 +2178,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert!(result.templates.is_empty());
@@ -2193,8 +2193,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 1);
@@ -2211,8 +2211,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2230,8 +2230,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2248,8 +2248,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2265,8 +2265,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2283,8 +2283,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2301,8 +2301,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2316,8 +2316,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2332,8 +2332,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2347,8 +2347,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2365,8 +2365,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
@@ -2384,8 +2384,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2404,8 +2404,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2426,8 +2426,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2452,8 +2452,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2472,8 +2472,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2493,8 +2493,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2517,8 +2517,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 3);
@@ -2531,8 +2531,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let cloned = result.clone();
@@ -2697,8 +2697,8 @@ mod tests {
         let err = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect_err("FPHA plant must cause an error");
 
@@ -2721,8 +2721,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         );
         assert!(
             result.is_ok(),
@@ -2747,15 +2747,15 @@ mod tests {
         let without = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let with_p = build_stage_templates(
             &system,
             &penalty_config(1000.0),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert_eq!(
@@ -2777,15 +2777,15 @@ mod tests {
         let with_p = build_stage_templates(
             &system,
             &penalty_config(1000.0),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let without = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert_eq!(
@@ -2804,8 +2804,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2827,8 +2827,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2848,8 +2848,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2883,8 +2883,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2914,8 +2914,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let t = &result.templates[0];
@@ -2952,8 +2952,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         assert_eq!(result.templates.len(), 3);
@@ -2991,8 +2991,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &config,
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
         let template = &result.templates[0];
@@ -3267,8 +3267,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
 
@@ -3301,8 +3301,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
 
@@ -3329,8 +3329,8 @@ mod tests {
         let result = build_stage_templates(
             &system,
             &no_penalty_config(),
-            &PrecomputedParLp::default(),
-            &PrecomputedNormalLp::default(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
         )
         .expect("no FPHA plants");
 

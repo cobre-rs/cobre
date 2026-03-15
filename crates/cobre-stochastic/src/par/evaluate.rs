@@ -15,7 +15,7 @@
 //!
 //! where:
 //! - `deterministic_base` encodes `mu_m - sum psi_{m,l} * mu_{m-l}` (built by
-//!   [`PrecomputedParLp`])
+//!   [`PrecomputedPar`])
 //! - `psi[l]` are the AR coefficients in original units (lag 1 is at index 0)
 //! - `lag[l]` is the observed series value at lag `l+1`
 //! - `sigma` is the residual standard deviation
@@ -24,9 +24,9 @@
 //! The returned value may be negative; truncation to a physical minimum is the
 //! caller's responsibility.
 //!
-//! [`PrecomputedParLp`]: super::precompute::PrecomputedParLp
+//! [`PrecomputedPar`]: super::precompute::PrecomputedPar
 
-use super::precompute::PrecomputedParLp;
+use super::precompute::PrecomputedPar;
 
 /// Evaluate the PAR(p) model equation for a single series element at a single stage.
 ///
@@ -145,7 +145,7 @@ pub fn evaluate_par_inflow(
 ///
 /// # Parameters
 ///
-/// - `par_lp` — precomputed PAR cache built by [`PrecomputedParLp::build`]
+/// - `par_lp` — precomputed PAR cache built by [`PrecomputedPar::build`]
 /// - `stage` — 0-based stage index (must be `< par_lp.n_stages()`)
 /// - `lag_matrix` — flat lag array, length `max_order * n_series`, indexed
 ///   as `[lag * n_series + element]`
@@ -156,7 +156,7 @@ pub fn evaluate_par_inflow(
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 /// use cobre_stochastic::evaluate_par_batch;
 /// use chrono::NaiveDate;
 ///
@@ -178,7 +178,7 @@ pub fn evaluate_par_inflow(
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
 /// };
-/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+/// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
 /// let noise = vec![0.5];
@@ -187,7 +187,7 @@ pub fn evaluate_par_inflow(
 /// assert!((output[0] - 115.0).abs() < 1e-10); // 100.0 + 30.0 * 0.5
 /// ```
 pub fn evaluate_par_batch(
-    par_lp: &PrecomputedParLp,
+    par_lp: &PrecomputedPar,
     stage: usize,
     lag_matrix: &[f64],
     noise: &[f64],
@@ -233,7 +233,7 @@ pub fn evaluate_par_batch(
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 /// #[allow(deprecated)]
 /// use cobre_stochastic::evaluate_par_inflows;
 /// use chrono::NaiveDate;
@@ -256,7 +256,7 @@ pub fn evaluate_par_batch(
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
 /// };
-/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+/// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
 /// let noise = vec![0.5];
@@ -267,7 +267,7 @@ pub fn evaluate_par_batch(
 /// ```
 #[deprecated(since = "0.1.2", note = "use evaluate_par_batch instead")]
 pub fn evaluate_par_inflows(
-    par_lp: &PrecomputedParLp,
+    par_lp: &PrecomputedPar,
     stage: usize,
     lag_matrix: &[f64],
     noise: &[f64],
@@ -358,7 +358,7 @@ pub fn solve_par_noise(
 ///
 /// # Parameters
 ///
-/// - `par_lp` — precomputed PAR cache built by [`PrecomputedParLp::build`]
+/// - `par_lp` — precomputed PAR cache built by [`PrecomputedPar::build`]
 /// - `stage` — 0-based stage index (must be `< par_lp.n_stages()`)
 /// - `lag_matrix` — flat lag array, length `max_order * n_series`, indexed
 ///   as `[lag * n_series + element]`
@@ -369,7 +369,7 @@ pub fn solve_par_noise(
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 /// use cobre_stochastic::{solve_par_noise, solve_par_noise_batch};
 /// use chrono::NaiveDate;
 ///
@@ -391,7 +391,7 @@ pub fn solve_par_noise(
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
 /// };
-/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+/// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
 /// let targets = vec![0.0]; // solve for zero output (truncation)
@@ -401,7 +401,7 @@ pub fn solve_par_noise(
 /// assert!((output[0] - (-100.0 / 30.0)).abs() < 1e-10);
 /// ```
 pub fn solve_par_noise_batch(
-    par_lp: &PrecomputedParLp,
+    par_lp: &PrecomputedPar,
     stage: usize,
     lag_matrix: &[f64],
     targets: &[f64],
@@ -452,7 +452,7 @@ pub fn solve_par_noise_batch(
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 /// #[allow(deprecated)]
 /// use cobre_stochastic::{solve_par_noise, solve_par_noises};
 /// use chrono::NaiveDate;
@@ -475,7 +475,7 @@ pub fn solve_par_noise_batch(
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
 /// };
-/// let par_lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+/// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
 /// let lag_matrix: Vec<f64> = vec![]; // no lags for AR(0)
 /// let targets = vec![0.0]; // solve for zero output (truncation)
@@ -487,7 +487,7 @@ pub fn solve_par_noise_batch(
 /// ```
 #[deprecated(since = "0.1.2", note = "use solve_par_noise_batch instead")]
 pub fn solve_par_noises(
-    par_lp: &PrecomputedParLp,
+    par_lp: &PrecomputedPar,
     stage: usize,
     lag_matrix: &[f64],
     targets: &[f64],
@@ -517,7 +517,7 @@ mod tests {
         evaluate_par, evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows,
         solve_par_noise, solve_par_noise_batch, solve_par_noises,
     };
-    use crate::par::precompute::PrecomputedParLp;
+    use crate::par::precompute::PrecomputedPar;
 
     fn dummy_date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -631,7 +631,7 @@ mod tests {
         );
     }
 
-    fn make_two_hydro_three_stage_par() -> PrecomputedParLp {
+    fn make_two_hydro_three_stage_par() -> PrecomputedPar {
         let hydro_ids = [EntityId(3), EntityId(5)];
 
         let stages: Vec<Stage> = (0..3)
@@ -657,7 +657,7 @@ mod tests {
         let mut all_models = pre_models;
         all_models.extend(study_models);
 
-        PrecomputedParLp::build(&all_models, &stages, &hydro_ids).unwrap()
+        PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap()
     }
 
     #[test]
@@ -774,10 +774,9 @@ mod tests {
             make_model(3, 0, 100.0, 30.0, vec![], 1.0),
         ];
 
-        let par_canonical =
-            PrecomputedParLp::build(&models, &stages, &hydro_ids_canonical).unwrap();
+        let par_canonical = PrecomputedPar::build(&models, &stages, &hydro_ids_canonical).unwrap();
         let par_reversed =
-            PrecomputedParLp::build(&models_reversed, &[stages[0].clone()], &hydro_ids_canonical)
+            PrecomputedPar::build(&models_reversed, &[stages[0].clone()], &hydro_ids_canonical)
                 .unwrap();
 
         // AR(0) for both, so lag_matrix is empty (max_order=0 → no lag entries).

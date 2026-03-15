@@ -312,8 +312,8 @@ impl StudySetup {
         let stage_templates = build_stage_templates(
             system,
             &inflow_method,
-            stochastic.par_lp(),
-            stochastic.normal_lp(),
+            stochastic.par(),
+            stochastic.normal(),
         )?;
 
         if stage_templates.templates.is_empty() {

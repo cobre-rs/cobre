@@ -80,7 +80,7 @@ pub(crate) fn transform_inflow_noise(
                 }
             }
 
-            let par_lp = stochastic.par_lp();
+            let par_lp = stochastic.par();
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
             evaluate_par_batch(
@@ -167,7 +167,7 @@ pub(crate) fn transform_load_noise(
     if n_load_buses == 0 {
         return;
     }
-    let load_lp = stochastic.normal_lp();
+    let load_lp = stochastic.normal();
     for lb_idx in 0..n_load_buses {
         let eta = raw_noise[n_hydros + lb_idx];
         let mean = load_lp.mean(stage, lb_idx);

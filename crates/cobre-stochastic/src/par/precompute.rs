@@ -1,6 +1,6 @@
 //! Pre-computation of PAR model coefficient arrays for LP RHS patching.
 //!
-//! This module provides [`PrecomputedParLp`], the performance-adapted cache built
+//! This module provides [`PrecomputedPar`], the performance-adapted cache built
 //! once during initialization from raw [`InflowModel`] parameters. It exposes flat,
 //! contiguous arrays in stage-major layout so the calling algorithm can patch LP
 //! right-hand sides without per-scenario recomputation.
@@ -37,7 +37,7 @@ use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
 use crate::StochasticError;
 
 // ---------------------------------------------------------------------------
-// PrecomputedParLp
+// PrecomputedPar
 // ---------------------------------------------------------------------------
 
 /// Cache-friendly PAR(p) model data for LP RHS patching.
@@ -57,7 +57,7 @@ use crate::StochasticError;
 ///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel, temporal::{Stage, Block, BlockMode, StageStateConfig, StageRiskConfig, ScenarioSourceConfig, NoiseMethod}};
-/// use cobre_stochastic::par::precompute::PrecomputedParLp;
+/// use cobre_stochastic::par::precompute::PrecomputedPar;
 /// use chrono::NaiveDate;
 ///
 /// let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -83,13 +83,13 @@ use crate::StochasticError;
 ///     residual_std_ratio: 1.0,
 /// };
 ///
-/// let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+/// let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 /// assert_eq!(lp.n_stages(), 1);
 /// assert_eq!(lp.n_hydros(), 1);
 /// assert!((lp.deterministic_base(0, 0) - 100.0).abs() < f64::EPSILON);
 /// ```
 #[derive(Debug)]
-pub struct PrecomputedParLp {
+pub struct PrecomputedPar {
     /// Deterministic base `b_{h,m(t)} = μ_{m(t)} - Σ_ℓ ψ_{m(t),ℓ} · μ_{m(t-ℓ)}`.
     /// Flat array indexed as `[stage * n_series + series_element]`.
     /// Length: `n_stages * n_series`.
@@ -121,12 +121,12 @@ pub struct PrecomputedParLp {
     max_order: usize,
 }
 
-impl PrecomputedParLp {
+impl PrecomputedPar {
     // -----------------------------------------------------------------------
     // Builder
     // -----------------------------------------------------------------------
 
-    /// Build a [`PrecomputedParLp`] from raw PAR model parameters.
+    /// Build a [`PrecomputedPar`] from raw PAR model parameters.
     ///
     /// # Parameters
     ///
@@ -408,8 +408,8 @@ impl PrecomputedParLp {
     }
 }
 
-impl Default for PrecomputedParLp {
-    /// Returns an empty [`PrecomputedParLp`] with zero stages and zero series elements.
+impl Default for PrecomputedPar {
+    /// Returns an empty [`PrecomputedPar`] with zero stages and zero series elements.
     ///
     /// Useful as a sentinel value for callers that do not use PAR models
     /// (e.g., test fixtures for systems with no series elements).
@@ -442,7 +442,7 @@ mod tests {
         },
     };
 
-    use super::PrecomputedParLp;
+    use super::PrecomputedPar;
 
     fn dummy_date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -495,7 +495,7 @@ mod tests {
     fn ar_order_zero_deterministic_base_equals_mean() {
         let stage = make_stage(0, 0, Some(0));
         let model = make_model(1, 0, 100.0, 30.0, vec![], 1.0);
-        let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+        let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 
         assert_eq!(lp.n_stages(), 1);
         assert_eq!(lp.n_hydros(), 1);
@@ -518,7 +518,7 @@ mod tests {
     fn ar_order_zero_std_zero_gives_zero_sigma() {
         let stage = make_stage(0, 0, Some(0));
         let model = make_model(1, 0, 50.0, 0.0, vec![], 1.0);
-        let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+        let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 
         assert!((lp.sigma(0, 0)).abs() < f64::EPSILON);
         assert!((lp.deterministic_base(0, 0) - 50.0).abs() < f64::EPSILON);
@@ -535,7 +535,7 @@ mod tests {
         let pre_study_model = make_model(1, -1, 100.0, 30.0, vec![], 1.0);
         let study_model = make_model(1, 0, 100.0, 30.0, vec![0.3], 0.954);
 
-        let lp = PrecomputedParLp::build(
+        let lp = PrecomputedPar::build(
             &[pre_study_model, study_model],
             &[study_stage],
             &[EntityId(1)],
@@ -583,7 +583,7 @@ mod tests {
         let mut all_models: Vec<InflowModel> = prestudy_models;
         all_models.extend(study_models);
 
-        let lp = PrecomputedParLp::build(&all_models, &stages, &hydro_ids).unwrap();
+        let lp = PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap();
 
         assert_eq!(lp.n_stages(), 3);
         assert_eq!(lp.n_hydros(), 2);
@@ -638,7 +638,7 @@ mod tests {
 
         let hydro_ids = [EntityId(3), EntityId(5)];
 
-        let lp = PrecomputedParLp::build(&models, &[stage], &hydro_ids).unwrap();
+        let lp = PrecomputedPar::build(&models, &[stage], &hydro_ids).unwrap();
 
         assert!(
             (lp.deterministic_base(0, 0) - 100.0).abs() < f64::EPSILON,
@@ -672,7 +672,7 @@ mod tests {
         let mut all_models = pre_models;
         all_models.extend(study_models);
 
-        let lp = PrecomputedParLp::build(&all_models, &stages, &hydro_ids).unwrap();
+        let lp = PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap();
 
         assert_eq!(lp.max_order(), 3);
 
@@ -705,7 +705,7 @@ mod tests {
 
         let models = [make_model(1, 0, 100.0, 30.0, vec![], 1.0)];
 
-        let lp = PrecomputedParLp::build(&models, &[stages[0].clone()], &hydro_ids).unwrap();
+        let lp = PrecomputedPar::build(&models, &[stages[0].clone()], &hydro_ids).unwrap();
 
         assert!((lp.deterministic_base(0, 1)).abs() < f64::EPSILON);
         assert!((lp.sigma(0, 1)).abs() < f64::EPSILON);
@@ -716,7 +716,7 @@ mod tests {
     fn deterministic_base_out_of_bounds_panics() {
         let stage = make_stage(0, 0, Some(0));
         let model = make_model(1, 0, 100.0, 30.0, vec![], 1.0);
-        let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+        let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
         let _ = lp.deterministic_base(1, 0);
     }
 
@@ -725,7 +725,7 @@ mod tests {
     fn sigma_out_of_bounds_panics() {
         let stage = make_stage(0, 0, Some(0));
         let model = make_model(1, 0, 100.0, 30.0, vec![], 1.0);
-        let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+        let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
         let _ = lp.sigma(1, 0);
     }
 
@@ -733,7 +733,7 @@ mod tests {
     fn acceptance_criterion_ar_order_zero_std_zero() {
         let stage = make_stage(0, 0, Some(0));
         let model = make_model(1, 0, 50.0, 0.0, vec![], 1.0);
-        let lp = PrecomputedParLp::build(&[model], &[stage], &[EntityId(1)]).unwrap();
+        let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 
         assert!((lp.sigma(0, 0)).abs() < f64::EPSILON);
         assert!((lp.deterministic_base(0, 0) - 50.0).abs() < f64::EPSILON);

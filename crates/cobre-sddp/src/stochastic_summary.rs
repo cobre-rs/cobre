@@ -168,15 +168,9 @@ pub fn build_stochastic_summary(
         StochasticSource::None
     };
 
-    // Count distinct stage_id values from the first hydro's inflow models.
+    // Count distinct stage_id values across all hydros' inflow models.
     let n_seasons = if n_hydros > 0 {
-        let first_hydro_id = system.hydros()[0].id;
-        let mut stage_ids: Vec<i32> = system
-            .inflow_models()
-            .iter()
-            .filter(|m| m.hydro_id == first_hydro_id)
-            .map(|m| m.stage_id)
-            .collect();
+        let mut stage_ids: Vec<i32> = system.inflow_models().iter().map(|m| m.stage_id).collect();
         stage_ids.sort_unstable();
         stage_ids.dedup();
         stage_ids.len()

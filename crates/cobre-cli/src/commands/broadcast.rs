@@ -136,9 +136,14 @@ impl BroadcastConfig {
                     iterations: *iterations,
                     tolerance: *tolerance,
                 },
-                // SimulationBased and GracefulShutdown are not representable in
-                // BroadcastStoppingRule; fold into the safety iteration limit.
+                // SimulationBased and GracefulShutdown are evaluated on rank 0
+                // only and are not broadcastable; fold into iteration limit for
+                // non-root ranks. Warn so the user knows the rule was substituted.
                 StoppingRule::SimulationBased { .. } | StoppingRule::GracefulShutdown => {
+                    eprintln!(
+                        "warning: stopping rule not broadcastable, \
+                         substituting IterationLimit({DEFAULT_MAX_ITERATIONS})"
+                    );
                     BroadcastStoppingRule::IterationLimit {
                         limit: DEFAULT_MAX_ITERATIONS,
                     }

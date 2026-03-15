@@ -11,4 +11,4 @@
 
 pub mod precompute;
 
-pub use precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormalLp};
+pub use precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormal};

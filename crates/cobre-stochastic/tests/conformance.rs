@@ -218,7 +218,7 @@ fn par_lp_coefficients_match_hand_computed() {
     let ctx = build_stochastic_context(&system, 42, &[], None)
         .expect("build_stochastic_context must succeed for the shared fixture");
 
-    let par = ctx.par_lp();
+    let par = ctx.par();
     let tol = 1e-10;
 
     // --- Hydro 1 (h_idx = 0, EntityId(1)) at stage 0 ---

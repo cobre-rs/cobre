@@ -721,7 +721,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         reason: training_result.reason.clone(),
         lower_bound: training_result.final_lb,
         upper_bound: training_result.final_ub,
-        upper_bound_std: 0.0,
+        upper_bound_std: training_result.final_ub_std,
         gap_percent: training_result.final_gap * 100.0,
         total_cuts_active: training_output.cut_stats.total_active,
         total_cuts_generated: training_output.cut_stats.total_generated,

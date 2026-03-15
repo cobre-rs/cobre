@@ -66,8 +66,11 @@ pub struct TrainingResult {
     /// Final lower bound at termination.
     pub final_lb: f64,
 
-    /// Final upper bound mean at termination.
+    /// Final upper bound mean at termination (smoothed EWMA).
     pub final_ub: f64,
+
+    /// Final upper bound standard deviation (smoothed EWMA).
+    pub final_ub_std: f64,
 
     /// Final convergence gap: `(UB - LB) / max(1.0, |UB|)`.
     pub final_gap: f64,
@@ -343,6 +346,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
     let mut final_lb = 0.0;
     let mut final_ub = 0.0;
+    let mut final_ub_std = 0.0;
     let mut final_gap = 0.0;
     let mut completed_iterations = 0u64;
     let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
@@ -514,6 +518,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         final_lb = convergence_monitor.lower_bound();
         final_ub = convergence_monitor.upper_bound();
+        final_ub_std = convergence_monitor.upper_bound_std();
         final_gap = convergence_monitor.gap();
 
         emit(
@@ -588,6 +593,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     Ok(TrainingResult {
         final_lb,
         final_ub,
+        final_ub_std,
         final_gap,
         iterations: completed_iterations,
         reason: termination_reason,

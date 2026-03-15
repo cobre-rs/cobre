@@ -212,6 +212,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 /// let result = TrainingResult {
 ///     final_lb: 100.0,
 ///     final_ub: 110.0,
+///     final_ub_std: 5.0,
 ///     final_gap: 0.091,
 ///     iterations: 1,
 ///     reason: "iteration_limit".to_string(),
@@ -306,6 +307,7 @@ mod tests {
         TrainingResult {
             final_lb: lb,
             final_ub: ub,
+            final_ub_std: 0.0,
             final_gap: gap,
             iterations,
             reason: reason.to_string(),

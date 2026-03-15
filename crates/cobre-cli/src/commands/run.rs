@@ -20,19 +20,20 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
-    FittingReport, HydroFittingEntry, write_correlation_json, write_fitting_report,
-    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
-    write_noise_openings,
+    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings, FittingReport,
+    HydroFittingEntry,
 };
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
 use cobre_io::write_results;
-use cobre_sddp::estimation::{HydroEstimationEntry, estimate_from_history};
+use cobre_sddp::estimation::{estimate_from_history, HydroEstimationEntry};
 use cobre_sddp::{
     EstimationReport, InflowNonNegativityMethod, SimulationScenarioResult, StoppingMode,
-    StoppingRule, StoppingRuleSet, StudySetup,
+    StoppingRule, StoppingRuleSet, StudySetup, DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS,
+    DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{build_stochastic_context, context::OpeningTree};
@@ -41,15 +42,6 @@ use crate::error::CliError;
 use crate::summary::{
     ArOrderSummary, SimulationSummary, StochasticSource, StochasticSummary, TrainingSummary,
 };
-
-/// Default number of forward-pass trajectories when not specified in config.
-const DEFAULT_FORWARD_PASSES: u32 = 1;
-
-/// Default maximum iterations when no stopping rule specifies an iteration limit.
-const DEFAULT_MAX_ITERATIONS: u64 = 100;
-
-/// Default random seed for stochastic scenario generation.
-const DEFAULT_SEED: u64 = 42;
 
 // Broadcast types — postcard-safe serializable wrappers for MPI communication
 
@@ -1220,7 +1212,11 @@ fn export_stochastic_artifacts(
         &stochastic_dir.join("noise_openings.parquet"),
         stochastic.opening_tree(),
     ) {
-        eprintln!("warning: stochastic export failed (noise_openings): {e}");
+        if !quiet {
+            let _ = stderr.write_line(&format!(
+                "warning: stochastic export failed (noise_openings): {e}"
+            ));
+        }
     }
 
     let stats_rows = inflow_models_to_stats_rows(system.inflow_models());
@@ -1228,7 +1224,11 @@ fn export_stochastic_artifacts(
         &stochastic_dir.join("inflow_seasonal_stats.parquet"),
         &stats_rows,
     ) {
-        eprintln!("warning: stochastic export failed (inflow_seasonal_stats): {e}");
+        if !quiet {
+            let _ = stderr.write_line(&format!(
+                "warning: stochastic export failed (inflow_seasonal_stats): {e}"
+            ));
+        }
     }
 
     let ar_rows = inflow_models_to_ar_rows(system.inflow_models());
@@ -1236,14 +1236,22 @@ fn export_stochastic_artifacts(
         &stochastic_dir.join("inflow_ar_coefficients.parquet"),
         &ar_rows,
     ) {
-        eprintln!("warning: stochastic export failed (inflow_ar_coefficients): {e}");
+        if !quiet {
+            let _ = stderr.write_line(&format!(
+                "warning: stochastic export failed (inflow_ar_coefficients): {e}"
+            ));
+        }
     }
 
     if let Err(e) = write_correlation_json(
         &stochastic_dir.join("correlation.json"),
         system.correlation(),
     ) {
-        eprintln!("warning: stochastic export failed (correlation): {e}");
+        if !quiet {
+            let _ = stderr.write_line(&format!(
+                "warning: stochastic export failed (correlation): {e}"
+            ));
+        }
     }
 
     let has_stochastic_load = system
@@ -1265,7 +1273,11 @@ fn export_stochastic_artifacts(
             &stochastic_dir.join("load_seasonal_stats.parquet"),
             &load_rows,
         ) {
-            eprintln!("warning: stochastic export failed (load_seasonal_stats): {e}");
+            if !quiet {
+                let _ = stderr.write_line(&format!(
+                    "warning: stochastic export failed (load_seasonal_stats): {e}"
+                ));
+            }
         }
     }
 
@@ -1273,7 +1285,11 @@ fn export_stochastic_artifacts(
         let fitting = estimation_report_to_fitting_report(report);
         if let Err(e) = write_fitting_report(&stochastic_dir.join("fitting_report.json"), &fitting)
         {
-            eprintln!("warning: stochastic export failed (fitting_report): {e}");
+            if !quiet {
+                let _ = stderr.write_line(&format!(
+                    "warning: stochastic export failed (fitting_report): {e}"
+                ));
+            }
         }
     }
 }
@@ -1281,7 +1297,7 @@ fn export_stochastic_artifacts(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{BroadcastOpeningTree, broadcast_value, resolve_thread_count};
+    use super::{broadcast_value, resolve_thread_count, BroadcastOpeningTree};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1485,7 +1501,7 @@ mod tests {
     fn load_user_opening_tree_returns_none_when_file_absent() {
         use super::load_user_opening_tree;
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder, scenario::CorrelationModel,
+            scenario::CorrelationModel, Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use std::fs;
         use tempfile::TempDir;
@@ -1541,8 +1557,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         use cobre_core::EntityId;
-        use cobre_sddp::EstimationReport;
         use cobre_sddp::estimation::HydroEstimationEntry;
+        use cobre_sddp::EstimationReport;
 
         use super::estimation_report_to_fitting_report;
 
@@ -1587,8 +1603,8 @@ mod tests {
     /// preserves `hydro_id`, `stage_id`, `mean_m3s`, `std_m3s` field values.
     #[test]
     fn inflow_models_to_stats_rows_field_values() {
-        use cobre_core::EntityId;
         use cobre_core::scenario::InflowModel;
+        use cobre_core::EntityId;
 
         use super::inflow_models_to_stats_rows;
 
@@ -1628,8 +1644,8 @@ mod tests {
     /// A white-noise model (order 0) produces no rows.
     #[test]
     fn inflow_models_to_ar_rows_lag_numbering_and_count() {
-        use cobre_core::EntityId;
         use cobre_core::scenario::InflowModel;
+        use cobre_core::EntityId;
 
         use super::inflow_models_to_ar_rows;
 
@@ -1678,13 +1694,13 @@ mod tests {
     fn make_system_with_hydro() -> cobre_core::System {
         use chrono::NaiveDate;
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
             scenario::{CorrelationModel, InflowModel},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
 
         let bus = Bus {
@@ -1823,8 +1839,8 @@ mod tests {
 
         use super::build_stochastic_summary;
         use cobre_core::EntityId;
-        use cobre_sddp::EstimationReport;
         use cobre_sddp::estimation::HydroEstimationEntry;
+        use cobre_sddp::EstimationReport;
         use cobre_stochastic::build_stochastic_context;
 
         let system = make_system_with_hydro();
@@ -1868,12 +1884,12 @@ mod tests {
     fn build_stochastic_summary_no_hydros_yields_none_source() {
         use chrono::NaiveDate;
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::CorrelationModel,
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::build_stochastic_context;
 

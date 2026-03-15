@@ -9,22 +9,20 @@ For methodology-level roadmap pages (algorithm theory, spec evolution), see the
 
 ## Inflow Truncation Methods
 
-**Status**: Deferred from v0.1.0. Only the penalty method is available.
+**Status**: `Truncation` was delivered in v0.1.1. Only `TruncationWithPenalty` remains deferred.
 
 PAR(p) models can produce negative inflow realisations. The penalty method
 (implemented in v0.1.0) handles this by adding a high-cost slack variable to
-the water balance row. Two additional methods from the literature are planned:
+the water balance row. The `Truncation` method (implemented in v0.1.1) clamps
+negative AR model draws to zero before LP patching. One additional method from
+the literature is planned:
 
-- **Truncation** -- evaluate the AR model externally before LP patching; if
-  the full inflow value `a_h < 0`, adjust the LP row bounds to force inflow to
-  zero. Requires threading AR coefficients from `StochasticContext` through to
-  the forward pass.
 - **Truncation with penalty** -- combine modified bounds with a bounded slack
   variable, matching the SPTcpp reference implementation most closely.
 
-The `InflowNonNegativityMethod` enum will gain `Truncation` and
-`TruncationWithPenalty { cost }` variants when these are implemented. Existing
-`"penalty"` and `"none"` configs will remain unchanged.
+The `InflowNonNegativityMethod` enum will gain a `TruncationWithPenalty { cost }`
+variant when this is implemented. The `Truncation` variant was added in v0.1.1.
+Existing `"penalty"` and `"none"` configs remain unchanged.
 
 **Full design**: `docs/deferred-truncation-design.md`
 **Paper reference**: Oliveira et al. (2022), _Energies_ 15(3):1115.

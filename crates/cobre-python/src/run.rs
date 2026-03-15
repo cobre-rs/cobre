@@ -34,11 +34,11 @@ use cobre_io::output::simulation_writer::{
     StageWritePayload, ThermalWriteRecord,
 };
 use cobre_io::{write_results, ParquetWriterConfig};
-use cobre_sddp::{FutureCostFunction, SimulationScenarioResult, SimulationStageResult, StudySetup};
+use cobre_sddp::{
+    FutureCostFunction, SimulationScenarioResult, SimulationStageResult, StudySetup, DEFAULT_SEED,
+};
 use cobre_solver::HighsSolver;
 use cobre_stochastic::build_stochastic_context;
-
-const DEFAULT_SEED: u64 = 42;
 
 /// Summary returned by [`run_inner`] on success.
 struct RunSummary {

@@ -31,8 +31,8 @@ use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::OpeningTree;
 
 use crate::{
-    FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch,
+    forward::build_cut_row_batch, FutureCostFunction, PatchBuffer, RiskMeasure, SddpError,
+    StageIndexer,
 };
 use cobre_solver::StageTemplate;
 
@@ -166,7 +166,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     clippy::cast_precision_loss
 )]
 mod tests {
-    use super::{LbEvalSpec, evaluate_lower_bound};
+    use super::{evaluate_lower_bound, LbEvalSpec};
     use crate::{FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer};
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
@@ -210,12 +210,12 @@ mod tests {
     fn simple_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
-            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

@@ -29,19 +29,18 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
-    validate_structure,
+    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::fitting::{
-        AicSelectionResult, ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients,
-        estimate_correlation, estimate_seasonal_stats, find_season_for_date, levinson_durbin,
-        select_order_aic,
+        estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats,
+        find_season_for_date, levinson_durbin, select_order_aic, AicSelectionResult,
+        ArCoefficientEstimate, SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -635,8 +634,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {

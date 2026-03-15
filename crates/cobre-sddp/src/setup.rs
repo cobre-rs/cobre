@@ -37,34 +37,34 @@
 //! # }
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use cobre_comm::Communicator;
-use cobre_core::{System, TrainingEvent, entities::hydro::HydroGenerationModel};
+use cobre_core::{entities::hydro::HydroGenerationModel, System, TrainingEvent};
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::StochasticContext;
 
 use crate::{
+    build_stage_templates,
+    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
+    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
     SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
-    build_stage_templates,
-    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
-    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
-    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
-const DEFAULT_FORWARD_PASSES: u32 = 1;
+pub const DEFAULT_FORWARD_PASSES: u32 = 1;
 
 /// Default maximum iterations when no stopping rule specifies an iteration limit.
-const DEFAULT_MAX_ITERATIONS: u64 = 100;
+pub const DEFAULT_MAX_ITERATIONS: u64 = 100;
 
 /// Default random seed for stochastic scenario generation.
-const DEFAULT_SEED: u64 = 42;
+pub const DEFAULT_SEED: u64 = 42;
 
 // ---------------------------------------------------------------------------
 // StudySetup
@@ -488,6 +488,35 @@ impl StudySetup {
         &self.stopping_rule_set
     }
 
+    // ── Context constructors ──────────────────────────────────────────────────
+
+    /// Construct a [`StageContext`] borrowing from this setup.
+    #[must_use]
+    pub fn stage_ctx(&self) -> StageContext<'_> {
+        StageContext {
+            templates: &self.stage_templates.templates,
+            base_rows: &self.stage_templates.base_rows,
+            noise_scale: &self.stage_templates.noise_scale,
+            n_hydros: self.stage_templates.n_hydros,
+            n_load_buses: self.stage_templates.n_load_buses,
+            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
+            load_bus_indices: &self.stage_templates.load_bus_indices,
+            block_counts_per_stage: &self.block_counts_per_stage,
+        }
+    }
+
+    /// Construct a [`TrainingContext`] borrowing from this setup.
+    #[must_use]
+    pub fn training_ctx(&self) -> TrainingContext<'_> {
+        TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+        }
+    }
+
     // ── Training method ───────────────────────────────────────────────────────
 
     /// Execute the training loop using the precomputed study state.
@@ -522,14 +551,12 @@ impl StudySetup {
             event_sender,
         };
 
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-        };
-
+        // Both context structs must be constructed inline in train(): the
+        // stage_ctx() and training_ctx() methods take &self, which would
+        // conflict with &mut self.fcf at the crate::train call site.
+        // Direct field borrows let the borrow checker see that self.fcf is
+        // disjoint from the fields borrowed by each context.
+        // (In simulate(), which is &self throughout, the methods are used instead.)
         let stage_ctx = StageContext {
             templates: &self.stage_templates.templates,
             base_rows: &self.stage_templates.base_rows,
@@ -539,6 +566,14 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+        };
+
+        let training_ctx = TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
         };
 
         crate::train(
@@ -589,24 +624,8 @@ impl StudySetup {
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
     ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
-        let stage_ctx = StageContext {
-            templates: &self.stage_templates.templates,
-            base_rows: &self.stage_templates.base_rows,
-            noise_scale: &self.stage_templates.noise_scale,
-            n_hydros: self.stage_templates.n_hydros,
-            n_load_buses: self.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
-            load_bus_indices: &self.stage_templates.load_bus_indices,
-            block_counts_per_stage: &self.block_counts_per_stage,
-        };
-
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-        };
+        let stage_ctx = self.stage_ctx();
+        let training_ctx = self.training_ctx();
 
         let sim_config = self.simulation_config();
 
@@ -783,12 +802,6 @@ mod tests {
     use super::StudySetup;
 
     use cobre_core::{
-        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
-        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
-    };
-    use cobre_core::{
-        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -799,6 +812,12 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId, SystemBuilder,
+    };
+    use cobre_core::{
+        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
+        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -1174,6 +1193,72 @@ mod tests {
         assert!(
             setup.cut_selection().is_none(),
             "cut_selection should be None when disabled"
+        );
+    }
+
+    #[test]
+    fn stage_ctx_fields_match_study_setup() {
+        let n_stages = 3;
+        let system = minimal_system(n_stages);
+        let config = minimal_config(2, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let ctx = setup.stage_ctx();
+
+        assert_eq!(
+            ctx.templates.len(),
+            setup.stage_templates().len(),
+            "templates length mismatch"
+        );
+        assert_eq!(
+            ctx.base_rows.len(),
+            setup.base_rows().len(),
+            "base_rows length mismatch"
+        );
+        assert_eq!(
+            ctx.noise_scale.len(),
+            setup.noise_scale().len(),
+            "noise_scale length mismatch"
+        );
+        assert_eq!(
+            ctx.n_hydros,
+            setup.entity_counts().hydro_ids.len(),
+            "n_hydros mismatch"
+        );
+        assert_eq!(
+            ctx.block_counts_per_stage.len(),
+            setup.block_counts_per_stage().len(),
+            "block_counts_per_stage length mismatch"
+        );
+    }
+
+    #[test]
+    fn training_ctx_fields_match_study_setup() {
+        let n_stages = 3;
+        let system = minimal_system(n_stages);
+        let config = minimal_config(2, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let ctx = setup.training_ctx();
+
+        assert_eq!(
+            ctx.horizon.num_stages(),
+            setup.horizon().num_stages(),
+            "horizon num_stages mismatch"
+        );
+        assert_eq!(
+            ctx.indexer.n_state,
+            setup.indexer().n_state,
+            "indexer n_state mismatch"
+        );
+        assert_eq!(
+            ctx.initial_state.len(),
+            setup.initial_state().len(),
+            "initial_state length mismatch"
         );
     }
 

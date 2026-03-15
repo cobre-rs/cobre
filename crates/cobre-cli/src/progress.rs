@@ -39,21 +39,12 @@ const TRAINING_TEMPLATE: &str = "Training   {bar:40} {pos}/{len} iter  {msg}";
 const SIMULATION_TEMPLATE: &str =
     "Simulation {bar:40} {pos}/{len} scenarios  {msg}  [{elapsed_precise} < {eta_precise}]";
 
-/// Format a floating-point value as scientific notation with 6 significant digits.
-///
-/// Uses Rust's `{:.5e}` specifier (1 digit before + 5 after the decimal point)
-/// and strips the leading `+` and zero-padding from the exponent for readability.
-/// For example, `2371091.9` → `"2.37109e6"`, `577560.0` → `"5.77560e5"`.
+/// Format a floating-point value as scientific notation (6 significant digits).
 fn fmt_sci(v: f64) -> String {
-    // {:.5e} produces e.g. "2.37109e6" or "5.77560e+05" depending on platform.
-    // Normalise to the compact form "Xe±N" (no leading zeros in exponent,
-    // no leading '+' sign).
     let raw = format!("{v:.5e}");
-    // Split at 'e' to handle the exponent separately.
     if let Some(pos) = raw.find('e') {
         let mantissa = &raw[..pos];
         let exp_str = &raw[pos + 1..];
-        // Parse the exponent as i32 to strip sign and leading zeros.
         if let Ok(exp) = exp_str.parse::<i32>() {
             return format!("{mantissa}e{exp}");
         }
@@ -86,12 +77,8 @@ impl ProgressHandle {
 
 /// Terminal wrapper that overrides the width reported to `indicatif`.
 ///
-/// Under MPI, `mpiexec` pipes stderr through a non-TTY pipe. `Term::stderr()`
-/// falls back to `(24, 80)` for the terminal size, but the user's real terminal
-/// may be wider. This causes `indicatif`'s cursor-movement math to overshoot,
-/// erasing the banner and earlier output. `MpiTerm` delegates all I/O to the
-/// underlying `Term` but reports the actual terminal width captured before the
-/// MPI process was spawned.
+/// Under MPI, stderr is a non-TTY pipe, causing `indicatif`'s cursor math to
+/// overshoot. This wrapper preserves the real terminal width.
 #[derive(Debug)]
 struct MpiTerm {
     inner: Term,
@@ -138,9 +125,7 @@ impl TermLike for MpiTerm {
 
 /// Resolve the terminal width for progress bar rendering.
 ///
-/// Tries, in order: (1) `Term::stderr()` native detection (works when stderr
-/// is a real TTY), (2) `$COLUMNS` environment variable (inherited by MPI
-/// processes from the launching shell), (3) fallback to 120 columns.
+/// Tries: `Term::stderr()` detection, `$COLUMNS` environment variable, then 120.
 pub fn resolve_term_width() -> u16 {
     let term = Term::stderr();
     if let Some((_, w)) = term.size_checked() {
@@ -157,10 +142,6 @@ pub fn resolve_term_width() -> u16 {
 }
 
 /// Spawn a background thread that renders progress bars and collects events.
-///
-/// `term_width` overrides the terminal width reported to `indicatif` for correct
-/// cursor math under MPI (where stderr is a pipe, not a TTY). Use
-/// [`resolve_term_width`] on the main thread before spawning.
 #[allow(clippy::too_many_lines)]
 pub fn run_progress_thread(
     receiver: mpsc::Receiver<TrainingEvent>,
@@ -227,7 +208,7 @@ pub fn run_progress_thread(
                         bar.set_position(u64::from(scenarios_complete));
                         let acc = sim_acc.get_or_insert_with(WelfordAccumulator::new);
                         acc.update(scenario_cost);
-                        let msg = if scenarios_complete >= 2 {
+                        let msg = if acc.count() >= 2 {
                             format!(
                                 "mean: {}  std: {}  CI95: +/-{}",
                                 fmt_sci(acc.mean()),
@@ -595,8 +576,6 @@ mod tests {
         ));
     }
 
-    /// Progress thread receives 5 [`TrainingEvent::SimulationProgress`] events with
-    /// distinct `scenario_cost` values and completes without panic.
     #[test]
     fn test_simulation_progress_five_events_no_panic() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
@@ -634,9 +613,6 @@ mod tests {
         );
     }
 
-    /// Progress thread accumulates 5 events; verifies collected costs match the
-    /// known `scenario_cost` values sent (integration of [`WelfordAccumulator`]
-    /// in the progress thread context).
     #[test]
     fn test_simulation_progress_accumulator_costs_collected_correctly() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
@@ -706,9 +682,6 @@ mod tests {
         );
     }
 
-    /// Progress thread accumulates 3 [`TrainingEvent::SimulationProgress`] events via
-    /// [`WelfordAccumulator`] and completes without panic. Verifies the accumulator path
-    /// in the event loop.
     #[test]
     fn test_simulation_progress_accumulator_three_events_no_panic() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();

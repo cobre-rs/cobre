@@ -2472,6 +2472,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -2994,6 +2995,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -3438,6 +3440,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -4039,6 +4042,7 @@ mod tests {
                 hydraulic_losses: None,
                 efficiency: None,
                 evaporation_coefficients_mm: None,
+                evaporation_reference_volumes_hm3: None,
                 diversion: None,
                 filling: None,
                 penalties: HydroPenalties {
@@ -4308,6 +4312,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -4509,6 +4514,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: hydro_penalties,
@@ -5359,7 +5365,7 @@ mod tests {
                         .collect();
                     EvaporationModel::Linearized {
                         coefficients,
-                        reference_volume_hm3: 100.0,
+                        reference_volumes_hm3: vec![100.0; n_stages],
                     }
                 } else {
                     EvaporationModel::None
@@ -5567,7 +5573,7 @@ mod tests {
                         .collect();
                     EvaporationModel::Linearized {
                         coefficients,
-                        reference_volume_hm3: 100.0,
+                        reference_volumes_hm3: vec![100.0; n_stages],
                     }
                 } else {
                     EvaporationModel::None
@@ -5813,7 +5819,7 @@ mod tests {
                     };
                     n_stages
                 ],
-                reference_volume_hm3: 100.0,
+                reference_volumes_hm3: vec![100.0; n_stages],
             },
             EvaporationModel::Linearized {
                 coefficients: vec![
@@ -5823,7 +5829,7 @@ mod tests {
                     };
                     n_stages
                 ],
-                reference_volume_hm3: 100.0,
+                reference_volumes_hm3: vec![100.0; n_stages],
             },
             EvaporationModel::None,
             EvaporationModel::None,
@@ -6024,6 +6030,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: hp,
@@ -6259,6 +6266,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {

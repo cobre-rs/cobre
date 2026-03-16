@@ -77,10 +77,11 @@ pub use estimation::{EstimationError, EstimationReport};
 pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use hydro_models::{
-    EvaporationModel, EvaporationModelSet, EvaporationSource, FphaHydroDetail, FphaPlane,
-    HydroModelProvenance, HydroModelSummary, LinearizedEvaporation, PrepareHydroModelsResult,
-    ProductionModelSet, ProductionModelSource, ResolvedProductionModel, build_hydro_model_summary,
-    prepare_hydro_models, resolve_evaporation_models, resolve_production_models,
+    EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
+    FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
+    PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource, ResolvedProductionModel,
+    build_hydro_model_summary, prepare_hydro_models, resolve_evaporation_models,
+    resolve_production_models,
 };
 pub use indexer::{EvaporationIndices, FphaRowRange, StageIndexer};
 pub use inflow_method::InflowNonNegativityMethod;

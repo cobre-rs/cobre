@@ -175,7 +175,7 @@ impl ProductionModelSet {
 /// ```
 ///
 /// where `V` is the reservoir volume (hm³) and `V_ref` is the reference volume
-/// stored in [`EvaporationModel::Linearized::reference_volume_hm3`].
+/// for each stage stored in [`EvaporationModel::Linearized::reference_volumes_hm3`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearizedEvaporation {
     /// Constant term of the linearized evaporation (hm³).
@@ -202,8 +202,11 @@ pub enum EvaporationModel {
     Linearized {
         /// Per-stage linearization coefficients; indexed by stage position.
         coefficients: Vec<LinearizedEvaporation>,
-        /// Reference storage volume (hm³) at which the linearization was computed.
-        reference_volume_hm3: f64,
+        /// Reference storage volumes (hm³) at which the linearization was computed,
+        /// one entry per stage. When using the midpoint fallback all entries are
+        /// identical; when using user-supplied seasonal volumes each entry reflects
+        /// the reference volume for that stage's calendar month.
+        reference_volumes_hm3: Vec<f64>,
     },
 }
 
@@ -279,6 +282,18 @@ pub enum EvaporationSource {
     LinearizedFromGeometry,
 }
 
+/// Source of the reference volume used for evaporation linearization.
+///
+/// Tracked per hydro plant and included in [`HydroModelProvenance`] for
+/// display and auditing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaporationReferenceSource {
+    /// User-supplied per-season reference volumes from the entity definition.
+    UserSupplied,
+    /// Default midpoint: `(min_storage + max_storage) / 2`.
+    DefaultMidpoint,
+}
+
 /// Provenance record for all hydro plants' production and evaporation models.
 ///
 /// One entry per hydro plant in declaration order (canonical ID order).
@@ -288,6 +303,11 @@ pub struct HydroModelProvenance {
     pub production_sources: Vec<(EntityId, ProductionModelSource)>,
     /// `(entity_id, source)` pairs for each hydro's evaporation model.
     pub evaporation_sources: Vec<(EntityId, EvaporationSource)>,
+    /// `(entity_id, source)` pairs for each hydro's evaporation reference volume.
+    ///
+    /// For hydros with [`EvaporationSource::NotModeled`], this is set to
+    /// [`EvaporationReferenceSource::DefaultMidpoint`] (irrelevant but consistent).
+    pub evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)>,
 }
 
 // ── Summary types ─────────────────────────────────────────────────────────────
@@ -327,6 +347,10 @@ pub struct HydroModelSummary {
     pub n_evaporation: usize,
     /// Number of hydro plants with no evaporation model.
     pub n_no_evaporation: usize,
+    /// Number of hydro plants with evaporation that used user-supplied reference volumes.
+    pub n_user_supplied_ref: usize,
+    /// Number of hydro plants with evaporation that used the default midpoint reference volume.
+    pub n_default_midpoint_ref: usize,
 }
 
 // ── Pipeline result ───────────────────────────────────────────────────────────
@@ -400,12 +424,19 @@ impl PrepareHydroModelsResult {
             .map(|h| (h.id, EvaporationSource::NotModeled))
             .collect();
 
+        let evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)> = system
+            .hydros()
+            .iter()
+            .map(|h| (h.id, EvaporationReferenceSource::DefaultMidpoint))
+            .collect();
+
         Self {
             production,
             evaporation,
             provenance: HydroModelProvenance {
                 production_sources,
                 evaporation_sources,
+                evaporation_reference_sources,
             },
         }
     }
@@ -505,6 +536,24 @@ pub fn build_hydro_model_summary(
         }
     }
 
+    let mut n_user_supplied_ref = 0usize;
+    let mut n_default_midpoint_ref = 0usize;
+
+    // Count reference source only for hydros that actually have evaporation.
+    for ((_, evap_src), (_, ref_src)) in result
+        .provenance
+        .evaporation_sources
+        .iter()
+        .zip(result.provenance.evaporation_reference_sources.iter())
+    {
+        if *evap_src == EvaporationSource::LinearizedFromGeometry {
+            match ref_src {
+                EvaporationReferenceSource::UserSupplied => n_user_supplied_ref += 1,
+                EvaporationReferenceSource::DefaultMidpoint => n_default_midpoint_ref += 1,
+            }
+        }
+    }
+
     HydroModelSummary {
         n_constant,
         n_fpha,
@@ -512,6 +561,8 @@ pub fn build_hydro_model_summary(
         fpha_details,
         n_evaporation,
         n_no_evaporation,
+        n_user_supplied_ref,
+        n_default_midpoint_ref,
     }
 }
 
@@ -537,7 +588,8 @@ pub fn prepare_hydro_models(
     case_dir: &Path,
 ) -> Result<PrepareHydroModelsResult, SddpError> {
     let (production, production_sources) = resolve_production_models(system, case_dir)?;
-    let (evaporation, evaporation_sources) = resolve_evaporation_models(system, case_dir)?;
+    let (evaporation, evaporation_sources, evaporation_reference_sources) =
+        resolve_evaporation_models(system, case_dir)?;
 
     Ok(PrepareHydroModelsResult {
         production,
@@ -545,6 +597,7 @@ pub fn prepare_hydro_models(
         provenance: HydroModelProvenance {
             production_sources,
             evaporation_sources,
+            evaporation_reference_sources,
         },
     })
 }
@@ -993,10 +1046,18 @@ fn validate_hyperplane_row(
 /// | Computed `k_evap_v` or `k_evap0` is NaN or infinite             | [`SddpError::Validation`] |
 /// | Stage has no `season_id` (cannot map to a month)                 | [`SddpError::Validation`] |
 /// | I/O failure loading geometry Parquet                             | [`SddpError::Io`]         |
+#[allow(clippy::type_complexity)]
 pub fn resolve_evaporation_models(
     system: &System,
     case_dir: &Path,
-) -> Result<(EvaporationModelSet, Vec<(EntityId, EvaporationSource)>), SddpError> {
+) -> Result<
+    (
+        EvaporationModelSet,
+        Vec<(EntityId, EvaporationSource)>,
+        Vec<(EntityId, EvaporationReferenceSource)>,
+    ),
+    SddpError,
+> {
     // ── Step 1: scan for any hydro that needs evaporation ─────────────────────
     let any_evaporation = system
         .hydros()
@@ -1015,7 +1076,16 @@ pub fn resolve_evaporation_models(
             .iter()
             .map(|h| (h.id, EvaporationSource::NotModeled))
             .collect();
-        return Ok((EvaporationModelSet::new(models), provenance));
+        let reference_sources = system
+            .hydros()
+            .iter()
+            .map(|h| (h.id, EvaporationReferenceSource::DefaultMidpoint))
+            .collect();
+        return Ok((
+            EvaporationModelSet::new(models),
+            provenance,
+            reference_sources,
+        ));
     }
 
     // ── Step 3: load hydro_geometry.parquet ───────────────────────────────────
@@ -1061,19 +1131,30 @@ pub fn resolve_evaporation_models(
 /// # Errors
 ///
 /// Same error conditions as [`resolve_evaporation_models`].
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
 fn resolve_evaporation_core(
     hydros: &[cobre_core::entities::hydro::Hydro],
     geometry_map: &HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>>,
     study_stages: &[&cobre_core::temporal::Stage],
-) -> Result<(EvaporationModelSet, Vec<(EntityId, EvaporationSource)>), SddpError> {
+) -> Result<
+    (
+        EvaporationModelSet,
+        Vec<(EntityId, EvaporationSource)>,
+        Vec<(EntityId, EvaporationReferenceSource)>,
+    ),
+    SddpError,
+> {
     let n_stages = study_stages.len();
     let mut all_models: Vec<EvaporationModel> = Vec::with_capacity(hydros.len());
     let mut provenance: Vec<(EntityId, EvaporationSource)> = Vec::with_capacity(hydros.len());
+    let mut reference_provenance: Vec<(EntityId, EvaporationReferenceSource)> =
+        Vec::with_capacity(hydros.len());
 
     for hydro in hydros {
         let Some(coefficients_mm) = hydro.evaporation_coefficients_mm else {
             all_models.push(EvaporationModel::None);
             provenance.push((hydro.id, EvaporationSource::NotModeled));
+            reference_provenance.push((hydro.id, EvaporationReferenceSource::DefaultMidpoint));
             continue;
         };
 
@@ -1101,15 +1182,34 @@ fn resolve_evaporation_core(
             )));
         }
 
-        // ── Compute reference volume ──────────────────────────────────────────
-        let v_ref = f64::midpoint(hydro.min_storage_hm3, hydro.max_storage_hm3);
+        // ── Determine reference volume strategy ───────────────────────────────
+        // When the hydro supplies per-season reference volumes, use them per
+        // stage (compute A and dA/dv inside the loop). Otherwise fall back to
+        // the midpoint once outside the loop.
+        let ref_source = if hydro.evaporation_reference_volumes_hm3.is_some() {
+            EvaporationReferenceSource::UserSupplied
+        } else {
+            EvaporationReferenceSource::DefaultMidpoint
+        };
 
-        // ── Interpolate A(v_ref) and dA/dv at v_ref ──────────────────────────
-        let a_ref = interpolate_area(geo_rows, v_ref);
-        let da_dv = area_derivative(geo_rows, v_ref);
+        // For the midpoint path, pre-compute v_ref / A(v_ref) / dA/dv once.
+        // These are only accessed when evaporation_reference_volumes_hm3 is None,
+        // so the values are always initialised before use.
+        let midpoint_v = f64::midpoint(hydro.min_storage_hm3, hydro.max_storage_hm3);
+        let midpoint_area = if hydro.evaporation_reference_volumes_hm3.is_none() {
+            interpolate_area(geo_rows, midpoint_v)
+        } else {
+            0.0 // unused; per-season path computes per stage
+        };
+        let midpoint_slope = if hydro.evaporation_reference_volumes_hm3.is_none() {
+            area_derivative(geo_rows, midpoint_v)
+        } else {
+            0.0 // unused; per-season path computes per stage
+        };
 
         // ── Compute per-stage coefficients ────────────────────────────────────
         let mut stage_coefficients: Vec<LinearizedEvaporation> = Vec::with_capacity(n_stages);
+        let mut stage_ref_volumes: Vec<f64> = Vec::with_capacity(n_stages);
 
         for stage in study_stages {
             let month_index = stage.season_id.ok_or_else(|| {
@@ -1131,6 +1231,21 @@ fn resolve_evaporation_core(
             }
 
             let c_ev = coefficients_mm[month_index];
+
+            // Resolve v_ref, a_ref, da_dv for this stage.
+            let (v_ref, a_ref, da_dv) =
+                if let Some(ref_vols) = hydro.evaporation_reference_volumes_hm3 {
+                    // Per-season path: look up the reference volume for this month.
+                    let v = ref_vols[month_index];
+                    (
+                        v,
+                        interpolate_area(geo_rows, v),
+                        area_derivative(geo_rows, v),
+                    )
+                } else {
+                    // Midpoint path: use the values pre-computed outside the loop.
+                    (midpoint_v, midpoint_area, midpoint_slope)
+                };
 
             // Total stage duration in hours (sum of all block durations).
             let stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
@@ -1157,16 +1272,22 @@ fn resolve_evaporation_core(
             }
 
             stage_coefficients.push(LinearizedEvaporation { k_evap0, k_evap_v });
+            stage_ref_volumes.push(v_ref);
         }
 
         all_models.push(EvaporationModel::Linearized {
             coefficients: stage_coefficients,
-            reference_volume_hm3: v_ref,
+            reference_volumes_hm3: stage_ref_volumes,
         });
         provenance.push((hydro.id, EvaporationSource::LinearizedFromGeometry));
+        reference_provenance.push((hydro.id, ref_source));
     }
 
-    Ok((EvaporationModelSet::new(all_models), provenance))
+    Ok((
+        EvaporationModelSet::new(all_models),
+        provenance,
+        reference_provenance,
+    ))
 }
 
 // ── Evaporation geometry helpers ──────────────────────────────────────────────
@@ -1305,10 +1426,11 @@ mod tests {
     };
 
     use super::{
-        EvaporationModel, EvaporationModelSet, EvaporationSource, FphaHydroDetail, FphaPlane,
-        HydroModelProvenance, HydroModelSummary, LinearizedEvaporation, PrepareHydroModelsResult,
-        ProductionModelSet, ProductionModelSource, ResolvedProductionModel, build_fpha_model,
-        build_hydro_model_summary, determine_source, find_model_for_stage, validate_hyperplane_row,
+        EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
+        FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
+        PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource,
+        ResolvedProductionModel, build_fpha_model, build_hydro_model_summary, determine_source,
+        find_model_for_stage, validate_hyperplane_row,
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1375,6 +1497,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: zero_penalties(),
@@ -1990,7 +2113,7 @@ mod tests {
 
         let evap_lin = EvaporationModel::Linearized {
             coefficients: vec![coeff],
-            reference_volume_hm3: 100.0,
+            reference_volumes_hm3: vec![100.0],
         };
         let _ = format!("{evap_lin:?}");
 
@@ -2009,12 +2132,18 @@ mod tests {
             fpha_details: vec![detail],
             n_evaporation: 2,
             n_no_evaporation: 2,
+            n_user_supplied_ref: 1,
+            n_default_midpoint_ref: 1,
         };
         let _ = format!("{summary:?}");
 
         let prov = HydroModelProvenance {
             production_sources: vec![(EntityId(1), ProductionModelSource::DefaultConstant)],
             evaporation_sources: vec![(EntityId(1), EvaporationSource::NotModeled)],
+            evaporation_reference_sources: vec![(
+                EntityId(1),
+                EvaporationReferenceSource::DefaultMidpoint,
+            )],
         };
         let _ = format!("{prov:?}");
 
@@ -2151,7 +2280,7 @@ mod tests {
                         k_evap_v: 0.02,
                     },
                 ],
-                reference_volume_hm3: 200.0,
+                reference_volumes_hm3: vec![200.0, 200.0],
             },
             EvaporationModel::None,
             EvaporationModel::Linearized {
@@ -2159,7 +2288,7 @@ mod tests {
                     k_evap0: 0.3,
                     k_evap_v: 0.005,
                 }],
-                reference_volume_hm3: 50.0,
+                reference_volumes_hm3: vec![50.0],
             },
         ]);
 
@@ -2198,7 +2327,7 @@ mod tests {
             EvaporationModel::None,
             EvaporationModel::Linearized {
                 coefficients: vec![coeff0, coeff1],
-                reference_volume_hm3: 100.0,
+                reference_volumes_hm3: vec![100.0, 100.0],
             },
             EvaporationModel::None,
         ]);
@@ -2445,6 +2574,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: evap_mm,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: zero_penalties(),
@@ -2469,7 +2599,7 @@ mod tests {
         let study_stages = [make_stage_with_month(0, 0)];
         let stage_refs: Vec<_> = study_stages.iter().collect();
 
-        let (models, provenance) =
+        let (models, provenance, _ref_provenance) =
             super::resolve_evaporation_core(&hydros, &geometry_map, &stage_refs)
                 .expect("should succeed for all-no-evaporation");
 
@@ -2524,7 +2654,7 @@ mod tests {
         let study_stages = [make_stage_with_month(0, 0)]; // January
         let stage_refs: Vec<_> = study_stages.iter().collect();
 
-        let (models, provenance) =
+        let (models, provenance, _ref_provenance) =
             super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
                 .expect("should succeed");
 
@@ -2535,11 +2665,17 @@ mod tests {
         match models.model(0) {
             EvaporationModel::Linearized {
                 coefficients,
-                reference_volume_hm3,
+                reference_volumes_hm3,
             } => {
+                assert_eq!(
+                    reference_volumes_hm3.len(),
+                    1,
+                    "must have one ref volume per stage"
+                );
                 assert!(
-                    (reference_volume_hm3 - 300.0).abs() < 1e-10,
-                    "v_ref must be (100+500)/2 = 300, got {reference_volume_hm3}"
+                    (reference_volumes_hm3[0] - 300.0).abs() < 1e-10,
+                    "v_ref must be (100+500)/2 = 300, got {}",
+                    reference_volumes_hm3[0]
                 );
                 assert_eq!(coefficients.len(), 1);
 
@@ -2587,7 +2723,7 @@ mod tests {
         let study_stages = [make_stage_with_month(0, 0)]; // January
         let stage_refs: Vec<_> = study_stages.iter().collect();
 
-        let (models, provenance) =
+        let (models, provenance, _ref_provenance) =
             super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
                 .expect("negative evaporation must succeed");
 
@@ -2669,7 +2805,7 @@ mod tests {
         let study_stages = [make_stage_with_month(0, 0)];
         let stage_refs: Vec<_> = study_stages.iter().collect();
 
-        let (models, provenance) =
+        let (models, provenance, _ref_provenance) =
             super::resolve_evaporation_core(&hydros, &geometry_map, &stage_refs)
                 .expect("should succeed");
 
@@ -2736,6 +2872,316 @@ mod tests {
         assert!(
             matches!(err, crate::SddpError::Validation(_)),
             "expected Validation error for non-finite coefficients, got {err:?}"
+        );
+    }
+
+    // ── Per-season reference volume tests ────────────────────────────────────
+
+    /// resolve_evaporation_core: user-supplied per-season reference volumes produce
+    /// stage coefficients derived from the month-specific v_ref.
+    ///
+    /// Geometry: volumes [100, 200, 300, 400, 500], areas [1.0, 1.5, 2.0, 2.5, 3.0].
+    /// ref_vols[0] = 200 (January), ref_vols[1] = 400 (February).
+    /// Hydro: v_min=100, v_max=500.
+    /// Stage 0: season_id=0, 744h. Stage 1: season_id=1, 672h.
+    ///
+    /// For stage 0 (v_ref=200): A(200)=1.5, dA/dv=(2.0-1.5)/(300-200)=0.005
+    /// For stage 1 (v_ref=400): A(400)=2.5, dA/dv=(3.0-2.5)/(500-400)=0.005
+    #[test]
+    fn resolve_evaporation_per_season_ref_vols_produces_per_stage_coefficients() {
+        let mut ref_vols = [0.0f64; 12];
+        ref_vols[0] = 200.0; // January
+        ref_vols[1] = 400.0; // February
+
+        let mut hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some([5.0f64; 12]));
+        hydro.evaporation_reference_volumes_hm3 = Some(ref_vols);
+
+        let geo_rows = make_geo_rows(&[
+            (100.0, 1.0),
+            (200.0, 1.5),
+            (300.0, 2.0),
+            (400.0, 2.5),
+            (500.0, 3.0),
+        ]);
+        let geo_refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        // Two stages: January (744h) and February (672h).
+        let stage_jan = make_stage_with_month(0, 0);
+        let mut stage_feb = make_stage_with_month(1, 1);
+        stage_feb.blocks = vec![Block {
+            index: 0,
+            name: "FEB".to_string(),
+            duration_hours: 672.0,
+        }];
+        let stage_refs = vec![&stage_jan, &stage_feb];
+
+        let (models, evap_provenance, ref_provenance) =
+            super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+                .expect("should succeed");
+
+        assert_eq!(models.n_hydros(), 1);
+        assert_eq!(
+            evap_provenance[0].1,
+            EvaporationSource::LinearizedFromGeometry
+        );
+        assert_eq!(
+            ref_provenance[0].1,
+            EvaporationReferenceSource::UserSupplied,
+            "user-supplied volumes must produce UserSupplied provenance"
+        );
+
+        match models.model(0) {
+            EvaporationModel::Linearized {
+                coefficients,
+                reference_volumes_hm3,
+            } => {
+                assert_eq!(coefficients.len(), 2, "must have 2 stage coefficients");
+                assert_eq!(reference_volumes_hm3.len(), 2, "must have 2 ref volumes");
+
+                // Stage 0: v_ref=200
+                assert!(
+                    (reference_volumes_hm3[0] - 200.0).abs() < 1e-10,
+                    "stage 0 ref vol must be 200, got {}",
+                    reference_volumes_hm3[0]
+                );
+
+                // Stage 1: v_ref=400
+                assert!(
+                    (reference_volumes_hm3[1] - 400.0).abs() < 1e-10,
+                    "stage 1 ref vol must be 400, got {}",
+                    reference_volumes_hm3[1]
+                );
+
+                // Verify stage 0 coefficients using v_ref=200.
+                let c_ev = 5.0_f64;
+                let da_dv = 0.005_f64; // same slope in both segments
+
+                let zeta_jan = 1.0 / (3.6 * 744.0);
+                let a_jan = 1.5_f64;
+                let v_ref_jan = 200.0_f64;
+                let expected_k_evap_v_jan = zeta_jan * c_ev * da_dv;
+                let expected_k_evap0_jan =
+                    zeta_jan * c_ev * a_jan - expected_k_evap_v_jan * v_ref_jan;
+                assert!(
+                    (coefficients[0].k_evap_v - expected_k_evap_v_jan).abs() < 1e-10,
+                    "stage 0 k_evap_v: expected {expected_k_evap_v_jan}, got {}",
+                    coefficients[0].k_evap_v
+                );
+                assert!(
+                    (coefficients[0].k_evap0 - expected_k_evap0_jan).abs() < 1e-10,
+                    "stage 0 k_evap0: expected {expected_k_evap0_jan}, got {}",
+                    coefficients[0].k_evap0
+                );
+
+                // Verify stage 1 coefficients using v_ref=400.
+                let zeta_feb = 1.0 / (3.6 * 672.0);
+                let a_feb = 2.5_f64;
+                let v_ref_feb = 400.0_f64;
+                let expected_k_evap_v_feb = zeta_feb * c_ev * da_dv;
+                let expected_k_evap0_feb =
+                    zeta_feb * c_ev * a_feb - expected_k_evap_v_feb * v_ref_feb;
+                assert!(
+                    (coefficients[1].k_evap_v - expected_k_evap_v_feb).abs() < 1e-10,
+                    "stage 1 k_evap_v: expected {expected_k_evap_v_feb}, got {}",
+                    coefficients[1].k_evap_v
+                );
+                assert!(
+                    (coefficients[1].k_evap0 - expected_k_evap0_feb).abs() < 1e-10,
+                    "stage 1 k_evap0: expected {expected_k_evap0_feb}, got {}",
+                    coefficients[1].k_evap0
+                );
+            }
+            other => panic!("expected Linearized, got {other:?}"),
+        }
+    }
+
+    /// resolve_evaporation_core: None reference volumes produce DefaultMidpoint provenance and
+    /// all reference_volumes_hm3 entries equal (v_min + v_max) / 2.
+    #[test]
+    fn resolve_evaporation_none_ref_vols_produces_default_midpoint_provenance() {
+        // `make_hydro_with_evaporation` already sets evaporation_reference_volumes_hm3 = None.
+        let hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some([5.0f64; 12]));
+
+        let geo_rows = make_geo_rows(&[
+            (100.0, 1.0),
+            (200.0, 1.5),
+            (300.0, 2.0),
+            (400.0, 2.5),
+            (500.0, 3.0),
+        ]);
+        let geo_refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        // Two stages with different months (January = 0, June = 5).
+        let stage_january = make_stage_with_month(0, 0);
+        let stage_june = make_stage_with_month(1, 5);
+        let stage_refs = vec![&stage_january, &stage_june];
+
+        let (models, evap_provenance, ref_provenance) =
+            super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+                .expect("should succeed");
+
+        assert_eq!(
+            ref_provenance[0].1,
+            EvaporationReferenceSource::DefaultMidpoint,
+            "None reference volumes must produce DefaultMidpoint provenance"
+        );
+        assert_eq!(
+            evap_provenance[0].1,
+            EvaporationSource::LinearizedFromGeometry
+        );
+
+        let expected_v_ref = f64::midpoint(100.0, 500.0); // 300.0
+
+        match models.model(0) {
+            EvaporationModel::Linearized {
+                reference_volumes_hm3,
+                ..
+            } => {
+                assert_eq!(
+                    reference_volumes_hm3.len(),
+                    2,
+                    "must have 2 ref volumes (one per stage)"
+                );
+                for (s, &v) in reference_volumes_hm3.iter().enumerate() {
+                    assert!(
+                        (v - expected_v_ref).abs() < 1e-10,
+                        "stage {s} ref vol must be midpoint {expected_v_ref}, got {v}"
+                    );
+                }
+            }
+            other => panic!("expected Linearized, got {other:?}"),
+        }
+    }
+
+    /// resolve_evaporation_core: mixed hydro set (one with user-supplied, one without)
+    /// produces correct per-hydro provenance.
+    #[test]
+    fn resolve_evaporation_mixed_ref_vol_provenance() {
+        let mut ref_vols = [300.0f64; 12];
+        ref_vols[0] = 200.0;
+
+        let mut hydro_with = make_hydro_with_evaporation(0, 100.0, 500.0, Some([5.0f64; 12]));
+        hydro_with.evaporation_reference_volumes_hm3 = Some(ref_vols);
+
+        let hydro_without = make_hydro_with_evaporation(1, 100.0, 500.0, Some([5.0f64; 12]));
+        // hydro_without.evaporation_reference_volumes_hm3 is already None.
+
+        let geo_rows = make_geo_rows(&[(100.0, 1.0), (300.0, 2.0), (500.0, 3.0)]);
+        let refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), refs.clone());
+        geometry_map.insert(EntityId::from(1), refs);
+
+        let stage = make_stage_with_month(0, 0);
+        let stage_refs = vec![&stage];
+
+        let (_, _, ref_provenance) = super::resolve_evaporation_core(
+            &[hydro_with, hydro_without],
+            &geometry_map,
+            &stage_refs,
+        )
+        .expect("should succeed");
+
+        assert_eq!(ref_provenance.len(), 2);
+        assert_eq!(
+            ref_provenance[0].1,
+            EvaporationReferenceSource::UserSupplied,
+            "hydro with ref vols must be UserSupplied"
+        );
+        assert_eq!(
+            ref_provenance[1].1,
+            EvaporationReferenceSource::DefaultMidpoint,
+            "hydro without ref vols must be DefaultMidpoint"
+        );
+    }
+
+    /// build_hydro_model_summary counts n_user_supplied_ref and n_default_midpoint_ref correctly.
+    #[test]
+    fn build_hydro_model_summary_ref_source_counts() {
+        // 3 hydros: IDs 1, 2, 3.
+        // IDs 1 and 2 have evaporation (1=UserSupplied, 2=DefaultMidpoint).
+        // ID 3 has no evaporation (DefaultMidpoint, irrelevant for count).
+        let hydro_ids = [1i32, 2, 3];
+        let hydros = hydro_ids
+            .iter()
+            .map(|&id| {
+                make_hydro(
+                    id,
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s: 0.95,
+                    },
+                )
+            })
+            .collect();
+        let system = make_system_for_summary(hydros);
+
+        let n_hydros = hydro_ids.len();
+        let n_stages = 1;
+        let models: Vec<Vec<ResolvedProductionModel>> = (0..n_hydros)
+            .map(|_| vec![ResolvedProductionModel::ConstantProductivity { productivity: 0.95 }])
+            .collect();
+        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production_sources = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
+            .collect();
+
+        let evaporation_sources = vec![
+            (EntityId(1), EvaporationSource::LinearizedFromGeometry),
+            (EntityId(2), EvaporationSource::LinearizedFromGeometry),
+            (EntityId(3), EvaporationSource::NotModeled),
+        ];
+        let evaporation_reference_sources = vec![
+            (EntityId(1), EvaporationReferenceSource::UserSupplied),
+            (EntityId(2), EvaporationReferenceSource::DefaultMidpoint),
+            (EntityId(3), EvaporationReferenceSource::DefaultMidpoint),
+        ];
+        let evap_models = vec![
+            EvaporationModel::Linearized {
+                coefficients: vec![LinearizedEvaporation {
+                    k_evap0: 1.0,
+                    k_evap_v: 0.01,
+                }],
+                reference_volumes_hm3: vec![200.0],
+            },
+            EvaporationModel::Linearized {
+                coefficients: vec![LinearizedEvaporation {
+                    k_evap0: 1.0,
+                    k_evap_v: 0.01,
+                }],
+                reference_volumes_hm3: vec![300.0],
+            },
+            EvaporationModel::None,
+        ];
+
+        let result = PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(evap_models),
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+                evaporation_reference_sources,
+            },
+        };
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(summary.n_evaporation, 2, "n_evaporation must be 2");
+        assert_eq!(summary.n_no_evaporation, 1, "n_no_evaporation must be 1");
+        assert_eq!(
+            summary.n_user_supplied_ref, 1,
+            "n_user_supplied_ref must be 1 (ID 1)"
+        );
+        assert_eq!(
+            summary.n_default_midpoint_ref, 1,
+            "n_default_midpoint_ref must be 1 (ID 2; ID 3 has no evaporation)"
         );
     }
 
@@ -2809,6 +3255,10 @@ mod tests {
             .iter()
             .map(|&id| (EntityId(id), EvaporationSource::NotModeled))
             .collect();
+        let evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)> = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), EvaporationReferenceSource::DefaultMidpoint))
+            .collect();
         let evap_models: Vec<EvaporationModel> =
             hydro_ids.iter().map(|_| EvaporationModel::None).collect();
         PrepareHydroModelsResult {
@@ -2817,6 +3267,7 @@ mod tests {
             provenance: HydroModelProvenance {
                 production_sources,
                 evaporation_sources,
+                evaporation_reference_sources,
             },
         }
     }
@@ -2878,6 +3329,10 @@ mod tests {
             .iter()
             .map(|(id, _)| (EntityId(*id), EvaporationSource::NotModeled))
             .collect();
+        let evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)> = all_ids
+            .iter()
+            .map(|(id, _)| (EntityId(*id), EvaporationReferenceSource::DefaultMidpoint))
+            .collect();
         let evap_models: Vec<EvaporationModel> =
             all_ids.iter().map(|_| EvaporationModel::None).collect();
         PrepareHydroModelsResult {
@@ -2886,6 +3341,7 @@ mod tests {
             provenance: HydroModelProvenance {
                 production_sources,
                 evaporation_sources,
+                evaporation_reference_sources,
             },
         }
     }
@@ -2931,12 +3387,17 @@ mod tests {
                             k_evap0: 1.0,
                             k_evap_v: 0.01,
                         }],
-                        reference_volume_hm3: 500.0,
+                        reference_volumes_hm3: vec![500.0],
                     }
                 } else {
                     EvaporationModel::None
                 }
             })
+            .collect();
+        // All test hydros use the default midpoint (no per-season volumes in this fixture).
+        let evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)> = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), EvaporationReferenceSource::DefaultMidpoint))
             .collect();
         PrepareHydroModelsResult {
             production,
@@ -2944,6 +3405,7 @@ mod tests {
             provenance: HydroModelProvenance {
                 production_sources,
                 evaporation_sources,
+                evaporation_reference_sources,
             },
         }
     }
@@ -3118,12 +3580,17 @@ mod tests {
                             k_evap0: 1.0,
                             k_evap_v: 0.01,
                         }],
-                        reference_volume_hm3: 500.0,
+                        reference_volumes_hm3: vec![500.0],
                     }
                 } else {
                     EvaporationModel::None
                 }
             })
+            .collect();
+        // All test hydros use the default midpoint (no per-season volumes in this fixture).
+        let evaporation_reference_sources: Vec<(EntityId, EvaporationReferenceSource)> = sorted
+            .iter()
+            .map(|(id, _)| (EntityId(*id), EvaporationReferenceSource::DefaultMidpoint))
             .collect();
         let result = PrepareHydroModelsResult {
             production,
@@ -3131,6 +3598,7 @@ mod tests {
             provenance: HydroModelProvenance {
                 production_sources,
                 evaporation_sources,
+                evaporation_reference_sources,
             },
         };
 

@@ -24,8 +24,8 @@ use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_sddp::{
-    ResolvedProductionModel, StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models,
-    setup::prepare_stochastic,
+    EvaporationModel, EvaporationReferenceSource, ResolvedProductionModel, StudySetup,
+    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
 
@@ -199,4 +199,113 @@ fn fpha_evaporation_case_converges() {
         "simulation mean cost must be positive; got {}",
         summary.mean_cost
     );
+}
+
+// ===========================================================================
+// Provenance integration test
+// ===========================================================================
+
+/// Verifies that after loading the updated 4ree-fpha-evap case and running
+/// `prepare_hydro_models`, the evaporation reference provenance is correct:
+///
+/// - Hydro 0 (FPHA + user-supplied `reference_volumes_hm3`) → `UserSupplied`
+/// - Hydro 1 (FPHA + user-supplied `reference_volumes_hm3`) → `UserSupplied`
+/// - Hydro 2 (constant productivity + no `reference_volumes_hm3`) → `DefaultMidpoint`
+///
+/// Also verifies that the per-stage reference volumes for hydro 0 match the
+/// expected season-to-volume mapping from the `reference_volumes_hm3` array.
+/// Stages 0-11 have `season_ids` 0-11 (January-December), so each stage's
+/// reference volume must equal `reference_volumes_hm3[season_id]`.
+#[test]
+fn test_4ree_fpha_evap_seasonal_ref_provenance() {
+    let case_dir = Path::new("../../examples/4ree-fpha-evap");
+
+    // ── Load system ───────────────────────────────────────────────────────────
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    assert_eq!(
+        system.hydros().len(),
+        4,
+        "system must contain exactly 4 hydro plants"
+    );
+
+    // ── Run hydro model preprocessing ────────────────────────────────────────
+
+    let result =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    // ── Verify provenance per hydro ───────────────────────────────────────────
+    //
+    // Hydros are stored in canonical ID order (0, 1, 2, 3).
+    // Hydro 3 has no evaporation block; its reference provenance is DefaultMidpoint
+    // (irrelevant but consistent, as documented in HydroModelProvenance).
+
+    let ref_sources = &result.provenance.evaporation_reference_sources;
+    assert_eq!(
+        ref_sources.len(),
+        4,
+        "must have one reference source entry per hydro"
+    );
+
+    // Hydro 0: FPHA with user-supplied reference volumes.
+    assert_eq!(
+        ref_sources[0].1,
+        EvaporationReferenceSource::UserSupplied,
+        "hydro 0 must have UserSupplied reference source"
+    );
+
+    // Hydro 1: FPHA with user-supplied reference volumes.
+    assert_eq!(
+        ref_sources[1].1,
+        EvaporationReferenceSource::UserSupplied,
+        "hydro 1 must have UserSupplied reference source"
+    );
+
+    // Hydro 2: constant productivity with evaporation but no reference volumes.
+    assert_eq!(
+        ref_sources[2].1,
+        EvaporationReferenceSource::DefaultMidpoint,
+        "hydro 2 must have DefaultMidpoint reference source (no user-supplied volumes)"
+    );
+
+    // ── Verify per-stage reference volumes for hydro 0 ───────────────────────
+    //
+    // The stages in this case run January–December (season_ids 0–11).
+    // The reference_volumes_hm3 array for hydro 0 is indexed by month (0-based),
+    // so stage t (season_id = t) must use reference_volumes_hm3[t].
+    //
+    // Expected values from hydros.json hydro 0:
+    //   Jan=140000, Feb=150000, Mar=160000, Apr=170000, May=170000, Jun=150000,
+    //   Jul=130000, Aug=110000, Sep=100000, Oct=100000, Nov=110000, Dec=125000
+    let expected_ref_vols: [f64; 12] = [
+        140_000.0, 150_000.0, 160_000.0, 170_000.0, 170_000.0, 150_000.0, 130_000.0, 110_000.0,
+        100_000.0, 100_000.0, 110_000.0, 125_000.0,
+    ];
+
+    match result.evaporation.model(0) {
+        EvaporationModel::Linearized {
+            reference_volumes_hm3,
+            ..
+        } => {
+            assert_eq!(
+                reference_volumes_hm3.len(),
+                12,
+                "hydro 0 must have 12 per-stage reference volumes (one per study stage)"
+            );
+            for (stage, (&actual, &expected)) in reference_volumes_hm3
+                .iter()
+                .zip(expected_ref_vols.iter())
+                .enumerate()
+            {
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "hydro 0 stage {stage}: expected reference volume {expected}, got {actual}"
+                );
+            }
+        }
+        EvaporationModel::None => {
+            panic!("hydro 0 must have a Linearized evaporation model, got None");
+        }
+    }
 }

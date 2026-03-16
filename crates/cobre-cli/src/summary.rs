@@ -128,9 +128,25 @@ fn hydro_plural(count: usize) -> &'static str {
 }
 
 /// Format the evaporation detail line for a [`HydroModelSummary`].
+///
+/// When there are no evaporating hydros the line has no reference source detail.
+/// When all evaporating hydros share a single source the label is unqualified;
+/// when they are split between sources the counts are shown explicitly.
 fn format_evaporation_line(summary: &HydroModelSummary) -> String {
+    if summary.n_evaporation == 0 {
+        return format!(
+            "0 hydros linearized, {} {} without",
+            summary.n_no_evaporation,
+            hydro_plural(summary.n_no_evaporation),
+        );
+    }
+    let ref_detail = match (summary.n_user_supplied_ref, summary.n_default_midpoint_ref) {
+        (0, _) => "midpoint v_ref".to_string(),
+        (_, 0) => "user v_ref".to_string(),
+        (u, m) => format!("{u} user v_ref, {m} midpoint v_ref"),
+    };
     format!(
-        "{} {} linearized (from geometry), {} {} without",
+        "{} {} linearized (from geometry, {ref_detail}), {} {} without",
         summary.n_evaporation,
         hydro_plural(summary.n_evaporation),
         summary.n_no_evaporation,
@@ -1156,6 +1172,8 @@ mod tests {
             ],
             n_evaporation: 3,
             n_no_evaporation: 1,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 3,
         }
     }
 
@@ -1167,6 +1185,8 @@ mod tests {
             fpha_details: vec![],
             n_evaporation: 0,
             n_no_evaporation: 4,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 0,
         }
     }
 
@@ -1178,6 +1198,8 @@ mod tests {
             fpha_details: vec![],
             n_evaporation: 162,
             n_no_evaporation: 3,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 162,
         }
     }
 
@@ -1275,6 +1297,8 @@ mod tests {
             fpha_details: vec![],
             n_evaporation: 1,
             n_no_evaporation: 2,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 1,
         };
         let s = format_hydro_model_summary_string(&summary);
 
@@ -1312,5 +1336,106 @@ mod tests {
     fn print_hydro_model_summary_all_fpha_does_not_panic() {
         let summary = make_hydro_model_summary_all_fpha();
         print_hydro_model_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    // ── format_evaporation_line reference-source variant tests ───────────────
+
+    /// AC: all-midpoint — line contains "midpoint `v_ref`" and does NOT contain "user `v_ref`".
+    #[test]
+    fn test_evaporation_line_all_midpoint() {
+        let summary = HydroModelSummary {
+            n_constant: 2,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 2,
+            n_no_evaporation: 0,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 2,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("midpoint v_ref"),
+            "all-midpoint must contain 'midpoint v_ref', got: {s}"
+        );
+        assert!(
+            !s.contains("user v_ref"),
+            "all-midpoint must NOT contain 'user v_ref', got: {s}"
+        );
+    }
+
+    /// AC: all-user-supplied — line contains "user `v_ref`" and does NOT contain "midpoint `v_ref`".
+    #[test]
+    fn test_evaporation_line_all_user_supplied() {
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 3,
+            n_no_evaporation: 1,
+            n_user_supplied_ref: 3,
+            n_default_midpoint_ref: 0,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("user v_ref"),
+            "all-user-supplied must contain 'user v_ref', got: {s}"
+        );
+        assert!(
+            !s.contains("midpoint v_ref"),
+            "all-user-supplied must NOT contain 'midpoint v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("3 hydros linearized"),
+            "all-user-supplied must contain '3 hydros linearized', got: {s}"
+        );
+        assert!(
+            s.contains("1 hydro without"),
+            "all-user-supplied must contain '1 hydro without', got: {s}"
+        );
+    }
+
+    /// AC: mixed — line contains "2 user `v_ref`" and "1 midpoint `v_ref`".
+    #[test]
+    fn test_evaporation_line_mixed() {
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 3,
+            n_no_evaporation: 1,
+            n_user_supplied_ref: 2,
+            n_default_midpoint_ref: 1,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("2 user v_ref"),
+            "mixed must contain '2 user v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("1 midpoint v_ref"),
+            "mixed must contain '1 midpoint v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("3 hydros linearized"),
+            "mixed must contain '3 hydros linearized', got: {s}"
+        );
+    }
+
+    /// AC: no evaporation — line does NOT contain "`v_ref`".
+    #[test]
+    fn test_evaporation_line_no_evaporation() {
+        let summary = make_hydro_model_summary_all_constant();
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            !s.contains("v_ref"),
+            "zero-evaporation must NOT contain 'v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("0 hydros linearized"),
+            "zero-evaporation must contain '0 hydros linearized', got: {s}"
+        );
     }
 }

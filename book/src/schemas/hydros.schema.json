@@ -14,10 +14,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "downstream_id",
-        "max_flow_m3s"
-      ],
+      "required": ["downstream_id", "max_flow_m3s"],
       "type": "object"
     },
     "RawEfficiency": {
@@ -36,10 +33,7 @@
               "type": "number"
             }
           },
-          "required": [
-            "type",
-            "value"
-          ],
+          "required": ["type", "value"],
           "type": "object"
         }
       ]
@@ -54,11 +48,17 @@
             "type": "number"
           },
           "type": "array"
+        },
+        "reference_volumes_hm3": {
+          "description": "Monthly reservoir reference volumes [hm³] used as the linearization reference point for evaporation, one per calendar month.\nIndex 0 = January, index 11 = December.\nAbsent = no reference volume override; the calling algorithm uses its own default (e.g., mid-point of the storage range).\nWhen present: must have exactly 12 elements, all finite, and all within [min_storage_hm3, max_storage_hm3].",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
         }
       },
-      "required": [
-        "coefficients_mm"
-      ],
+      "required": ["coefficients_mm"],
       "type": "object"
     },
     "RawFillingConfig": {
@@ -76,9 +76,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "start_stage_id"
-      ],
+      "required": ["start_stage_id"],
       "type": "object"
     },
     "RawGeneration": {
@@ -225,10 +223,7 @@
               "type": "number"
             }
           },
-          "required": [
-            "type",
-            "value"
-          ],
+          "required": ["type", "value"],
           "type": "object"
         },
         {
@@ -244,10 +239,7 @@
               "type": "number"
             }
           },
-          "required": [
-            "type",
-            "value_m"
-          ],
+          "required": ["type", "value_m"],
           "type": "object"
         }
       ]
@@ -274,10 +266,7 @@
         "downstream_id": {
           "description": "Downstream hydro plant in the cascade. `null` = no downstream.",
           "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "efficiency": {
           "anyOf": [
@@ -294,10 +283,7 @@
           "default": null,
           "description": "Stage index when the plant enters service. Absent or null = always exists.",
           "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "evaporation": {
           "anyOf": [
@@ -314,10 +300,7 @@
           "default": null,
           "description": "Stage index when the plant is decommissioned. Absent or null = never.",
           "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "filling": {
           "anyOf": [
@@ -401,90 +384,57 @@
         "diversion_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "evaporation_violation_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "filling_target_violation_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "fpha_turbined_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "generation_violation_below_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "outflow_violation_above_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "outflow_violation_below_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "spillage_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "storage_violation_below_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "turbined_violation_below_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "water_withdrawal_violation_cost": {
           "default": null,
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         }
       },
       "type": "object"
@@ -495,10 +445,7 @@
         "max_outflow_m3s": {
           "description": "Maximum total outflow [m³/s]. `null` = no upper bound.",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "min_outflow_m3s": {
           "description": "Minimum total outflow [m³/s].",
@@ -506,9 +453,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "min_outflow_m3s"
-      ],
+      "required": ["min_outflow_m3s"],
       "type": "object"
     },
     "RawReservoir": {
@@ -525,10 +470,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "min_storage_hm3",
-        "max_storage_hm3"
-      ],
+      "required": ["min_storage_hm3", "max_storage_hm3"],
       "type": "object"
     },
     "RawTailrace": {
@@ -550,10 +492,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type",
-            "coefficients"
-          ],
+          "required": ["type", "coefficients"],
           "type": "object"
         },
         {
@@ -571,10 +510,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type",
-            "points"
-          ],
+          "required": ["type", "points"],
           "type": "object"
         }
       ]
@@ -593,10 +529,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "outflow_m3s",
-        "height_m"
-      ],
+      "required": ["outflow_m3s", "height_m"],
       "type": "object"
     }
   },
@@ -605,10 +538,7 @@
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "hydros": {
       "description": "Array of hydro plant entries.",
@@ -618,9 +548,7 @@
       "type": "array"
     }
   },
-  "required": [
-    "hydros"
-  ],
+  "required": ["hydros"],
   "title": "RawHydroFile",
   "type": "object"
 }

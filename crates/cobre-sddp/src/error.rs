@@ -10,6 +10,7 @@ use cobre_solver::SolverError;
 use cobre_stochastic::StochasticError;
 
 use crate::estimation::EstimationError;
+use crate::fpha_fitting::FphaFittingError;
 
 /// Unified error type for SDDP algorithm operations.
 ///
@@ -108,6 +109,12 @@ impl From<EstimationError> for SddpError {
     }
 }
 
+impl From<FphaFittingError> for SddpError {
+    fn from(err: FphaFittingError) -> Self {
+        Self::Validation(err.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SddpError;
@@ -116,6 +123,8 @@ mod tests {
     use cobre_solver::SolverError;
     use cobre_stochastic::StochasticError;
     use std::path::PathBuf;
+
+    use crate::fpha_fitting::FphaFittingError;
 
     fn assert_send_sync_static<E: std::error::Error + Send + Sync + 'static>() {}
 
@@ -227,6 +236,20 @@ mod tests {
         assert!(matches!(err, SddpError::Communication(_)));
         let msg = err.to_string();
         assert!(msg.contains("MPI"), "{msg}");
+    }
+
+    #[test]
+    fn from_fpha_fitting_error_wraps_as_validation() {
+        let inner = FphaFittingError::InsufficientPoints {
+            hydro_name: "Itaipu".to_string(),
+            count: 1,
+        };
+        let display_msg = inner.to_string();
+        let err: SddpError = inner.into();
+        assert!(
+            matches!(err, SddpError::Validation(ref msg) if *msg == display_msg),
+            "expected Validation wrapping the FphaFittingError display output, got {err:?}"
+        );
     }
 
     #[test]

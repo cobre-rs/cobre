@@ -21,9 +21,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cobre_core::{EntityId, System, entities::hydro::HydroGenerationModel};
-use cobre_io::extensions::{FphaHyperplaneRow, ProductionModelConfig, SelectionMode};
+use cobre_io::extensions::{
+    FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
+};
 
 use crate::SddpError;
+use crate::fpha_fitting::fit_fpha_planes;
 
 // ── Hyperplane types ──────────────────────────────────────────────────────────
 
@@ -610,6 +613,8 @@ pub fn prepare_hydro_models(
 /// If absent, all hydros fall back to the [`HydroGenerationModel`] from their
 /// entity definition in `system/hydros.json`. When any hydro is configured as
 /// FPHA with `source: "precomputed"`, also loads `system/fpha_hyperplanes.parquet`.
+/// When any hydro is configured as FPHA with `source: "computed"`, also loads
+/// `system/hydro_geometry.parquet` and runs the FPHA fitting pipeline.
 ///
 /// Returns `(ProductionModelSet, provenance_vec)` where the provenance vector
 /// records the [`ProductionModelSource`] for each hydro in canonical ID order.
@@ -621,7 +626,8 @@ pub fn prepare_hydro_models(
 /// 1. If `hydro_production_models.json` has an entry for this hydro:
 ///    - `source: "precomputed"` → load hyperplanes from `fpha_hyperplanes.parquet`,
 ///      scale `gamma_0` by `kappa`, record [`ProductionModelSource::PrecomputedHyperplanes`].
-///    - `source: "computed"` → return [`SddpError::Validation`] (not yet implemented).
+///    - `source: "computed"` → fit hyperplanes from `hydro_geometry.parquet` via the
+///      FPHA fitting pipeline, record [`ProductionModelSource::ComputedFromGeometry`].
 /// 2. Otherwise, use the [`HydroGenerationModel`] from the entity definition:
 ///    - [`HydroGenerationModel::ConstantProductivity`] →
 ///      [`ResolvedProductionModel::ConstantProductivity`].
@@ -632,16 +638,18 @@ pub fn prepare_hydro_models(
 ///
 /// # Errors
 ///
-/// | Condition                                        | Error variant              |
-/// | ------------------------------------------------ | -------------------------- |
-/// | `source: "computed"` in config entry             | [`SddpError::Validation`]  |
-/// | `Fpha` entity model with no config entry         | [`SddpError::Validation`]  |
-/// | `gamma_v <= 0` for any hyperplane                | [`SddpError::Validation`]  |
-/// | `gamma_s > 0` for any hyperplane                 | [`SddpError::Validation`]  |
-/// | `gamma_q <= 0` for any hyperplane                | [`SddpError::Validation`]  |
-/// | `kappa` not in `(0, 1]`                          | [`SddpError::Validation`]  |
-/// | Zero hyperplanes for an FPHA hydro at any stage  | [`SddpError::Validation`]  |
-/// | I/O failure loading JSON or Parquet              | [`SddpError::Io`]          |
+/// | Condition                                                       | Error variant              |
+/// | --------------------------------------------------------------- | -------------------------- |
+/// | `Fpha` entity model with no config entry                        | [`SddpError::Validation`]  |
+/// | `source: "computed"` with missing tailrace/losses/efficiency    | [`SddpError::Validation`]  |
+/// | `source: "computed"` with no geometry rows for the hydro        | [`SddpError::Validation`]  |
+/// | FPHA fitting pipeline error                                     | [`SddpError::Validation`]  |
+/// | `gamma_v <= 0` for any precomputed hyperplane                   | [`SddpError::Validation`]  |
+/// | `gamma_s > 0` for any precomputed hyperplane                    | [`SddpError::Validation`]  |
+/// | `gamma_q <= 0` for any precomputed hyperplane                   | [`SddpError::Validation`]  |
+/// | `kappa` not in `(0, 1]` for precomputed hyperplane              | [`SddpError::Validation`]  |
+/// | Zero hyperplanes for an FPHA hydro at any stage                 | [`SddpError::Validation`]  |
+/// | I/O failure loading JSON or Parquet                             | [`SddpError::Io`]          |
 pub fn resolve_production_models(
     system: &System,
     case_dir: &Path,
@@ -663,23 +671,8 @@ pub fn resolve_production_models(
     let config_map: HashMap<EntityId, &ProductionModelConfig> =
         prod_configs.iter().map(|c| (c.hydro_id, c)).collect();
 
-    // ── Step 4: determine which hydros need FPHA hyperplanes ──────────────────
-    let any_fpha = prod_configs.iter().any(config_uses_precomputed_fpha);
-
-    // ── Step 5: load FPHA hyperplane rows when needed ─────────────────────────
-    let hyperplane_rows: Vec<FphaHyperplaneRow> = if any_fpha {
-        let hp_path = if manifest.system_fpha_hyperplanes_parquet {
-            Some(case_dir.join("system").join("fpha_hyperplanes.parquet"))
-        } else {
-            None
-        };
-        cobre_io::extensions::load_fpha_hyperplanes(hp_path.as_deref())?
-    } else {
-        Vec::new()
-    };
-
-    // ── Step 6: build O(1) hyperplane lookup: (hydro_id, stage_id) → rows ────
-    // Key is (EntityId, Option<i32>) — None means all stages.
+    // ── Step 4/5/6: load and index precomputed FPHA hyperplane rows ───────────
+    let hyperplane_rows = load_precomputed_hyperplanes(&prod_configs, &manifest, case_dir)?;
     let mut hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
         HashMap::new();
     for row in &hyperplane_rows {
@@ -688,6 +681,10 @@ pub fn resolve_production_models(
             .or_default()
             .push(row);
     }
+
+    // ── Step 4b/5b/6b: load and index geometry rows for computed-source hydros ─
+    let geometry_rows = load_geometry_rows(&prod_configs, &manifest, case_dir)?;
+    let geometry_map = build_geometry_map(&geometry_rows);
 
     // ── Step 7: collect study stages (id >= 0) in canonical order ────────────
     let study_stages: Vec<&cobre_core::temporal::Stage> =
@@ -705,10 +702,29 @@ pub fn resolve_production_models(
         let source = determine_source(hydro, config_entry)?;
         provenance.push((hydro.id, source));
 
-        let mut stage_models: Vec<ResolvedProductionModel> = Vec::with_capacity(n_stages);
+        // For computed sources, fit planes once per hydro and reuse for each stage.
+        let cached_computed_planes: Option<Vec<FphaPlane>> =
+            if source == ProductionModelSource::ComputedFromGeometry {
+                Some(fit_planes_for_hydro(
+                    hydro,
+                    config_entry,
+                    &geometry_map,
+                    &study_stages,
+                )?)
+            } else {
+                None
+            };
 
+        let mut stage_models: Vec<ResolvedProductionModel> = Vec::with_capacity(n_stages);
         for stage in &study_stages {
-            let model = resolve_stage_model(hydro, stage, config_entry, source, &hyperplane_map)?;
+            let model = resolve_stage_model(
+                hydro,
+                stage,
+                config_entry,
+                source,
+                &hyperplane_map,
+                cached_computed_planes.as_deref(),
+            )?;
             stage_models.push(model);
         }
 
@@ -717,6 +733,108 @@ pub fn resolve_production_models(
 
     let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
     Ok((set, provenance))
+}
+
+/// Load precomputed FPHA hyperplane rows from disk when any config uses `source: "precomputed"`.
+///
+/// Returns an empty vector when no precomputed hyperplanes are needed.
+fn load_precomputed_hyperplanes(
+    prod_configs: &[ProductionModelConfig],
+    manifest: &cobre_io::FileManifest,
+    case_dir: &Path,
+) -> Result<Vec<FphaHyperplaneRow>, SddpError> {
+    if !prod_configs.iter().any(config_uses_precomputed_fpha) {
+        return Ok(Vec::new());
+    }
+    let hp_path = if manifest.system_fpha_hyperplanes_parquet {
+        Some(case_dir.join("system").join("fpha_hyperplanes.parquet"))
+    } else {
+        None
+    };
+    Ok(cobre_io::extensions::load_fpha_hyperplanes(
+        hp_path.as_deref(),
+    )?)
+}
+
+/// Load geometry rows from disk when any config uses `source: "computed"`.
+///
+/// Returns an empty vector when no computed-source hydros exist.
+fn load_geometry_rows(
+    prod_configs: &[ProductionModelConfig],
+    manifest: &cobre_io::FileManifest,
+    case_dir: &Path,
+) -> Result<Vec<HydroGeometryRow>, SddpError> {
+    if !prod_configs.iter().any(config_uses_computed_fpha) {
+        return Ok(Vec::new());
+    }
+    let geo_path = if manifest.system_hydro_geometry_parquet {
+        Some(case_dir.join("system").join("hydro_geometry.parquet"))
+    } else {
+        None
+    };
+    Ok(cobre_io::extensions::load_hydro_geometry(
+        geo_path.as_deref(),
+    )?)
+}
+
+/// Build an `O(1)` geometry map: `hydro_id → sorted geometry row references`.
+fn build_geometry_map(
+    geometry_rows: &[HydroGeometryRow],
+) -> HashMap<EntityId, Vec<&HydroGeometryRow>> {
+    let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+    for row in geometry_rows {
+        geometry_map.entry(row.hydro_id).or_default().push(row);
+    }
+    for rows in geometry_map.values_mut() {
+        rows.sort_by(|a, b| {
+            a.volume_hm3
+                .partial_cmp(&b.volume_hm3)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    geometry_map
+}
+
+/// Validate prerequisites and call `fit_fpha_planes` once for a computed-source hydro.
+///
+/// Returns the fitted planes; the outer loop caches them and clones for each stage.
+fn fit_planes_for_hydro(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    config_entry: Option<&ProductionModelConfig>,
+    geometry_map: &HashMap<EntityId, Vec<&HydroGeometryRow>>,
+    study_stages: &[&cobre_core::temporal::Stage],
+) -> Result<Vec<FphaPlane>, SddpError> {
+    validate_computed_prerequisites(hydro, geometry_map)?;
+
+    // Use the first study stage as representative for FphaConfig lookup.
+    // In the MVP, the fitting result is stage-independent.
+    let representative_stage = study_stages.first().ok_or_else(|| {
+        SddpError::Validation(format!(
+            "hydro {} (id={}) has source: \"computed\" but the system has no study stages",
+            hydro.name, hydro.id.0
+        ))
+    })?;
+
+    let config = config_entry
+        .and_then(|c| find_fpha_config_for_stage(c, representative_stage))
+        .ok_or_else(|| {
+            SddpError::Validation(format!(
+                "hydro {} (id={}) has source: \"computed\" but no FphaConfig \
+                 was found in hydro_production_models.json",
+                hydro.name, hydro.id.0
+            ))
+        })?;
+
+    // Collect owned clones from the map's reference slices so that
+    // fit_fpha_planes can work with &[HydroGeometryRow] directly.
+    let geo_rows_owned: Vec<HydroGeometryRow> = geometry_map
+        .get(&hydro.id)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .map(|r| (*r).clone())
+        .collect();
+
+    Ok(fit_fpha_planes(&geo_rows_owned, hydro, config)?)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -736,6 +854,95 @@ fn config_uses_precomputed_fpha(config: &ProductionModelConfig) -> bool {
                 .is_some_and(|f| f.source == "precomputed")
         }),
     }
+}
+
+/// Return `true` if the config entry uses `source: "computed"` FPHA in any
+/// stage range or season entry.
+fn config_uses_computed_fpha(config: &ProductionModelConfig) -> bool {
+    match &config.selection_mode {
+        SelectionMode::StageRanges { ranges } => ranges.iter().any(|r| {
+            r.fpha_config
+                .as_ref()
+                .is_some_and(|f| f.source == "computed")
+        }),
+        SelectionMode::Seasonal { seasons, .. } => seasons.iter().any(|s| {
+            s.fpha_config
+                .as_ref()
+                .is_some_and(|f| f.source == "computed")
+        }),
+    }
+}
+
+/// Extract the [`FphaConfig`] that applies to a given stage from a [`ProductionModelConfig`].
+///
+/// Returns `None` when no stage range or season entry covers the stage, or when
+/// the matched entry has no `fpha_config` field.
+fn find_fpha_config_for_stage<'a>(
+    config: &'a ProductionModelConfig,
+    stage: &cobre_core::temporal::Stage,
+) -> Option<&'a FphaConfig> {
+    match &config.selection_mode {
+        SelectionMode::StageRanges { ranges } => {
+            for range in ranges {
+                let after_start = stage.id >= range.start_stage_id;
+                let before_end = range.end_stage_id.is_none_or(|end| stage.id <= end);
+                if after_start && before_end {
+                    return range.fpha_config.as_ref();
+                }
+            }
+            None
+        }
+        SelectionMode::Seasonal {
+            default_model: _,
+            seasons,
+        } => {
+            if let Some(season_id) = stage.season_id {
+                for season in seasons {
+                    if i32::try_from(season_id).is_ok_and(|sid| sid == season.season_id) {
+                        return season.fpha_config.as_ref();
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Validate that a hydro with `source: "computed"` has all required model fields and geometry.
+///
+/// Checks that `tailrace`, `hydraulic_losses`, and `efficiency` are all `Some`, and
+/// that at least one geometry row exists for this hydro in the geometry map.
+///
+/// # Errors
+///
+/// Returns `SddpError::Validation` listing the first missing prerequisite found,
+/// including the hydro name and id.
+fn validate_computed_prerequisites(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    geometry_map: &HashMap<EntityId, Vec<&HydroGeometryRow>>,
+) -> Result<(), SddpError> {
+    let missing = if hydro.tailrace.is_none() {
+        Some("tailrace")
+    } else if hydro.hydraulic_losses.is_none() {
+        Some("hydraulic_losses")
+    } else if hydro.efficiency.is_none() {
+        Some("efficiency")
+    } else if geometry_map.get(&hydro.id).is_none_or(Vec::is_empty) {
+        Some("geometry data")
+    } else {
+        None
+    };
+
+    if let Some(missing_item) = missing {
+        return Err(SddpError::Validation(format!(
+            "hydro {} (id={}) has source: \"computed\" but is missing {}. \
+             Computed FPHA fitting requires tailrace, hydraulic_losses, \
+             efficiency, and geometry data.",
+            hydro.name, hydro.id.0, missing_item
+        )));
+    }
+
+    Ok(())
 }
 
 /// Determine the [`ProductionModelSource`] for one hydro.
@@ -772,13 +979,7 @@ fn determine_source(
                 .map(|s| s.model.clone()),
         };
         if computed_range.is_some() {
-            return Err(SddpError::Validation(format!(
-                "hydro {} (id={}) has a production model entry with source: \"computed\", \
-                 which is not yet implemented. \
-                 Provide pre-computed hyperplanes in fpha_hyperplanes.parquet \
-                 with source: \"precomputed\" in hydro_production_models.json instead.",
-                hydro.name, hydro.id.0
-            )));
+            return Ok(ProductionModelSource::ComputedFromGeometry);
         }
         // Only "precomputed" FPHA entries remain.
         let has_fpha = match &config.selection_mode {
@@ -808,18 +1009,42 @@ fn determine_source(
 }
 
 /// Resolve the production model for one (hydro, stage) pair.
+///
+/// `cached_computed_planes` carries planes already fitted by the outer loop
+/// when `source == ComputedFromGeometry`. Passing pre-fitted planes avoids
+/// running the fitting pipeline once per stage; the outer loop fits once per
+/// hydro and clones for every stage via this parameter.
 fn resolve_stage_model(
     hydro: &cobre_core::entities::hydro::Hydro,
     stage: &cobre_core::temporal::Stage,
     config_entry: Option<&ProductionModelConfig>,
     source: ProductionModelSource,
     hyperplane_map: &HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>>,
+    cached_computed_planes: Option<&[FphaPlane]>,
 ) -> Result<ResolvedProductionModel, SddpError> {
     if let Some(config) = config_entry {
         let model_name = find_model_for_stage(config, stage);
 
         if model_name.as_deref() == Some("fpha") {
-            build_fpha_model(hydro, stage, source, hyperplane_map)
+            if source == ProductionModelSource::ComputedFromGeometry {
+                // Use the pre-fitted planes from the outer loop cache.
+                let planes = cached_computed_planes
+                    .ok_or_else(|| {
+                        SddpError::Validation(format!(
+                            "hydro {} (id={}) is ComputedFromGeometry but no cached planes \
+                             were provided to resolve_stage_model",
+                            hydro.name, hydro.id.0
+                        ))
+                    })?
+                    .to_vec();
+                let turbined_cost = hydro.penalties.fpha_turbined_cost;
+                Ok(ResolvedProductionModel::Fpha {
+                    planes,
+                    turbined_cost,
+                })
+            } else {
+                build_fpha_model(hydro, stage, source, hyperplane_map)
+            }
         } else {
             // "constant_productivity" or "linearized_head" from config:
             // use entity productivity.
@@ -1413,7 +1638,8 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
+        Bus, DeficitSegment, EfficiencyModel, EntityId, HydraulicLossesModel, SystemBuilder,
+        TailraceModel,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         scenario::CorrelationModel,
         temporal::{
@@ -1422,7 +1648,8 @@ mod tests {
         },
     };
     use cobre_io::extensions::{
-        FphaConfig, FphaHyperplaneRow, ProductionModelConfig, SelectionMode, StageRange,
+        FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
+        StageRange,
     };
 
     use super::{
@@ -1430,7 +1657,8 @@ mod tests {
         FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
         PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource,
         ResolvedProductionModel, build_fpha_model, build_hydro_model_summary, determine_source,
-        find_model_for_stage, validate_hyperplane_row,
+        find_fpha_config_for_stage, find_model_for_stage, validate_computed_prerequisites,
+        validate_hyperplane_row,
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -1596,6 +1824,7 @@ mod tests {
             None,
             ProductionModelSource::DefaultConstant,
             &empty_map,
+            None,
         )
         .expect("should succeed");
         assert!(
@@ -1626,6 +1855,7 @@ mod tests {
             None,
             ProductionModelSource::DefaultConstant,
             &empty_map,
+            None,
         )
         .expect("should succeed");
         assert!(
@@ -1647,21 +1877,140 @@ mod tests {
         );
     }
 
-    /// source: "computed" in config → validation error containing "not implemented" and "precomputed".
+    /// source: "computed" in config → returns `ComputedFromGeometry` (fitting is now supported).
     #[test]
-    fn computed_source_returns_validation_error_with_suggestions() {
+    fn computed_source_returns_computed_from_geometry() {
         let hydro = make_hydro(0, HydroGenerationModel::Fpha);
         let config = computed_fpha_config(0);
 
-        let err = determine_source(&hydro, Some(&config)).expect_err("should fail");
+        let source = determine_source(&hydro, Some(&config)).expect("should succeed");
+        assert_eq!(
+            source,
+            ProductionModelSource::ComputedFromGeometry,
+            "expected ComputedFromGeometry, got {source:?}"
+        );
+    }
+
+    /// Helper: build a minimal hydro with all computed-source prerequisites set.
+    fn make_computed_hydro(id: i32) -> cobre_core::entities::hydro::Hydro {
+        let mut hydro = make_hydro(id, HydroGenerationModel::Fpha);
+        hydro.tailrace = Some(TailraceModel::Polynomial {
+            coefficients: vec![300.0],
+        });
+        hydro.hydraulic_losses = Some(HydraulicLossesModel::Factor { value: 0.02 });
+        hydro.efficiency = Some(EfficiencyModel::Constant { value: 0.92 });
+        hydro
+    }
+
+    /// Helper: build a two-point VHA geometry row vector for a hydro.
+    fn make_geometry_rows(hydro_id: i32) -> Vec<HydroGeometryRow> {
+        vec![
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 100.0,
+                height_m: 400.0,
+                area_km2: 10.0,
+            },
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 2000.0,
+                height_m: 450.0,
+                area_km2: 50.0,
+            },
+        ]
+    }
+
+    /// validate_computed_prerequisites: missing tailrace → Validation error with "tailrace" and hydro name.
+    #[test]
+    fn computed_source_missing_tailrace_returns_validation_error() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        // tailrace is None in make_hydro
+        let rows = make_geometry_rows(0);
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        let row_refs: Vec<&HydroGeometryRow> = rows.iter().collect();
+        geometry_map.insert(EntityId::from(0), row_refs);
+
+        let err = validate_computed_prerequisites(&hydro, &geometry_map)
+            .expect_err("should fail when tailrace is None");
         let msg = err.to_string();
         assert!(
-            msg.contains("not yet implemented"),
-            "error must mention 'not yet implemented', got: {msg}"
+            msg.contains("tailrace"),
+            "error must mention 'tailrace', got: {msg}"
         );
         assert!(
-            msg.contains("precomputed"),
-            "error must suggest 'precomputed', got: {msg}"
+            msg.contains(&hydro.name),
+            "error must include hydro name '{}', got: {msg}",
+            hydro.name
+        );
+    }
+
+    /// validate_computed_prerequisites: missing geometry rows → Validation error with "geometry" and hydro name.
+    #[test]
+    fn computed_source_missing_geometry_returns_validation_error() {
+        let hydro = make_computed_hydro(0);
+        let empty_geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+
+        let err = validate_computed_prerequisites(&hydro, &empty_geometry_map)
+            .expect_err("should fail when geometry rows are absent");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("geometry"),
+            "error must mention 'geometry', got: {msg}"
+        );
+        assert!(
+            msg.contains(&hydro.name),
+            "error must include hydro name '{}', got: {msg}",
+            hydro.name
+        );
+    }
+
+    /// find_fpha_config_for_stage: returns Some(&FphaConfig) when stage is in the range.
+    #[test]
+    fn find_fpha_config_for_stage_returns_config_in_range() {
+        let config = computed_fpha_config(0);
+        let stage = make_stage(5);
+
+        let result = find_fpha_config_for_stage(&config, &stage);
+        assert!(
+            result.is_some(),
+            "expected Some(FphaConfig) for stage 5, got None"
+        );
+        assert_eq!(
+            result.expect("just checked is_some").source,
+            "computed",
+            "expected source 'computed'"
+        );
+    }
+
+    /// find_fpha_config_for_stage: returns None when no range covers the stage.
+    #[test]
+    fn find_fpha_config_for_stage_returns_none_outside_range() {
+        // Create a config with range [5, 10].
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 5,
+                    end_stage_id: Some(10),
+                    model: "fpha".to_string(),
+                    fpha_config: Some(FphaConfig {
+                        source: "computed".to_string(),
+                        volume_discretization_points: None,
+                        turbine_discretization_points: None,
+                        spillage_discretization_points: None,
+                        max_planes_per_hydro: None,
+                        fitting_window: None,
+                    }),
+                }],
+            },
+        };
+
+        // Stage 0 is before the range [5, 10].
+        let stage = make_stage(0);
+        let result = find_fpha_config_for_stage(&config, &stage);
+        assert!(
+            result.is_none(),
+            "expected None for stage 0 (outside range [5,10]), got {result:?}"
         );
     }
 
@@ -3643,6 +3992,422 @@ mod tests {
         assert_eq!(
             summary.n_no_evaporation, 2,
             "n_no_evaporation must be 2 (IDs 2 and 4)"
+        );
+    }
+
+    // ── Computed-source integration tests ─────────────────────────────────────
+
+    /// Sobradinho-style hydro with all computed prerequisites, matching the known-valid
+    /// fixture from `fpha_fitting.rs`. Used for end-to-end computed-source tests.
+    fn make_sobradinho_computed_hydro(id: i32) -> cobre_core::entities::hydro::Hydro {
+        let mut hydro = make_hydro(id, HydroGenerationModel::Fpha);
+        hydro.name = format!("Sobradinho{id}");
+        hydro.min_storage_hm3 = 100.0;
+        hydro.max_storage_hm3 = 20_000.0;
+        hydro.max_turbined_m3s = 500.0;
+        hydro.tailrace = Some(TailraceModel::Polynomial {
+            coefficients: vec![0.0, 0.001_f64],
+        });
+        hydro.hydraulic_losses = Some(HydraulicLossesModel::Constant { value_m: 2.0 });
+        hydro.efficiency = Some(EfficiencyModel::Constant { value: 0.92 });
+        hydro
+    }
+
+    /// Four-point VHA geometry rows spanning volumes 100.0 to 20_000.0 hm³ and heights
+    /// 386.5 to 400.0 m. Mirrors the Sobradinho-style fixture used in `fpha_fitting.rs`.
+    fn make_sobradinho_geometry_rows(hydro_id: i32) -> Vec<HydroGeometryRow> {
+        vec![
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 100.0,
+                height_m: 386.5,
+                area_km2: 500.0,
+            },
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 5_000.0,
+                height_m: 392.0,
+                area_km2: 800.0,
+            },
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 12_000.0,
+                height_m: 396.5,
+                area_km2: 1_100.0,
+            },
+            HydroGeometryRow {
+                hydro_id: EntityId::from(hydro_id),
+                volume_hm3: 20_000.0,
+                height_m: 400.0,
+                area_km2: 1_400.0,
+            },
+        ]
+    }
+
+    /// Computed-source end-to-end: a hydro with all prerequisites and Sobradinho-style geometry
+    /// produces a valid `Fpha` model with 3–10 planes and correct coefficient signs.
+    ///
+    /// Tests `fit_planes_for_hydro` + `resolve_stage_model` together.
+    #[test]
+    fn computed_source_end_to_end_produces_valid_fpha_planes() {
+        let hydro = make_sobradinho_computed_hydro(0);
+        let config = computed_fpha_config(0);
+        let stage = make_stage(0);
+
+        let geo_rows = make_sobradinho_geometry_rows(0);
+        let geo_refs: Vec<&HydroGeometryRow> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        let study_stages = [stage.clone()];
+        let stage_refs: Vec<&cobre_core::temporal::Stage> = study_stages.iter().collect();
+
+        // Fit planes once (simulating the outer loop in resolve_production_models).
+        let planes = super::fit_planes_for_hydro(&hydro, Some(&config), &geometry_map, &stage_refs)
+            .expect("fit_planes_for_hydro must succeed for valid Sobradinho-style input");
+
+        // Plane count must be within the expected range for default FphaConfig.
+        assert!(
+            (3..=10).contains(&planes.len()),
+            "expected 3–10 planes, got {}",
+            planes.len()
+        );
+
+        // Coefficient signs must satisfy physical constraints.
+        for (idx, plane) in planes.iter().enumerate() {
+            assert!(
+                plane.gamma_v > 0.0,
+                "plane {idx}: gamma_v={} must be > 0",
+                plane.gamma_v
+            );
+            assert!(
+                plane.gamma_q > 0.0,
+                "plane {idx}: gamma_q={} must be > 0",
+                plane.gamma_q
+            );
+            assert!(
+                plane.gamma_s <= 0.0,
+                "plane {idx}: gamma_s={} must be <= 0",
+                plane.gamma_s
+            );
+        }
+
+        // Verify resolve_stage_model correctly wraps the cached planes.
+        let empty_hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
+            HashMap::new();
+        let model = super::resolve_stage_model(
+            &hydro,
+            &stage,
+            Some(&config),
+            ProductionModelSource::ComputedFromGeometry,
+            &empty_hyperplane_map,
+            Some(&planes),
+        )
+        .expect("resolve_stage_model must succeed for ComputedFromGeometry with cached planes");
+
+        match model {
+            ResolvedProductionModel::Fpha {
+                planes: out_planes, ..
+            } => {
+                assert_eq!(
+                    out_planes.len(),
+                    planes.len(),
+                    "stage model must have the same plane count as the fitted planes"
+                );
+            }
+            other => panic!("expected Fpha variant, got {other:?}"),
+        }
+    }
+
+    /// Mixed precomputed + computed sources: both hydros resolve to valid `Fpha` models and
+    /// provenance is correctly differentiated by source.
+    ///
+    /// Hydro 0: `source: "precomputed"` with 3 manually-constructed hyperplane rows.
+    /// Hydro 1: `source: "computed"` with Sobradinho-style geometry.
+    #[test]
+    fn mixed_precomputed_and_computed_sources_resolve_correctly() {
+        // Hydro 0: precomputed FPHA.
+        let hydro0 = make_hydro(0, HydroGenerationModel::Fpha);
+        let config0 = precomputed_fpha_config(0);
+
+        let precomp_row_a = valid_row(0, None, 0);
+        let precomp_row_b = valid_row(0, None, 1);
+        let precomp_row_c = valid_row(0, None, 2);
+        let mut hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
+            HashMap::new();
+        hyperplane_map.insert(
+            (EntityId::from(0), None),
+            vec![&precomp_row_a, &precomp_row_b, &precomp_row_c],
+        );
+
+        // Hydro 1: computed FPHA.
+        let hydro1 = make_sobradinho_computed_hydro(1);
+        let config1 = computed_fpha_config(1);
+
+        let geo_rows = make_sobradinho_geometry_rows(1);
+        let geo_refs: Vec<&HydroGeometryRow> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        geometry_map.insert(EntityId::from(1), geo_refs);
+
+        let stage = make_stage(0);
+        let study_stages = [stage.clone()];
+        let stage_refs: Vec<&cobre_core::temporal::Stage> = study_stages.iter().collect();
+
+        // Determine sources.
+        let src0 = determine_source(&hydro0, Some(&config0)).expect("hydro0 source");
+        let src1 = determine_source(&hydro1, Some(&config1)).expect("hydro1 source");
+        assert_eq!(
+            src0,
+            ProductionModelSource::PrecomputedHyperplanes,
+            "hydro 0 must be PrecomputedHyperplanes"
+        );
+        assert_eq!(
+            src1,
+            ProductionModelSource::ComputedFromGeometry,
+            "hydro 1 must be ComputedFromGeometry"
+        );
+
+        // Fit computed planes for hydro 1.
+        let computed_planes =
+            super::fit_planes_for_hydro(&hydro1, Some(&config1), &geometry_map, &stage_refs)
+                .expect("fit_planes_for_hydro must succeed for hydro 1");
+
+        // Resolve stage model for hydro 0 (precomputed path).
+        let model0 = super::resolve_stage_model(
+            &hydro0,
+            &stage,
+            Some(&config0),
+            src0,
+            &hyperplane_map,
+            None,
+        )
+        .expect("resolve_stage_model must succeed for hydro 0 (precomputed)");
+
+        // Resolve stage model for hydro 1 (computed path, cached planes).
+        let empty_hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
+            HashMap::new();
+        let model1 = super::resolve_stage_model(
+            &hydro1,
+            &stage,
+            Some(&config1),
+            src1,
+            &empty_hyperplane_map,
+            Some(&computed_planes),
+        )
+        .expect("resolve_stage_model must succeed for hydro 1 (computed)");
+
+        // Both models must be Fpha.
+        assert!(
+            matches!(model0, ResolvedProductionModel::Fpha { .. }),
+            "hydro 0 must resolve to Fpha, got {model0:?}"
+        );
+        assert!(
+            matches!(model1, ResolvedProductionModel::Fpha { .. }),
+            "hydro 1 must resolve to Fpha, got {model1:?}"
+        );
+
+        // Provenance in canonical id-sorted order: [(id=0, Precomputed), (id=1, Computed)].
+        assert_eq!(
+            src0,
+            ProductionModelSource::PrecomputedHyperplanes,
+            "provenance[0] must be PrecomputedHyperplanes"
+        );
+        assert_eq!(
+            src1,
+            ProductionModelSource::ComputedFromGeometry,
+            "provenance[1] must be ComputedFromGeometry"
+        );
+    }
+
+    /// Computed-source all-stages-same: three stages all receive plane vectors with identical
+    /// coefficients, confirming that the outer loop fits once and clones for every stage.
+    #[test]
+    fn computed_source_all_stages_produce_identical_planes() {
+        let hydro = make_sobradinho_computed_hydro(0);
+        let config = computed_fpha_config(0);
+
+        let geo_rows = make_sobradinho_geometry_rows(0);
+        let geo_refs: Vec<&HydroGeometryRow> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        // Three study stages.
+        let stages = [make_stage(0), make_stage(1), make_stage(2)];
+        let stage_refs: Vec<&cobre_core::temporal::Stage> = stages.iter().collect();
+
+        // Fit once.
+        let cached_planes =
+            super::fit_planes_for_hydro(&hydro, Some(&config), &geometry_map, &stage_refs)
+                .expect("fit_planes_for_hydro must succeed");
+
+        let empty_hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
+            HashMap::new();
+
+        // Resolve for each stage and collect planes.
+        let stage_planes: Vec<Vec<FphaPlane>> = stages
+            .iter()
+            .map(|stage| {
+                let model = super::resolve_stage_model(
+                    &hydro,
+                    stage,
+                    Some(&config),
+                    ProductionModelSource::ComputedFromGeometry,
+                    &empty_hyperplane_map,
+                    Some(&cached_planes),
+                )
+                .expect("resolve_stage_model must succeed");
+                match model {
+                    ResolvedProductionModel::Fpha { planes, .. } => planes,
+                    other => panic!("expected Fpha, got {other:?}"),
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            stage_planes.len(),
+            3,
+            "must have plane vectors for 3 stages"
+        );
+
+        // All stages must have the same plane count.
+        let expected_count = stage_planes[0].len();
+        for (s, planes) in stage_planes.iter().enumerate() {
+            assert_eq!(
+                planes.len(),
+                expected_count,
+                "stage {s}: plane count must be {expected_count}, got {}",
+                planes.len()
+            );
+        }
+
+        // Planes must be bitwise-identical across stages (cloned from the same source).
+        for (s, planes) in stage_planes.iter().enumerate().skip(1) {
+            for (p, plane) in planes.iter().enumerate() {
+                assert_eq!(
+                    *plane, stage_planes[0][p],
+                    "stage {s} plane {p}: must be identical to stage 0 plane {p}"
+                );
+            }
+        }
+    }
+
+    /// Summary with one computed-source hydro: `n_fpha == 1` and
+    /// `fpha_details[0].source == ComputedFromGeometry`.
+    #[test]
+    fn computed_source_in_summary_counts_correctly() {
+        // Single hydro with Fpha generation model (needed so build_hydro_model_summary
+        // can look up the name from the system entity list).
+        let hydro = make_hydro(5, HydroGenerationModel::Fpha);
+        let system = make_system_for_summary(vec![hydro]);
+
+        let fpha_plane = FphaPlane {
+            intercept: 800.0,
+            gamma_v: 0.003,
+            gamma_q: 0.90,
+            gamma_s: -0.005,
+        };
+        let n_planes = 4;
+        let production = ProductionModelSet::new(
+            vec![vec![ResolvedProductionModel::Fpha {
+                planes: vec![fpha_plane; n_planes],
+                turbined_cost: 0.0,
+            }]],
+            1,
+            1,
+        );
+
+        let result = PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(vec![EvaporationModel::None]),
+            provenance: HydroModelProvenance {
+                production_sources: vec![(
+                    EntityId::from(5),
+                    ProductionModelSource::ComputedFromGeometry,
+                )],
+                evaporation_sources: vec![(EntityId::from(5), EvaporationSource::NotModeled)],
+                evaporation_reference_sources: vec![(
+                    EntityId::from(5),
+                    EvaporationReferenceSource::DefaultMidpoint,
+                )],
+            },
+        };
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(
+            summary.n_fpha, 1,
+            "n_fpha must be 1 for one computed-source hydro"
+        );
+        assert_eq!(summary.n_constant, 0, "n_constant must be 0");
+        assert_eq!(
+            summary.total_planes, n_planes,
+            "total_planes must equal the plane count from the representative stage"
+        );
+        assert_eq!(
+            summary.fpha_details.len(),
+            1,
+            "must have one fpha_details entry"
+        );
+        assert_eq!(
+            summary.fpha_details[0].source,
+            ProductionModelSource::ComputedFromGeometry,
+            "fpha_details[0].source must be ComputedFromGeometry"
+        );
+        assert_eq!(
+            summary.fpha_details[0].n_planes, n_planes,
+            "fpha_details[0].n_planes must match the fitted plane count"
+        );
+    }
+
+    /// `validate_computed_prerequisites`: missing `efficiency` returns `SddpError::Validation`
+    /// with a message containing both "efficiency" and the hydro name "TestHydro".
+    #[test]
+    fn computed_source_missing_efficiency_returns_validation_error() {
+        let mut hydro = make_computed_hydro(0);
+        hydro.name = "TestHydro".to_string();
+        hydro.efficiency = None; // remove efficiency to trigger prerequisite failure
+
+        let rows = make_geometry_rows(0);
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        let row_refs: Vec<&HydroGeometryRow> = rows.iter().collect();
+        geometry_map.insert(EntityId::from(0), row_refs);
+
+        let err = validate_computed_prerequisites(&hydro, &geometry_map)
+            .expect_err("should fail when efficiency is None");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("efficiency"),
+            "error must mention 'efficiency', got: {msg}"
+        );
+        assert!(
+            msg.contains("TestHydro"),
+            "error must include hydro name 'TestHydro', got: {msg}"
+        );
+    }
+
+    /// `validate_computed_prerequisites`: missing `hydraulic_losses` returns `SddpError::Validation`
+    /// with a message containing "hydraulic_losses" and the hydro name.
+    #[test]
+    fn computed_source_missing_losses_returns_validation_error() {
+        let mut hydro = make_computed_hydro(0);
+        hydro.hydraulic_losses = None; // remove losses to trigger prerequisite failure
+
+        let rows = make_geometry_rows(0);
+        let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
+        let row_refs: Vec<&HydroGeometryRow> = rows.iter().collect();
+        geometry_map.insert(EntityId::from(0), row_refs);
+
+        let err = validate_computed_prerequisites(&hydro, &geometry_map)
+            .expect_err("should fail when hydraulic_losses is None");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("hydraulic_losses"),
+            "error must mention 'hydraulic_losses', got: {msg}"
+        );
+        assert!(
+            msg.contains(&hydro.name),
+            "error must include hydro name '{}', got: {msg}",
+            hydro.name
         );
     }
 }

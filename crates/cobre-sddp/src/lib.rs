@@ -45,6 +45,7 @@ pub mod cut_sync;
 pub mod error;
 pub mod estimation;
 pub mod forward;
+pub(crate) mod fpha_fitting;
 pub mod horizon_mode;
 pub mod hydro_models;
 pub mod indexer;

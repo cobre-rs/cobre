@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/initial_conditions.schema.json",
   "storage": [
     {
       "hydro_id": 0,

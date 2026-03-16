@@ -57,7 +57,7 @@ use crate::{
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
     build_stage_templates,
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
-    hydro_models::PrepareHydroModelsResult,
+    hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
@@ -340,7 +340,27 @@ impl StudySetup {
         let has_inflow_penalty =
             inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
 
-        let indexer = StageIndexer::with_equipment(
+        // Compute FPHA and evaporation hydro indices at stage 0 (representative).
+        let n_hydros = system.hydros().len();
+        let mut fpha_hydro_indices: Vec<usize> = Vec::new();
+        let mut fpha_planes: Vec<usize> = Vec::new();
+        let mut evap_hydro_indices: Vec<usize> = Vec::new();
+        for h_idx in 0..n_hydros {
+            if let ResolvedProductionModel::Fpha { planes, .. } =
+                hydro_models.production.model(h_idx, 0)
+            {
+                fpha_hydro_indices.push(h_idx);
+                fpha_planes.push(planes.len());
+            }
+            if matches!(
+                hydro_models.evaporation.model(h_idx),
+                EvaporationModel::Linearized { .. }
+            ) {
+                evap_hydro_indices.push(h_idx);
+            }
+        }
+
+        let indexer = StageIndexer::with_equipment_and_evaporation(
             stage_templates_ref[0].n_hydro,
             stage_templates_ref[0].max_par_order,
             system.thermals().len(),
@@ -348,8 +368,9 @@ impl StudySetup {
             system.buses().len(),
             n_blks_stage0,
             has_inflow_penalty,
-            vec![],
-            &[],
+            fpha_hydro_indices,
+            &fpha_planes,
+            evap_hydro_indices,
         );
 
         // ── Initial state ─────────────────────────────────────────────────────

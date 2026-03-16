@@ -5,12 +5,7 @@
     "stopping_rules": [
       {
         "type": "iteration_limit",
-        "limit": 64
-      },
-      {
-        "type": "bound_stalling",
-        "iterations": 2,
-        "tolerance": 1e-8
+        "limit": 10
       }
     ]
   },

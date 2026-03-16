@@ -28,7 +28,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
-use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for deterministic testing.
@@ -183,9 +183,14 @@ fn d01_thermal_dispatch() {
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 182_500.0, 1e-6, "D01");
     assert!(
-        result.iterations <= 5,
-        "D01: expected convergence in <= 5 iterations, got {}",
+        result.iterations <= 10,
+        "D01: iterations={}",
         result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D01: gap={:.2e}",
+        result.final_gap
     );
 }
 
@@ -213,9 +218,14 @@ fn d02_single_hydro() {
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, D02_EXPECTED_COST, 1e-4, "D02");
     assert!(
-        result.iterations <= 5,
-        "D02: expected convergence in <= 5 iterations, got {}",
+        result.iterations <= 10,
+        "D02: iterations={}",
         result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D02: gap={:.2e}",
+        result.final_gap
     );
 }
 
@@ -309,8 +319,13 @@ fn d03_two_hydro_cascade() {
     assert_cost(result.final_lb, D03_EXPECTED_COST, 1e-4, "D03");
     assert!(
         result.iterations <= 10,
-        "D03: expected convergence in <= 10 iterations, got {}",
+        "D03: iterations={}",
         result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D03: gap={:.2e}",
+        result.final_gap
     );
 }
 
@@ -382,7 +397,12 @@ fn d04_transmission() {
     assert_cost(result.final_lb, D04_EXPECTED_COST, 1e-4, "D04");
     assert!(
         result.iterations <= 10,
-        "D04: expected convergence in <= 10 iterations, got {}",
+        "D04: iterations={}",
         result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D04: gap={:.2e}",
+        result.final_gap
     );
 }

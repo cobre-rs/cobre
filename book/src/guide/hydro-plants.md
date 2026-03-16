@@ -180,8 +180,9 @@ LP at the cost specified by `outflow_violation_below_cost` in the penalties bloc
 
 ## Generation Models
 
-The `generation` block configures the turbine model (internally stored as the
-`generation_model` field on the `Hydro` struct). All variants share the core
+The `generation` block configures the turbine model for dispatch purposes. It
+provides the default production function used when no `hydro_production_models.json`
+file is present, or for any plant not listed there. All variants share the core
 turbine bounds (`min_turbined_m3s`, `max_turbined_m3s`) and generation bounds
 (`min_generation_mw`, `max_generation_mw`). The `model` key selects which
 production function converts flow to power.
@@ -208,17 +209,230 @@ production function converts flow to power.
 
 ### Available Production Function Models
 
-| Model                 | `model` value             | Status            | Description                                                                                                                                    |
-| --------------------- | ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Constant productivity | `"constant_productivity"` | Available         | `power = productivity * turbined_flow`. Independent of reservoir head. The only model supported in the current release.                        |
-| Linearized head       | `"linearized_head"`       | Not yet available | Head-dependent productivity linearized around an operating point at each stage. Will be documented when released.                              |
-| FPHA                  | `"fpha"`                  | Not yet available | Full production function with head-area-productivity tables. Requires forebay and tailrace elevation tables. Will be documented when released. |
+| Model                 | `model` value             | Status            | Description                                                                                                                                          |
+| --------------------- | ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Constant productivity | `"constant_productivity"` | Available         | `power = productivity * turbined_flow`. Independent of reservoir head. Requires only `productivity_mw_per_m3s`.                                      |
+| FPHA                  | `"fpha"`                  | Available         | Piecewise-linear outer approximation of the nonlinear production function. Head-dependent. Configured via `hydro_production_models.json`. See below. |
+| Linearized head       | `"linearized_head"`       | Not yet available | Head-dependent productivity linearized around an operating point at each stage. Will be documented when released.                                    |
 
 For the `1dtoy` example and for most initial studies, `constant_productivity` is
 the correct choice. The `productivity_mw_per_m3s` factor encodes the plant's
 average efficiency and net head. For a plant with 80 m net head and 90% efficiency,
 the theoretical productivity is approximately `9.81 * 80 * 0.90 / 1000 ≈ 0.706`
 MW/(m³/s).
+
+---
+
+## FPHA Production Model
+
+The FPHA (Forebay-Height Production Approximation) model represents the nonlinear
+relationship between reservoir volume, turbined flow, spillage, and electrical
+generation as a piecewise-linear outer approximation. It captures the head
+dependence of hydro production — plants with high reservoir levels generate more
+power for the same turbined flow.
+
+FPHA is configured per plant and per stage via `system/hydro_production_models.json`.
+A plant not listed in that file uses the `model` specified in its `generation` block
+in `hydros.json`.
+
+### Configuration File
+
+`system/hydro_production_models.json` maps each hydro plant to a production model
+selection strategy. The file is optional; when absent, all plants use their
+`generation.model` from `hydros.json`.
+
+Two selection strategies are supported:
+
+**`stage_ranges`** — assigns a model to each contiguous stage interval:
+
+```json
+{
+  "$schema": "../schemas/production_models.schema.json",
+  "production_models": [
+    {
+      "hydro_id": 1,
+      "selection_mode": "stage_ranges",
+      "stage_ranges": [
+        {
+          "start_stage_id": 0,
+          "end_stage_id": null,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "precomputed"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**`seasonal`** — assigns a model based on season index, with a fallback for seasons
+not explicitly listed:
+
+```json
+{
+  "$schema": "../schemas/production_models.schema.json",
+  "production_models": [
+    {
+      "hydro_id": 1,
+      "selection_mode": "seasonal",
+      "default_model": "constant_productivity",
+      "seasons": [
+        {
+          "season_id": 0,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "computed",
+            "volume_discretization_points": 7,
+            "turbine_discretization_points": 7
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Season indices are 0-based and match the season map defined in `stages.json`.
+
+### Hyperplane Sources
+
+When a plant is configured with `model: "fpha"`, the `fpha_config.source` field
+selects where the hyperplane coefficients come from.
+
+#### `source: "precomputed"`
+
+Hyperplanes are loaded directly from `system/fpha_hyperplanes.parquet`. Use this
+source when you have pre-fitted hyperplanes from a previous run or from an external
+tool.
+
+```json
+"fpha_config": {
+  "source": "precomputed"
+}
+```
+
+The `fpha_config` block for `"precomputed"` requires no additional fields. The
+discretization and fitting options are ignored — the hyperplanes are used as-is.
+
+The Parquet file must be present at `system/fpha_hyperplanes.parquet`. Its schema is:
+
+| Column            | Type    | Required | Description                                            |
+| ----------------- | ------- | -------- | ------------------------------------------------------ |
+| `hydro_id`        | INT32   | Yes      | Hydro plant identifier                                 |
+| `stage_id`        | INT32?  | No       | Stage the plane applies to (`null` = all stages)       |
+| `plane_id`        | INT32   | Yes      | Plane index within this hydro                          |
+| `gamma_0`         | DOUBLE  | Yes      | Intercept coefficient (MW)                             |
+| `gamma_v`         | DOUBLE  | Yes      | Volume coefficient (MW/hm³). Must be positive.         |
+| `gamma_q`         | DOUBLE  | Yes      | Turbined flow coefficient (MW per m³/s)                |
+| `gamma_s`         | DOUBLE  | Yes      | Spillage coefficient (MW per m³/s). Must be ≤ 0.       |
+| `kappa`           | DOUBLE? | No       | Correction factor (default: 1.0)                       |
+| `valid_v_min_hm3` | DOUBLE? | No       | Minimum volume where this plane is valid (hm³)         |
+| `valid_v_max_hm3` | DOUBLE? | No       | Maximum volume where this plane is valid (hm³)         |
+| `valid_q_max_m3s` | DOUBLE? | No       | Maximum turbined flow where this plane is valid (m³/s) |
+
+Each `(hydro_id, stage_id)` group must have at least 3 planes. Rows are sorted by
+`(hydro_id, stage_id, plane_id)` ascending; null `stage_id` sorts before any
+non-null value.
+
+#### `source: "computed"`
+
+Hyperplanes are fitted at runtime from the plant's physical geometry. Cobre reads
+the VHA (Volume-Height-Area) curve from `system/hydro_geometry.parquet`, evaluates
+the production function `phi(v, q, s)` over a discretization grid, and fits a
+piecewise-linear outer approximation.
+
+This source requires:
+
+1. The hydro plant must have `tailrace`, `hydraulic_losses`, and `efficiency` models
+   defined in `hydros.json`.
+2. `system/hydro_geometry.parquet` must contain at least 2 rows for the plant, with
+   strictly increasing `volume_hm3` values and non-decreasing `height_m` and
+   `area_km2` values.
+
+```json
+"fpha_config": {
+  "source": "computed",
+  "volume_discretization_points": 5,
+  "turbine_discretization_points": 5,
+  "spillage_discretization_points": 5,
+  "max_planes_per_hydro": 10,
+  "fitting_window": null
+}
+```
+
+All fields except `source` are optional:
+
+| Field                            | Default | Description                                                                                                            |
+| -------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `volume_discretization_points`   | 5       | Number of volume grid points for fitting. Must be >= 2.                                                                |
+| `turbine_discretization_points`  | 5       | Number of turbined-flow grid points. Must be >= 2.                                                                     |
+| `spillage_discretization_points` | 5       | Number of spillage grid points. Must be >= 2.                                                                          |
+| `max_planes_per_hydro`           | 10      | Maximum planes retained after heuristic selection. Must be >= 1.                                                       |
+| `fitting_window`                 | null    | Optional volume range for fitting. When absent, the full operating range `[min_storage_hm3, max_storage_hm3]` is used. |
+
+The `fitting_window` field restricts which portion of the operating range is used to
+construct the grid. Use it when the plant rarely operates near one extreme and you
+want the planes to be tighter in the operating region. Two bound variants are
+supported per dimension, and they are mutually exclusive:
+
+```json
+"fitting_window": {
+  "volume_min_hm3": 1000.0,
+  "volume_max_hm3": 40000.0
+}
+```
+
+```json
+"fitting_window": {
+  "volume_min_percentile": 5.0,
+  "volume_max_percentile": 95.0
+}
+```
+
+Do not mix absolute (`_hm3`) and percentile (`_percentile`) bounds for the same
+limit — the validator will reject the configuration.
+
+### Kappa Correction Factor
+
+The FPHA envelope is an outer approximation: by construction it never underestimates
+generation. To ensure the LP does not systematically overestimate production, a
+correction factor kappa (κ) is applied to each hyperplane's intercept:
+
+```
+gamma_0_effective = gamma_0 * kappa
+```
+
+Kappa is computed automatically during fitting by finding the tightest scalar
+multiplier such that the scaled envelope is valid. It satisfies `0 < kappa <= 1.0`.
+
+A kappa value below 0.95 indicates that the hyperplane envelope deviates
+noticeably from the true production function over the fitted grid. When this
+occurs, a warning is emitted during case loading:
+
+```
+Warning: hydro 'UHE Example' FPHA envelope has kappa = 0.87 (< 0.95).
+Consider increasing discretization points or narrowing the fitting window.
+```
+
+For `source: "precomputed"`, kappa is read from the optional `kappa` column.
+When absent or null, kappa defaults to 1.0 (the stored intercepts are used
+unchanged).
+
+### Parquet Export for Round-Trip Use
+
+When hyperplanes are fitted at runtime (`source: "computed"`), the fitted
+coefficients — including the computed kappa values — are automatically written to:
+
+```
+output/hydro_models/fpha_hyperplanes.parquet
+```
+
+This file uses the same 11-column schema as the input `system/fpha_hyperplanes.parquet`.
+To switch from computed to precomputed fitting on a subsequent run, copy this file
+to `system/fpha_hyperplanes.parquet` and change `source` to `"precomputed"` in
+`hydro_production_models.json`.
 
 ---
 
@@ -459,6 +673,10 @@ and the nature of the problem.
 | Generation bounds consistency   | Physical feasibility | `min_generation_mw` must be less than or equal to `max_generation_mw`.                                                           |
 | Initial conditions completeness | Reference error      | Every hydro plant must have exactly one entry in `initial_conditions.json` (either in `storage` or `filling_storage`, not both). |
 | Evaporation array length        | Schema error         | When `evaporation_coefficients_mm` is present, it must have exactly 12 values.                                                   |
+| FPHA geometry coverage          | Dimensional error    | Every plant configured with `fpha` or `linearized_head` must have at least 2 rows in `system/hydro_geometry.parquet`.            |
+| FPHA plane coverage             | Dimensional error    | Every `(hydro_id, stage_id)` group in `system/fpha_hyperplanes.parquet` must have at least 3 planes.                             |
+| FPHA coefficient signs          | Semantic error       | `gamma_v` must be positive; `gamma_s` must be non-positive.                                                                      |
+| Geometry monotonicity           | Semantic error       | `volume_hm3` must be strictly increasing; `height_m` and `area_km2` must be non-decreasing.                                      |
 
 ---
 

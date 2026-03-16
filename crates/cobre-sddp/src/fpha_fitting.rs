@@ -977,6 +977,78 @@ pub(crate) fn compute_tangent_plane(
     })
 }
 
+// ── Grid construction ─────────────────────────────────────────────────────────
+
+/// Precomputed grid axis values for the fitting 3D grid over `(v, q, s)`.
+///
+/// Computed once by [`build_grid`] and reused across all pipeline steps that
+/// iterate the same grid (`sample_tangent_planes`, `eliminate_redundant`,
+/// `compute_grid_errors`, and `compute_kappa`).  Centralising the formula
+/// here eliminates the risk of the four call-sites diverging.
+#[allow(clippy::struct_field_names)]
+struct GridParams {
+    /// Volume axis: `n_volume_points` values from `v_min` to `v_max` (inclusive).
+    v_points: Vec<f64>,
+    /// Flow axis: `n_flow_points` values from `q_min` to `q_max` (inclusive).
+    q_points: Vec<f64>,
+    /// Spillage axis: `n_spillage_points` values from `0` to `s_max` (inclusive).
+    s_points: Vec<f64>,
+}
+
+/// Build the uniform 3D grid for FPHA fitting.
+///
+/// Constructs three uniform axis vectors that define the grid used consistently
+/// across [`sample_tangent_planes`], [`eliminate_redundant`],
+/// [`compute_grid_errors`], and [`compute_kappa`].
+///
+/// ## Axis formulas
+///
+/// - **Volume**: `n_volume_points` values from `bounds.v_min` to `bounds.v_max`.
+/// - **Flow**: `n_flow_points` values from `q_min` to `pf.max_turbined_m3s`,
+///   where `q_min = max(1.0, pf.max_turbined_m3s * 0.01)`.  The lower bound
+///   avoids `q = 0` where the tangent plane is degenerate.
+/// - **Spillage**: `n_spillage_points` values from `0.0` to
+///   `pf.max_turbined_m3s * 0.5`.  Spillage `s = 0` is always the first point.
+///
+/// All axes are inclusive at both endpoints.
+fn build_grid(pf: &ProductionFunction, bounds: &FittingBounds) -> GridParams {
+    let n_v = bounds.n_volume_points;
+    let n_q = bounds.n_flow_points;
+    let n_s = bounds.n_spillage_points;
+
+    let v_range = bounds.v_max - bounds.v_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let v_denom = f64::from((n_v - 1) as u32);
+
+    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+    let q_range = pf.max_turbined_m3s - q_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let q_denom = f64::from((n_q - 1) as u32);
+
+    let s_max = pf.max_turbined_m3s * 0.5_f64;
+    #[allow(clippy::cast_possible_truncation)]
+    let s_denom = f64::from((n_s - 1) as u32);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let v_points: Vec<f64> = (0..n_v)
+        .map(|i| bounds.v_min + f64::from(i as u32) * v_range / v_denom)
+        .collect();
+    #[allow(clippy::cast_possible_truncation)]
+    let q_points: Vec<f64> = (0..n_q)
+        .map(|j| q_min + f64::from(j as u32) * q_range / q_denom)
+        .collect();
+    #[allow(clippy::cast_possible_truncation)]
+    let s_points: Vec<f64> = (0..n_s)
+        .map(|k| f64::from(k as u32) * s_max / s_denom)
+        .collect();
+
+    GridParams {
+        v_points,
+        q_points,
+        s_points,
+    }
+}
+
 // ── Grid sampling ─────────────────────────────────────────────────────────────
 
 /// Sample tangent hyperplanes at all points of a uniform 3D grid over `(v, q, s)`.
@@ -1010,34 +1082,16 @@ pub(crate) fn sample_tangent_planes(
     pf: &ProductionFunction,
     bounds: &FittingBounds,
 ) -> Vec<RawHyperplane> {
-    let n_v = bounds.n_volume_points;
-    let n_q = bounds.n_flow_points;
-    let n_s = bounds.n_spillage_points;
+    let grid = build_grid(pf, bounds);
+    let n_v = grid.v_points.len();
+    let n_q = grid.q_points.len();
+    let n_s = grid.s_points.len();
 
     let mut planes = Vec::with_capacity(n_v * n_q * n_s);
 
-    let v_range = bounds.v_max - bounds.v_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let v_denom = f64::from((n_v - 1) as u32);
-
-    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
-    let q_range = pf.max_turbined_m3s - q_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let q_denom = f64::from((n_q - 1) as u32);
-
-    let s_max = pf.max_turbined_m3s * 0.5_f64;
-    #[allow(clippy::cast_possible_truncation)]
-    let s_denom = f64::from((n_s - 1) as u32);
-
-    for i in 0..n_v {
-        #[allow(clippy::cast_possible_truncation)]
-        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
-        for j in 0..n_q {
-            #[allow(clippy::cast_possible_truncation)]
-            let q = q_min + f64::from(j as u32) * q_range / q_denom;
-            for k in 0..n_s {
-                #[allow(clippy::cast_possible_truncation)]
-                let s = f64::from(k as u32) * s_max / s_denom;
+    for &v in &grid.v_points {
+        for &q in &grid.q_points {
+            for &s in &grid.s_points {
                 if let Some(plane) = compute_tangent_plane(pf, v, q, s) {
                     planes.push(plane);
                 }
@@ -1092,35 +1146,12 @@ pub(crate) fn eliminate_redundant(
         return Vec::new();
     }
 
-    let n_v = bounds.n_volume_points;
-    let n_q = bounds.n_flow_points;
-    let n_s = bounds.n_spillage_points;
-
+    let grid = build_grid(pf, bounds);
     let mut active = vec![false; planes.len()];
 
-    let v_range = bounds.v_max - bounds.v_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let v_denom = f64::from((n_v - 1) as u32);
-
-    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
-    let q_range = pf.max_turbined_m3s - q_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let q_denom = f64::from((n_q - 1) as u32);
-
-    let s_max = pf.max_turbined_m3s * 0.5_f64;
-    #[allow(clippy::cast_possible_truncation)]
-    let s_denom = f64::from((n_s - 1) as u32);
-
-    for i in 0..n_v {
-        #[allow(clippy::cast_possible_truncation)]
-        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
-        for j in 0..n_q {
-            #[allow(clippy::cast_possible_truncation)]
-            let q = q_min + f64::from(j as u32) * q_range / q_denom;
-            for k in 0..n_s {
-                #[allow(clippy::cast_possible_truncation)]
-                let s = f64::from(k as u32) * s_max / s_denom;
-
+    for &v in &grid.v_points {
+        for &q in &grid.q_points {
+            for &s in &grid.s_points {
                 // Find the maximum plane value at this grid point.
                 let max_val = planes
                     .iter()
@@ -1210,39 +1241,13 @@ fn compute_grid_errors(
     pf: &ProductionFunction,
     bounds: &FittingBounds,
 ) -> Vec<f64> {
-    let n_v = bounds.n_volume_points;
-    let n_q = bounds.n_flow_points;
-    let n_s = bounds.n_spillage_points;
+    let grid = build_grid(pf, bounds);
+    let n = grid.v_points.len() * grid.q_points.len() * grid.s_points.len();
+    let mut errors = Vec::with_capacity(n);
 
-    // Reconstruct the same grid as sample_tangent_planes / eliminate_redundant.
-    let v_range = bounds.v_max - bounds.v_min;
-    // Grid counts are validated to be >= 2; casting usize → u32 → f64 is safe for
-    // typical discretization values (2–20).
-    #[allow(clippy::cast_possible_truncation)]
-    let v_denom = f64::from((n_v - 1) as u32);
-
-    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
-    let q_max = pf.max_turbined_m3s;
-    let q_range = q_max - q_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let q_denom = f64::from((n_q - 1) as u32);
-
-    let s_max = pf.max_turbined_m3s * 0.5_f64;
-    #[allow(clippy::cast_possible_truncation)]
-    let s_denom = f64::from((n_s - 1) as u32);
-
-    let mut errors = Vec::with_capacity(n_v * n_q * n_s);
-
-    for i in 0..n_v {
-        #[allow(clippy::cast_possible_truncation)]
-        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
-        for j in 0..n_q {
-            #[allow(clippy::cast_possible_truncation)]
-            let q = q_min + f64::from(j as u32) * q_range / q_denom;
-            for k in 0..n_s {
-                #[allow(clippy::cast_possible_truncation)]
-                let s = f64::from(k as u32) * s_max / s_denom;
-
+    for &v in &grid.v_points {
+        for &q in &grid.q_points {
+            for &s in &grid.s_points {
                 let phi_val = pf.evaluate(v, q, s);
                 let envelope_val = if planes.is_empty() {
                     f64::NEG_INFINITY
@@ -1278,9 +1283,13 @@ fn compute_grid_errors(
 /// ## Properties
 ///
 /// - The returned planes are a subset of the input.
-/// - The envelope property is preserved: after selection,
-///   `max_m(plane_m(v,q,s)) >= phi(v,q,s)` still holds at every grid point, because
-///   removal only makes the envelope looser, never introduces negative error.
+/// - Returns at most `max_planes_per_hydro` planes.  If removing any further plane
+///   would violate the outer-approximation property (minimum grid error would drop
+///   below `-1e-8`), the function stops early and may return more planes than the
+///   target.
+/// - The envelope property is preserved whenever early-stop is not triggered:
+///   after selection, `max_m(plane_m(v,q,s)) >= phi(v,q,s)` still holds at every
+///   grid point.
 /// - Returns an empty `Vec` when `planes` is empty.
 ///
 /// ## Complexity
@@ -1396,40 +1405,13 @@ pub(crate) fn compute_kappa(
         return 1.0;
     }
 
-    let n_v = bounds.n_volume_points;
-    let n_q = bounds.n_flow_points;
-    let n_s = bounds.n_spillage_points;
-
-    // Reconstruct the same grid as sample_tangent_planes / eliminate_redundant.
-    let v_range = bounds.v_max - bounds.v_min;
-    // Grid counts are validated to be >= 2 by resolve_fitting_bounds; casting
-    // usize → u32 → f64 is safe because counts are small (typically 2–20).
-    #[allow(clippy::cast_possible_truncation)]
-    let v_denom = f64::from((n_v - 1) as u32);
-
-    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
-    let q_max = pf.max_turbined_m3s;
-    let q_range = q_max - q_min;
-    #[allow(clippy::cast_possible_truncation)]
-    let q_denom = f64::from((n_q - 1) as u32);
-
-    let s_max = pf.max_turbined_m3s * 0.5_f64;
-    #[allow(clippy::cast_possible_truncation)]
-    let s_denom = f64::from((n_s - 1) as u32);
-
+    let grid = build_grid(pf, bounds);
     let mut min_ratio = f64::MAX;
     let mut found_valid = false;
 
-    for i in 0..n_v {
-        #[allow(clippy::cast_possible_truncation)]
-        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
-        for j in 0..n_q {
-            #[allow(clippy::cast_possible_truncation)]
-            let q = q_min + f64::from(j as u32) * q_range / q_denom;
-            for k in 0..n_s {
-                #[allow(clippy::cast_possible_truncation)]
-                let s = f64::from(k as u32) * s_max / s_denom;
-
+    for &v in &grid.v_points {
+        for &q in &grid.q_points {
+            for &s in &grid.s_points {
                 let phi_val = pf.evaluate(v, q, s);
                 let max_plane = planes
                     .iter()
@@ -1459,9 +1441,15 @@ pub(crate) fn compute_kappa(
 /// 4. Each plane's `gamma_q > -1e-10` (turbining must have non-negative marginal value).
 /// 5. Each plane's `gamma_s <= 1e-10` (spillage must have non-positive marginal value).
 ///
-/// A kappa below 0.95 triggers a warning to stderr, indicating the envelope
-/// overestimates the production function significantly. This is informational;
-/// the function still returns `Ok(())` in this case.
+/// A kappa below 0.95 indicates the envelope overestimates the production function
+/// significantly.  The function still returns `Ok(Some(kappa))` in this case —
+/// the caller is responsible for surfacing the warning through structured diagnostics.
+///
+/// # Returns
+///
+/// - `Ok(None)` — validation passed and kappa >= 0.95 (no warning).
+/// - `Ok(Some(kappa))` — validation passed but kappa < 0.95 (low-kappa warning).
+/// - `Err(...)` — a hard validation failure.
 ///
 /// # Errors
 ///
@@ -1482,7 +1470,7 @@ pub(crate) fn validate_fitted_planes(
     planes: &[RawHyperplane],
     kappa: f64,
     hydro_name: &str,
-) -> Result<(), FphaFittingError> {
+) -> Result<Option<f64>, FphaFittingError> {
     if planes.is_empty() {
         return Err(FphaFittingError::NoHyperplanesProduced {
             hydro_name: hydro_name.to_owned(),
@@ -1496,12 +1484,7 @@ pub(crate) fn validate_fitted_planes(
         });
     }
 
-    if kappa < 0.95 {
-        eprintln!(
-            "warning: hydro '{hydro_name}': kappa={kappa:.6} < 0.95; \
-             the FPHA envelope overestimates the true production function significantly"
-        );
-    }
+    let low_kappa = if kappa < 0.95 { Some(kappa) } else { None };
 
     for (idx, plane) in planes.iter().enumerate() {
         if plane.gamma_v < -1e-10 {
@@ -1536,7 +1519,7 @@ pub(crate) fn validate_fitted_planes(
         }
     }
 
-    Ok(())
+    Ok(low_kappa)
 }
 
 // ── Top-level fitting pipeline ────────────────────────────────────────────────
@@ -1581,6 +1564,10 @@ pub(crate) struct FphaFitResult {
     pub planes: Vec<FphaPlane>,
     /// Nominal head correction factor κ ∈ (0, 1] applied during fitting.
     pub kappa: f64,
+    /// Non-`None` when kappa < 0.95, carrying the kappa value for structured
+    /// warning display by the caller.  The fitting result is still valid in
+    /// this case; the warning is informational.
+    pub low_kappa_warning: Option<f64>,
 }
 
 /// # Errors
@@ -1618,7 +1605,7 @@ pub(crate) fn fit_fpha_planes(
     let selected = select_planes(&non_redundant, &pf, &bounds);
     let kappa = compute_kappa(&selected, &pf, &bounds);
 
-    validate_fitted_planes(&selected, kappa, &hydro.name)?;
+    let low_kappa_warning = validate_fitted_planes(&selected, kappa, &hydro.name)?;
 
     let planes = selected
         .iter()
@@ -1630,7 +1617,11 @@ pub(crate) fn fit_fpha_planes(
         })
         .collect();
 
-    Ok(FphaFitResult { planes, kappa })
+    Ok(FphaFitResult {
+        planes,
+        kappa,
+        low_kappa_warning,
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

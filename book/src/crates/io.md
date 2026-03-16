@@ -19,7 +19,7 @@ with all foreign keys resolved and all domain rules verified.
 | -------------------- | --------------------------------------------------------------------------------- |
 | `config`             | `Config` struct and `parse_config` — reads `config.json`                          |
 | `system`             | Entity parsers for buses, lines, hydros, thermals, and stub types                 |
-| `extensions`         | Hydro production model extensions (FPHA hyperplanes, geometry tables)             |
+| `extensions`         | Hydro production model extensions — FPHA hyperplane loading, production model configuration parsing, and hydro geometry parsing |
 | `scenarios`          | Inflow and load statistical model loading, assembly, and history-based estimation |
 | `constraints`        | Stage-varying bound and penalty override loading from Parquet                     |
 | `penalties`          | Global penalty defaults parser (`penalties.json`)                                 |
@@ -30,7 +30,7 @@ with all foreign keys resolved and all domain rules verified.
 | `pipeline`           | Orchestrator that wires all layers into a single `load_case` call                 |
 | `report`             | Structured validation report generation                                           |
 | `broadcast`          | System serialization and deserialization for MPI broadcast                        |
-| `output`             | Output result types for simulation and training data                              |
+| `output`             | Output result types for simulation and training data; `output::hydro_models` exports fitted FPHA hyperplane coefficients to Parquet |
 
 ## `load_case`
 

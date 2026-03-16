@@ -85,6 +85,8 @@ will not produce `simulation/pumping_stations/`.
       generic/
         scenario_id=0000/data.parquet
         ...
+  hydro_models/
+    fpha_hyperplanes.parquet         (when any hydro uses source: "computed")
   stochastic/
     inflow_seasonal_stats.parquet    (when estimation was performed)
     inflow_ar_coefficients.parquet   (when estimation was performed)
@@ -782,6 +784,45 @@ cobre report results/ | jq '.training.convergence.termination_reason'
 status=$(cobre report results/ | jq -r '.status')
 [ "$status" = "complete" ] || exit 1
 ```
+
+---
+
+## Hydro Model Artifacts
+
+When any hydro plant is configured with `fpha_config.source: "computed"` in
+`system/hydro_production_models.json`, Cobre fits the FPHA hyperplanes from
+`system/hydro_geometry.parquet` before training begins and writes the results to
+the `hydro_models/` directory. The directory is not written when no hydro uses
+`source: "computed"`.
+
+### `hydro_models/fpha_hyperplanes.parquet`
+
+Fitted FPHA hyperplane coefficients for all hydros that used `source: "computed"`
+in the current run. The schema is identical to the input file
+`system/fpha_hyperplanes.parquet`: 11 columns, all with the same names, types,
+and nullability.
+
+| Column            | Type    | Nullable | Description                                                    |
+| ----------------- | ------- | -------- | -------------------------------------------------------------- |
+| `hydro_id`        | INT32   | No       | Hydro plant ID                                                 |
+| `stage_id`        | INT32   | Yes      | Stage the plane applies to. `null` = valid for all stages      |
+| `plane_id`        | INT32   | No       | Plane index within this hydro (and stage)                      |
+| `gamma_0`         | DOUBLE  | No       | Intercept coefficient (MW), unscaled                           |
+| `gamma_v`         | DOUBLE  | No       | Volume coefficient (MW/hm³)                                    |
+| `gamma_q`         | DOUBLE  | No       | Turbined flow coefficient (MW per m³/s)                        |
+| `gamma_s`         | DOUBLE  | No       | Spillage coefficient (MW per m³/s)                             |
+| `kappa`           | DOUBLE  | Yes      | Correction factor. Defaults to `1.0` when absent or null.      |
+| `valid_v_min_hm3` | DOUBLE  | Yes      | Volume range minimum where this plane is valid (hm³)           |
+| `valid_v_max_hm3` | DOUBLE  | Yes      | Volume range maximum where this plane is valid (hm³)           |
+| `valid_q_max_m3s` | DOUBLE  | Yes      | Maximum turbined flow where this plane is valid (m³/s)         |
+
+The file is written atomically (via a `.tmp` rename) and uses the same
+`(hydro_id, stage_id, plane_id)`-sorted row order as the input schema. It can
+be used directly as a future `source: "precomputed"` input by copying it to
+`system/fpha_hyperplanes.parquet`.
+
+See [Case Format Reference — `system/fpha_hyperplanes.parquet`](./case-format.md#systemfpha_hyperplanesparquet)
+for the full column definitions and validity constraints.
 
 ---
 

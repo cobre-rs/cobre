@@ -170,7 +170,7 @@ The minimal viable solver is built through an [8-phase implementation sequence](
 
 ### v0.2 — Production Hardening
 
-- [ ] FPHA hydroelectric production function
+- [x] FPHA hydroelectric production function
 - [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)

@@ -354,6 +354,11 @@ pub struct HydroModelSummary {
     pub n_user_supplied_ref: usize,
     /// Number of hydro plants with evaporation that used the default midpoint reference volume.
     pub n_default_midpoint_ref: usize,
+    /// Low-kappa warnings for hydros whose FPHA envelope kappa < 0.95.
+    ///
+    /// Each entry is `(hydro_name, kappa)`.  An empty vector means all fitted
+    /// FPHA envelopes had kappa >= 0.95 (no warnings).
+    pub kappa_warnings: Vec<(String, f64)>,
 }
 
 // ── Pipeline result ───────────────────────────────────────────────────────────
@@ -371,6 +376,12 @@ pub struct PrepareHydroModelsResult {
     pub evaporation: EvaporationModelSet,
     /// Provenance records for all hydro plants.
     pub provenance: HydroModelProvenance,
+    /// Low-kappa warnings collected during computed FPHA fitting.
+    ///
+    /// Each entry is `(hydro_name, kappa)` for hydros whose fitted FPHA
+    /// envelope had kappa < 0.95.  An empty vector means no warnings were
+    /// generated.
+    pub kappa_warnings: Vec<(String, f64)>,
 }
 
 impl PrepareHydroModelsResult {
@@ -441,6 +452,7 @@ impl PrepareHydroModelsResult {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         }
     }
 }
@@ -566,6 +578,7 @@ pub fn build_hydro_model_summary(
         n_no_evaporation,
         n_user_supplied_ref,
         n_default_midpoint_ref,
+        kappa_warnings: result.kappa_warnings.clone(),
     }
 }
 
@@ -590,7 +603,8 @@ pub fn prepare_hydro_models(
     system: &System,
     case_dir: &Path,
 ) -> Result<PrepareHydroModelsResult, SddpError> {
-    let (production, production_sources) = resolve_production_models(system, case_dir)?;
+    let (production, production_sources, kappa_warnings) =
+        resolve_production_models(system, case_dir)?;
     let (evaporation, evaporation_sources, evaporation_reference_sources) =
         resolve_evaporation_models(system, case_dir)?;
 
@@ -602,10 +616,19 @@ pub fn prepare_hydro_models(
             evaporation_sources,
             evaporation_reference_sources,
         },
+        kappa_warnings,
     })
 }
 
 // ── FPHA production model resolution ─────────────────────────────────────────
+
+/// Return type for [`resolve_production_models`]: the model set, provenance vector,
+/// and low-kappa warnings collected during computed FPHA fitting.
+type ResolveProductionResult = (
+    ProductionModelSet,
+    Vec<(EntityId, ProductionModelSource)>,
+    Vec<(String, f64)>,
+);
 
 /// Resolve per-hydro per-stage production models from the case directory.
 ///
@@ -616,8 +639,10 @@ pub fn prepare_hydro_models(
 /// When any hydro is configured as FPHA with `source: "computed"`, also loads
 /// `system/hydro_geometry.parquet` and runs the FPHA fitting pipeline.
 ///
-/// Returns `(ProductionModelSet, provenance_vec)` where the provenance vector
-/// records the [`ProductionModelSource`] for each hydro in canonical ID order.
+/// Returns `(ProductionModelSet, provenance_vec, kappa_warnings)` where the
+/// provenance vector records the [`ProductionModelSource`] for each hydro in
+/// canonical ID order, and `kappa_warnings` contains `(name, kappa)` pairs for
+/// any computed FPHA hydro whose fitted envelope had kappa < 0.95.
 ///
 /// # Model resolution per hydro
 ///
@@ -653,7 +678,7 @@ pub fn prepare_hydro_models(
 pub fn resolve_production_models(
     system: &System,
     case_dir: &Path,
-) -> Result<(ProductionModelSet, Vec<(EntityId, ProductionModelSource)>), SddpError> {
+) -> Result<ResolveProductionResult, SddpError> {
     // ── Step 1: check whether the optional config file is present ─────────────
     let mut ctx = cobre_io::ValidationContext::new();
     let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
@@ -696,6 +721,7 @@ pub fn resolve_production_models(
     let mut all_models: Vec<Vec<ResolvedProductionModel>> = Vec::with_capacity(n_hydros);
     let mut provenance: Vec<(EntityId, ProductionModelSource)> = Vec::with_capacity(n_hydros);
     let mut export_rows: Vec<cobre_io::FphaHyperplaneRow> = Vec::new();
+    let mut kappa_warnings: Vec<(String, f64)> = Vec::new();
 
     for hydro in system.hydros() {
         let config_entry = config_map.get(&hydro.id).copied();
@@ -708,6 +734,10 @@ pub fn resolve_production_models(
             if source == ProductionModelSource::ComputedFromGeometry {
                 let fit_result =
                     fit_planes_for_hydro(hydro, config_entry, &geometry_map, &study_stages)?;
+                // Collect low-kappa warnings for structured diagnostic display.
+                if let Some(kappa) = fit_result.low_kappa_warning {
+                    kappa_warnings.push((hydro.name.clone(), kappa));
+                }
                 // Collect export rows for this computed-source hydro.
                 for (plane_id, plane) in fit_result.planes.iter().enumerate() {
                     let raw_gamma_0 = plane.intercept / fit_result.kappa;
@@ -758,7 +788,7 @@ pub fn resolve_production_models(
     }
 
     let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
-    Ok((set, provenance))
+    Ok((set, provenance, kappa_warnings))
 }
 
 /// Load precomputed FPHA hyperplane rows from disk when any config uses `source: "precomputed"`.
@@ -825,6 +855,17 @@ fn build_geometry_map(
 ///
 /// Returns the full fitting result including planes and kappa; the outer loop
 /// caches the planes for each stage and uses kappa to reconstruct export rows.
+///
+/// # Prerequisite policy
+///
+/// Before fitting, [`validate_computed_prerequisites`] is called to require
+/// that `tailrace`, `hydraulic_losses`, and `efficiency` are all `Some`.
+/// Although the production function math can technically handle `None` values
+/// (zero tailrace, lossless penstock, 100% efficiency), requiring all three
+/// ensures the reservoir geometry was fully characterized before committing to
+/// the computed path.  Silently accepting partial geometry risks producing
+/// FPHA envelopes that are physically inconsistent with the operator's intent
+/// and are difficult to diagnose after the fact.
 fn fit_planes_for_hydro(
     hydro: &cobre_core::entities::hydro::Hydro,
     config_entry: Option<&ProductionModelConfig>,
@@ -939,6 +980,18 @@ fn find_fpha_config_for_stage<'a>(
 ///
 /// Checks that `tailrace`, `hydraulic_losses`, and `efficiency` are all `Some`, and
 /// that at least one geometry row exists for this hydro in the geometry map.
+///
+/// # Policy rationale
+///
+/// Although the production function math can handle `None` for each of these
+/// fields (zero tailrace, lossless penstock, 100% efficiency as defaults),
+/// requiring all three as `Some` ensures the reservoir geometry was **fully
+/// characterized** before committing to the computed FPHA path.  Accepting
+/// partial geometry risks producing envelopes that are physically inconsistent
+/// with the operator's intent and hard to diagnose after the fact.  Any hydro
+/// that genuinely has no tailrace, lossless penstock, or a perfect turbine
+/// must declare this explicitly by providing the respective model with an
+/// appropriate constant or polynomial value.
 ///
 /// # Errors
 ///
@@ -2514,6 +2567,7 @@ mod tests {
             n_no_evaporation: 2,
             n_user_supplied_ref: 1,
             n_default_midpoint_ref: 1,
+            kappa_warnings: Vec::new(),
         };
         let _ = format!("{summary:?}");
 
@@ -2539,6 +2593,7 @@ mod tests {
             production: prod_set,
             evaporation: evap_set,
             provenance: prov,
+            kappa_warnings: Vec::new(),
         };
         let _ = format!("{result:?}");
     }
@@ -3549,6 +3604,7 @@ mod tests {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);
@@ -3649,6 +3705,7 @@ mod tests {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -3723,6 +3780,7 @@ mod tests {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -3787,6 +3845,7 @@ mod tests {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -3980,6 +4039,7 @@ mod tests {
                 evaporation_sources,
                 evaporation_reference_sources,
             },
+            kappa_warnings: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);
@@ -4359,6 +4419,7 @@ mod tests {
                     EvaporationReferenceSource::DefaultMidpoint,
                 )],
             },
+            kappa_warnings: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);

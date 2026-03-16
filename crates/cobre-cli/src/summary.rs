@@ -100,22 +100,76 @@ pub fn print_hydro_model_summary(stderr: &Term, summary: &HydroModelSummary) {
     ));
 }
 
+/// Classify how FPHA planes were obtained for display purposes.
+enum FphaSourceLabel {
+    /// All FPHA hydros loaded from `fpha_hyperplanes.parquet`.
+    AllPrecomputed,
+    /// All FPHA hydros computed from reservoir geometry.
+    AllComputed,
+    /// A mix: `n_precomputed` from Parquet and `n_computed` from geometry.
+    Mixed {
+        n_precomputed: usize,
+        n_computed: usize,
+    },
+}
+
+/// Determine the [`FphaSourceLabel`] for the FPHA hydros in a summary.
+fn fpha_source_label(summary: &HydroModelSummary) -> FphaSourceLabel {
+    use cobre_sddp::ProductionModelSource;
+
+    let n_precomputed = summary
+        .fpha_details
+        .iter()
+        .filter(|d| d.source == ProductionModelSource::PrecomputedHyperplanes)
+        .count();
+    let n_computed = summary
+        .fpha_details
+        .iter()
+        .filter(|d| d.source == ProductionModelSource::ComputedFromGeometry)
+        .count();
+
+    match (n_precomputed, n_computed) {
+        (_, 0) => FphaSourceLabel::AllPrecomputed,
+        (0, _) => FphaSourceLabel::AllComputed,
+        _ => FphaSourceLabel::Mixed {
+            n_precomputed,
+            n_computed,
+        },
+    }
+}
+
 /// Format the production detail line for a [`HydroModelSummary`].
 fn format_production_line(summary: &HydroModelSummary) -> String {
     match (summary.n_constant, summary.n_fpha) {
         (0, 0) => "0 hydros".to_string(),
         (n_const, 0) => format!("{n_const} constant"),
         (0, n_fpha) => {
-            // All-FPHA case: show filename for clarity.
+            let source_detail = match fpha_source_label(summary) {
+                FphaSourceLabel::AllPrecomputed => {
+                    "loaded from fpha_hyperplanes.parquet".to_string()
+                }
+                FphaSourceLabel::AllComputed => "computed from geometry".to_string(),
+                FphaSourceLabel::Mixed {
+                    n_precomputed,
+                    n_computed,
+                } => format!("{n_precomputed} precomputed, {n_computed} computed from geometry"),
+            };
             format!(
-                "{n_fpha} FPHA ({} planes, loaded from fpha_hyperplanes.parquet)",
+                "{n_fpha} FPHA ({} planes, {source_detail})",
                 summary.total_planes
             )
         }
         (n_const, n_fpha) => {
-            // Mixed case: short label without filename.
+            let source_detail = match fpha_source_label(summary) {
+                FphaSourceLabel::AllPrecomputed => "loaded".to_string(),
+                FphaSourceLabel::AllComputed => "computed from geometry".to_string(),
+                FphaSourceLabel::Mixed {
+                    n_precomputed,
+                    n_computed,
+                } => format!("{n_precomputed} precomputed, {n_computed} computed from geometry"),
+            };
             format!(
-                "{n_const} constant, {n_fpha} FPHA ({} planes, loaded)",
+                "{n_const} constant, {n_fpha} FPHA ({} planes, {source_detail})",
                 summary.total_planes
             )
         }
@@ -1174,6 +1228,7 @@ mod tests {
             n_no_evaporation: 1,
             n_user_supplied_ref: 0,
             n_default_midpoint_ref: 3,
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -1187,6 +1242,7 @@ mod tests {
             n_no_evaporation: 4,
             n_user_supplied_ref: 0,
             n_default_midpoint_ref: 0,
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -1200,6 +1256,7 @@ mod tests {
             n_no_evaporation: 3,
             n_user_supplied_ref: 0,
             n_default_midpoint_ref: 162,
+            kappa_warnings: Vec::new(),
         }
     }
 
@@ -1299,6 +1356,7 @@ mod tests {
             n_no_evaporation: 2,
             n_user_supplied_ref: 0,
             n_default_midpoint_ref: 1,
+            kappa_warnings: Vec::new(),
         };
         let s = format_hydro_model_summary_string(&summary);
 
@@ -1352,6 +1410,7 @@ mod tests {
             n_no_evaporation: 0,
             n_user_supplied_ref: 0,
             n_default_midpoint_ref: 2,
+            kappa_warnings: Vec::new(),
         };
         let s = format_hydro_model_summary_string(&summary);
         assert!(
@@ -1376,6 +1435,7 @@ mod tests {
             n_no_evaporation: 1,
             n_user_supplied_ref: 3,
             n_default_midpoint_ref: 0,
+            kappa_warnings: Vec::new(),
         };
         let s = format_hydro_model_summary_string(&summary);
         assert!(
@@ -1408,6 +1468,7 @@ mod tests {
             n_no_evaporation: 1,
             n_user_supplied_ref: 2,
             n_default_midpoint_ref: 1,
+            kappa_warnings: Vec::new(),
         };
         let s = format_hydro_model_summary_string(&summary);
         assert!(

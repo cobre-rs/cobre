@@ -26,12 +26,14 @@
 //!
 //! ```rust,no_run
 //! use cobre_sddp::setup::StudySetup;
+//! use cobre_sddp::hydro_models::PrepareHydroModelsResult;
 //! use cobre_stochastic::build_stochastic_context;
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
 //! let stochastic = build_stochastic_context(system, 42, &[], None)?;
-//! let setup = StudySetup::new(system, config, stochastic)?;
+//! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
+//! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
 //! # Ok(())
 //! # }
@@ -55,6 +57,7 @@ use crate::{
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
     build_stage_templates,
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    hydro_models::PrepareHydroModelsResult,
     simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
@@ -222,6 +225,9 @@ pub struct StudySetup {
     risk_measures: Vec<RiskMeasure>,
     entity_counts: EntityCounts,
 
+    // ── Hydro models ──────────────────────────────────────────────────────────
+    hydro_models: PrepareHydroModelsResult,
+
     // ── Derived layout values ─────────────────────────────────────────────────
     block_counts_per_stage: Vec<usize>,
     max_blocks: usize,
@@ -257,6 +263,7 @@ impl StudySetup {
         system: &System,
         config: &cobre_io::Config,
         stochastic: StochasticContext,
+        hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         let params = StudyParams::from_config(config)?;
         Self::from_broadcast_params(
@@ -270,6 +277,7 @@ impl StudySetup {
             params.policy_path,
             params.inflow_method,
             params.cut_selection,
+            hydro_models,
         )
     }
 
@@ -307,6 +315,7 @@ impl StudySetup {
         policy_path: String,
         inflow_method: InflowNonNegativityMethod,
         cut_selection: Option<CutSelectionStrategy>,
+        hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         // ── Stage templates ───────────────────────────────────────────────────
         let stage_templates = build_stage_templates(
@@ -314,6 +323,7 @@ impl StudySetup {
             &inflow_method,
             stochastic.par(),
             stochastic.normal(),
+            &hydro_models.production,
         )?;
 
         if stage_templates.templates.is_empty() {
@@ -337,6 +347,8 @@ impl StudySetup {
             system.buses().len(),
             n_blks_stage0,
             has_inflow_penalty,
+            vec![],
+            &[],
         );
 
         // ── Initial state ─────────────────────────────────────────────────────
@@ -386,6 +398,7 @@ impl StudySetup {
             horizon,
             risk_measures,
             entity_counts,
+            hydro_models,
             block_counts_per_stage,
             max_blocks,
             seed,
@@ -479,6 +492,16 @@ impl StudySetup {
     #[must_use]
     pub fn entity_counts(&self) -> &EntityCounts {
         &self.entity_counts
+    }
+
+    /// Return a reference to the hydro model preprocessing result.
+    ///
+    /// Contains the resolved production models, evaporation models, and
+    /// provenance records for all hydro plants. Used by the LP builder
+    /// (Epic 2/3) to configure hydro-related LP variables and constraints.
+    #[must_use]
+    pub fn hydro_models(&self) -> &PrepareHydroModelsResult {
+        &self.hydro_models
     }
 
     // ── Accessors: derived layout ─────────────────────────────────────────────
@@ -993,6 +1016,7 @@ pub fn prepare_stochastic(
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
+    use crate::hydro_models::PrepareHydroModelsResult;
 
     use cobre_core::{
         BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
@@ -1273,7 +1297,12 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let result = StudySetup::new(&system, &config, stochastic);
+        let result = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let setup = result.unwrap();
         assert!(!setup.stage_templates().is_empty());
@@ -1288,7 +1317,12 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let result = StudySetup::new(&system, &config, stochastic);
+        let result = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        );
         assert!(result.is_err(), "expected Err, got Ok");
         let err = result.unwrap_err();
         let msg = err.to_string();
@@ -1307,7 +1341,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         // Stage templates
         assert_eq!(setup.stage_templates().len(), n_stages);
@@ -1346,7 +1386,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let mut setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         let n_state = setup.indexer().n_state;
         let coefficients = vec![1.0_f64; n_state];
@@ -1364,7 +1410,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         // The minimal_config uses "penalty" — should not be None.
         assert!(
@@ -1381,7 +1433,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         assert!(
             setup.cut_selection().is_none(),
@@ -1397,7 +1455,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
         let ctx = setup.stage_ctx();
 
         assert_eq!(
@@ -1435,7 +1499,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
         let ctx = setup.training_ctx();
 
         assert_eq!(
@@ -1468,7 +1538,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let mut setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
         let comm = LocalBackend;
         let mut solver = HighsSolver::new().expect("solver");
 
@@ -1500,7 +1576,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let mut setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
         let comm = LocalBackend;
         let mut solver = HighsSolver::new().expect("solver");
 
@@ -1535,7 +1617,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         let sim_cfg = setup.simulation_config();
         assert_eq!(sim_cfg.n_scenarios, setup.n_scenarios());
@@ -1555,7 +1643,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         let pool = setup
             .create_workspace_pool(2, HighsSolver::new)
@@ -1579,7 +1673,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let mut setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
         let comm = LocalBackend;
         let mut solver = HighsSolver::new().expect("solver");
 
@@ -1627,7 +1727,13 @@ mod tests {
         let stochastic =
             build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
 
-        let mut setup = StudySetup::new(&system, &config, stochastic).expect("setup");
+        let mut setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
 
         // Train first so the FCF has cuts.
         let comm = LocalBackend;
@@ -1962,5 +2068,84 @@ mod tests {
             ComponentProvenance::UserSupplied,
             "opening_tree provenance must not be UserSupplied when file is absent"
         );
+    }
+
+    // ── prepare_hydro_models / hydro_models accessor tests ────────────────────
+
+    /// Given a system with no FPHA and no evaporation data, `default_from_system`
+    /// returns a result where all hydros use constant productivity and no evaporation.
+    #[test]
+    fn default_from_system_gives_constant_and_no_evaporation() {
+        use crate::hydro_models::{
+            EvaporationModel, ProductionModelSource, ResolvedProductionModel,
+        };
+
+        let system = minimal_system(2);
+        let result = PrepareHydroModelsResult::default_from_system(&system);
+
+        assert_eq!(
+            result.provenance.production_sources.len(),
+            system.hydros().len(),
+            "production_sources length must equal n_hydros"
+        );
+        for (_, source) in &result.provenance.production_sources {
+            assert_eq!(
+                *source,
+                ProductionModelSource::DefaultConstant,
+                "all hydros must use DefaultConstant"
+            );
+        }
+
+        assert_eq!(
+            result.provenance.evaporation_sources.len(),
+            system.hydros().len(),
+            "evaporation_sources length must equal n_hydros"
+        );
+        assert!(
+            !result.evaporation.has_evaporation(),
+            "default result must have no evaporation"
+        );
+
+        // Verify the production model for the one hydro at stage 0 is ConstantProductivity.
+        let model = result.production.model(0, 0);
+        assert!(
+            matches!(model, ResolvedProductionModel::ConstantProductivity { .. }),
+            "default production model must be ConstantProductivity"
+        );
+
+        // Verify the evaporation model for the one hydro is None.
+        let evap = result.evaporation.model(0);
+        assert!(
+            matches!(evap, EvaporationModel::None),
+            "default evaporation model must be None"
+        );
+    }
+
+    /// Given a valid `StudySetup`, `hydro_models()` returns the stored result.
+    #[test]
+    fn hydro_models_accessor_returns_stored_result() {
+        use crate::hydro_models::ProductionModelSource;
+
+        let system = minimal_system(2);
+        let config = minimal_config(1, 5);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+        let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+
+        let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
+
+        let models = setup.hydro_models();
+        assert_eq!(
+            models.provenance.production_sources.len(),
+            system.hydros().len(),
+            "hydro_models() must return the stored result (provenance length mismatch)"
+        );
+        for (_, source) in &models.provenance.production_sources {
+            assert_eq!(
+                *source,
+                ProductionModelSource::DefaultConstant,
+                "stored result must preserve DefaultConstant provenance"
+            );
+        }
     }
 }

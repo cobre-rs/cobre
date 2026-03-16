@@ -1,0 +1,3176 @@
+//! Hydro model runtime types for the production function and evaporation pipelines.
+//!
+//! Provides the preprocessed output types for the hydro model pipeline:
+//!
+//! - [`ResolvedProductionModel`] and [`ProductionModelSet`] — resolved production
+//!   functions (constant productivity or FPHA hyperplanes) indexed by hydro and stage.
+//! - [`EvaporationModel`] and [`EvaporationModelSet`] — linearized evaporation
+//!   coefficients indexed by hydro plant.
+//! - [`HydroModelProvenance`] — tracks the source of each hydro's production and
+//!   evaporation model for display and auditing.
+//! - [`HydroModelSummary`] — aggregated statistics for display after preprocessing.
+//! - [`PrepareHydroModelsResult`] — bundles all pipeline outputs.
+//! - [`resolve_production_models`] — resolves per-hydro per-stage production models
+//!   from the case directory, returning a [`ProductionModelSet`] and provenance vector.
+//!
+//! These types live in `cobre-sddp` because they are algorithm-specific (FPHA
+//! hyperplane approximation is an SDDP concept). They must not be placed in
+//! `cobre-core`.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use cobre_core::{EntityId, System, entities::hydro::HydroGenerationModel};
+use cobre_io::extensions::{FphaHyperplaneRow, ProductionModelConfig, SelectionMode};
+
+use crate::SddpError;
+
+// ── Hyperplane types ──────────────────────────────────────────────────────────
+
+/// A single FPHA hyperplane with a pre-scaled intercept.
+///
+/// The intercept stored here is `gamma_0 * kappa` (the intercept coefficient
+/// multiplied by the nominal head factor). The LP builder adds this directly
+/// to the right-hand side of the hyperplane inequality constraint without
+/// further scaling.
+///
+/// # Fields
+///
+/// - `intercept` — pre-scaled intercept (`gamma_0 * kappa`)
+/// - `gamma_v` — storage (volume) coefficient
+/// - `gamma_q` — turbined-flow coefficient
+/// - `gamma_s` — spillage coefficient
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FphaPlane {
+    /// Pre-scaled intercept (`gamma_0 * kappa`).
+    pub intercept: f64,
+    /// Storage (volume) coefficient.
+    pub gamma_v: f64,
+    /// Turbined-flow coefficient.
+    pub gamma_q: f64,
+    /// Spillage coefficient.
+    pub gamma_s: f64,
+}
+
+// ── Resolved production model ─────────────────────────────────────────────────
+
+/// A fully-resolved hydro production model for one (hydro, stage) pair.
+///
+/// The enum has two variants:
+///
+/// - [`ConstantProductivity`](ResolvedProductionModel::ConstantProductivity) —
+///   generation is modelled as `g = rho * q` with a fixed productivity scalar.
+/// - [`Fpha`](ResolvedProductionModel::Fpha) — generation is bounded by `M`
+///   linear hyperplane constraints derived from the FPHA approximation.
+#[derive(Debug, Clone)]
+pub enum ResolvedProductionModel {
+    /// Constant productivity: generation = `productivity * turbined_flow`.
+    ConstantProductivity {
+        /// Productivity coefficient (MW per m³/s).
+        productivity: f64,
+    },
+    /// FPHA hyperplane approximation with `M` linearisation planes.
+    Fpha {
+        /// Ordered set of hyperplanes; each constrains the generation variable.
+        planes: Vec<FphaPlane>,
+        /// Penalty cost for turbined flow under the FPHA model (cost/m³/s).
+        turbined_cost: f64,
+    },
+}
+
+// ── Production model set ──────────────────────────────────────────────────────
+
+/// Resolved production models for all (hydro, stage) combinations.
+///
+/// Indexed as `stage_models[hydro_index][stage_index]`. Access via the
+/// [`model`](ProductionModelSet::model) accessor.
+///
+/// # Layout
+///
+/// The inner `Vec<ResolvedProductionModel>` at index `h` covers all stages for
+/// hydro `h`. Access to a given (hydro, stage) pair is `O(1)`.
+#[derive(Debug, Clone)]
+pub struct ProductionModelSet {
+    /// `stage_models[h][t]` is the resolved production model for hydro `h` at stage `t`.
+    stage_models: Vec<Vec<ResolvedProductionModel>>,
+    /// Number of hydro plants (outer dimension).
+    n_hydros: usize,
+    /// Number of stages (inner dimension).
+    n_stages: usize,
+}
+
+impl ProductionModelSet {
+    /// Construct a `ProductionModelSet` from a 2-D grid of models.
+    ///
+    /// `models` must be indexed as `models[hydro][stage]` and must have
+    /// dimensions `n_hydros × n_stages`.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `models.len() != n_hydros` or any inner
+    /// `Vec` length differs from `n_stages`.
+    #[must_use]
+    pub fn new(
+        models: Vec<Vec<ResolvedProductionModel>>,
+        n_hydros: usize,
+        n_stages: usize,
+    ) -> Self {
+        debug_assert_eq!(
+            models.len(),
+            n_hydros,
+            "outer dimension must equal n_hydros"
+        );
+        debug_assert!(
+            models.iter().all(|row| row.len() == n_stages),
+            "each hydro's stage vector must have length n_stages"
+        );
+        Self {
+            stage_models: models,
+            n_hydros,
+            n_stages,
+        }
+    }
+
+    /// Return the resolved production model for hydro `hydro` at stage `stage`.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `hydro >= n_hydros` or `stage >= n_stages`.
+    #[must_use]
+    pub fn model(&self, hydro: usize, stage: usize) -> &ResolvedProductionModel {
+        debug_assert!(
+            hydro < self.n_hydros,
+            "hydro index {hydro} out of bounds (n_hydros = {})",
+            self.n_hydros
+        );
+        debug_assert!(
+            stage < self.n_stages,
+            "stage index {stage} out of bounds (n_stages = {})",
+            self.n_stages
+        );
+        &self.stage_models[hydro][stage]
+    }
+
+    /// Number of hydro plants.
+    #[must_use]
+    pub fn n_hydros(&self) -> usize {
+        self.n_hydros
+    }
+
+    /// Number of stages.
+    #[must_use]
+    pub fn n_stages(&self) -> usize {
+        self.n_stages
+    }
+}
+
+// ── Linearized evaporation ────────────────────────────────────────────────────
+
+/// Linearized evaporation coefficients for one (hydro, stage) pair.
+///
+/// The evaporation volume (hm³) is approximated as:
+///
+/// ```text
+/// evap = k_evap0 + k_evap_v * (V - V_ref)
+/// ```
+///
+/// where `V` is the reservoir volume (hm³) and `V_ref` is the reference volume
+/// stored in [`EvaporationModel::Linearized::reference_volume_hm3`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinearizedEvaporation {
+    /// Constant term of the linearized evaporation (hm³).
+    pub k_evap0: f64,
+    /// Volume-dependent slope of the linearized evaporation (hm³/hm³ = dimensionless).
+    pub k_evap_v: f64,
+}
+
+// ── Evaporation model ─────────────────────────────────────────────────────────
+
+/// Resolved evaporation model for a single hydro plant.
+///
+/// The enum has two variants:
+///
+/// - [`None`](EvaporationModel::None) — evaporation is not modelled for this
+///   hydro plant; the LP builder adds no evaporation term.
+/// - [`Linearized`](EvaporationModel::Linearized) — per-stage linearized
+///   evaporation coefficients derived from reservoir geometry.
+#[derive(Debug, Clone)]
+pub enum EvaporationModel {
+    /// No evaporation for this hydro plant.
+    None,
+    /// Linearized evaporation with per-stage coefficients.
+    Linearized {
+        /// Per-stage linearization coefficients; indexed by stage position.
+        coefficients: Vec<LinearizedEvaporation>,
+        /// Reference storage volume (hm³) at which the linearization was computed.
+        reference_volume_hm3: f64,
+    },
+}
+
+// ── Evaporation model set ─────────────────────────────────────────────────────
+
+/// Evaporation models for all hydro plants, indexed by hydro position.
+///
+/// Access individual models via [`model`](EvaporationModelSet::model).
+/// Use [`has_evaporation`](EvaporationModelSet::has_evaporation) to gate
+/// evaporation-related LP setup without iterating the full set.
+#[derive(Debug, Clone)]
+pub struct EvaporationModelSet {
+    /// `models[h]` is the evaporation model for hydro plant at position `h`.
+    models: Vec<EvaporationModel>,
+}
+
+impl EvaporationModelSet {
+    /// Construct an `EvaporationModelSet` from a vector of per-hydro models.
+    #[must_use]
+    pub fn new(models: Vec<EvaporationModel>) -> Self {
+        Self { models }
+    }
+
+    /// Return the evaporation model for hydro plant at position `hydro`.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `hydro >= models.len()`.
+    #[must_use]
+    pub fn model(&self, hydro: usize) -> &EvaporationModel {
+        debug_assert!(
+            hydro < self.models.len(),
+            "hydro index {hydro} out of bounds (n_hydros = {})",
+            self.models.len()
+        );
+        &self.models[hydro]
+    }
+
+    /// Return `true` if at least one hydro plant has a [`Linearized`](EvaporationModel::Linearized) model.
+    #[must_use]
+    pub fn has_evaporation(&self) -> bool {
+        self.models
+            .iter()
+            .any(|m| matches!(m, EvaporationModel::Linearized { .. }))
+    }
+
+    /// Number of hydro plants in the set.
+    #[must_use]
+    pub fn n_hydros(&self) -> usize {
+        self.models.len()
+    }
+}
+
+// ── Provenance types ──────────────────────────────────────────────────────────
+
+/// Source of the production model used for a given hydro plant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionModelSource {
+    /// Constant productivity from the entity definition; no geometric data.
+    DefaultConstant,
+    /// FPHA hyperplanes loaded from a precomputed Parquet file.
+    PrecomputedHyperplanes,
+    /// FPHA hyperplanes computed from reservoir geometry during preprocessing.
+    ComputedFromGeometry,
+}
+
+/// Source of the evaporation model used for a given hydro plant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaporationSource {
+    /// Evaporation is not included for this hydro plant.
+    NotModeled,
+    /// Evaporation coefficients were linearized from reservoir geometry.
+    LinearizedFromGeometry,
+}
+
+/// Provenance record for all hydro plants' production and evaporation models.
+///
+/// One entry per hydro plant in declaration order (canonical ID order).
+#[derive(Debug, Clone)]
+pub struct HydroModelProvenance {
+    /// `(entity_id, source)` pairs for each hydro's production model.
+    pub production_sources: Vec<(EntityId, ProductionModelSource)>,
+    /// `(entity_id, source)` pairs for each hydro's evaporation model.
+    pub evaporation_sources: Vec<(EntityId, EvaporationSource)>,
+}
+
+// ── Summary types ─────────────────────────────────────────────────────────────
+
+/// Per-hydro detail for FPHA production models.
+///
+/// Included in [`HydroModelSummary`] for display and auditing. Contains the
+/// entity identity, source, and the number of linearisation planes.
+#[derive(Debug, Clone)]
+pub struct FphaHydroDetail {
+    /// Entity identifier of the hydro plant.
+    pub hydro_id: EntityId,
+    /// Human-readable name of the hydro plant.
+    pub name: String,
+    /// Source from which the FPHA hyperplanes were obtained.
+    pub source: ProductionModelSource,
+    /// Number of hyperplanes in the FPHA approximation for this hydro.
+    pub n_planes: usize,
+}
+
+/// Aggregated summary of the hydro model preprocessing pipeline.
+///
+/// Produced by the summary builder in the hydro models module and consumed by
+/// `cobre-cli` for display. Contains counts for both production and evaporation
+/// models.
+#[derive(Debug, Clone)]
+pub struct HydroModelSummary {
+    /// Number of hydro plants using [`ResolvedProductionModel::ConstantProductivity`].
+    pub n_constant: usize,
+    /// Number of hydro plants using [`ResolvedProductionModel::Fpha`].
+    pub n_fpha: usize,
+    /// Total number of hyperplanes across all FPHA hydro plants.
+    pub total_planes: usize,
+    /// Per-hydro detail for each FPHA hydro plant.
+    pub fpha_details: Vec<FphaHydroDetail>,
+    /// Number of hydro plants with linearized evaporation.
+    pub n_evaporation: usize,
+    /// Number of hydro plants with no evaporation model.
+    pub n_no_evaporation: usize,
+}
+
+// ── Pipeline result ───────────────────────────────────────────────────────────
+
+/// Result of the hydro model preprocessing pipeline.
+///
+/// Bundles the three outputs so that callers do not need to handle them as
+/// separate return values. Consumed by `StudySetup` construction and the
+/// hydro model summary builder.
+#[derive(Debug)]
+pub struct PrepareHydroModelsResult {
+    /// Resolved production models for all (hydro, stage) pairs.
+    pub production: ProductionModelSet,
+    /// Resolved evaporation models for all hydro plants.
+    pub evaporation: EvaporationModelSet,
+    /// Provenance records for all hydro plants.
+    pub provenance: HydroModelProvenance,
+}
+
+impl PrepareHydroModelsResult {
+    /// Build a default result for a system with no FPHA and no evaporation data.
+    ///
+    /// All hydros receive [`ResolvedProductionModel::ConstantProductivity`] using
+    /// the productivity from their entity definition, and [`EvaporationModel::None`].
+    /// Provenance is set to [`ProductionModelSource::DefaultConstant`] and
+    /// [`EvaporationSource::NotModeled`] for every hydro.
+    ///
+    /// This factory is used in tests and in entry points where the full
+    /// `prepare_hydro_models` pipeline is not available (e.g., non-root MPI ranks
+    /// that reconstruct the result independently).
+    #[must_use]
+    pub fn default_from_system(system: &System) -> Self {
+        let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+        let n_stages = study_stages.len();
+        let n_hydros = system.hydros().len();
+
+        let production_models: Vec<Vec<ResolvedProductionModel>> = system
+            .hydros()
+            .iter()
+            .map(|hydro| {
+                let productivity = match &hydro.generation_model {
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s,
+                    }
+                    | HydroGenerationModel::LinearizedHead {
+                        productivity_mw_per_m3s,
+                    } => *productivity_mw_per_m3s,
+                    HydroGenerationModel::Fpha => 0.0,
+                };
+                vec![ResolvedProductionModel::ConstantProductivity { productivity }; n_stages]
+            })
+            .collect();
+
+        let production = ProductionModelSet::new(production_models, n_hydros, n_stages);
+
+        let evaporation_models: Vec<EvaporationModel> = system
+            .hydros()
+            .iter()
+            .map(|_| EvaporationModel::None)
+            .collect();
+        let evaporation = EvaporationModelSet::new(evaporation_models);
+
+        let production_sources: Vec<(EntityId, ProductionModelSource)> = system
+            .hydros()
+            .iter()
+            .map(|h| (h.id, ProductionModelSource::DefaultConstant))
+            .collect();
+        let evaporation_sources: Vec<(EntityId, EvaporationSource)> = system
+            .hydros()
+            .iter()
+            .map(|h| (h.id, EvaporationSource::NotModeled))
+            .collect();
+
+        Self {
+            production,
+            evaporation,
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+            },
+        }
+    }
+}
+
+// ── Summary builder ───────────────────────────────────────────────────────────
+
+/// Build a [`HydroModelSummary`] from the pipeline result and the system.
+///
+/// Called after the hydro model preprocessing pipeline completes and before
+/// training starts. All fields are derived from the already-validated inputs;
+/// construction is infallible.
+///
+/// # Counting logic
+///
+/// - `n_constant`: hydros whose production provenance is
+///   [`ProductionModelSource::DefaultConstant`].
+/// - `n_fpha`: hydros whose production provenance is
+///   [`ProductionModelSource::PrecomputedHyperplanes`] or
+///   [`ProductionModelSource::ComputedFromGeometry`].
+/// - `total_planes`: sum of plane counts from the first study stage across all
+///   FPHA hydros. Stages beyond the first use the same hyperplanes in the
+///   common case; the first stage is taken as representative for display.
+/// - `fpha_details`: one [`FphaHydroDetail`] per FPHA hydro in canonical order.
+/// - `n_evaporation`: hydros whose evaporation provenance is
+///   [`EvaporationSource::LinearizedFromGeometry`].
+/// - `n_no_evaporation`: hydros whose evaporation provenance is
+///   [`EvaporationSource::NotModeled`].
+#[must_use]
+pub fn build_hydro_model_summary(
+    result: &PrepareHydroModelsResult,
+    system: &System,
+) -> HydroModelSummary {
+    let mut n_constant = 0usize;
+    let mut n_fpha = 0usize;
+    let mut total_planes = 0usize;
+    let mut fpha_details: Vec<FphaHydroDetail> = Vec::new();
+
+    // Collect study stages to determine plane counts (id >= 0).
+    let study_stages: Vec<usize> = system
+        .stages()
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.id >= 0)
+        .map(|(idx, _)| idx)
+        .collect();
+    // Use stage position 0 (within the study stages) as the representative stage.
+    // Production models are indexed by hydro position within `system.hydros()`.
+    let representative_stage = 0usize; // index into `study_stages`
+
+    for (hydro_pos, (entity_id, source)) in result.provenance.production_sources.iter().enumerate()
+    {
+        match source {
+            ProductionModelSource::DefaultConstant => {
+                n_constant += 1;
+            }
+            ProductionModelSource::PrecomputedHyperplanes
+            | ProductionModelSource::ComputedFromGeometry => {
+                n_fpha += 1;
+
+                // Resolve plane count from the representative study stage.
+                let n_planes = if study_stages.is_empty() {
+                    0
+                } else {
+                    match result.production.model(hydro_pos, representative_stage) {
+                        ResolvedProductionModel::Fpha { planes, .. } => planes.len(),
+                        ResolvedProductionModel::ConstantProductivity { .. } => 0,
+                    }
+                };
+
+                total_planes += n_planes;
+
+                // Look up the hydro name from the system entity list.
+                let name = system
+                    .hydros()
+                    .iter()
+                    .find(|h| h.id == *entity_id)
+                    .map_or_else(|| entity_id.0.to_string(), |h| h.name.clone());
+
+                fpha_details.push(FphaHydroDetail {
+                    hydro_id: *entity_id,
+                    name,
+                    source: *source,
+                    n_planes,
+                });
+            }
+        }
+    }
+
+    let mut n_evaporation = 0usize;
+    let mut n_no_evaporation = 0usize;
+
+    for (_, source) in &result.provenance.evaporation_sources {
+        match source {
+            EvaporationSource::LinearizedFromGeometry => n_evaporation += 1,
+            EvaporationSource::NotModeled => n_no_evaporation += 1,
+        }
+    }
+
+    HydroModelSummary {
+        n_constant,
+        n_fpha,
+        total_planes,
+        fpha_details,
+        n_evaporation,
+        n_no_evaporation,
+    }
+}
+
+// ── Top-level pipeline function ───────────────────────────────────────────────
+
+/// Run the full hydro model preprocessing pipeline for a case directory.
+///
+/// Composes [`resolve_production_models`] and [`resolve_evaporation_models`]
+/// and returns a [`PrepareHydroModelsResult`] bundling all pipeline outputs.
+///
+/// Called once per entry point (CLI, Python) before constructing `StudySetup`.
+/// On MPI setups, this function runs on all ranks independently (each rank has
+/// the system via broadcast and can load the optional files from a shared
+/// filesystem).
+///
+/// # Errors
+///
+/// Propagates errors from [`resolve_production_models`] and
+/// [`resolve_evaporation_models`]. See their individual documentation for the
+/// full error table.
+pub fn prepare_hydro_models(
+    system: &System,
+    case_dir: &Path,
+) -> Result<PrepareHydroModelsResult, SddpError> {
+    let (production, production_sources) = resolve_production_models(system, case_dir)?;
+    let (evaporation, evaporation_sources) = resolve_evaporation_models(system, case_dir)?;
+
+    Ok(PrepareHydroModelsResult {
+        production,
+        evaporation,
+        provenance: HydroModelProvenance {
+            production_sources,
+            evaporation_sources,
+        },
+    })
+}
+
+// ── FPHA production model resolution ─────────────────────────────────────────
+
+/// Resolve per-hydro per-stage production models from the case directory.
+///
+/// Reads `system/hydro_production_models.json` when present (optional file).
+/// If absent, all hydros fall back to the [`HydroGenerationModel`] from their
+/// entity definition in `system/hydros.json`. When any hydro is configured as
+/// FPHA with `source: "precomputed"`, also loads `system/fpha_hyperplanes.parquet`.
+///
+/// Returns `(ProductionModelSet, provenance_vec)` where the provenance vector
+/// records the [`ProductionModelSource`] for each hydro in canonical ID order.
+///
+/// # Model resolution per hydro
+///
+/// For each hydro in `system.hydros()` (canonical ID order):
+///
+/// 1. If `hydro_production_models.json` has an entry for this hydro:
+///    - `source: "precomputed"` → load hyperplanes from `fpha_hyperplanes.parquet`,
+///      scale `gamma_0` by `kappa`, record [`ProductionModelSource::PrecomputedHyperplanes`].
+///    - `source: "computed"` → return [`SddpError::Validation`] (not yet implemented).
+/// 2. Otherwise, use the [`HydroGenerationModel`] from the entity definition:
+///    - [`HydroGenerationModel::ConstantProductivity`] →
+///      [`ResolvedProductionModel::ConstantProductivity`].
+///    - [`HydroGenerationModel::LinearizedHead`] →
+///      [`ResolvedProductionModel::ConstantProductivity`] (uses the productivity field).
+///    - [`HydroGenerationModel::Fpha`] without a config entry →
+///      [`SddpError::Validation`] (no hyperplane source specified).
+///
+/// # Errors
+///
+/// | Condition                                        | Error variant              |
+/// | ------------------------------------------------ | -------------------------- |
+/// | `source: "computed"` in config entry             | [`SddpError::Validation`]  |
+/// | `Fpha` entity model with no config entry         | [`SddpError::Validation`]  |
+/// | `gamma_v <= 0` for any hyperplane                | [`SddpError::Validation`]  |
+/// | `gamma_s > 0` for any hyperplane                 | [`SddpError::Validation`]  |
+/// | `gamma_q <= 0` for any hyperplane                | [`SddpError::Validation`]  |
+/// | `kappa` not in `(0, 1]`                          | [`SddpError::Validation`]  |
+/// | Zero hyperplanes for an FPHA hydro at any stage  | [`SddpError::Validation`]  |
+/// | I/O failure loading JSON or Parquet              | [`SddpError::Io`]          |
+pub fn resolve_production_models(
+    system: &System,
+    case_dir: &Path,
+) -> Result<(ProductionModelSet, Vec<(EntityId, ProductionModelSource)>), SddpError> {
+    // ── Step 1: check whether the optional config file is present ─────────────
+    let mut ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
+    let config_path = if manifest.system_hydro_production_models_json {
+        Some(case_dir.join("system").join("hydro_production_models.json"))
+    } else {
+        None
+    };
+
+    // ── Step 2: load production model configs ─────────────────────────────────
+    let prod_configs: Vec<ProductionModelConfig> =
+        cobre_io::extensions::load_production_models(config_path.as_deref())?;
+
+    // ── Step 3: build O(1) lookup: hydro_id → config ─────────────────────────
+    let config_map: HashMap<EntityId, &ProductionModelConfig> =
+        prod_configs.iter().map(|c| (c.hydro_id, c)).collect();
+
+    // ── Step 4: determine which hydros need FPHA hyperplanes ──────────────────
+    let any_fpha = prod_configs.iter().any(config_uses_precomputed_fpha);
+
+    // ── Step 5: load FPHA hyperplane rows when needed ─────────────────────────
+    let hyperplane_rows: Vec<FphaHyperplaneRow> = if any_fpha {
+        let hp_path = if manifest.system_fpha_hyperplanes_parquet {
+            Some(case_dir.join("system").join("fpha_hyperplanes.parquet"))
+        } else {
+            None
+        };
+        cobre_io::extensions::load_fpha_hyperplanes(hp_path.as_deref())?
+    } else {
+        Vec::new()
+    };
+
+    // ── Step 6: build O(1) hyperplane lookup: (hydro_id, stage_id) → rows ────
+    // Key is (EntityId, Option<i32>) — None means all stages.
+    let mut hyperplane_map: HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>> =
+        HashMap::new();
+    for row in &hyperplane_rows {
+        hyperplane_map
+            .entry((row.hydro_id, row.stage_id))
+            .or_default()
+            .push(row);
+    }
+
+    // ── Step 7: collect study stages (id >= 0) in canonical order ────────────
+    let study_stages: Vec<&cobre_core::temporal::Stage> =
+        system.stages().iter().filter(|s| s.id >= 0).collect();
+    let n_stages = study_stages.len();
+    let n_hydros = system.hydros().len();
+
+    // ── Step 8: resolve per-hydro per-stage model ─────────────────────────────
+    let mut all_models: Vec<Vec<ResolvedProductionModel>> = Vec::with_capacity(n_hydros);
+    let mut provenance: Vec<(EntityId, ProductionModelSource)> = Vec::with_capacity(n_hydros);
+
+    for hydro in system.hydros() {
+        let config_entry = config_map.get(&hydro.id).copied();
+
+        let source = determine_source(hydro, config_entry)?;
+        provenance.push((hydro.id, source));
+
+        let mut stage_models: Vec<ResolvedProductionModel> = Vec::with_capacity(n_stages);
+
+        for stage in &study_stages {
+            let model = resolve_stage_model(hydro, stage, config_entry, source, &hyperplane_map)?;
+            stage_models.push(model);
+        }
+
+        all_models.push(stage_models);
+    }
+
+    let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
+    Ok((set, provenance))
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Return `true` if the config entry uses `source: "precomputed"` FPHA in any
+/// stage range or season entry.
+fn config_uses_precomputed_fpha(config: &ProductionModelConfig) -> bool {
+    match &config.selection_mode {
+        SelectionMode::StageRanges { ranges } => ranges.iter().any(|r| {
+            r.fpha_config
+                .as_ref()
+                .is_some_and(|f| f.source == "precomputed")
+        }),
+        SelectionMode::Seasonal { seasons, .. } => seasons.iter().any(|s| {
+            s.fpha_config
+                .as_ref()
+                .is_some_and(|f| f.source == "precomputed")
+        }),
+    }
+}
+
+/// Determine the [`ProductionModelSource`] for one hydro.
+///
+/// This checks only the high-level source classification without building the
+/// per-stage model data; it is called once per hydro before the per-stage loop.
+///
+/// The function also rejects unsupported cases early to give clear errors before
+/// any expensive Parquet loading occurs.
+fn determine_source(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    config_entry: Option<&ProductionModelConfig>,
+) -> Result<ProductionModelSource, SddpError> {
+    if let Some(config) = config_entry {
+        // Config present: determine from the selection mode.
+        // We look at whether any range/season uses "precomputed" or "computed".
+        // "computed" is rejected immediately.
+        let computed_range = match &config.selection_mode {
+            SelectionMode::StageRanges { ranges } => ranges
+                .iter()
+                .find(|r| {
+                    r.fpha_config
+                        .as_ref()
+                        .is_some_and(|f| f.source == "computed")
+                })
+                .map(|r| r.model.clone()),
+            SelectionMode::Seasonal { seasons, .. } => seasons
+                .iter()
+                .find(|s| {
+                    s.fpha_config
+                        .as_ref()
+                        .is_some_and(|f| f.source == "computed")
+                })
+                .map(|s| s.model.clone()),
+        };
+        if computed_range.is_some() {
+            return Err(SddpError::Validation(format!(
+                "hydro {} (id={}) has a production model entry with source: \"computed\", \
+                 which is not yet implemented. \
+                 Provide pre-computed hyperplanes in fpha_hyperplanes.parquet \
+                 with source: \"precomputed\" in hydro_production_models.json instead.",
+                hydro.name, hydro.id.0
+            )));
+        }
+        // Only "precomputed" FPHA entries remain.
+        let has_fpha = match &config.selection_mode {
+            SelectionMode::StageRanges { ranges } => ranges.iter().any(|r| r.model == "fpha"),
+            SelectionMode::Seasonal { seasons, .. } => seasons.iter().any(|s| s.model == "fpha"),
+        };
+        Ok(if has_fpha {
+            ProductionModelSource::PrecomputedHyperplanes
+        } else {
+            ProductionModelSource::DefaultConstant
+        })
+    } else {
+        // No config entry: use HydroGenerationModel from entity.
+        match &hydro.generation_model {
+            HydroGenerationModel::ConstantProductivity { .. }
+            | HydroGenerationModel::LinearizedHead { .. } => {
+                Ok(ProductionModelSource::DefaultConstant)
+            }
+            HydroGenerationModel::Fpha => Err(SddpError::Validation(format!(
+                "hydro {} (id={}) has generation_model: \"fpha\" in hydros.json \
+                 but no entry in hydro_production_models.json. \
+                 Add an entry with source: \"precomputed\" to specify the hyperplane source.",
+                hydro.name, hydro.id.0
+            ))),
+        }
+    }
+}
+
+/// Resolve the production model for one (hydro, stage) pair.
+fn resolve_stage_model(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    stage: &cobre_core::temporal::Stage,
+    config_entry: Option<&ProductionModelConfig>,
+    source: ProductionModelSource,
+    hyperplane_map: &HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>>,
+) -> Result<ResolvedProductionModel, SddpError> {
+    if let Some(config) = config_entry {
+        let model_name = find_model_for_stage(config, stage);
+
+        if model_name.as_deref() == Some("fpha") {
+            build_fpha_model(hydro, stage, source, hyperplane_map)
+        } else {
+            // "constant_productivity" or "linearized_head" from config:
+            // use entity productivity.
+            let productivity = entity_productivity(hydro);
+            Ok(ResolvedProductionModel::ConstantProductivity { productivity })
+        }
+    } else {
+        // No config entry: use entity generation model.
+        match &hydro.generation_model {
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s,
+            }
+            | HydroGenerationModel::LinearizedHead {
+                productivity_mw_per_m3s,
+            } => Ok(ResolvedProductionModel::ConstantProductivity {
+                productivity: *productivity_mw_per_m3s,
+            }),
+            // Fpha without config is already rejected by determine_source().
+            HydroGenerationModel::Fpha => unreachable!(
+                "Fpha entity without config entry should have been rejected in determine_source"
+            ),
+        }
+    }
+}
+
+/// Find the model name that applies to a given stage from a `ProductionModelConfig`.
+///
+/// Returns `None` when the config has no entry covering the given stage (gap in coverage).
+/// For `StageRanges`, the match is `start_stage_id <= stage.id <= end_stage_id`.
+/// For `Seasonal`, the match is by `season_id == stage.season_id`.
+fn find_model_for_stage(
+    config: &ProductionModelConfig,
+    stage: &cobre_core::temporal::Stage,
+) -> Option<String> {
+    match &config.selection_mode {
+        SelectionMode::StageRanges { ranges } => {
+            for range in ranges {
+                let after_start = stage.id >= range.start_stage_id;
+                let before_end = range.end_stage_id.is_none_or(|end| stage.id <= end);
+                if after_start && before_end {
+                    return Some(range.model.clone());
+                }
+            }
+            None
+        }
+        SelectionMode::Seasonal {
+            default_model,
+            seasons,
+        } => {
+            if let Some(season_id) = stage.season_id {
+                for season in seasons {
+                    // season.season_id is i32; stage.season_id is usize.
+                    // Convert usize to i32 for comparison to avoid cast_sign_loss.
+                    if i32::try_from(season_id).is_ok_and(|sid| sid == season.season_id) {
+                        return Some(season.model.clone());
+                    }
+                }
+            }
+            // Fall back to default model when no season matches (or no season_id on stage).
+            Some(default_model.clone())
+        }
+    }
+}
+
+/// Return the productivity field from the hydro entity regardless of which
+/// `HydroGenerationModel` variant is active.
+///
+/// Used when a config entry explicitly assigns `"constant_productivity"` or
+/// `"linearized_head"` to a stage that would otherwise use the entity model.
+fn entity_productivity(hydro: &cobre_core::entities::hydro::Hydro) -> f64 {
+    match &hydro.generation_model {
+        HydroGenerationModel::ConstantProductivity {
+            productivity_mw_per_m3s,
+        }
+        | HydroGenerationModel::LinearizedHead {
+            productivity_mw_per_m3s,
+        } => *productivity_mw_per_m3s,
+        // Fpha entity model has no productivity scalar — use 0.0 as a safe
+        // placeholder; this case is only reached when the config explicitly
+        // assigns a non-FPHA model to a stage for an Fpha entity, which is
+        // unusual but not an error (the caller chose to override via config).
+        HydroGenerationModel::Fpha => 0.0,
+    }
+}
+
+/// Build an `Fpha` variant `ResolvedProductionModel` for one (hydro, stage) pair.
+///
+/// Looks up hyperplanes for `(hydro_id, Some(stage.id))` first; falls back to
+/// `(hydro_id, None)` when no stage-specific rows exist (global all-stage rows).
+/// Validates each hyperplane's coefficients and `kappa`, then constructs
+/// [`FphaPlane`] with the pre-scaled intercept `gamma_0 * kappa`.
+fn build_fpha_model(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    stage: &cobre_core::temporal::Stage,
+    _source: ProductionModelSource,
+    hyperplane_map: &HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>>,
+) -> Result<ResolvedProductionModel, SddpError> {
+    // Prefer stage-specific rows; fall back to global (stage_id: None) rows.
+    let rows: &[&FphaHyperplaneRow] = hyperplane_map
+        .get(&(hydro.id, Some(stage.id)))
+        .or_else(|| hyperplane_map.get(&(hydro.id, None)))
+        .ok_or_else(|| {
+            SddpError::Validation(format!(
+                "hydro {} (id={}) is configured as FPHA but has no hyperplane rows \
+             in fpha_hyperplanes.parquet for stage {} (and no global all-stage rows).",
+                hydro.name, hydro.id.0, stage.id
+            ))
+        })?;
+
+    if rows.is_empty() {
+        return Err(SddpError::Validation(format!(
+            "hydro {} (id={}) has zero hyperplane rows for stage {}.",
+            hydro.name, hydro.id.0, stage.id
+        )));
+    }
+
+    let mut planes: Vec<FphaPlane> = Vec::with_capacity(rows.len());
+    for row in rows {
+        validate_hyperplane_row(hydro, stage, row)?;
+        planes.push(FphaPlane {
+            intercept: row.gamma_0 * row.kappa,
+            gamma_v: row.gamma_v,
+            gamma_q: row.gamma_q,
+            gamma_s: row.gamma_s,
+        });
+    }
+
+    let turbined_cost = hydro.penalties.fpha_turbined_cost;
+    Ok(ResolvedProductionModel::Fpha {
+        planes,
+        turbined_cost,
+    })
+}
+
+/// Validate the physical constraints for one `FphaHyperplaneRow`.
+///
+/// Returns `Err(SddpError::Validation(...))` when any constraint is violated.
+///
+/// Constraints (from design SS4.7):
+///
+/// - `gamma_v > 0` — higher storage → more generation
+/// - `gamma_s <= 0` — spillage reduces generation
+/// - `gamma_q > 0` — more turbined flow → more generation
+/// - `kappa ∈ (0, 1]` — correction factor range
+fn validate_hyperplane_row(
+    hydro: &cobre_core::entities::hydro::Hydro,
+    stage: &cobre_core::temporal::Stage,
+    row: &FphaHyperplaneRow,
+) -> Result<(), SddpError> {
+    let ctx = format!(
+        "hydro {} (id={}) plane {} stage {}",
+        hydro.name, hydro.id.0, row.plane_id, stage.id
+    );
+
+    if row.gamma_v <= 0.0 {
+        return Err(SddpError::Validation(format!(
+            "{ctx}: gamma_v must be > 0 (higher storage → more generation), \
+             got gamma_v = {}",
+            row.gamma_v
+        )));
+    }
+
+    if row.gamma_s > 0.0 {
+        return Err(SddpError::Validation(format!(
+            "{ctx}: gamma_s must be <= 0 (spillage reduces generation), \
+             got gamma_s = {}",
+            row.gamma_s
+        )));
+    }
+
+    if row.gamma_q <= 0.0 {
+        return Err(SddpError::Validation(format!(
+            "{ctx}: gamma_q must be > 0 (more turbined flow → more generation), \
+             got gamma_q = {}",
+            row.gamma_q
+        )));
+    }
+
+    if row.kappa <= 0.0 || row.kappa > 1.0 {
+        return Err(SddpError::Validation(format!(
+            "{ctx}: kappa must be in (0, 1] (correction factor range), \
+             got kappa = {}",
+            row.kappa
+        )));
+    }
+
+    Ok(())
+}
+
+// ── Evaporation model resolution ──────────────────────────────────────────────
+
+/// Resolve per-hydro linearized evaporation models from reservoir geometry.
+///
+/// Scans `system.hydros()` for plants with `evaporation_coefficients_mm` set.
+/// When none are found, returns `EvaporationModel::None` for every hydro
+/// without touching the filesystem. When any hydros have evaporation
+/// coefficients, loads `system/hydro_geometry.parquet` and computes a
+/// first-order Taylor linearization around the operating midpoint.
+///
+/// The linearized evaporation model for stage `t` is:
+///
+/// ```text
+/// Q_ev = k_evap0 + k_evap_v * v
+/// ```
+///
+/// where:
+///
+/// ```text
+/// zeta  = 1.0 / (3.6 * stage_hours)         -- mm·km² → m³/s
+/// k_evap_v = zeta * c_ev[month] * dA/dv|_{v_ref}
+/// k_evap0  = zeta * c_ev[month] * A(v_ref) - k_evap_v * v_ref
+/// ```
+///
+/// `v_ref = (v_min + v_max) / 2` is the linearization reference volume.
+/// `stage_hours` is the sum of all block durations in the stage.
+/// `month` is the 0-based calendar month from `stage.season_id` (0 = January).
+///
+/// # Errors
+///
+/// | Condition                                                        | Error variant             |
+/// | ---------------------------------------------------------------- | ------------------------- |
+/// | Hydro has evaporation coefficients but no geometry rows          | [`SddpError::Validation`] |
+/// | All geometry `area_km2` values are zero                          | [`SddpError::Validation`] |
+/// | Computed `k_evap_v` or `k_evap0` is NaN or infinite             | [`SddpError::Validation`] |
+/// | Stage has no `season_id` (cannot map to a month)                 | [`SddpError::Validation`] |
+/// | I/O failure loading geometry Parquet                             | [`SddpError::Io`]         |
+pub fn resolve_evaporation_models(
+    system: &System,
+    case_dir: &Path,
+) -> Result<(EvaporationModelSet, Vec<(EntityId, EvaporationSource)>), SddpError> {
+    // ── Step 1: scan for any hydro that needs evaporation ─────────────────────
+    let any_evaporation = system
+        .hydros()
+        .iter()
+        .any(|h| h.evaporation_coefficients_mm.is_some());
+
+    // ── Step 2: early return when no hydro has evaporation ────────────────────
+    if !any_evaporation {
+        let models = system
+            .hydros()
+            .iter()
+            .map(|_| EvaporationModel::None)
+            .collect();
+        let provenance = system
+            .hydros()
+            .iter()
+            .map(|h| (h.id, EvaporationSource::NotModeled))
+            .collect();
+        return Ok((EvaporationModelSet::new(models), provenance));
+    }
+
+    // ── Step 3: load hydro_geometry.parquet ───────────────────────────────────
+    let mut ctx = cobre_io::ValidationContext::new();
+    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
+    let geometry_path = if manifest.system_hydro_geometry_parquet {
+        Some(case_dir.join("system").join("hydro_geometry.parquet"))
+    } else {
+        None
+    };
+    let geometry_rows = cobre_io::extensions::load_hydro_geometry(geometry_path.as_deref())?;
+
+    // ── Step 4: group geometry rows by hydro_id ───────────────────────────────
+    let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+        HashMap::new();
+    for row in &geometry_rows {
+        geometry_map.entry(row.hydro_id).or_default().push(row);
+    }
+    // Sort each hydro's rows by volume_hm3 ascending (should already be sorted,
+    // but guarantee it here since we rely on sorted order for interpolation).
+    for rows in geometry_map.values_mut() {
+        rows.sort_by(|a, b| {
+            a.volume_hm3
+                .partial_cmp(&b.volume_hm3)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    // ── Step 5: collect study stages (id >= 0) ────────────────────────────────
+    let study_stages: Vec<&cobre_core::temporal::Stage> =
+        system.stages().iter().filter(|s| s.id >= 0).collect();
+
+    // ── Step 6: delegate to core logic (testable without disk I/O) ───────────
+    resolve_evaporation_core(system.hydros(), &geometry_map, &study_stages)
+}
+
+/// Core evaporation linearization logic, operating on pre-loaded data.
+///
+/// Separated from [`resolve_evaporation_models`] so that unit tests can exercise
+/// the resolution logic without loading files from disk. Takes pre-loaded, grouped
+/// geometry rows and the ordered set of study stages.
+///
+/// # Errors
+///
+/// Same error conditions as [`resolve_evaporation_models`].
+fn resolve_evaporation_core(
+    hydros: &[cobre_core::entities::hydro::Hydro],
+    geometry_map: &HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>>,
+    study_stages: &[&cobre_core::temporal::Stage],
+) -> Result<(EvaporationModelSet, Vec<(EntityId, EvaporationSource)>), SddpError> {
+    let n_stages = study_stages.len();
+    let mut all_models: Vec<EvaporationModel> = Vec::with_capacity(hydros.len());
+    let mut provenance: Vec<(EntityId, EvaporationSource)> = Vec::with_capacity(hydros.len());
+
+    for hydro in hydros {
+        let Some(coefficients_mm) = hydro.evaporation_coefficients_mm else {
+            all_models.push(EvaporationModel::None);
+            provenance.push((hydro.id, EvaporationSource::NotModeled));
+            continue;
+        };
+
+        // ── Look up geometry rows ─────────────────────────────────────────────
+        let geo_rows: &[&cobre_io::extensions::HydroGeometryRow] =
+            geometry_map.get(&hydro.id).map_or(&[], Vec::as_slice);
+
+        if geo_rows.is_empty() {
+            return Err(SddpError::Validation(format!(
+                "hydro {} (id={}) has evaporation_coefficients_mm but no geometry data \
+                 in hydro_geometry.parquet. Evaporation linearization requires \
+                 area-volume curve data.",
+                hydro.name, hydro.id.0
+            )));
+        }
+
+        // ── Verify area_km2 values are not all zero ───────────────────────────
+        let all_zero_area = geo_rows.iter().all(|r| r.area_km2 == 0.0);
+        if all_zero_area {
+            return Err(SddpError::Validation(format!(
+                "hydro {} (id={}) has evaporation_coefficients_mm but all area_km2 \
+                 values in hydro_geometry.parquet are zero. \
+                 Evaporation linearization requires non-zero surface area data.",
+                hydro.name, hydro.id.0
+            )));
+        }
+
+        // ── Compute reference volume ──────────────────────────────────────────
+        let v_ref = f64::midpoint(hydro.min_storage_hm3, hydro.max_storage_hm3);
+
+        // ── Interpolate A(v_ref) and dA/dv at v_ref ──────────────────────────
+        let a_ref = interpolate_area(geo_rows, v_ref);
+        let da_dv = area_derivative(geo_rows, v_ref);
+
+        // ── Compute per-stage coefficients ────────────────────────────────────
+        let mut stage_coefficients: Vec<LinearizedEvaporation> = Vec::with_capacity(n_stages);
+
+        for stage in study_stages {
+            let month_index = stage.season_id.ok_or_else(|| {
+                SddpError::Validation(format!(
+                    "stage {} has no season_id and cannot be mapped to a calendar month \
+                     for evaporation coefficient lookup (hydro {} id={}). \
+                     All study stages must have a season_id for evaporation modeling.",
+                    stage.id, hydro.name, hydro.id.0
+                ))
+            })?;
+
+            if month_index >= 12 {
+                return Err(SddpError::Validation(format!(
+                    "stage {} has season_id={month_index} which is outside [0, 11]. \
+                     Evaporation coefficient arrays have 12 entries (one per calendar month). \
+                     (hydro {} id={})",
+                    stage.id, hydro.name, hydro.id.0
+                )));
+            }
+
+            let c_ev = coefficients_mm[month_index];
+
+            // Total stage duration in hours (sum of all block durations).
+            let stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+
+            let zeta_evap = 1.0 / (3.6 * stage_hours);
+
+            let k_evap_v = zeta_evap * c_ev * da_dv;
+            let k_evap0 = zeta_evap * c_ev * a_ref - k_evap_v * v_ref;
+
+            // Validate finiteness (catches degenerate geometry or zero-duration stages).
+            if !k_evap_v.is_finite() {
+                return Err(SddpError::Validation(format!(
+                    "hydro {} (id={}) stage {}: computed k_evap_v = {k_evap_v} is not \
+                     finite. Check geometry data for degenerate area-volume curve points.",
+                    hydro.name, hydro.id.0, stage.id
+                )));
+            }
+            if !k_evap0.is_finite() {
+                return Err(SddpError::Validation(format!(
+                    "hydro {} (id={}) stage {}: computed k_evap0 = {k_evap0} is not \
+                     finite. Check geometry data for degenerate area-volume curve points.",
+                    hydro.name, hydro.id.0, stage.id
+                )));
+            }
+
+            stage_coefficients.push(LinearizedEvaporation { k_evap0, k_evap_v });
+        }
+
+        all_models.push(EvaporationModel::Linearized {
+            coefficients: stage_coefficients,
+            reference_volume_hm3: v_ref,
+        });
+        provenance.push((hydro.id, EvaporationSource::LinearizedFromGeometry));
+    }
+
+    Ok((EvaporationModelSet::new(all_models), provenance))
+}
+
+// ── Evaporation geometry helpers ──────────────────────────────────────────────
+
+/// Linearly interpolate reservoir surface area at volume `v` from the sorted
+/// geometry table.
+///
+/// When `v` is below the first point or above the last point, returns the
+/// area at the first or last point respectively (clamping, not extrapolation).
+/// When `v` falls exactly on a geometry point, returns that point's area.
+/// Between two points, performs linear interpolation.
+///
+/// Assumes `geometry` is sorted by `volume_hm3` ascending and non-empty.
+/// Returns `0.0` for an empty geometry slice.
+fn interpolate_area(geometry: &[&cobre_io::extensions::HydroGeometryRow], v: f64) -> f64 {
+    if geometry.is_empty() {
+        return 0.0;
+    }
+
+    let n = geometry.len();
+
+    // Clamp below the first point.
+    if v <= geometry[0].volume_hm3 {
+        return geometry[0].area_km2;
+    }
+
+    // Clamp above the last point.
+    if v >= geometry[n - 1].volume_hm3 {
+        return geometry[n - 1].area_km2;
+    }
+
+    // Binary search for the interval [i, i+1] that straddles v.
+    // We know v is strictly between geometry[0] and geometry[n-1].
+    let mut lo = 0usize;
+    let mut hi = n - 1;
+    while hi - lo > 1 {
+        let mid = lo.midpoint(hi);
+        if geometry[mid].volume_hm3 <= v {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    let v0 = geometry[lo].volume_hm3;
+    let v1 = geometry[hi].volume_hm3;
+    let a0 = geometry[lo].area_km2;
+    let a1 = geometry[hi].area_km2;
+
+    // Linear interpolation: A(v) = A0 + (A1 - A0) * (v - v0) / (v1 - v0).
+    // Guard against identical volume points (degenerate geometry).
+    let dv = v1 - v0;
+    if dv == 0.0 {
+        return a0;
+    }
+
+    a0 + (a1 - a0) * (v - v0) / dv
+}
+
+/// Compute the finite-difference derivative `dA/dv` at volume `v` from the
+/// sorted geometry table.
+///
+/// Uses the slope of the enclosing interval `[i, i+1]`. When `v` is at or
+/// below the first point, uses the slope between the first and second points.
+/// When `v` is at or above the last point, uses the slope between the last two
+/// points. For a single-point geometry, returns `0.0` (no gradient information).
+///
+/// Assumes `geometry` is sorted by `volume_hm3` ascending.
+fn area_derivative(geometry: &[&cobre_io::extensions::HydroGeometryRow], v: f64) -> f64 {
+    let n = geometry.len();
+
+    if n < 2 {
+        // Single-point or empty geometry: no gradient information.
+        return 0.0;
+    }
+
+    // Determine the interval to use for the finite difference.
+    let (lo, hi) = if v <= geometry[0].volume_hm3 {
+        // At or below the first point: use the first interval.
+        (0, 1)
+    } else if v >= geometry[n - 1].volume_hm3 {
+        // At or above the last point: use the last interval.
+        (n - 2, n - 1)
+    } else {
+        // Binary search for the enclosing interval.
+        let mut l = 0usize;
+        let mut r = n - 1;
+        while r - l > 1 {
+            let mid = l.midpoint(r);
+            if geometry[mid].volume_hm3 <= v {
+                l = mid;
+            } else {
+                r = mid;
+            }
+        }
+        (l, r)
+    };
+
+    let dv = geometry[hi].volume_hm3 - geometry[lo].volume_hm3;
+    let da = geometry[hi].area_km2 - geometry[lo].area_km2;
+
+    // Guard against identical volume points (degenerate geometry).
+    if dv == 0.0 {
+        return 0.0;
+    }
+
+    da / dv
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(
+    clippy::doc_markdown,
+    clippy::match_wildcard_for_single_variants,
+    clippy::cast_precision_loss,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+mod tests {
+    use std::collections::HashMap;
+
+    use chrono::NaiveDate;
+    use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
+        entities::hydro::{HydroGenerationModel, HydroPenalties},
+        scenario::CorrelationModel,
+        temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        },
+    };
+    use cobre_io::extensions::{
+        FphaConfig, FphaHyperplaneRow, ProductionModelConfig, SelectionMode, StageRange,
+    };
+
+    use super::{
+        EvaporationModel, EvaporationModelSet, EvaporationSource, FphaHydroDetail, FphaPlane,
+        HydroModelProvenance, HydroModelSummary, LinearizedEvaporation, PrepareHydroModelsResult,
+        ProductionModelSet, ProductionModelSource, ResolvedProductionModel, build_fpha_model,
+        build_hydro_model_summary, determine_source, find_model_for_stage, validate_hyperplane_row,
+    };
+
+    // ── Test helpers ──────────────────────────────────────────────────────────
+
+    fn make_stage(id: i32) -> Stage {
+        Stage {
+            index: usize::try_from(id.max(0)).unwrap_or(0),
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap_or_default(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap_or_default(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 50,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    fn zero_penalties() -> HydroPenalties {
+        HydroPenalties {
+            spillage_cost: 0.0,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        }
+    }
+
+    fn make_hydro(id: i32, model: HydroGenerationModel) -> cobre_core::entities::hydro::Hydro {
+        cobre_core::entities::hydro::Hydro {
+            id: EntityId::from(id),
+            name: format!("Hydro{id}"),
+            bus_id: EntityId::from(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 100.0,
+            max_storage_hm3: 2000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: model,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 500.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 1000.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            diversion: None,
+            filling: None,
+            penalties: zero_penalties(),
+        }
+    }
+
+    fn valid_row(hydro_id: i32, stage_id: Option<i32>, plane_id: i32) -> FphaHyperplaneRow {
+        FphaHyperplaneRow {
+            hydro_id: EntityId::from(hydro_id),
+            stage_id,
+            plane_id,
+            gamma_0: 1000.0,
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+            kappa: 1.0,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        }
+    }
+
+    fn precomputed_fpha_config(hydro_id: i32) -> ProductionModelConfig {
+        ProductionModelConfig {
+            hydro_id: EntityId::from(hydro_id),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "fpha".to_string(),
+                    fpha_config: Some(FphaConfig {
+                        source: "precomputed".to_string(),
+                        volume_discretization_points: None,
+                        turbine_discretization_points: None,
+                        fitting_window: None,
+                    }),
+                }],
+            },
+        }
+    }
+
+    fn computed_fpha_config(hydro_id: i32) -> ProductionModelConfig {
+        ProductionModelConfig {
+            hydro_id: EntityId::from(hydro_id),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "fpha".to_string(),
+                    fpha_config: Some(FphaConfig {
+                        source: "computed".to_string(),
+                        volume_discretization_points: None,
+                        turbine_discretization_points: None,
+                        fitting_window: None,
+                    }),
+                }],
+            },
+        }
+    }
+
+    // ── resolve_production_models unit tests (in-memory, no disk I/O) ─────────
+
+    /// All-constant system with no config file: all hydros → DefaultConstant provenance.
+    #[test]
+    fn all_constant_no_config_returns_default_constant_provenance() {
+        let hydro0 = make_hydro(
+            0,
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+        );
+        let hydro1 = make_hydro(
+            1,
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.8,
+            },
+        );
+
+        let stage = make_stage(0);
+
+        // Test determine_source: no config entry, ConstantProductivity entity model.
+        let src0 = determine_source(&hydro0, None).expect("should succeed");
+        let src1 = determine_source(&hydro1, None).expect("should succeed");
+        assert_eq!(src0, ProductionModelSource::DefaultConstant);
+        assert_eq!(src1, ProductionModelSource::DefaultConstant);
+
+        // Test resolve_stage_model: constant productivity should come from entity.
+        let empty_map = std::collections::HashMap::new();
+        let model0 = super::resolve_stage_model(
+            &hydro0,
+            &stage,
+            None,
+            ProductionModelSource::DefaultConstant,
+            &empty_map,
+        )
+        .expect("should succeed");
+        assert!(
+            matches!(model0, ResolvedProductionModel::ConstantProductivity { productivity }
+                if (productivity - 0.9).abs() < f64::EPSILON),
+            "expected ConstantProductivity 0.9, got {model0:?}"
+        );
+    }
+
+    /// LinearizedHead entity model without config → ConstantProductivity with the productivity field.
+    #[test]
+    fn linearized_head_entity_resolves_to_constant_productivity() {
+        let hydro = make_hydro(
+            0,
+            HydroGenerationModel::LinearizedHead {
+                productivity_mw_per_m3s: 0.75,
+            },
+        );
+        let stage = make_stage(0);
+
+        let src = determine_source(&hydro, None).expect("should succeed");
+        assert_eq!(src, ProductionModelSource::DefaultConstant);
+
+        let empty_map = std::collections::HashMap::new();
+        let model = super::resolve_stage_model(
+            &hydro,
+            &stage,
+            None,
+            ProductionModelSource::DefaultConstant,
+            &empty_map,
+        )
+        .expect("should succeed");
+        assert!(
+            matches!(model, ResolvedProductionModel::ConstantProductivity { productivity }
+                if (productivity - 0.75).abs() < f64::EPSILON),
+            "LinearizedHead should resolve to ConstantProductivity 0.75, got {model:?}"
+        );
+    }
+
+    /// Fpha entity model without config → validation error.
+    #[test]
+    fn fpha_entity_without_config_entry_returns_validation_error() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let err = determine_source(&hydro, None).expect_err("should fail");
+        assert!(
+            matches!(err, crate::SddpError::Validation(ref msg) if
+                msg.contains("fpha") || msg.contains("no entry") || msg.contains("hydro_production_models")),
+            "expected Validation error mentioning missing config entry, got {err:?}"
+        );
+    }
+
+    /// source: "computed" in config → validation error containing "not implemented" and "precomputed".
+    #[test]
+    fn computed_source_returns_validation_error_with_suggestions() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let config = computed_fpha_config(0);
+
+        let err = determine_source(&hydro, Some(&config)).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not yet implemented"),
+            "error must mention 'not yet implemented', got: {msg}"
+        );
+        assert!(
+            msg.contains("precomputed"),
+            "error must suggest 'precomputed', got: {msg}"
+        );
+    }
+
+    /// kappa = 0.95 → intercept is gamma_0 * kappa.
+    #[test]
+    fn gamma_0_is_scaled_by_kappa() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let row = FphaHyperplaneRow {
+            hydro_id: EntityId::from(0),
+            stage_id: None,
+            plane_id: 0,
+            gamma_0: 1000.0,
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+            kappa: 0.95,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        };
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            (EntityId::from(0), None::<i32>),
+            vec![&row as &FphaHyperplaneRow],
+        );
+
+        let model = build_fpha_model(
+            &hydro,
+            &stage,
+            ProductionModelSource::PrecomputedHyperplanes,
+            &map,
+        )
+        .expect("should build FPHA model");
+
+        match model {
+            ResolvedProductionModel::Fpha { planes, .. } => {
+                assert_eq!(planes.len(), 1);
+                let expected = 1000.0 * 0.95;
+                assert!(
+                    (planes[0].intercept - expected).abs() < 1e-10,
+                    "intercept must be gamma_0 * kappa = {expected}, got {}",
+                    planes[0].intercept
+                );
+            }
+            other => panic!("expected Fpha variant, got {other:?}"),
+        }
+    }
+
+    /// validate_hyperplane_row rejects gamma_v <= 0.
+    #[test]
+    fn validation_rejects_gamma_v_nonpositive() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.gamma_v = -0.1;
+
+        let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gamma_v"),
+            "error must mention gamma_v, got: {msg}"
+        );
+    }
+
+    /// validate_hyperplane_row rejects gamma_s > 0.
+    #[test]
+    fn validation_rejects_gamma_s_positive() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.gamma_s = 0.01;
+
+        let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gamma_s"),
+            "error must mention gamma_s, got: {msg}"
+        );
+    }
+
+    /// validate_hyperplane_row rejects gamma_q <= 0.
+    #[test]
+    fn validation_rejects_gamma_q_nonpositive() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.gamma_q = 0.0;
+
+        let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gamma_q"),
+            "error must mention gamma_q, got: {msg}"
+        );
+    }
+
+    /// validate_hyperplane_row rejects kappa = 0 (must be > 0).
+    #[test]
+    fn validation_rejects_kappa_zero() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.kappa = 0.0;
+
+        let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("kappa"),
+            "error must mention kappa, got: {msg}"
+        );
+    }
+
+    /// validate_hyperplane_row rejects kappa = 1.5 (must be <= 1).
+    #[test]
+    fn validation_rejects_kappa_above_one() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.kappa = 1.5;
+
+        let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("kappa"),
+            "error must mention kappa, got: {msg}"
+        );
+    }
+
+    /// Stage-specific hyperplanes (Some(stage_id)) override all-stage (None) rows.
+    #[test]
+    fn stage_specific_hyperplanes_override_all_stage() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let global_row = FphaHyperplaneRow {
+            hydro_id: EntityId::from(0),
+            stage_id: None,
+            plane_id: 0,
+            gamma_0: 500.0, // distinct intercept to identify
+            gamma_v: 0.001,
+            gamma_q: 0.80,
+            gamma_s: -0.005,
+            kappa: 1.0,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        };
+        let stage_row = FphaHyperplaneRow {
+            hydro_id: EntityId::from(0),
+            stage_id: Some(0),
+            plane_id: 0,
+            gamma_0: 900.0, // distinct intercept to identify
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+            kappa: 1.0,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        };
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            (EntityId::from(0), None::<i32>),
+            vec![&global_row as &FphaHyperplaneRow],
+        );
+        map.insert(
+            (EntityId::from(0), Some(0i32)),
+            vec![&stage_row as &FphaHyperplaneRow],
+        );
+
+        let model = build_fpha_model(
+            &hydro,
+            &stage,
+            ProductionModelSource::PrecomputedHyperplanes,
+            &map,
+        )
+        .expect("should succeed");
+
+        match model {
+            ResolvedProductionModel::Fpha { planes, .. } => {
+                // Stage-specific row has gamma_0 = 900, global has 500; stage-specific wins.
+                assert!(
+                    (planes[0].intercept - 900.0).abs() < 1e-10,
+                    "stage-specific intercept 900 should override global 500, got {}",
+                    planes[0].intercept
+                );
+            }
+            other => panic!("expected Fpha variant, got {other:?}"),
+        }
+    }
+
+    /// All-stage hyperplanes (stage_id: None) are used when no stage-specific rows exist.
+    #[test]
+    fn all_stage_hyperplanes_used_when_no_stage_specific_rows() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(5); // stage id 5, no stage-specific rows for it
+
+        let global_row = FphaHyperplaneRow {
+            hydro_id: EntityId::from(0),
+            stage_id: None,
+            plane_id: 0,
+            gamma_0: 700.0,
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+            kappa: 1.0,
+            valid_v_min_hm3: None,
+            valid_v_max_hm3: None,
+            valid_q_max_m3s: None,
+        };
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            (EntityId::from(0), None::<i32>),
+            vec![&global_row as &FphaHyperplaneRow],
+        );
+
+        let model = build_fpha_model(
+            &hydro,
+            &stage,
+            ProductionModelSource::PrecomputedHyperplanes,
+            &map,
+        )
+        .expect("should succeed using global rows");
+
+        match model {
+            ResolvedProductionModel::Fpha { planes, .. } => {
+                assert!(
+                    (planes[0].intercept - 700.0).abs() < 1e-10,
+                    "expected global intercept 700, got {}",
+                    planes[0].intercept
+                );
+            }
+            other => panic!("expected Fpha, got {other:?}"),
+        }
+    }
+
+    /// Zero hyperplanes for a stage (empty rows) → validation error.
+    #[test]
+    fn zero_hyperplanes_for_stage_returns_validation_error() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        // Map has the key but an empty rows vec.
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            (EntityId::from(0), None::<i32>),
+            Vec::<&FphaHyperplaneRow>::new(),
+        );
+
+        let err = build_fpha_model(
+            &hydro,
+            &stage,
+            ProductionModelSource::PrecomputedHyperplanes,
+            &map,
+        )
+        .expect_err("should fail with zero hyperplanes");
+
+        assert!(
+            matches!(err, crate::SddpError::Validation(_)),
+            "expected Validation error, got {err:?}"
+        );
+    }
+
+    /// 4-hydro 12-stage system with 2 FPHA and 2 constant hydros: model(h, s) returns correct variant.
+    #[test]
+    fn mixed_system_model_returns_correct_variant_for_all_pairs() {
+        let n_stages = 12;
+        let n_hydros = 4;
+
+        // Hydros 0 and 1 are constant; hydros 2 and 3 are FPHA.
+        let mut all_models: Vec<Vec<ResolvedProductionModel>> = Vec::with_capacity(n_hydros);
+
+        for productivity in [0.90f64, 0.91f64] {
+            let row: Vec<_> = (0..n_stages)
+                .map(|_| ResolvedProductionModel::ConstantProductivity { productivity })
+                .collect();
+            all_models.push(row);
+        }
+        for _h in 2..4usize {
+            let row: Vec<_> = (0..n_stages)
+                .map(|_| ResolvedProductionModel::Fpha {
+                    planes: vec![FphaPlane {
+                        intercept: 800.0,
+                        gamma_v: 0.002,
+                        gamma_q: 0.85,
+                        gamma_s: -0.01,
+                    }],
+                    turbined_cost: 0.05,
+                })
+                .collect();
+            all_models.push(row);
+        }
+
+        let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
+
+        // Constant hydros (0, 1) at all stages.
+        for s in 0..n_stages {
+            assert!(
+                matches!(
+                    set.model(0, s),
+                    ResolvedProductionModel::ConstantProductivity { .. }
+                ),
+                "hydro 0 stage {s} must be ConstantProductivity"
+            );
+            assert!(
+                matches!(
+                    set.model(1, s),
+                    ResolvedProductionModel::ConstantProductivity { .. }
+                ),
+                "hydro 1 stage {s} must be ConstantProductivity"
+            );
+        }
+        // FPHA hydros (2, 3) at all stages.
+        for s in 0..n_stages {
+            assert!(
+                matches!(set.model(2, s), ResolvedProductionModel::Fpha { .. }),
+                "hydro 2 stage {s} must be Fpha"
+            );
+            assert!(
+                matches!(set.model(3, s), ResolvedProductionModel::Fpha { .. }),
+                "hydro 3 stage {s} must be Fpha"
+            );
+        }
+    }
+
+    /// find_model_for_stage: stage_id in range returns fpha model name.
+    #[test]
+    fn find_model_for_stage_returns_correct_model_name_in_range() {
+        let config = precomputed_fpha_config(0);
+        let stage = make_stage(3);
+        let name = find_model_for_stage(&config, &stage);
+        assert_eq!(name.as_deref(), Some("fpha"));
+    }
+
+    /// find_model_for_stage: stage_id before start of range returns None.
+    #[test]
+    fn find_model_for_stage_returns_none_when_before_range_start() {
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 5,
+                    end_stage_id: Some(10),
+                    model: "fpha".to_string(),
+                    fpha_config: None,
+                }],
+            },
+        };
+        let stage = make_stage(3); // id 3, before start_stage_id 5
+        let name = find_model_for_stage(&config, &stage);
+        assert!(
+            name.is_none(),
+            "stage 3 is before range [5, 10], expected None"
+        );
+    }
+
+    /// find_model_for_stage: end_stage_id = None covers all stages from start.
+    #[test]
+    fn find_model_for_stage_open_ended_range_covers_all_stages() {
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "constant_productivity".to_string(),
+                    fpha_config: None,
+                }],
+            },
+        };
+        for stage_id in [0, 5, 11, 100] {
+            let stage = make_stage(stage_id);
+            let name = find_model_for_stage(&config, &stage);
+            assert_eq!(
+                name.as_deref(),
+                Some("constant_productivity"),
+                "open-ended range must cover stage {stage_id}"
+            );
+        }
+    }
+
+    /// precomputed config returns PrecomputedHyperplanes source.
+    #[test]
+    fn precomputed_config_returns_precomputed_source() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let config = precomputed_fpha_config(0);
+        let src = determine_source(&hydro, Some(&config)).expect("should succeed");
+        assert_eq!(src, ProductionModelSource::PrecomputedHyperplanes);
+    }
+
+    // ── Compile-time trait assertions ─────────────────────────────────────────
+
+    #[test]
+    fn fpha_plane_is_copy() {
+        let plane = FphaPlane {
+            intercept: 1.0,
+            gamma_v: 0.1,
+            gamma_q: 0.2,
+            gamma_s: 0.3,
+        };
+        // Copy: assign to a new binding, then use the original — both must be accessible.
+        let plane2 = plane;
+        assert_eq!(plane.intercept, plane2.intercept);
+    }
+
+    #[test]
+    fn linearized_evaporation_is_copy() {
+        let coeff = LinearizedEvaporation {
+            k_evap0: 0.5,
+            k_evap_v: 0.01,
+        };
+        let coeff2 = coeff;
+        assert_eq!(coeff.k_evap0, coeff2.k_evap0);
+    }
+
+    #[test]
+    fn all_types_implement_debug() {
+        let plane = FphaPlane {
+            intercept: 1.0,
+            gamma_v: 0.1,
+            gamma_q: 0.2,
+            gamma_s: 0.3,
+        };
+        let _ = format!("{plane:?}");
+
+        let model_const = ResolvedProductionModel::ConstantProductivity { productivity: 0.95 };
+        let _ = format!("{model_const:?}");
+
+        let model_fpha = ResolvedProductionModel::Fpha {
+            planes: vec![plane],
+            turbined_cost: 0.01,
+        };
+        let _ = format!("{model_fpha:?}");
+
+        let coeff = LinearizedEvaporation {
+            k_evap0: 0.5,
+            k_evap_v: 0.01,
+        };
+        let _ = format!("{coeff:?}");
+
+        let evap_none = EvaporationModel::None;
+        let _ = format!("{evap_none:?}");
+
+        let evap_lin = EvaporationModel::Linearized {
+            coefficients: vec![coeff],
+            reference_volume_hm3: 100.0,
+        };
+        let _ = format!("{evap_lin:?}");
+
+        let detail = FphaHydroDetail {
+            hydro_id: EntityId(1),
+            name: "H1".to_string(),
+            source: ProductionModelSource::PrecomputedHyperplanes,
+            n_planes: 5,
+        };
+        let _ = format!("{detail:?}");
+
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 1,
+            total_planes: 5,
+            fpha_details: vec![detail],
+            n_evaporation: 2,
+            n_no_evaporation: 2,
+        };
+        let _ = format!("{summary:?}");
+
+        let prov = HydroModelProvenance {
+            production_sources: vec![(EntityId(1), ProductionModelSource::DefaultConstant)],
+            evaporation_sources: vec![(EntityId(1), EvaporationSource::NotModeled)],
+        };
+        let _ = format!("{prov:?}");
+
+        let prod_set = ProductionModelSet::new(
+            vec![vec![ResolvedProductionModel::ConstantProductivity {
+                productivity: 0.95,
+            }]],
+            1,
+            1,
+        );
+        let evap_set = EvaporationModelSet::new(vec![EvaporationModel::None]);
+        let result = PrepareHydroModelsResult {
+            production: prod_set,
+            evaporation: evap_set,
+            provenance: prov,
+        };
+        let _ = format!("{result:?}");
+    }
+
+    // ── ProductionModelSet tests ──────────────────────────────────────────────
+
+    #[test]
+    fn production_model_set_model_returns_correct_variant() {
+        // 2 hydros × 3 stages
+        let models = vec![
+            vec![
+                ResolvedProductionModel::ConstantProductivity { productivity: 0.90 },
+                ResolvedProductionModel::ConstantProductivity { productivity: 0.91 },
+                ResolvedProductionModel::Fpha {
+                    planes: vec![FphaPlane {
+                        intercept: 10.0,
+                        gamma_v: 0.1,
+                        gamma_q: -0.5,
+                        gamma_s: -0.2,
+                    }],
+                    turbined_cost: 0.005,
+                },
+            ],
+            vec![
+                ResolvedProductionModel::Fpha {
+                    planes: vec![
+                        FphaPlane {
+                            intercept: 5.0,
+                            gamma_v: 0.05,
+                            gamma_q: -0.3,
+                            gamma_s: -0.1,
+                        },
+                        FphaPlane {
+                            intercept: 8.0,
+                            gamma_v: 0.08,
+                            gamma_q: -0.4,
+                            gamma_s: -0.15,
+                        },
+                    ],
+                    turbined_cost: 0.01,
+                },
+                ResolvedProductionModel::ConstantProductivity { productivity: 0.80 },
+                ResolvedProductionModel::ConstantProductivity { productivity: 0.85 },
+            ],
+        ];
+
+        let set = ProductionModelSet::new(models, 2, 3);
+
+        // hydro 0, stage 0 → ConstantProductivity 0.90
+        assert!(
+            matches!(
+                set.model(0, 0),
+                ResolvedProductionModel::ConstantProductivity { productivity }
+                    if (*productivity - 0.90).abs() < f64::EPSILON
+            ),
+            "model(0, 0) must be ConstantProductivity with productivity 0.90"
+        );
+
+        // hydro 0, stage 2 → Fpha with 1 plane
+        assert!(
+            matches!(set.model(0, 2), ResolvedProductionModel::Fpha { planes, .. } if planes.len() == 1),
+            "model(0, 2) must be Fpha with 1 plane"
+        );
+
+        // hydro 1, stage 0 → Fpha with 2 planes
+        assert!(
+            matches!(set.model(1, 0), ResolvedProductionModel::Fpha { planes, .. } if planes.len() == 2),
+            "model(1, 0) must be Fpha with 2 planes"
+        );
+
+        // hydro 1, stage 2 → ConstantProductivity 0.85
+        assert!(
+            matches!(
+                set.model(1, 2),
+                ResolvedProductionModel::ConstantProductivity { productivity }
+                    if (*productivity - 0.85).abs() < f64::EPSILON
+            ),
+            "model(1, 2) must be ConstantProductivity with productivity 0.85"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "hydro index 2 out of bounds")]
+    fn production_model_set_out_of_bounds_hydro_panics_in_debug() {
+        let set = ProductionModelSet::new(
+            vec![
+                vec![
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.90 },
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.91 },
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.92 },
+                ],
+                vec![
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.80 },
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.81 },
+                    ResolvedProductionModel::ConstantProductivity { productivity: 0.82 },
+                ],
+            ],
+            2,
+            3,
+        );
+        // hydro index 2 is out of bounds for n_hydros = 2 → debug_assert! fires
+        let _ = set.model(2, 0);
+    }
+
+    // ── EvaporationModelSet tests ─────────────────────────────────────────────
+
+    #[test]
+    fn evaporation_model_set_has_evaporation_true_when_any_linearized() {
+        let set = EvaporationModelSet::new(vec![
+            EvaporationModel::None,
+            EvaporationModel::Linearized {
+                coefficients: vec![
+                    LinearizedEvaporation {
+                        k_evap0: 0.5,
+                        k_evap_v: 0.01,
+                    },
+                    LinearizedEvaporation {
+                        k_evap0: 0.6,
+                        k_evap_v: 0.02,
+                    },
+                ],
+                reference_volume_hm3: 200.0,
+            },
+            EvaporationModel::None,
+            EvaporationModel::Linearized {
+                coefficients: vec![LinearizedEvaporation {
+                    k_evap0: 0.3,
+                    k_evap_v: 0.005,
+                }],
+                reference_volume_hm3: 50.0,
+            },
+        ]);
+
+        assert!(
+            set.has_evaporation(),
+            "has_evaporation() must return true when at least one hydro is Linearized"
+        );
+    }
+
+    #[test]
+    fn evaporation_model_set_has_evaporation_false_when_all_none() {
+        let set = EvaporationModelSet::new(vec![
+            EvaporationModel::None,
+            EvaporationModel::None,
+            EvaporationModel::None,
+        ]);
+
+        assert!(
+            !set.has_evaporation(),
+            "has_evaporation() must return false when all hydros have None"
+        );
+    }
+
+    #[test]
+    fn evaporation_model_set_model_returns_correct_variant() {
+        let coeff0 = LinearizedEvaporation {
+            k_evap0: 1.0,
+            k_evap_v: 0.1,
+        };
+        let coeff1 = LinearizedEvaporation {
+            k_evap0: 2.0,
+            k_evap_v: 0.2,
+        };
+
+        let set = EvaporationModelSet::new(vec![
+            EvaporationModel::None,
+            EvaporationModel::Linearized {
+                coefficients: vec![coeff0, coeff1],
+                reference_volume_hm3: 100.0,
+            },
+            EvaporationModel::None,
+        ]);
+
+        assert!(
+            matches!(set.model(0), EvaporationModel::None),
+            "model(0) must be None"
+        );
+        assert!(
+            matches!(
+                set.model(1),
+                EvaporationModel::Linearized { coefficients, .. } if coefficients.len() == 2
+            ),
+            "model(1) must be Linearized with 2 coefficients"
+        );
+        assert!(
+            matches!(set.model(2), EvaporationModel::None),
+            "model(2) must be None"
+        );
+    }
+
+    #[test]
+    fn evaporation_model_set_empty_has_no_evaporation() {
+        let set = EvaporationModelSet::new(vec![]);
+        assert!(
+            !set.has_evaporation(),
+            "has_evaporation() must return false for an empty set"
+        );
+    }
+
+    // ── interpolate_area unit tests ───────────────────────────────────────────
+
+    /// Helper: build a slice of HydroGeometryRow references for interpolation tests.
+    fn make_geo_rows(volume_area: &[(f64, f64)]) -> Vec<cobre_io::extensions::HydroGeometryRow> {
+        volume_area
+            .iter()
+            .map(|&(v, a)| cobre_io::extensions::HydroGeometryRow {
+                hydro_id: EntityId::from(1),
+                volume_hm3: v,
+                height_m: 0.0,
+                area_km2: a,
+            })
+            .collect()
+    }
+
+    /// interpolate_area: exact match on the first geometry point returns that area.
+    #[test]
+    fn interpolate_area_exact_first_point() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 100.0);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "exact first point: expected 1.0, got {result}"
+        );
+    }
+
+    /// interpolate_area: exact match on the last geometry point returns that area.
+    #[test]
+    fn interpolate_area_exact_last_point() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 300.0);
+        assert!(
+            (result - 2.0).abs() < 1e-10,
+            "exact last point: expected 2.0, got {result}"
+        );
+    }
+
+    /// interpolate_area: exact match on a middle geometry point returns that area.
+    #[test]
+    fn interpolate_area_exact_middle_point() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 200.0);
+        assert!(
+            (result - 1.5).abs() < 1e-10,
+            "exact middle point: expected 1.5, got {result}"
+        );
+    }
+
+    /// interpolate_area: midpoint between two geometry points is linearly interpolated.
+    ///
+    /// Geometry: volumes [100, 200, 300, 400, 500], areas [1.0, 1.5, 2.0, 2.5, 3.0].
+    /// At v=300, A(300) = 2.0 (exact match). At v=250, A(250) = 1.75 (midpoint of [1.5, 2.0]).
+    #[test]
+    fn interpolate_area_midpoint_between_two_points() {
+        let rows = make_geo_rows(&[
+            (100.0, 1.0),
+            (200.0, 1.5),
+            (300.0, 2.0),
+            (400.0, 2.5),
+            (500.0, 3.0),
+        ]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 250.0);
+        // Midpoint between (200, 1.5) and (300, 2.0): 1.5 + 0.5 * (2.0 - 1.5) = 1.75
+        assert!(
+            (result - 1.75).abs() < 1e-10,
+            "midpoint: expected 1.75, got {result}"
+        );
+    }
+
+    /// interpolate_area: volume below first point clamps to first area.
+    #[test]
+    fn interpolate_area_clamps_below_first_point() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 50.0);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "below first point: expected clamped area 1.0, got {result}"
+        );
+    }
+
+    /// interpolate_area: volume above last point clamps to last area.
+    #[test]
+    fn interpolate_area_clamps_above_last_point() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::interpolate_area(&refs, 400.0);
+        assert!(
+            (result - 2.0).abs() < 1e-10,
+            "above last point: expected clamped area 2.0, got {result}"
+        );
+    }
+
+    // ── area_derivative unit tests ────────────────────────────────────────────
+
+    /// area_derivative: correct finite difference between two points spanning v.
+    ///
+    /// Geometry: volumes [100, 200, 300, 400, 500], areas [1.0, 1.5, 2.0, 2.5, 3.0].
+    /// dA/dv at v=300 uses the interval [200, 300]: (2.0 - 1.5) / (300 - 200) = 0.005.
+    #[test]
+    fn area_derivative_correct_finite_difference() {
+        let rows = make_geo_rows(&[
+            (100.0, 1.0),
+            (200.0, 1.5),
+            (300.0, 2.0),
+            (400.0, 2.5),
+            (500.0, 3.0),
+        ]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::area_derivative(&refs, 300.0);
+        // Interval [200, 300]: (2.0 - 1.5) / (300 - 200) = 0.005
+        assert!(
+            (result - 0.005).abs() < 1e-10,
+            "dA/dv at 300: expected 0.005, got {result}"
+        );
+    }
+
+    /// area_derivative: single-point geometry returns 0.0.
+    #[test]
+    fn area_derivative_single_point_returns_zero() {
+        let rows = make_geo_rows(&[(200.0, 1.5)]);
+        let refs: Vec<_> = rows.iter().collect();
+        let result = super::area_derivative(&refs, 200.0);
+        assert!(
+            result.abs() < 1e-10,
+            "single-point geometry: expected dA/dv = 0.0, got {result}"
+        );
+    }
+
+    /// area_derivative: at or below the first point uses the first interval.
+    #[test]
+    fn area_derivative_at_or_below_first_point_uses_first_interval() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        // First interval: (1.5 - 1.0) / (200 - 100) = 0.005
+        let result = super::area_derivative(&refs, 50.0);
+        assert!(
+            (result - 0.005).abs() < 1e-10,
+            "below first point: expected first-interval slope 0.005, got {result}"
+        );
+    }
+
+    /// area_derivative: at or above the last point uses the last interval.
+    #[test]
+    fn area_derivative_at_or_above_last_point_uses_last_interval() {
+        let rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let refs: Vec<_> = rows.iter().collect();
+        // Last interval: (2.0 - 1.5) / (300 - 200) = 0.005
+        let result = super::area_derivative(&refs, 400.0);
+        assert!(
+            (result - 0.005).abs() < 1e-10,
+            "above last point: expected last-interval slope 0.005, got {result}"
+        );
+    }
+
+    // ── resolve_evaporation_models unit tests (in-memory, no disk I/O) ────────
+
+    /// Helper: build a Stage with the given id and season_id (month index).
+    fn make_stage_with_month(id: i32, month: usize) -> Stage {
+        Stage {
+            index: usize::try_from(id.max(0)).unwrap_or(0),
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap_or_default(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap_or_default(),
+            season_id: Some(month),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 50,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// Helper: build a Hydro with the given id and evaporation coefficients.
+    fn make_hydro_with_evaporation(
+        id: i32,
+        min_storage: f64,
+        max_storage: f64,
+        evap_mm: Option<[f64; 12]>,
+    ) -> cobre_core::entities::hydro::Hydro {
+        cobre_core::entities::hydro::Hydro {
+            id: EntityId::from(id),
+            name: format!("Hydro{id}"),
+            bus_id: EntityId::from(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: min_storage,
+            max_storage_hm3: max_storage,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 500.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 1000.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: evap_mm,
+            diversion: None,
+            filling: None,
+            penalties: zero_penalties(),
+        }
+    }
+
+    /// resolve_evaporation_models core logic: all-no-evaporation system returns all None
+    /// without geometry lookup.
+    ///
+    /// This test calls the internal core logic directly without loading from disk by
+    /// using an empty geometry map.
+    #[test]
+    fn resolve_evaporation_all_none_when_no_hydro_has_coefficients() {
+        let hydros = vec![
+            make_hydro_with_evaporation(0, 100.0, 500.0, None),
+            make_hydro_with_evaporation(1, 200.0, 1000.0, None),
+        ];
+
+        // Build the geometry map (empty, since no hydro needs it).
+        let geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        let study_stages = [make_stage_with_month(0, 0)];
+        let stage_refs: Vec<_> = study_stages.iter().collect();
+
+        let (models, provenance) =
+            super::resolve_evaporation_core(&hydros, &geometry_map, &stage_refs)
+                .expect("should succeed for all-no-evaporation");
+
+        assert_eq!(models.n_hydros(), 2);
+        assert!(
+            matches!(models.model(0), EvaporationModel::None),
+            "hydro 0 must be None"
+        );
+        assert!(
+            matches!(models.model(1), EvaporationModel::None),
+            "hydro 1 must be None"
+        );
+        assert!(!models.has_evaporation(), "has_evaporation() must be false");
+        assert_eq!(provenance.len(), 2);
+        assert!(
+            provenance
+                .iter()
+                .all(|(_, src)| *src == EvaporationSource::NotModeled)
+        );
+    }
+
+    /// resolve_evaporation_models core logic: known geometry + coefficient gives correct k_evap0 and k_evap_v.
+    ///
+    /// Spec (acceptance criterion 2):
+    ///   hydro: v_min=100, v_max=500, evaporation_coefficients_mm=[5.0; 12]
+    ///   geometry: volumes [100, 200, 300, 400, 500], areas [1.0, 1.5, 2.0, 2.5, 3.0]
+    ///   v_ref = (100 + 500) / 2 = 300
+    ///   A(300) = 2.0
+    ///   dA/dv|_300 = (2.0 - 1.5) / (300 - 200) = 0.005
+    ///   stage: season_id=0 (January), duration=744h
+    ///   zeta = 1 / (3.6 * 744) = 1 / 2678.4
+    ///   c_ev = 5.0
+    ///   k_evap_v = zeta * 5.0 * 0.005
+    ///   k_evap0  = zeta * 5.0 * 2.0 - k_evap_v * 300
+    #[test]
+    fn resolve_evaporation_known_geometry_produces_correct_coefficients() {
+        let evap_mm = [5.0f64; 12];
+        let hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some(evap_mm));
+
+        let geo_rows = make_geo_rows(&[
+            (100.0, 1.0),
+            (200.0, 1.5),
+            (300.0, 2.0),
+            (400.0, 2.5),
+            (500.0, 3.0),
+        ]);
+        let geo_refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        let study_stages = [make_stage_with_month(0, 0)]; // January
+        let stage_refs: Vec<_> = study_stages.iter().collect();
+
+        let (models, provenance) =
+            super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+                .expect("should succeed");
+
+        assert_eq!(models.n_hydros(), 1);
+        assert_eq!(provenance.len(), 1);
+        assert_eq!(provenance[0].1, EvaporationSource::LinearizedFromGeometry);
+
+        match models.model(0) {
+            EvaporationModel::Linearized {
+                coefficients,
+                reference_volume_hm3,
+            } => {
+                assert!(
+                    (reference_volume_hm3 - 300.0).abs() < 1e-10,
+                    "v_ref must be (100+500)/2 = 300, got {reference_volume_hm3}"
+                );
+                assert_eq!(coefficients.len(), 1);
+
+                let v_ref = 300.0_f64;
+                let a_ref = 2.0_f64;
+                let da_dv = 0.005_f64;
+                let c_ev = 5.0_f64;
+                let stage_hours = 744.0_f64;
+                let zeta = 1.0 / (3.6 * stage_hours);
+
+                let expected_k_evap_v = zeta * c_ev * da_dv;
+                let expected_k_evap0 = zeta * c_ev * a_ref - expected_k_evap_v * v_ref;
+
+                let coeff = &coefficients[0];
+                assert!(
+                    (coeff.k_evap_v - expected_k_evap_v).abs() < 1e-10,
+                    "k_evap_v: expected {expected_k_evap_v}, got {}",
+                    coeff.k_evap_v
+                );
+                assert!(
+                    (coeff.k_evap0 - expected_k_evap0).abs() < 1e-10,
+                    "k_evap0: expected {expected_k_evap0}, got {}",
+                    coeff.k_evap0
+                );
+            }
+            other => panic!("expected Linearized, got {other:?}"),
+        }
+    }
+
+    /// resolve_evaporation_models core logic: negative evaporation coefficients produce valid results.
+    ///
+    /// Net precipitation (negative c_ev) is physically valid. k_evap_v can be negative.
+    #[test]
+    fn resolve_evaporation_negative_coefficient_produces_valid_results() {
+        let mut evap_mm = [0.0f64; 12];
+        evap_mm[0] = -3.0; // net precipitation in January
+        let hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some(evap_mm));
+
+        let geo_rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let geo_refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        let study_stages = [make_stage_with_month(0, 0)]; // January
+        let stage_refs: Vec<_> = study_stages.iter().collect();
+
+        let (models, provenance) =
+            super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+                .expect("negative evaporation must succeed");
+
+        assert_eq!(provenance[0].1, EvaporationSource::LinearizedFromGeometry);
+
+        match models.model(0) {
+            EvaporationModel::Linearized { coefficients, .. } => {
+                let coeff = &coefficients[0];
+                assert!(
+                    coeff.k_evap_v.is_finite(),
+                    "k_evap_v must be finite for negative c_ev"
+                );
+                assert!(
+                    coeff.k_evap0.is_finite(),
+                    "k_evap0 must be finite for negative c_ev"
+                );
+                // Negative c_ev with positive dA/dv → negative k_evap_v.
+                assert!(
+                    coeff.k_evap_v < 0.0,
+                    "k_evap_v must be negative for net precipitation scenario"
+                );
+            }
+            other => panic!("expected Linearized, got {other:?}"),
+        }
+    }
+
+    /// resolve_evaporation_models core logic: hydro with evaporation but no geometry rows
+    /// returns SddpError::Validation containing "geometry".
+    #[test]
+    fn resolve_evaporation_missing_geometry_returns_validation_error() {
+        let evap_mm = [5.0f64; 12];
+        let hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some(evap_mm));
+
+        // Geometry map has no entry for hydro 0.
+        let geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+
+        let study_stages = [make_stage_with_month(0, 0)];
+        let stage_refs: Vec<_> = study_stages.iter().collect();
+
+        let err = super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+            .expect_err("missing geometry must return an error");
+
+        match err {
+            crate::SddpError::Validation(msg) => {
+                assert!(
+                    msg.to_lowercase().contains("geometry"),
+                    "error message must mention 'geometry', got: {msg}"
+                );
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+    }
+
+    /// resolve_evaporation_models core logic: 4 hydros where 2 have evaporation and 2 do not.
+    ///
+    /// Acceptance criterion 1: returns 2 Linearized and 2 None models.
+    #[test]
+    fn resolve_evaporation_mixed_system_returns_correct_model_mix() {
+        let evap_mm = [5.0f64; 12];
+        let hydros = vec![
+            make_hydro_with_evaporation(0, 100.0, 500.0, Some(evap_mm)),
+            make_hydro_with_evaporation(1, 200.0, 1000.0, None),
+            make_hydro_with_evaporation(2, 50.0, 300.0, Some(evap_mm)),
+            make_hydro_with_evaporation(3, 300.0, 2000.0, None),
+        ];
+
+        let geo_rows_h0 = make_geo_rows(&[(100.0, 1.0), (300.0, 2.0), (500.0, 3.0)]);
+        let geo_rows_h2 = make_geo_rows(&[(50.0, 0.5), (175.0, 1.0), (300.0, 1.5)]);
+
+        let refs_h0: Vec<_> = geo_rows_h0.iter().collect();
+        let refs_h2: Vec<_> = geo_rows_h2.iter().collect();
+
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), refs_h0);
+        geometry_map.insert(EntityId::from(2), refs_h2);
+
+        let study_stages = [make_stage_with_month(0, 0)];
+        let stage_refs: Vec<_> = study_stages.iter().collect();
+
+        let (models, provenance) =
+            super::resolve_evaporation_core(&hydros, &geometry_map, &stage_refs)
+                .expect("should succeed");
+
+        assert_eq!(models.n_hydros(), 4);
+        assert!(
+            matches!(models.model(0), EvaporationModel::Linearized { .. }),
+            "hydro 0 must be Linearized"
+        );
+        assert!(
+            matches!(models.model(1), EvaporationModel::None),
+            "hydro 1 must be None"
+        );
+        assert!(
+            matches!(models.model(2), EvaporationModel::Linearized { .. }),
+            "hydro 2 must be Linearized"
+        );
+        assert!(
+            matches!(models.model(3), EvaporationModel::None),
+            "hydro 3 must be None"
+        );
+
+        // 2 Linearized, 2 NotModeled in provenance.
+        let n_linearized = provenance
+            .iter()
+            .filter(|(_, s)| *s == EvaporationSource::LinearizedFromGeometry)
+            .count();
+        let n_not_modeled = provenance
+            .iter()
+            .filter(|(_, s)| *s == EvaporationSource::NotModeled)
+            .count();
+        assert_eq!(n_linearized, 2, "expected 2 LinearizedFromGeometry");
+        assert_eq!(n_not_modeled, 2, "expected 2 NotModeled");
+    }
+
+    /// resolve_evaporation_models core logic: NaN/Inf detection from degenerate geometry
+    /// (two identical volume points) returns a validation error.
+    #[test]
+    fn resolve_evaporation_degenerate_geometry_nan_detected() {
+        let evap_mm = [5.0f64; 12];
+        let hydro = make_hydro_with_evaporation(0, 100.0, 500.0, Some(evap_mm));
+
+        // Two rows with same volume but different areas: this is degenerate.
+        // With dv=0, area_derivative returns 0.0, so no NaN there.
+        // To force NaN we need the scenario where stage_hours=0 (zeta → Inf).
+        // Test that scenario instead.
+        let mut stage_zero_duration = make_stage_with_month(0, 0);
+        stage_zero_duration.blocks = vec![Block {
+            index: 0,
+            name: "ZERO".to_string(),
+            duration_hours: 0.0, // zero duration → zeta = Inf → k_evap_v = Inf
+        }];
+
+        let geo_rows = make_geo_rows(&[(100.0, 1.0), (200.0, 1.5), (300.0, 2.0)]);
+        let geo_refs: Vec<_> = geo_rows.iter().collect();
+        let mut geometry_map: HashMap<EntityId, Vec<&cobre_io::extensions::HydroGeometryRow>> =
+            HashMap::new();
+        geometry_map.insert(EntityId::from(0), geo_refs);
+
+        let stage_refs = vec![&stage_zero_duration];
+
+        let err = super::resolve_evaporation_core(&[hydro], &geometry_map, &stage_refs)
+            .expect_err("degenerate geometry (zero duration) must return an error");
+
+        assert!(
+            matches!(err, crate::SddpError::Validation(_)),
+            "expected Validation error for non-finite coefficients, got {err:?}"
+        );
+    }
+
+    // ── build_hydro_model_summary tests ───────────────────────────────────────
+
+    /// Build a minimal single-bus `System` with the given hydros and one study stage.
+    ///
+    /// Uses bus `EntityId(10)` to match the `make_hydro` helper's `bus_id`.
+    fn make_system_for_summary(
+        hydros: Vec<cobre_core::entities::hydro::Hydro>,
+    ) -> cobre_core::System {
+        let bus = Bus {
+            id: EntityId(10),
+            name: "B10".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap_or_default(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap_or_default(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(hydros)
+            .stages(vec![stage])
+            .correlation(CorrelationModel::default())
+            .build()
+            .unwrap()
+    }
+
+    /// Build a `PrepareHydroModelsResult` for a set of hydro IDs where every
+    /// hydro uses constant productivity and has no evaporation.
+    fn make_result_all_constant(hydro_ids: &[i32]) -> PrepareHydroModelsResult {
+        let n_hydros = hydro_ids.len();
+        let n_stages = 1;
+        let models: Vec<Vec<ResolvedProductionModel>> = hydro_ids
+            .iter()
+            .map(|_| {
+                (0..n_stages)
+                    .map(|_| ResolvedProductionModel::ConstantProductivity { productivity: 0.95 })
+                    .collect()
+            })
+            .collect();
+        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production_sources = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
+            .collect();
+        let evaporation_sources = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), EvaporationSource::NotModeled))
+            .collect();
+        let evap_models: Vec<EvaporationModel> =
+            hydro_ids.iter().map(|_| EvaporationModel::None).collect();
+        PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(evap_models),
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+            },
+        }
+    }
+
+    /// Build a `PrepareHydroModelsResult` with mixed constant and FPHA hydros.
+    ///
+    /// The hydro list is merged and sorted by id ascending (canonical order).
+    /// Each FPHA hydro gets `n_planes` hyperplanes at the single study stage.
+    fn make_result_mixed(
+        constant_ids: &[i32],
+        fpha_ids: &[i32],
+        n_planes: usize,
+    ) -> PrepareHydroModelsResult {
+        let n_stages = 1;
+        let fpha_plane = FphaPlane {
+            intercept: 1000.0,
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+        };
+        let mut all_ids: Vec<(i32, bool)> = constant_ids
+            .iter()
+            .map(|&id| (id, false))
+            .chain(fpha_ids.iter().map(|&id| (id, true)))
+            .collect();
+        all_ids.sort_by_key(|(id, _)| *id);
+
+        let n_hydros = all_ids.len();
+        let models: Vec<Vec<ResolvedProductionModel>> = all_ids
+            .iter()
+            .map(|(_, is_fpha)| {
+                (0..n_stages)
+                    .map(|_| {
+                        if *is_fpha {
+                            ResolvedProductionModel::Fpha {
+                                planes: vec![fpha_plane; n_planes],
+                                turbined_cost: 0.0,
+                            }
+                        } else {
+                            ResolvedProductionModel::ConstantProductivity { productivity: 0.95 }
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production_sources: Vec<(EntityId, ProductionModelSource)> = all_ids
+            .iter()
+            .map(|(id, is_fpha)| {
+                let src = if *is_fpha {
+                    ProductionModelSource::PrecomputedHyperplanes
+                } else {
+                    ProductionModelSource::DefaultConstant
+                };
+                (EntityId(*id), src)
+            })
+            .collect();
+        let evaporation_sources: Vec<(EntityId, EvaporationSource)> = all_ids
+            .iter()
+            .map(|(id, _)| (EntityId(*id), EvaporationSource::NotModeled))
+            .collect();
+        let evap_models: Vec<EvaporationModel> =
+            all_ids.iter().map(|_| EvaporationModel::None).collect();
+        PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(evap_models),
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+            },
+        }
+    }
+
+    /// Build a `PrepareHydroModelsResult` with evaporation for a subset of hydros.
+    fn make_result_with_evaporation(
+        hydro_ids: &[i32],
+        evap_ids: &[i32],
+    ) -> PrepareHydroModelsResult {
+        let n_hydros = hydro_ids.len();
+        let n_stages = 1;
+        let models: Vec<Vec<ResolvedProductionModel>> = hydro_ids
+            .iter()
+            .map(|_| {
+                (0..n_stages)
+                    .map(|_| ResolvedProductionModel::ConstantProductivity { productivity: 0.95 })
+                    .collect()
+            })
+            .collect();
+        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production_sources = hydro_ids
+            .iter()
+            .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
+            .collect();
+        let evap_set: std::collections::HashSet<i32> = evap_ids.iter().copied().collect();
+        let evaporation_sources: Vec<(EntityId, EvaporationSource)> = hydro_ids
+            .iter()
+            .map(|&id| {
+                let src = if evap_set.contains(&id) {
+                    EvaporationSource::LinearizedFromGeometry
+                } else {
+                    EvaporationSource::NotModeled
+                };
+                (EntityId(id), src)
+            })
+            .collect();
+        let evap_models: Vec<EvaporationModel> = hydro_ids
+            .iter()
+            .map(|&id| {
+                if evap_set.contains(&id) {
+                    EvaporationModel::Linearized {
+                        coefficients: vec![LinearizedEvaporation {
+                            k_evap0: 1.0,
+                            k_evap_v: 0.01,
+                        }],
+                        reference_volume_hm3: 500.0,
+                    }
+                } else {
+                    EvaporationModel::None
+                }
+            })
+            .collect();
+        PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(evap_models),
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+            },
+        }
+    }
+
+    /// All-constant system: n_constant = 4, n_fpha = 0, total_planes = 0.
+    #[test]
+    fn build_hydro_model_summary_all_constant() {
+        let hydro_ids = [1i32, 2, 3, 4];
+        let hydros = hydro_ids
+            .iter()
+            .map(|&id| {
+                make_hydro(
+                    id,
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s: 0.95,
+                    },
+                )
+            })
+            .collect();
+        let system = make_system_for_summary(hydros);
+        let result = make_result_all_constant(&hydro_ids);
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(
+            summary.n_constant, 4,
+            "all-constant system must have n_constant = 4"
+        );
+        assert_eq!(
+            summary.n_fpha, 0,
+            "all-constant system must have n_fpha = 0"
+        );
+        assert_eq!(
+            summary.total_planes, 0,
+            "all-constant system must have total_planes = 0"
+        );
+        assert!(
+            summary.fpha_details.is_empty(),
+            "all-constant system must have empty fpha_details"
+        );
+    }
+
+    /// Mixed system (2 constant + 2 FPHA, 5 planes each): correct counts and plane total.
+    #[test]
+    fn build_hydro_model_summary_mixed_counts_and_plane_total() {
+        let constant_ids = [1i32, 2];
+        let fpha_ids = [3i32, 4];
+        let all_ids = [1i32, 2, 3, 4];
+        let hydros = all_ids
+            .iter()
+            .map(|&id| {
+                make_hydro(
+                    id,
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s: 0.95,
+                    },
+                )
+            })
+            .collect();
+        let system = make_system_for_summary(hydros);
+        let result = make_result_mixed(&constant_ids, &fpha_ids, 5);
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(summary.n_constant, 2, "n_constant must be 2");
+        assert_eq!(summary.n_fpha, 2, "n_fpha must be 2");
+        assert_eq!(
+            summary.total_planes, 10,
+            "total_planes must be 10 (2 × 5 planes)"
+        );
+        assert_eq!(
+            summary.fpha_details.len(),
+            2,
+            "must have 2 fpha_details entries"
+        );
+        for detail in &summary.fpha_details {
+            assert_eq!(
+                detail.n_planes, 5,
+                "each FPHA detail must have n_planes = 5"
+            );
+        }
+    }
+
+    /// Acceptance criterion: 2 constant + 2 FPHA (10 planes) + 3 evaporation / 1 without.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn build_hydro_model_summary_acceptance_criterion() {
+        // IDs 1,2 constant; IDs 3,4 FPHA with 5 planes each.
+        // IDs 1,2,3 have evaporation; ID 4 does not.
+        let constant_ids = [1i32, 2];
+        let fpha_ids = [3i32, 4];
+        let all_ids = [1i32, 2, 3, 4];
+        let hydros = all_ids
+            .iter()
+            .map(|&id| {
+                make_hydro(
+                    id,
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s: 0.95,
+                    },
+                )
+            })
+            .collect();
+        let system = make_system_for_summary(hydros);
+
+        let n_stages = 1;
+        let fpha_plane = FphaPlane {
+            intercept: 1000.0,
+            gamma_v: 0.002,
+            gamma_q: 0.85,
+            gamma_s: -0.01,
+        };
+        let mut sorted: Vec<(i32, bool)> = constant_ids
+            .iter()
+            .map(|&id| (id, false))
+            .chain(fpha_ids.iter().map(|&id| (id, true)))
+            .collect();
+        sorted.sort_by_key(|(id, _)| *id);
+        let n_hydros = sorted.len();
+
+        let models: Vec<Vec<ResolvedProductionModel>> = sorted
+            .iter()
+            .map(|(_, is_fpha)| {
+                (0..n_stages)
+                    .map(|_| {
+                        if *is_fpha {
+                            ResolvedProductionModel::Fpha {
+                                planes: vec![fpha_plane; 5],
+                                turbined_cost: 0.0,
+                            }
+                        } else {
+                            ResolvedProductionModel::ConstantProductivity { productivity: 0.95 }
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production_sources: Vec<(EntityId, ProductionModelSource)> = sorted
+            .iter()
+            .map(|(id, is_fpha)| {
+                (
+                    EntityId(*id),
+                    if *is_fpha {
+                        ProductionModelSource::PrecomputedHyperplanes
+                    } else {
+                        ProductionModelSource::DefaultConstant
+                    },
+                )
+            })
+            .collect();
+        let evap_set: std::collections::HashSet<i32> = [1, 2, 3].into_iter().collect();
+        let evaporation_sources: Vec<(EntityId, EvaporationSource)> = sorted
+            .iter()
+            .map(|(id, _)| {
+                (
+                    EntityId(*id),
+                    if evap_set.contains(id) {
+                        EvaporationSource::LinearizedFromGeometry
+                    } else {
+                        EvaporationSource::NotModeled
+                    },
+                )
+            })
+            .collect();
+        let evap_models: Vec<EvaporationModel> = sorted
+            .iter()
+            .map(|(id, _)| {
+                if evap_set.contains(id) {
+                    EvaporationModel::Linearized {
+                        coefficients: vec![LinearizedEvaporation {
+                            k_evap0: 1.0,
+                            k_evap_v: 0.01,
+                        }],
+                        reference_volume_hm3: 500.0,
+                    }
+                } else {
+                    EvaporationModel::None
+                }
+            })
+            .collect();
+        let result = PrepareHydroModelsResult {
+            production,
+            evaporation: EvaporationModelSet::new(evap_models),
+            provenance: HydroModelProvenance {
+                production_sources,
+                evaporation_sources,
+            },
+        };
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(summary.n_constant, 2, "n_constant must be 2");
+        assert_eq!(summary.n_fpha, 2, "n_fpha must be 2");
+        assert_eq!(summary.total_planes, 10, "total_planes must be 10");
+        assert_eq!(summary.n_evaporation, 3, "n_evaporation must be 3");
+        assert_eq!(summary.n_no_evaporation, 1, "n_no_evaporation must be 1");
+    }
+
+    /// Evaporation counts are derived from provenance, not model variant.
+    #[test]
+    fn build_hydro_model_summary_evaporation_counts_from_provenance() {
+        let hydro_ids = [1i32, 2, 3, 4];
+        let evap_ids = [1i32, 3];
+        let hydros = hydro_ids
+            .iter()
+            .map(|&id| {
+                make_hydro(
+                    id,
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s: 0.95,
+                    },
+                )
+            })
+            .collect();
+        let system = make_system_for_summary(hydros);
+        let result = make_result_with_evaporation(&hydro_ids, &evap_ids);
+
+        let summary = build_hydro_model_summary(&result, &system);
+
+        assert_eq!(
+            summary.n_evaporation, 2,
+            "n_evaporation must be 2 (IDs 1 and 3)"
+        );
+        assert_eq!(
+            summary.n_no_evaporation, 2,
+            "n_no_evaporation must be 2 (IDs 2 and 4)"
+        );
+    }
+}

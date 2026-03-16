@@ -72,8 +72,8 @@ pub use constraints::{
 pub use error::LoadError;
 pub use extensions::{
     FittingWindow, FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
-    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_production_models,
-    parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
+    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_hydro_geometry,
+    load_production_models, parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use output::policy::{

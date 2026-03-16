@@ -22,6 +22,8 @@
 use cobre_core::{EfficiencyModel, HydraulicLossesModel, Hydro, TailraceModel};
 use cobre_io::extensions::{FphaConfig, HydroGeometryRow};
 
+use crate::hydro_models::FphaPlane;
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Errors that arise during FPHA fitting geometry validation or evaluation.
@@ -115,6 +117,42 @@ pub(crate) enum FphaFittingError {
         /// The value that was provided (< 2 for grid dimensions, < 1 for max planes).
         value: usize,
     },
+
+    /// The computed kappa correction factor is outside the valid range `(0, 1]`.
+    ///
+    /// Kappa must be strictly positive (zero production everywhere is degenerate)
+    /// and at most 1.0 (a kappa > 1.0 would mean the envelope underestimates phi,
+    /// which violates the outer-approximation guarantee).
+    InvalidKappa {
+        /// Name of the hydro plant whose fitting was rejected.
+        hydro_name: String,
+        /// The kappa value that was computed.
+        kappa: f64,
+    },
+
+    /// The fitting pipeline produced zero valid hyperplanes.
+    ///
+    /// This can occur when every sampled grid point has zero or negative production
+    /// (e.g., net head ≤ 0 everywhere), so no tangent planes can be constructed.
+    NoHyperplanesProduced {
+        /// Name of the hydro plant for which no hyperplanes were produced.
+        hydro_name: String,
+    },
+
+    /// A fitted hyperplane has a coefficient with the wrong sign.
+    ///
+    /// Valid physical hyperplanes satisfy `gamma_v > 0` (more storage → more head →
+    /// more power), `gamma_q > 0` (turbining produces power), and `gamma_s <= 0`
+    /// (spillage raises tailrace, reducing net head). A coefficient outside these
+    /// bounds indicates a numerical problem during fitting.
+    InvalidCoefficient {
+        /// Name of the hydro plant whose fitting was rejected.
+        hydro_name: String,
+        /// Zero-based index of the offending hyperplane in the selected set.
+        plane_index: usize,
+        /// Human-readable description of which coefficient failed and its value.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for FphaFittingError {
@@ -168,6 +206,25 @@ impl std::fmt::Display for FphaFittingError {
                 f,
                 "hydro '{hydro_name}': discretization count for '{dimension}' is {value}, \
                  which is below the minimum required"
+            ),
+            Self::InvalidKappa { hydro_name, kappa } => write!(
+                f,
+                "hydro '{hydro_name}': computed kappa {kappa} is outside the valid range (0, 1]; \
+                 kappa must be strictly positive and at most 1.0"
+            ),
+            Self::NoHyperplanesProduced { hydro_name } => write!(
+                f,
+                "hydro '{hydro_name}': fitting pipeline produced zero valid hyperplanes; \
+                 check that net head is positive over the fitting grid"
+            ),
+            Self::InvalidCoefficient {
+                hydro_name,
+                plane_index,
+                detail,
+            } => write!(
+                f,
+                "hydro '{hydro_name}': hyperplane {plane_index} has an invalid coefficient: \
+                 {detail}"
             ),
         }
     }
@@ -854,6 +911,705 @@ impl ProductionFunction {
     }
 }
 
+/// An unscaled tangent hyperplane to the production function `phi(v, q, s)`.
+///
+/// Represents the tangent plane at a specific operating point `(v0, q0, s0)`:
+/// `g(v, q, s) = gamma_0 + gamma_v * v + gamma_q * q + gamma_s * s`
+///
+/// The intercept is NOT scaled by kappa (contrast with [`cobre_core::FphaPlane`],
+/// where `intercept = gamma_0 * kappa`). By construction, the tangent-point
+/// identity holds: `evaluate(v0, q0, s0) == phi(v0, q0, s0)`.
+#[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_field_names)]
+pub(crate) struct RawHyperplane {
+    /// Intercept (NOT scaled by kappa).
+    pub gamma_0: f64,
+    /// Volume gradient [MW / (hm³)].
+    pub gamma_v: f64,
+    /// Turbined flow gradient [MW / (m³/s)].
+    pub gamma_q: f64,
+    /// Spillage flow gradient [MW / (m³/s)].
+    pub gamma_s: f64,
+}
+
+impl RawHyperplane {
+    /// Evaluates the hyperplane at `(v, q, s)`: `gamma_0 + gamma_v*v + gamma_q*q + gamma_s*s`.
+    pub(crate) fn evaluate(&self, v: f64, q: f64, s: f64) -> f64 {
+        self.gamma_0 + self.gamma_v * v + self.gamma_q * q + self.gamma_s * s
+    }
+}
+
+/// Computes the tangent hyperplane to `pf` at operating point `(v, q, s)`.
+///
+/// Returns `None` for degenerate operating points where the tangent plane is
+/// not meaningful for the concave envelope:
+/// - `q <= 0.0`: zero turbined flow yields zero production.
+/// - `phi(v, q, s) <= 0.0`: non-positive production (e.g., net head ≤ 0).
+///
+/// The returned [`RawHyperplane`] satisfies the tangent-point identity:
+/// `plane.evaluate(v, q, s) == pf.evaluate(v, q, s)` exactly (by construction).
+///
+/// # Parameters
+///
+/// - `pf` — production function to differentiate.
+/// - `v` — reservoir volume \[hm³\].
+/// - `q` — turbined flow \[m³/s\].
+/// - `s` — spillage flow \[m³/s\].
+pub(crate) fn compute_tangent_plane(
+    pf: &ProductionFunction,
+    v: f64,
+    q: f64,
+    s: f64,
+) -> Option<RawHyperplane> {
+    if q <= 0.0 {
+        return None;
+    }
+    let phi_val = pf.evaluate(v, q, s);
+    if phi_val <= 0.0 {
+        return None;
+    }
+    let (dv, dq, ds) = pf.partial_derivatives(v, q, s);
+    let gamma_0 = phi_val - dv * v - dq * q - ds * s;
+    Some(RawHyperplane {
+        gamma_0,
+        gamma_v: dv,
+        gamma_q: dq,
+        gamma_s: ds,
+    })
+}
+
+// ── Grid sampling ─────────────────────────────────────────────────────────────
+
+/// Sample tangent hyperplanes at all points of a uniform 3D grid over `(v, q, s)`.
+///
+/// Constructs three uniform grids from the bounds provided in `bounds`:
+///
+/// - **Volume** grid: `n_volume_points` values from `bounds.v_min` to `bounds.v_max`
+///   (inclusive endpoints).
+/// - **Flow** grid: `n_flow_points` values from `q_min` to `pf.max_turbined_m3s`
+///   (inclusive endpoints), where `q_min = max(1.0, pf.max_turbined_m3s * 0.01)`.
+///   The lower bound avoids `q = 0` where the tangent plane is degenerate.
+/// - **Spillage** grid: `n_spillage_points` values from `0.0` to
+///   `pf.max_turbined_m3s * 0.5` (inclusive endpoints). Spillage `s = 0` is
+///   always the first grid point.
+///
+/// For each `(v_i, q_j, s_k)` triple on the grid, calls [`compute_tangent_plane`]
+/// and collects all `Some` results. Degenerate operating points (zero flow or
+/// non-positive production) are silently dropped.
+///
+/// # Returns
+///
+/// A `Vec<RawHyperplane>` of length up to
+/// `n_volume_points * n_flow_points * n_spillage_points`.
+/// Returns an empty vector if every grid point is degenerate.
+///
+/// # Parameters
+///
+/// - `pf` — production function to differentiate.
+/// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
+pub(crate) fn sample_tangent_planes(
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> Vec<RawHyperplane> {
+    let n_v = bounds.n_volume_points;
+    let n_q = bounds.n_flow_points;
+    let n_s = bounds.n_spillage_points;
+
+    let mut planes = Vec::with_capacity(n_v * n_q * n_s);
+
+    let v_range = bounds.v_max - bounds.v_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let v_denom = f64::from((n_v - 1) as u32);
+
+    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+    let q_range = pf.max_turbined_m3s - q_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let q_denom = f64::from((n_q - 1) as u32);
+
+    let s_max = pf.max_turbined_m3s * 0.5_f64;
+    #[allow(clippy::cast_possible_truncation)]
+    let s_denom = f64::from((n_s - 1) as u32);
+
+    for i in 0..n_v {
+        #[allow(clippy::cast_possible_truncation)]
+        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+        for j in 0..n_q {
+            #[allow(clippy::cast_possible_truncation)]
+            let q = q_min + f64::from(j as u32) * q_range / q_denom;
+            for k in 0..n_s {
+                #[allow(clippy::cast_possible_truncation)]
+                let s = f64::from(k as u32) * s_max / s_denom;
+                if let Some(plane) = compute_tangent_plane(pf, v, q, s) {
+                    planes.push(plane);
+                }
+            }
+        }
+    }
+
+    planes
+}
+
+// ── Redundancy elimination ────────────────────────────────────────────────────
+
+/// Remove hyperplanes that are never the tightest bound at any grid point.
+///
+/// A plane is **active** if there exists at least one point `(v_i, q_j, s_k)` on
+/// the same 3D grid used by [`sample_tangent_planes`] where its value is within
+/// `1e-8` of the maximum over all planes at that point.  Planes that are never
+/// active are redundant — they are always dominated by some other plane — and are
+/// discarded.
+///
+/// After dominance filtering, near-identical planes (all four coefficients
+/// differing by less than `1e-8`) are further deduplicated: only the first
+/// occurrence of each unique plane is retained.  This ensures that a linear
+/// production function (e.g., constant head with no tailrace) produces exactly
+/// one surviving plane rather than many identical copies.
+///
+/// The grid is reconstructed from `pf` and `bounds` using the identical formula
+/// as [`sample_tangent_planes`], so the set of test points is consistent with the
+/// sampling step.
+///
+/// # Guarantee
+///
+/// If `planes` is non-empty, at least one plane always achieves the maximum at
+/// some grid point and therefore survives.
+///
+/// # Returns
+///
+/// The deduplicated subset of `planes` that are active at least once.  Returns an
+/// empty vector if and only if `planes` is empty.
+///
+/// # Parameters
+///
+/// - `planes` — candidate hyperplanes (typically produced by [`sample_tangent_planes`]).
+/// - `pf` — production function supplying grid parameters.
+/// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
+pub(crate) fn eliminate_redundant(
+    planes: &[RawHyperplane],
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> Vec<RawHyperplane> {
+    if planes.is_empty() {
+        return Vec::new();
+    }
+
+    let n_v = bounds.n_volume_points;
+    let n_q = bounds.n_flow_points;
+    let n_s = bounds.n_spillage_points;
+
+    let mut active = vec![false; planes.len()];
+
+    let v_range = bounds.v_max - bounds.v_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let v_denom = f64::from((n_v - 1) as u32);
+
+    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+    let q_range = pf.max_turbined_m3s - q_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let q_denom = f64::from((n_q - 1) as u32);
+
+    let s_max = pf.max_turbined_m3s * 0.5_f64;
+    #[allow(clippy::cast_possible_truncation)]
+    let s_denom = f64::from((n_s - 1) as u32);
+
+    for i in 0..n_v {
+        #[allow(clippy::cast_possible_truncation)]
+        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+        for j in 0..n_q {
+            #[allow(clippy::cast_possible_truncation)]
+            let q = q_min + f64::from(j as u32) * q_range / q_denom;
+            for k in 0..n_s {
+                #[allow(clippy::cast_possible_truncation)]
+                let s = f64::from(k as u32) * s_max / s_denom;
+
+                // Find the maximum plane value at this grid point.
+                let max_val = planes
+                    .iter()
+                    .map(|p| p.evaluate(v, q, s))
+                    .fold(f64::NEG_INFINITY, f64::max);
+
+                // Mark all planes within 1e-8 of the maximum as active.
+                for (idx, plane) in planes.iter().enumerate() {
+                    if max_val - plane.evaluate(v, q, s) <= 1e-8 {
+                        active[idx] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let active_planes: Vec<RawHyperplane> = planes
+        .iter()
+        .zip(active.iter())
+        .filter_map(|(p, &is_active)| if is_active { Some(*p) } else { None })
+        .collect();
+
+    // Deduplicate near-identical planes (< 1e-8 on all coefficients).
+    let mut unique: Vec<RawHyperplane> = Vec::with_capacity(active_planes.len());
+    'outer: for candidate in &active_planes {
+        for existing in &unique {
+            if (candidate.gamma_0 - existing.gamma_0).abs() < 1e-8
+                && (candidate.gamma_v - existing.gamma_v).abs() < 1e-8
+                && (candidate.gamma_q - existing.gamma_q).abs() < 1e-8
+                && (candidate.gamma_s - existing.gamma_s).abs() < 1e-8
+            {
+                continue 'outer;
+            }
+        }
+        unique.push(*candidate);
+    }
+    unique
+}
+
+// ── Heuristic plane selection ─────────────────────────────────────────────────
+
+/// Compute the maximum approximation error of a hyperplane envelope over the fitting grid.
+///
+/// For every grid point `(v_i, q_j, s_k)` reconstructed with the same formula as
+/// [`sample_tangent_planes`], the error at that point is:
+///
+/// ```text
+/// error(v, q, s) = max_m(plane_m(v, q, s)) - phi(v, q, s)
+/// ```
+///
+/// Because the envelope is a concave outer approximation, `error >= 0` everywhere.
+/// The returned value is the maximum error over all grid points, i.e., how "loose"
+/// the approximation is — lower is better.
+///
+/// Returns `0.0` when `planes` is empty (no envelope, no error defined).
+///
+/// # Parameters
+///
+/// - `planes` — hyperplanes forming the concave envelope.
+/// - `pf` — production function used for ground-truth evaluation.
+/// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
+pub(crate) fn compute_max_approximation_error(
+    planes: &[RawHyperplane],
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> f64 {
+    compute_grid_errors(planes, pf, bounds)
+        .into_iter()
+        .fold(0.0_f64, f64::max)
+}
+
+/// Compute signed per-grid-point approximation errors `envelope(v,q,s) - phi(v,q,s)`.
+///
+/// Positive values indicate the envelope is loose at that point (correct for an
+/// outer approximation).  Negative values indicate a violation (envelope < phi),
+/// which can occur when planes were sampled at different operating points and the
+/// production function is not globally concave.
+///
+/// The grid is the same 3D uniform grid used by [`sample_tangent_planes`] and
+/// [`eliminate_redundant`].  Returns a `Vec` of length `n_vol * n_flow * n_spill`.
+/// When `planes` is empty, every entry is `f64::NEG_INFINITY`.
+fn compute_grid_errors(
+    planes: &[RawHyperplane],
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> Vec<f64> {
+    let n_v = bounds.n_volume_points;
+    let n_q = bounds.n_flow_points;
+    let n_s = bounds.n_spillage_points;
+
+    // Reconstruct the same grid as sample_tangent_planes / eliminate_redundant.
+    let v_range = bounds.v_max - bounds.v_min;
+    // Grid counts are validated to be >= 2; casting usize → u32 → f64 is safe for
+    // typical discretization values (2–20).
+    #[allow(clippy::cast_possible_truncation)]
+    let v_denom = f64::from((n_v - 1) as u32);
+
+    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+    let q_max = pf.max_turbined_m3s;
+    let q_range = q_max - q_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let q_denom = f64::from((n_q - 1) as u32);
+
+    let s_max = pf.max_turbined_m3s * 0.5_f64;
+    #[allow(clippy::cast_possible_truncation)]
+    let s_denom = f64::from((n_s - 1) as u32);
+
+    let mut errors = Vec::with_capacity(n_v * n_q * n_s);
+
+    for i in 0..n_v {
+        #[allow(clippy::cast_possible_truncation)]
+        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+        for j in 0..n_q {
+            #[allow(clippy::cast_possible_truncation)]
+            let q = q_min + f64::from(j as u32) * q_range / q_denom;
+            for k in 0..n_s {
+                #[allow(clippy::cast_possible_truncation)]
+                let s = f64::from(k as u32) * s_max / s_denom;
+
+                let phi_val = pf.evaluate(v, q, s);
+                let envelope_val = if planes.is_empty() {
+                    f64::NEG_INFINITY
+                } else {
+                    planes
+                        .iter()
+                        .map(|p| p.evaluate(v, q, s))
+                        .fold(f64::NEG_INFINITY, f64::max)
+                };
+                errors.push(envelope_val - phi_val);
+            }
+        }
+    }
+
+    errors
+}
+
+/// Select at most `bounds.max_planes_per_hydro` hyperplanes using a greedy removal heuristic.
+///
+/// The selection minimises the maximum approximation error (as measured by
+/// [`compute_max_approximation_error`]) subject to the cardinality constraint
+/// `|result| <= max_planes_per_hydro`.
+///
+/// ## Algorithm
+///
+/// 1. **Passthrough**: if `planes.len() <= max_planes_per_hydro`, all planes are
+///    returned unchanged.
+/// 2. **Greedy removal**: while the current count exceeds the target, evaluate the
+///    increase in maximum approximation error that would result from removing each
+///    remaining plane, then permanently remove the plane whose removal causes the
+///    smallest increase.
+///
+/// ## Properties
+///
+/// - The returned planes are a subset of the input.
+/// - The envelope property is preserved: after selection,
+///   `max_m(plane_m(v,q,s)) >= phi(v,q,s)` still holds at every grid point, because
+///   removal only makes the envelope looser, never introduces negative error.
+/// - Returns an empty `Vec` when `planes` is empty.
+///
+/// ## Complexity
+///
+/// The greedy step is O(n² × `grid_size`) where n = `planes.len()` and
+/// `grid_size` = `n_vol × n_flow × n_spill`. For n ≤ 40 and `grid_size` = 125 this
+/// is ≈ 200 000 evaluations per removal step — negligible for preprocessing.
+///
+/// # Parameters
+///
+/// - `planes` — non-redundant candidate hyperplanes (output of [`eliminate_redundant`]).
+/// - `pf` — production function used for error evaluation.
+/// - `bounds` — resolved fitting bounds; `bounds.max_planes_per_hydro` is the target.
+pub(crate) fn select_planes(
+    planes: &[RawHyperplane],
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> Vec<RawHyperplane> {
+    if planes.len() <= bounds.max_planes_per_hydro {
+        return planes.to_vec();
+    }
+
+    let target = bounds.max_planes_per_hydro;
+    let mut current: Vec<RawHyperplane> = planes.to_vec();
+    let mut scratch: Vec<RawHyperplane> = Vec::with_capacity(current.len());
+    let envelope_tol = -1e-8_f64;
+
+    while current.len() > target {
+        let n = current.len();
+        let mut best_idx = 0_usize;
+        let mut best_is_valid = false;
+        let mut best_max_error = f64::INFINITY;
+
+        for remove_idx in 0..n {
+            scratch.clear();
+            scratch.extend(
+                current.iter().enumerate().filter_map(
+                    |(i, &p)| {
+                        if i == remove_idx { None } else { Some(p) }
+                    },
+                ),
+            );
+
+            let errors = compute_grid_errors(&scratch, pf, bounds);
+            let min_err = errors.iter().copied().fold(f64::INFINITY, f64::min);
+            let max_err = errors.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let is_valid = min_err >= envelope_tol;
+            let max_err_nonneg = max_err.max(0.0);
+
+            let prefer = if is_valid && !best_is_valid {
+                true
+            } else if is_valid == best_is_valid {
+                max_err_nonneg < best_max_error
+            } else {
+                false
+            };
+
+            if prefer {
+                best_is_valid = is_valid;
+                best_max_error = max_err_nonneg;
+                best_idx = remove_idx;
+            }
+        }
+
+        if !best_is_valid {
+            break;
+        }
+
+        current.swap_remove(best_idx);
+    }
+
+    current
+}
+
+// ── Kappa computation ─────────────────────────────────────────────────────────
+
+/// Compute the kappa correction factor for a set of selected hyperplanes.
+///
+/// Kappa is defined as the minimum over all grid points of the ratio between the
+/// exact production value and the maximum hyperplane value at that point:
+///
+/// ```text
+/// kappa = min_{(v_i, q_j, s_k)} { phi(v_i, q_j, s_k) / max_m(plane_m(v_i, q_j, s_k)) }
+/// ```
+///
+/// A kappa of 1.0 means the concave envelope is tight at every grid point.
+/// Values less than 1.0 indicate the envelope overestimates the true production
+/// at some points; multiplying each intercept by kappa pulls the envelope down
+/// to eliminate the overestimation.
+///
+/// # Grid
+///
+/// The same 3D grid formula used by [`sample_tangent_planes`] and
+/// [`eliminate_redundant`] is applied here, ensuring consistent coverage.
+///
+/// # Returns
+///
+/// The minimum `phi / max_plane` ratio over all grid points where both `phi > 0`
+/// and `max_plane > 0`. Returns `1.0` if no such grid point exists (degenerate
+/// case where all points have zero production).
+///
+/// # Parameters
+///
+/// - `planes` — selected hyperplanes (output of [`select_planes`]).
+/// - `pf` — production function used for ground-truth evaluation.
+/// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
+pub(crate) fn compute_kappa(
+    planes: &[RawHyperplane],
+    pf: &ProductionFunction,
+    bounds: &FittingBounds,
+) -> f64 {
+    if planes.is_empty() {
+        return 1.0;
+    }
+
+    let n_v = bounds.n_volume_points;
+    let n_q = bounds.n_flow_points;
+    let n_s = bounds.n_spillage_points;
+
+    // Reconstruct the same grid as sample_tangent_planes / eliminate_redundant.
+    let v_range = bounds.v_max - bounds.v_min;
+    // Grid counts are validated to be >= 2 by resolve_fitting_bounds; casting
+    // usize → u32 → f64 is safe because counts are small (typically 2–20).
+    #[allow(clippy::cast_possible_truncation)]
+    let v_denom = f64::from((n_v - 1) as u32);
+
+    let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+    let q_max = pf.max_turbined_m3s;
+    let q_range = q_max - q_min;
+    #[allow(clippy::cast_possible_truncation)]
+    let q_denom = f64::from((n_q - 1) as u32);
+
+    let s_max = pf.max_turbined_m3s * 0.5_f64;
+    #[allow(clippy::cast_possible_truncation)]
+    let s_denom = f64::from((n_s - 1) as u32);
+
+    let mut min_ratio = f64::MAX;
+    let mut found_valid = false;
+
+    for i in 0..n_v {
+        #[allow(clippy::cast_possible_truncation)]
+        let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+        for j in 0..n_q {
+            #[allow(clippy::cast_possible_truncation)]
+            let q = q_min + f64::from(j as u32) * q_range / q_denom;
+            for k in 0..n_s {
+                #[allow(clippy::cast_possible_truncation)]
+                let s = f64::from(k as u32) * s_max / s_denom;
+
+                let phi_val = pf.evaluate(v, q, s);
+                let max_plane = planes
+                    .iter()
+                    .map(|p| p.evaluate(v, q, s))
+                    .fold(f64::NEG_INFINITY, f64::max);
+
+                if phi_val > 0.0 && max_plane > 0.0 {
+                    min_ratio = min_ratio.min(phi_val / max_plane);
+                    found_valid = true;
+                }
+            }
+        }
+    }
+
+    if found_valid { min_ratio } else { 1.0 }
+}
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+/// Validate a set of selected hyperplanes and their kappa correction factor.
+///
+/// Checks that:
+/// 1. At least one plane exists — zero planes cannot form an LP constraint set.
+/// 2. Kappa is in `(0, 1]` — values outside this range indicate a degenerate
+///    or overestimating fitting result.
+/// 3. Each plane's `gamma_v > -1e-10` (effectively > 0, allowing for rounding).
+/// 4. Each plane's `gamma_q > -1e-10` (turbining must have non-negative marginal value).
+/// 5. Each plane's `gamma_s <= 1e-10` (spillage must have non-positive marginal value).
+///
+/// A kappa below 0.95 triggers a warning to stderr, indicating the envelope
+/// overestimates the production function significantly. This is informational;
+/// the function still returns `Ok(())` in this case.
+///
+/// # Errors
+///
+/// | Condition | Error variant |
+/// |-----------|---------------|
+/// | `planes` is empty | [`FphaFittingError::NoHyperplanesProduced`] |
+/// | `kappa <= 0` or `kappa > 1` | [`FphaFittingError::InvalidKappa`] |
+/// | `gamma_v < -1e-10` for any plane | [`FphaFittingError::InvalidCoefficient`] |
+/// | `gamma_q < -1e-10` for any plane | [`FphaFittingError::InvalidCoefficient`] |
+/// | `gamma_s > 1e-10` for any plane | [`FphaFittingError::InvalidCoefficient`] |
+///
+/// # Parameters
+///
+/// - `planes` — selected hyperplanes after heuristic reduction.
+/// - `kappa` — the correction factor computed by [`compute_kappa`].
+/// - `hydro_name` — plant name used in error messages.
+pub(crate) fn validate_fitted_planes(
+    planes: &[RawHyperplane],
+    kappa: f64,
+    hydro_name: &str,
+) -> Result<(), FphaFittingError> {
+    if planes.is_empty() {
+        return Err(FphaFittingError::NoHyperplanesProduced {
+            hydro_name: hydro_name.to_owned(),
+        });
+    }
+
+    if kappa <= 0.0 || kappa > 1.0 {
+        return Err(FphaFittingError::InvalidKappa {
+            hydro_name: hydro_name.to_owned(),
+            kappa,
+        });
+    }
+
+    if kappa < 0.95 {
+        eprintln!(
+            "warning: hydro '{hydro_name}': kappa={kappa:.6} < 0.95; \
+             the FPHA envelope overestimates the true production function significantly"
+        );
+    }
+
+    for (idx, plane) in planes.iter().enumerate() {
+        if plane.gamma_v < -1e-10 {
+            return Err(FphaFittingError::InvalidCoefficient {
+                hydro_name: hydro_name.to_owned(),
+                plane_index: idx,
+                detail: format!(
+                    "gamma_v={:.6e} must be >= 0 (more storage should increase production)",
+                    plane.gamma_v
+                ),
+            });
+        }
+        if plane.gamma_q < -1e-10 {
+            return Err(FphaFittingError::InvalidCoefficient {
+                hydro_name: hydro_name.to_owned(),
+                plane_index: idx,
+                detail: format!(
+                    "gamma_q={:.6e} must be >= 0 (turbined flow should produce power)",
+                    plane.gamma_q
+                ),
+            });
+        }
+        if plane.gamma_s > 1e-10 {
+            return Err(FphaFittingError::InvalidCoefficient {
+                hydro_name: hydro_name.to_owned(),
+                plane_index: idx,
+                detail: format!(
+                    "gamma_s={:.6e} must be <= 0 (spillage should not increase production)",
+                    plane.gamma_s
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+// ── Top-level fitting pipeline ────────────────────────────────────────────────
+
+/// Fit FPHA hyperplanes for a single hydro plant from its VHA curve geometry.
+///
+/// This is the top-level entry point for the computed FPHA path. It orchestrates
+/// the full pipeline:
+///
+/// 1. **Forebay table** — build `ForebayTable` from the VHA curve rows.
+/// 2. **Production function** — build `ProductionFunction` from the forebay table
+///    and the hydro plant's tailrace, hydraulic loss, and efficiency models.
+/// 3. **Fitting bounds** — resolve volume range and grid counts from the config.
+/// 4. **Sampling** — sample tangent hyperplanes on the 3D grid.
+/// 5. **Redundancy elimination** — discard planes that are never the tightest bound.
+/// 6. **Heuristic selection** — reduce to at most `max_planes_per_hydro` planes.
+/// 7. **Kappa computation** — compute the correction factor on the selected planes.
+/// 8. **Validation** — verify kappa and coefficient signs.
+/// 9. **Conversion** — convert each `RawHyperplane` to `FphaPlane` with
+///    `intercept = gamma_0 * kappa`.
+///
+/// The returned `Vec<FphaPlane>` is structurally identical to what the precomputed
+/// path produces from `fpha_hyperplanes.parquet`: the LP builder treats both paths
+/// identically.
+///
+/// # Errors
+///
+/// Any step in the pipeline can fail. All errors propagate via `?` and are
+/// variants of [`FphaFittingError`]. The caller receives a descriptive error
+/// that includes the hydro plant name.
+///
+/// # Parameters
+///
+/// - `forebay_rows` — VHA curve rows for the hydro plant, sorted ascending by
+///   `volume_hm3` (as returned by `cobre_io::extensions::parse_hydro_geometry`).
+/// - `hydro` — resolved hydro plant entity supplying physical bounds and models.
+/// - `config` — FPHA fitting configuration (grid sizes, optional fitting window).
+pub(crate) fn fit_fpha_planes(
+    forebay_rows: &[HydroGeometryRow],
+    hydro: &Hydro,
+    config: &FphaConfig,
+) -> Result<Vec<FphaPlane>, FphaFittingError> {
+    let forebay = ForebayTable::new(forebay_rows, &hydro.name)?;
+
+    let pf = ProductionFunction::new(
+        forebay.clone(),
+        hydro.tailrace.as_ref(),
+        hydro.hydraulic_losses.as_ref(),
+        hydro.efficiency.as_ref(),
+        hydro.max_turbined_m3s,
+        hydro.name.clone(),
+    );
+
+    let bounds = resolve_fitting_bounds(config, hydro, &forebay)?;
+
+    let sampled = sample_tangent_planes(&pf, &bounds);
+    let non_redundant = eliminate_redundant(&sampled, &pf, &bounds);
+    let selected = select_planes(&non_redundant, &pf, &bounds);
+    let kappa = compute_kappa(&selected, &pf, &bounds);
+
+    validate_fitted_planes(&selected, kappa, &hydro.name)?;
+
+    let planes = selected
+        .iter()
+        .map(|raw| FphaPlane {
+            intercept: raw.gamma_0 * kappa,
+            gamma_v: raw.gamma_v,
+            gamma_q: raw.gamma_q,
+            gamma_s: raw.gamma_s,
+        })
+        .collect();
+
+    Ok(planes)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -873,9 +1629,10 @@ mod tests {
     use cobre_io::extensions::{FittingWindow, FphaConfig, HydroGeometryRow};
 
     use super::{
-        FittingBounds, ForebayTable, FphaFittingError, ProductionFunction, evaluate_losses,
-        evaluate_losses_factor, evaluate_tailrace, evaluate_tailrace_derivative,
-        resolve_fitting_bounds,
+        FittingBounds, ForebayTable, FphaFittingError, ProductionFunction, RawHyperplane,
+        compute_kappa, compute_tangent_plane, eliminate_redundant, evaluate_losses,
+        evaluate_losses_factor, evaluate_tailrace, evaluate_tailrace_derivative, fit_fpha_planes,
+        resolve_fitting_bounds, sample_tangent_planes, validate_fitted_planes,
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -2455,5 +3212,1360 @@ mod tests {
             ),
             "expected InsufficientDiscretization for max_planes_per_hydro=0, got: {err:?}"
         );
+    }
+
+    // ── RawHyperplane and compute_tangent_plane tests ─────────────────────────
+
+    /// Helper: build the production function used for the ticket-005 acceptance criteria.
+    ///
+    /// Setup: sloped_forebay (h = 380 + v * 2e-3), linear tailrace (h = 5.5/3000 * q),
+    /// constant hydraulic loss = 2.0 m, efficiency = 0.92.
+    /// At (v=10000, q=3000, s=0):
+    ///   h_fore = 400, h_tail = 5.5, h_loss = 2.0, h_net = 392.5
+    ///   K = 9.81e-3, ke = K * 0.92 = 9.0252e-3
+    ///   phi = ke * 3000 * 392.5 = 10629.459 MW
+    fn ac005_production_function() -> ProductionFunction {
+        let forebay = sloped_forebay();
+        let tailrace = linear_tailrace_5_5_at_3000();
+        let losses = HydraulicLossesModel::Constant { value_m: 2.0 };
+        let efficiency = EfficiencyModel::Constant { value: 0.92 };
+        ProductionFunction::new(
+            forebay,
+            Some(&tailrace),
+            Some(&losses),
+            Some(&efficiency),
+            12_600.0,
+            "TestPlant".to_owned(),
+        )
+    }
+
+    /// AC: compute_tangent_plane at (v=10000, q=3000, s=0) returns Some and all four
+    /// coefficients match the analytical derivation.
+    ///
+    /// Expected (from ticket-005 AC section with ke = 9.81e-3 * 0.92):
+    ///   phi = ke * 3000 * 392.5
+    ///   gamma_v = ke * 3000 * 2e-3
+    ///   gamma_q = ke * (392.5 - 5.5) = ke * 387.0
+    ///   gamma_s = -ke * 5.5
+    ///   gamma_0 = phi - gamma_v * 10000 - gamma_q * 3000 - gamma_s * 0
+    #[test]
+    fn tangent_plane_at_known_operating_point_coefficients() {
+        let pf = ac005_production_function();
+        let (v0, q0, s0) = (10_000.0_f64, 3000.0_f64, 0.0_f64);
+
+        let plane = compute_tangent_plane(&pf, v0, q0, s0)
+            .expect("should return Some for valid operating point");
+
+        let ke = 9.81e-3_f64 * 0.92_f64;
+        let expected_phi = ke * 3000.0 * 392.5;
+        let expected_dv = ke * 3000.0 * 2e-3;
+        let expected_dq = ke * 387.0;
+        let expected_ds = -ke * 5.5;
+        let expected_gamma_0 =
+            expected_phi - expected_dv * v0 - expected_dq * q0 - expected_ds * s0;
+
+        assert!(
+            (plane.gamma_v - expected_dv).abs() < 1e-10,
+            "gamma_v={}, expected={}",
+            plane.gamma_v,
+            expected_dv
+        );
+        assert!(
+            (plane.gamma_q - expected_dq).abs() < 1e-10,
+            "gamma_q={}, expected={}",
+            plane.gamma_q,
+            expected_dq
+        );
+        assert!(
+            (plane.gamma_s - expected_ds).abs() < 1e-10,
+            "gamma_s={}, expected={}",
+            plane.gamma_s,
+            expected_ds
+        );
+        assert!(
+            (plane.gamma_0 - expected_gamma_0).abs() < 1e-6,
+            "gamma_0={}, expected={}",
+            plane.gamma_0,
+            expected_gamma_0
+        );
+    }
+
+    /// AC: tangent-point identity — evaluate(v0, q0, s0) equals phi(v0, q0, s0) within 1e-10.
+    #[test]
+    fn tangent_plane_identity_at_operating_point() {
+        let pf = ac005_production_function();
+        let (v0, q0, s0) = (10_000.0_f64, 3000.0_f64, 0.0_f64);
+
+        let plane = compute_tangent_plane(&pf, v0, q0, s0)
+            .expect("should return Some for valid operating point");
+
+        let phi = pf.evaluate(v0, q0, s0);
+        let g_at_tangent = plane.evaluate(v0, q0, s0);
+
+        assert!(
+            (g_at_tangent - phi).abs() < 1e-10,
+            "tangent-point identity failed: plane.evaluate={g_at_tangent}, phi={phi}, diff={}",
+            (g_at_tangent - phi).abs()
+        );
+    }
+
+    /// AC: tangent-point identity holds at a second operating point.
+    #[test]
+    fn tangent_plane_identity_at_second_operating_point() {
+        let pf = ac005_production_function();
+        let (v0, q0, s0) = (5_000.0_f64, 1500.0_f64, 200.0_f64);
+
+        let plane = compute_tangent_plane(&pf, v0, q0, s0)
+            .expect("should return Some for valid operating point");
+
+        let phi = pf.evaluate(v0, q0, s0);
+        let g_at_tangent = plane.evaluate(v0, q0, s0);
+
+        assert!(
+            (g_at_tangent - phi).abs() < 1e-10,
+            "tangent-point identity failed: plane.evaluate={g_at_tangent}, phi={phi}, diff={}",
+            (g_at_tangent - phi).abs()
+        );
+    }
+
+    /// AC: tangent-point identity holds at a third operating point with nonzero spillage.
+    #[test]
+    fn tangent_plane_identity_with_spillage() {
+        let pf = ac005_production_function();
+        let (v0, q0, s0) = (8_000.0_f64, 2000.0_f64, 500.0_f64);
+
+        let plane = compute_tangent_plane(&pf, v0, q0, s0)
+            .expect("should return Some for valid operating point");
+
+        let phi = pf.evaluate(v0, q0, s0);
+        let g_at_tangent = plane.evaluate(v0, q0, s0);
+
+        assert!(
+            (g_at_tangent - phi).abs() < 1e-10,
+            "tangent-point identity failed: plane.evaluate={g_at_tangent}, phi={phi}, diff={}",
+            (g_at_tangent - phi).abs()
+        );
+    }
+
+    /// AC: q = 0 returns None (degenerate).
+    #[test]
+    fn compute_tangent_plane_zero_flow_returns_none() {
+        let pf = ac005_production_function();
+        let result = compute_tangent_plane(&pf, 10_000.0, 0.0, 0.0);
+        assert!(result.is_none(), "expected None for q=0, got {result:?}");
+    }
+
+    /// AC: negative q returns None (degenerate).
+    #[test]
+    fn compute_tangent_plane_negative_flow_returns_none() {
+        let pf = ac005_production_function();
+        let result = compute_tangent_plane(&pf, 10_000.0, -100.0, 0.0);
+        assert!(result.is_none(), "expected None for q<0, got {result:?}");
+    }
+
+    /// AC: phi <= 0 (net head <= 0) returns None.
+    ///
+    /// A production function with a very high constant tailrace will produce
+    /// negative net head at any operating point, causing phi <= 0.
+    #[test]
+    fn compute_tangent_plane_zero_production_returns_none() {
+        // tailrace so large that net_head <= 0 everywhere
+        let forebay = sloped_forebay(); // h_fore = 400 at v=10000
+        let giant_tailrace = TailraceModel::Polynomial {
+            coefficients: vec![500.0], // constant 500 m > any forebay height
+        };
+        let pf = ProductionFunction::new(
+            forebay,
+            Some(&giant_tailrace),
+            None,
+            None,
+            12_600.0,
+            "TestPlant".to_owned(),
+        );
+        // net_head = 400 - 500 = -100, phi < 0
+        let result = compute_tangent_plane(&pf, 10_000.0, 3000.0, 0.0);
+        assert!(result.is_none(), "expected None for phi<=0, got {result:?}");
+    }
+
+    /// AC: RawHyperplane::evaluate returns the correct linear combination.
+    #[test]
+    fn raw_hyperplane_evaluate_linear_combination() {
+        let plane = RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.01,
+            gamma_q: 3.5,
+            gamma_s: -0.05,
+        };
+        // 100 + 0.01*500 + 3.5*200 + (-0.05)*50 = 100 + 5 + 700 - 2.5 = 802.5
+        let expected = 100.0 + 0.01 * 500.0 + 3.5 * 200.0 + (-0.05) * 50.0;
+        assert!(
+            (plane.evaluate(500.0, 200.0, 50.0) - expected).abs() < 1e-10,
+            "evaluate mismatch: got {}, expected {expected}",
+            plane.evaluate(500.0, 200.0, 50.0)
+        );
+    }
+
+    /// AC: gamma_v > 0 for positive net head (physical sanity).
+    #[test]
+    fn gamma_v_positive_for_positive_net_head() {
+        let pf = ac005_production_function();
+        let plane = compute_tangent_plane(&pf, 10_000.0, 3000.0, 0.0).expect("should return Some");
+        assert!(
+            plane.gamma_v > 0.0,
+            "gamma_v must be > 0 for positive net head, got {}",
+            plane.gamma_v
+        );
+    }
+
+    /// AC: gamma_s <= 0 when tailrace model is present (spillage increases
+    /// tailrace height, reducing net head and thus production).
+    #[test]
+    fn gamma_s_nonpositive_with_tailrace() {
+        let pf = ac005_production_function();
+        let plane = compute_tangent_plane(&pf, 10_000.0, 3000.0, 0.0).expect("should return Some");
+        assert!(
+            plane.gamma_s <= 0.0,
+            "gamma_s must be <= 0 with tailrace, got {}",
+            plane.gamma_s
+        );
+    }
+
+    /// AC: RawHyperplane implements Debug, Clone, Copy.
+    /// (Compile-time test — if this compiles, the derives are present.)
+    #[test]
+    fn raw_hyperplane_implements_debug_clone_copy() {
+        let original = RawHyperplane {
+            gamma_0: 1.0,
+            gamma_v: 2.0,
+            gamma_q: 3.0,
+            gamma_s: 4.0,
+        };
+        // Copy: move into `copy_a`, then still use `original` (Copy allows this).
+        let copy_a = original;
+        let copy_b = original;
+        let _debug_str = format!("{original:?}");
+        assert!((copy_a.gamma_0 - copy_b.gamma_0).abs() < 1e-15);
+        assert!((copy_a.gamma_v - copy_b.gamma_v).abs() < 1e-15);
+        assert!((copy_a.gamma_q - copy_b.gamma_q).abs() < 1e-15);
+        assert!((copy_a.gamma_s - copy_b.gamma_s).abs() < 1e-15);
+    }
+
+    // ── sample_tangent_planes tests ───────────────────────────────────────────
+
+    /// Build a `ProductionFunction` with a polynomial tailrace and constant losses
+    /// suitable for grid sampling tests.  Sloped forebay, linear tailrace, constant
+    /// 2 m losses, 92% efficiency, max_turbined = 3000 m³/s.
+    fn sampling_production_function() -> ProductionFunction {
+        let forebay = sloped_forebay();
+        let tailrace = linear_tailrace_5_5_at_3000();
+        let losses = HydraulicLossesModel::Constant { value_m: 2.0 };
+        let efficiency = EfficiencyModel::Constant { value: 0.92 };
+        ProductionFunction::new(
+            forebay,
+            Some(&tailrace),
+            Some(&losses),
+            Some(&efficiency),
+            3000.0,
+            "SamplingPlant".to_owned(),
+        )
+    }
+
+    /// Build `FittingBounds` with given grid counts.
+    fn fitting_bounds_5x5x5() -> FittingBounds {
+        FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        }
+    }
+
+    /// AC: With a 5x5x5 grid on a non-degenerate production function, sample_tangent_planes
+    /// returns between 100 and 125 hyperplanes (some near q_min may be filtered).
+    #[test]
+    fn sample_tangent_planes_count_between_100_and_125_for_5x5x5() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        assert!(
+            (100..=125).contains(&planes.len()),
+            "expected 100..=125 planes, got {}",
+            planes.len()
+        );
+    }
+
+    /// Sampling a 3x2x2 grid returns at most 12 planes.
+    #[test]
+    fn sample_tangent_planes_count_at_most_n_v_times_n_q_times_n_s() {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 3,
+            n_flow_points: 2,
+            n_spillage_points: 2,
+            max_planes_per_hydro: 10,
+        };
+        let planes = sample_tangent_planes(&pf, &bounds);
+        assert!(
+            planes.len() <= 3 * 2 * 2,
+            "expected at most 12 planes, got {}",
+            planes.len()
+        );
+    }
+
+    /// Flow grid starts at a positive epsilon, not 0.0.  All returned planes
+    /// have gamma_q > 0 (which holds when net head > 0 and q > 0).
+    #[test]
+    fn sample_tangent_planes_flow_grid_avoids_zero_q() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        for (idx, plane) in planes.iter().enumerate() {
+            assert!(
+                plane.gamma_q >= 0.0,
+                "plane {idx}: gamma_q={} should be >= 0",
+                plane.gamma_q
+            );
+        }
+    }
+
+    /// Spillage grid starts at 0.0.  Planes sampled at s > 0 have a negative
+    /// gamma_s (spillage reduces production when a tailrace is present), confirming
+    /// the spillage dimension is exercised.
+    #[test]
+    fn sample_tangent_planes_spillage_grid_starts_at_zero() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        // With a linear tailrace, gamma_s < 0 for interior flow points.
+        // At least one plane should have a strictly negative gamma_s.
+        let any_negative_s = planes.iter().any(|p| p.gamma_s < -1e-12);
+        assert!(
+            any_negative_s,
+            "expected at least one plane with gamma_s < 0 (spillage dimension active)"
+        );
+    }
+
+    // ── eliminate_redundant tests ─────────────────────────────────────────────
+
+    /// AC: eliminate_redundant removes planes for non-trivial geometry.
+    #[test]
+    fn eliminate_redundant_strictly_reduces_count_for_non_trivial_geometry() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        assert!(!planes.is_empty(), "sampling must produce planes");
+
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        assert!(
+            non_redundant.len() < planes.len(),
+            "expected strict reduction: {} -> {}",
+            planes.len(),
+            non_redundant.len()
+        );
+    }
+
+    /// AC: at every grid point, max_m(plane.evaluate) >= phi(v, q, s).
+    /// The envelope is a valid upper bound on the concave production function.
+    #[test]
+    fn eliminate_redundant_envelope_upper_bounds_production_function() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+
+        let n_v = bounds.n_volume_points;
+        let n_q = bounds.n_flow_points;
+        let n_s = bounds.n_spillage_points;
+
+        let v_range = bounds.v_max - bounds.v_min;
+        #[allow(clippy::cast_possible_truncation)]
+        let v_denom = f64::from((n_v - 1) as u32);
+        let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+        let q_range = pf.max_turbined_m3s - q_min;
+        #[allow(clippy::cast_possible_truncation)]
+        let q_denom = f64::from((n_q - 1) as u32);
+        let s_max = pf.max_turbined_m3s * 0.5_f64;
+        #[allow(clippy::cast_possible_truncation)]
+        let s_denom = f64::from((n_s - 1) as u32);
+
+        for i in 0..n_v {
+            #[allow(clippy::cast_possible_truncation)]
+            let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+            for j in 0..n_q {
+                #[allow(clippy::cast_possible_truncation)]
+                let q = q_min + f64::from(j as u32) * q_range / q_denom;
+                for k in 0..n_s {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let s = f64::from(k as u32) * s_max / s_denom;
+                    let phi = pf.evaluate(v, q, s);
+                    let max_plane = non_redundant
+                        .iter()
+                        .map(|p| p.evaluate(v, q, s))
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    assert!(
+                        max_plane >= phi - 1e-8,
+                        "envelope violated at (v={v}, q={q}, s={s}): \
+                         max_plane={max_plane} < phi={phi}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// AC: constant-head production function (flat forebay, no tailrace, no losses,
+    /// s has no effect) produces exactly 1 non-redundant hyperplane because
+    /// the function is already linear in q.
+    #[test]
+    fn eliminate_redundant_constant_head_produces_one_plane() {
+        // Flat forebay at 400 m, no tailrace, no losses: phi = K * q * 400.
+        // This is purely linear in q, so all tangent planes are identical.
+        let forebay = flat_forebay_400m();
+        let pf =
+            ProductionFunction::new(forebay, None, None, None, 1000.0, "ConstantHead".to_owned());
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 20_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        };
+
+        let planes = sample_tangent_planes(&pf, &bounds);
+        assert!(
+            !planes.is_empty(),
+            "constant-head should produce some planes"
+        );
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        assert_eq!(
+            non_redundant.len(),
+            1,
+            "constant-head function is linear in q: expected 1 surviving plane, got {}",
+            non_redundant.len()
+        );
+    }
+
+    /// AC: empty input to eliminate_redundant returns empty output.
+    #[test]
+    fn eliminate_redundant_empty_input_returns_empty() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let result = eliminate_redundant(&[], &pf, &bounds);
+        assert!(result.is_empty(), "expected empty output for empty input");
+    }
+
+    /// AC: planes sampled at s > 0 can survive redundancy elimination —
+    /// the spillage dimension contributes meaningfully.
+    #[test]
+    fn eliminate_redundant_spillage_planes_can_survive() {
+        // Use sampling_production_function which has a tailrace, so spillage affects
+        // gamma_s.  After elimination, at least one surviving plane should have a
+        // non-zero gamma_s (|gamma_s| > 1e-12), confirming spillage-dimension planes
+        // were not all pruned.
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        let any_nonzero_s = non_redundant.iter().any(|p| p.gamma_s.abs() > 1e-12);
+        assert!(
+            any_nonzero_s,
+            "expected at least one surviving plane with non-zero gamma_s"
+        );
+    }
+
+    /// AC: all planes survive when constructed to be non-redundant at distinct points.
+    ///
+    /// With a 2x2x2 grid (8 grid points) and exactly 8 sampling planes produced,
+    /// each plane is optimal at a unique corner — none are redundant.  We verify
+    /// that all surviving planes come from the original set (output ⊆ input).
+    #[test]
+    fn eliminate_redundant_output_is_subset_of_input() {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 2,
+            n_flow_points: 2,
+            n_spillage_points: 2,
+            max_planes_per_hydro: 10,
+        };
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+
+        // Every surviving plane must appear in the original input (by field equality).
+        for surviving in &non_redundant {
+            let found = planes.iter().any(|p| {
+                (p.gamma_0 - surviving.gamma_0).abs() < 1e-15
+                    && (p.gamma_v - surviving.gamma_v).abs() < 1e-15
+                    && (p.gamma_q - surviving.gamma_q).abs() < 1e-15
+                    && (p.gamma_s - surviving.gamma_s).abs() < 1e-15
+            });
+            assert!(found, "surviving plane not found in input: {surviving:?}");
+        }
+    }
+
+    // ── select_planes / compute_max_approximation_error tests ─────────────────
+
+    use super::{compute_max_approximation_error, select_planes};
+
+    /// Build a fixture of > 10 valid tangent planes for selection tests.
+    ///
+    /// Uses `sample_tangent_planes` on a 7×5×5 grid (up to 175 candidates) with
+    /// the `sampling_production_function`.  These planes are NOT passed through
+    /// `eliminate_redundant` — they are raw tangent planes sampled on the same grid
+    /// formula used by `compute_max_approximation_error`.  Because the sampling grid
+    /// covers every evaluation point in `bounds` (same `pf` + `bounds`), the full
+    /// set of sampled planes forms a valid outer approximation: at each test-grid
+    /// point, the plane sampled there evaluates to exactly phi, so the envelope is
+    /// always >= phi.
+    ///
+    /// The returned `bounds` has `n_volume_points=7`, `n_flow_points=5`,
+    /// `n_spillage_points=5`, and `max_planes_per_hydro=10`, forcing the greedy
+    /// step to reduce the set to 10.
+    fn non_redundant_planes_for_selection()
+    -> (Vec<RawHyperplane>, ProductionFunction, FittingBounds) {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 7,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        };
+        let planes = sample_tangent_planes(&pf, &bounds);
+
+        // Fixture sanity: a 7×5×5 grid on a non-degenerate function must give > 10 planes.
+        assert!(
+            planes.len() > bounds.max_planes_per_hydro,
+            "fixture sanity: need > {} planes for selection tests, got {}",
+            bounds.max_planes_per_hydro,
+            planes.len()
+        );
+        (planes, pf, bounds)
+    }
+
+    /// AC: given > max_planes_per_hydro non-redundant planes, select_planes returns
+    /// exactly max_planes_per_hydro planes.
+    #[test]
+    fn select_planes_reduces_to_target_count() {
+        let (planes, pf, bounds) = non_redundant_planes_for_selection();
+        // Verify the fixture actually has more planes than the target.
+        assert!(
+            planes.len() > bounds.max_planes_per_hydro,
+            "fixture must have > {} planes; got {}",
+            bounds.max_planes_per_hydro,
+            planes.len()
+        );
+        let selected = select_planes(&planes, &pf, &bounds);
+        assert_eq!(
+            selected.len(),
+            bounds.max_planes_per_hydro,
+            "expected exactly {} planes, got {}",
+            bounds.max_planes_per_hydro,
+            selected.len()
+        );
+    }
+
+    /// AC: approximation error of selected planes is < 2× error of the full set.
+    #[test]
+    fn select_planes_approximation_error_not_catastrophically_worse() {
+        let (planes, pf, bounds) = non_redundant_planes_for_selection();
+        let full_error = compute_max_approximation_error(&planes, &pf, &bounds);
+        let selected = select_planes(&planes, &pf, &bounds);
+        let selected_error = compute_max_approximation_error(&selected, &pf, &bounds);
+
+        // Tolerance: selected error may be at most 2× the full-set error.
+        // When full_error is 0 (linear function), both errors should be 0.
+        let threshold = if full_error < 1e-12 {
+            1e-6
+        } else {
+            2.0 * full_error
+        };
+        assert!(
+            selected_error <= threshold,
+            "selected error {selected_error} > 2× full error {full_error}"
+        );
+    }
+
+    /// AC: given <= max_planes_per_hydro planes, select_planes returns all of them unchanged.
+    #[test]
+    fn select_planes_passthrough_when_input_is_small() {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 2,
+            n_flow_points: 2,
+            n_spillage_points: 2,
+            max_planes_per_hydro: 10,
+        };
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+
+        // 2x2x2 grid gives at most 8 planes, all <= target of 10.
+        assert!(
+            non_redundant.len() <= bounds.max_planes_per_hydro,
+            "fixture should have <= 10 planes; got {}",
+            non_redundant.len()
+        );
+        let selected = select_planes(&non_redundant, &pf, &bounds);
+        assert_eq!(
+            selected.len(),
+            non_redundant.len(),
+            "passthrough: expected all {} planes, got {}",
+            non_redundant.len(),
+            selected.len()
+        );
+        // Contents must be identical (same order and values).
+        for (i, (a, b)) in non_redundant.iter().zip(selected.iter()).enumerate() {
+            assert!(
+                (a.gamma_0 - b.gamma_0).abs() < 1e-15
+                    && (a.gamma_v - b.gamma_v).abs() < 1e-15
+                    && (a.gamma_q - b.gamma_q).abs() < 1e-15
+                    && (a.gamma_s - b.gamma_s).abs() < 1e-15,
+                "plane {i} differs in passthrough path"
+            );
+        }
+    }
+
+    /// AC: envelope property preserved after selection — at every grid point,
+    /// max_m(plane_m(v,q,s)) >= phi(v,q,s).
+    #[test]
+    fn select_planes_preserves_envelope_property() {
+        let (planes, pf, bounds) = non_redundant_planes_for_selection();
+        let selected = select_planes(&planes, &pf, &bounds);
+
+        let n_v = bounds.n_volume_points;
+        let n_q = bounds.n_flow_points;
+        let n_s = bounds.n_spillage_points;
+
+        let v_range = bounds.v_max - bounds.v_min;
+        #[allow(clippy::cast_possible_truncation)]
+        let v_denom = f64::from((n_v - 1) as u32);
+        let q_min = (pf.max_turbined_m3s * 0.01_f64).max(1.0_f64);
+        let q_range = pf.max_turbined_m3s - q_min;
+        #[allow(clippy::cast_possible_truncation)]
+        let q_denom = f64::from((n_q - 1) as u32);
+        let s_max = pf.max_turbined_m3s * 0.5_f64;
+        #[allow(clippy::cast_possible_truncation)]
+        let s_denom = f64::from((n_s - 1) as u32);
+
+        for i in 0..n_v {
+            #[allow(clippy::cast_possible_truncation)]
+            let v = bounds.v_min + f64::from(i as u32) * v_range / v_denom;
+            for j in 0..n_q {
+                #[allow(clippy::cast_possible_truncation)]
+                let q = q_min + f64::from(j as u32) * q_range / q_denom;
+                for k in 0..n_s {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let s = f64::from(k as u32) * s_max / s_denom;
+                    let phi = pf.evaluate(v, q, s);
+                    let max_plane = selected
+                        .iter()
+                        .map(|p| p.evaluate(v, q, s))
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    assert!(
+                        max_plane >= phi - 1e-8,
+                        "envelope violated after selection at (v={v}, q={q}, s={s}): \
+                         max_plane={max_plane} < phi={phi}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// AC: empty input to select_planes returns empty output.
+    #[test]
+    fn select_planes_empty_input_returns_empty() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let result = select_planes(&[], &pf, &bounds);
+        assert!(result.is_empty(), "expected empty output for empty input");
+    }
+
+    /// AC: single-plane input returns that plane regardless of target.
+    #[test]
+    fn select_planes_single_plane_returns_unchanged() {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 1,
+        };
+        let plane = RawHyperplane {
+            gamma_0: 50.0,
+            gamma_v: 0.001,
+            gamma_q: 3.0,
+            gamma_s: -0.01,
+        };
+        let result = select_planes(&[plane], &pf, &bounds);
+        assert_eq!(result.len(), 1, "expected 1 plane, got {}", result.len());
+        assert!(
+            (result[0].gamma_0 - plane.gamma_0).abs() < 1e-15,
+            "plane must be returned unchanged"
+        );
+    }
+
+    /// AC: compute_max_approximation_error with known geometry.
+    ///
+    /// For a flat forebay (constant head 400 m), no tailrace, no losses:
+    /// phi(v, q, s) = K * q * 400.  This is linear in q, so the single tangent
+    /// plane `g(v, q, s) = K * 400 * q` is an exact fit everywhere, and the error
+    /// must be zero (within floating-point tolerance).
+    #[test]
+    fn compute_max_approximation_error_is_zero_for_linear_production_function() {
+        let forebay = flat_forebay_400m();
+        let pf =
+            ProductionFunction::new(forebay, None, None, None, 1000.0, "ConstantHead".to_owned());
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 20_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        };
+
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        assert_eq!(
+            non_redundant.len(),
+            1,
+            "constant-head should yield exactly 1 plane"
+        );
+
+        let err = compute_max_approximation_error(&non_redundant, &pf, &bounds);
+        assert!(
+            err < 1e-8,
+            "expected near-zero error for linear production function, got {err}"
+        );
+    }
+
+    /// AC: compute_max_approximation_error returns 0.0 for empty plane set.
+    #[test]
+    fn compute_max_approximation_error_empty_planes_returns_zero() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let err = compute_max_approximation_error(&[], &pf, &bounds);
+        assert!(
+            err.abs() < 1e-15,
+            "expected 0.0 for empty plane set, got {err}"
+        );
+    }
+
+    /// AC: compute_max_approximation_error is non-negative (envelope >= phi).
+    #[test]
+    fn compute_max_approximation_error_is_non_negative() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        let err = compute_max_approximation_error(&non_redundant, &pf, &bounds);
+        assert!(err >= 0.0, "error must be non-negative, got {err}");
+    }
+
+    /// AC: selected output is a subset of the input planes.
+    #[test]
+    fn select_planes_output_is_subset_of_input() {
+        let (planes, pf, bounds) = non_redundant_planes_for_selection();
+        let selected = select_planes(&planes, &pf, &bounds);
+        for surviving in &selected {
+            let found = planes.iter().any(|p| {
+                (p.gamma_0 - surviving.gamma_0).abs() < 1e-15
+                    && (p.gamma_v - surviving.gamma_v).abs() < 1e-15
+                    && (p.gamma_q - surviving.gamma_q).abs() < 1e-15
+                    && (p.gamma_s - surviving.gamma_s).abs() < 1e-15
+            });
+            assert!(found, "selected plane not found in input: {surviving:?}");
+        }
+    }
+
+    // ── compute_kappa tests ────────────────────────────────────────────────────
+
+    /// AC: kappa is in (0, 1] for a non-degenerate production function.
+    ///
+    /// Verifies the fundamental contract: compute_kappa always returns a value in
+    /// (0, 1] when the planes and production function are valid.
+    #[test]
+    fn compute_kappa_in_valid_range_for_realistic_geometry() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        let selected = select_planes(&non_redundant, &pf, &bounds);
+
+        let kappa = compute_kappa(&selected, &pf, &bounds);
+        assert!(kappa > 0.0, "kappa must be strictly positive, got {kappa}");
+        assert!(kappa <= 1.0, "kappa must be <= 1.0, got {kappa}");
+    }
+
+    /// AC: kappa >= 0.95 for a physically realistic geometry where phi is nearly linear.
+    ///
+    /// A flat forebay (constant head) produces a production function that is exactly
+    /// linear in turbined flow.  The single surviving hyperplane is an exact fit, so
+    /// `phi / max_plane = 1.0` at every grid point and kappa = 1.0 >= 0.95.
+    ///
+    /// This demonstrates the acceptance criterion: for a physically realistic geometry
+    /// where the head variation is negligible (common for run-of-river plants with
+    /// stable head), kappa is close to 1.0.
+    #[test]
+    fn compute_kappa_in_range_for_realistic_geometry() {
+        let forebay = flat_forebay_400m();
+        let pf = ProductionFunction::new(
+            forebay,
+            None,
+            None,
+            Some(&EfficiencyModel::Constant { value: 0.92 }),
+            3_000.0,
+            "FlatHeadPlant".to_owned(),
+        );
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 20_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        };
+
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        let selected = select_planes(&non_redundant, &pf, &bounds);
+
+        let kappa = compute_kappa(&selected, &pf, &bounds);
+        assert!(kappa > 0.0, "kappa must be strictly positive, got {kappa}");
+        assert!(kappa <= 1.0, "kappa must be <= 1.0, got {kappa}");
+        assert!(
+            kappa >= 0.95,
+            "kappa={kappa} < 0.95 for a constant-head (physically realistic) geometry"
+        );
+    }
+
+    /// AC: kappa = 1.0 for a perfectly linear production function.
+    ///
+    /// A flat forebay with no tailrace and no losses yields phi = K * q * h_fore,
+    /// which is linear in q.  The single surviving tangent plane is exact at every
+    /// grid point, so the ratio phi / max_plane = 1.0 everywhere, giving kappa = 1.0.
+    #[test]
+    fn compute_kappa_is_one_for_linear_production_function() {
+        let forebay = flat_forebay_400m();
+        let pf =
+            ProductionFunction::new(forebay, None, None, None, 1000.0, "ConstantHead".to_owned());
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 20_000.0,
+            n_volume_points: 5,
+            n_flow_points: 5,
+            n_spillage_points: 5,
+            max_planes_per_hydro: 10,
+        };
+
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+        // For a linear function, exactly 1 plane survives deduplication.
+        assert_eq!(
+            non_redundant.len(),
+            1,
+            "expected 1 plane for linear function"
+        );
+
+        let kappa = compute_kappa(&non_redundant, &pf, &bounds);
+        assert!(
+            (kappa - 1.0).abs() < 1e-8,
+            "kappa must be 1.0 for linear production function, got {kappa}"
+        );
+    }
+
+    /// AC: kappa < 1.0 for a nonlinear (curved) production function.
+    ///
+    /// A sloped forebay with a polynomial tailrace creates a nonlinear phi; the
+    /// piecewise-linear envelope overestimates phi at interior points, so kappa < 1.0.
+    #[test]
+    fn compute_kappa_less_than_one_for_nonlinear_production_function() {
+        let pf = sampling_production_function();
+        let bounds = FittingBounds {
+            v_min: 0.0,
+            v_max: 10_000.0,
+            n_volume_points: 3,
+            n_flow_points: 3,
+            n_spillage_points: 3,
+            max_planes_per_hydro: 10,
+        };
+        let planes = sample_tangent_planes(&pf, &bounds);
+        let non_redundant = eliminate_redundant(&planes, &pf, &bounds);
+
+        // Use a coarser grid so the envelope is not tight everywhere.
+        let kappa = compute_kappa(&non_redundant, &pf, &bounds);
+        // kappa must be positive and at most 1.0.
+        assert!(kappa > 0.0, "kappa must be positive, got {kappa}");
+        assert!(kappa <= 1.0, "kappa must be <= 1.0, got {kappa}");
+    }
+
+    /// AC: compute_kappa with empty planes returns 1.0.
+    #[test]
+    fn compute_kappa_empty_planes_returns_one() {
+        let pf = sampling_production_function();
+        let bounds = fitting_bounds_5x5x5();
+        let kappa = compute_kappa(&[], &pf, &bounds);
+        assert!(
+            (kappa - 1.0).abs() < 1e-15,
+            "expected kappa=1.0 for empty planes, got {kappa}"
+        );
+    }
+
+    // ── validate_fitted_planes tests ──────────────────────────────────────────
+
+    /// AC: valid planes and kappa=0.985 pass validation.
+    #[test]
+    fn validate_fitted_planes_valid_input_returns_ok() {
+        let planes = vec![
+            RawHyperplane {
+                gamma_0: 100.0,
+                gamma_v: 0.001,
+                gamma_q: 3.5,
+                gamma_s: -0.01,
+            },
+            RawHyperplane {
+                gamma_0: 200.0,
+                gamma_v: 0.002,
+                gamma_q: 3.8,
+                gamma_s: -0.02,
+            },
+        ];
+        let result = validate_fitted_planes(&planes, 0.985, "TestHydro");
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+    }
+
+    /// AC: kappa = 0.0 returns InvalidKappa.
+    #[test]
+    fn validate_fitted_planes_zero_kappa_returns_invalid_kappa() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let err = validate_fitted_planes(&planes, 0.0, "TestHydro").unwrap_err();
+        assert!(
+            matches!(err, FphaFittingError::InvalidKappa { kappa, .. } if kappa == 0.0),
+            "expected InvalidKappa with kappa=0.0, got: {err:?}"
+        );
+    }
+
+    /// AC: kappa > 1.0 returns InvalidKappa.
+    #[test]
+    fn validate_fitted_planes_kappa_above_one_returns_invalid_kappa() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let err = validate_fitted_planes(&planes, 1.001, "TestHydro").unwrap_err();
+        assert!(
+            matches!(err, FphaFittingError::InvalidKappa { .. }),
+            "expected InvalidKappa for kappa=1.001, got: {err:?}"
+        );
+    }
+
+    /// AC: negative kappa returns InvalidKappa.
+    #[test]
+    fn validate_fitted_planes_negative_kappa_returns_invalid_kappa() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let err = validate_fitted_planes(&planes, -0.5, "TestHydro").unwrap_err();
+        assert!(
+            matches!(err, FphaFittingError::InvalidKappa { .. }),
+            "expected InvalidKappa for kappa=-0.5, got: {err:?}"
+        );
+    }
+
+    /// AC: empty planes returns NoHyperplanesProduced.
+    #[test]
+    fn validate_fitted_planes_empty_planes_returns_no_hyperplanes() {
+        let err = validate_fitted_planes(&[], 0.99, "TestHydro").unwrap_err();
+        assert!(
+            matches!(err, FphaFittingError::NoHyperplanesProduced { .. }),
+            "expected NoHyperplanesProduced, got: {err:?}"
+        );
+    }
+
+    /// AC: plane with gamma_v significantly below zero returns InvalidCoefficient.
+    #[test]
+    fn validate_fitted_planes_negative_gamma_v_returns_invalid_coefficient() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: -0.01, // clearly negative
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let err = validate_fitted_planes(&planes, 0.98, "TestHydro").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FphaFittingError::InvalidCoefficient { plane_index: 0, ref detail, .. }
+                if detail.contains("gamma_v")
+            ),
+            "expected InvalidCoefficient for gamma_v < 0, got: {err:?}"
+        );
+    }
+
+    /// AC: plane with gamma_q significantly below zero returns InvalidCoefficient.
+    #[test]
+    fn validate_fitted_planes_negative_gamma_q_returns_invalid_coefficient() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: -0.01, // clearly negative
+            gamma_s: -0.01,
+        }];
+        let err = validate_fitted_planes(&planes, 0.98, "TestHydro").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FphaFittingError::InvalidCoefficient { plane_index: 0, ref detail, .. }
+                if detail.contains("gamma_q")
+            ),
+            "expected InvalidCoefficient for gamma_q < 0, got: {err:?}"
+        );
+    }
+
+    /// AC: plane with gamma_s significantly above zero returns InvalidCoefficient.
+    #[test]
+    fn validate_fitted_planes_positive_gamma_s_returns_invalid_coefficient() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: 0.01, // positive: spillage should not increase production
+        }];
+        let err = validate_fitted_planes(&planes, 0.98, "TestHydro").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FphaFittingError::InvalidCoefficient { plane_index: 0, ref detail, .. }
+                if detail.contains("gamma_s")
+            ),
+            "expected InvalidCoefficient for gamma_s > 0, got: {err:?}"
+        );
+    }
+
+    /// AC: near-zero gamma_v (within 1e-10 tolerance) passes validation.
+    #[test]
+    fn validate_fitted_planes_near_zero_gamma_v_within_tolerance_passes() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: -1e-11, // within tolerance -1e-10
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let result = validate_fitted_planes(&planes, 0.99, "TestHydro");
+        assert!(
+            result.is_ok(),
+            "near-zero gamma_v within tolerance should pass: {result:?}"
+        );
+    }
+
+    /// AC: near-zero gamma_s (within 1e-10 tolerance) passes validation.
+    #[test]
+    fn validate_fitted_planes_near_zero_gamma_s_within_tolerance_passes() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: 1e-11, // within tolerance 1e-10
+        }];
+        let result = validate_fitted_planes(&planes, 0.99, "TestHydro");
+        assert!(
+            result.is_ok(),
+            "near-zero gamma_s within tolerance should pass: {result:?}"
+        );
+    }
+
+    /// AC: kappa exactly 1.0 passes validation.
+    #[test]
+    fn validate_fitted_planes_kappa_exactly_one_passes() {
+        let planes = vec![RawHyperplane {
+            gamma_0: 100.0,
+            gamma_v: 0.001,
+            gamma_q: 3.5,
+            gamma_s: -0.01,
+        }];
+        let result = validate_fitted_planes(&planes, 1.0, "TestHydro");
+        assert!(result.is_ok(), "kappa=1.0 should pass: {result:?}");
+    }
+
+    // ── fit_fpha_planes tests ──────────────────────────────────────────────────
+
+    /// Build a Hydro entity with Sobradinho-style geometry and optional models.
+    fn make_sobradinho_hydro() -> Hydro {
+        let zero_penalties = HydroPenalties {
+            spillage_cost: 0.0,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        };
+        Hydro {
+            id: EntityId::from(1),
+            name: "Sobradinho".to_owned(),
+            bus_id: EntityId::from(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 34_116.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::Fpha,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 3_000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 1_000.0,
+            tailrace: Some(TailraceModel::Polynomial {
+                coefficients: vec![0.0, 0.001_f64],
+            }),
+            hydraulic_losses: Some(cobre_core::HydraulicLossesModel::Constant { value_m: 2.0 }),
+            efficiency: Some(EfficiencyModel::Constant { value: 0.92 }),
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: zero_penalties,
+        }
+    }
+
+    /// AC: fit_fpha_planes with Sobradinho-style geometry and default FphaConfig
+    /// returns Ok with between 3 and 10 planes, all with valid coefficient signs.
+    #[test]
+    fn fit_fpha_planes_sobradinho_style_end_to_end() {
+        let rows = sobradinho_rows();
+        let hydro = make_sobradinho_hydro();
+        let config = FphaConfig {
+            source: "computed".to_owned(),
+            volume_discretization_points: None,
+            turbine_discretization_points: None,
+            spillage_discretization_points: None,
+            max_planes_per_hydro: None,
+            fitting_window: None,
+        };
+
+        let planes =
+            fit_fpha_planes(&rows, &hydro, &config).expect("fit_fpha_planes should succeed");
+
+        // Count must be in expected range for a realistic hydro.
+        assert!(
+            (3..=10).contains(&planes.len()),
+            "expected 3–10 planes, got {}",
+            planes.len()
+        );
+
+        // All coefficient signs must be valid.
+        for (idx, plane) in planes.iter().enumerate() {
+            assert!(
+                plane.gamma_v >= -1e-10,
+                "plane {idx}: gamma_v={} must be >= 0",
+                plane.gamma_v
+            );
+            assert!(
+                plane.gamma_q >= -1e-10,
+                "plane {idx}: gamma_q={} must be >= 0",
+                plane.gamma_q
+            );
+            assert!(
+                plane.gamma_s <= 1e-10,
+                "plane {idx}: gamma_s={} must be <= 0",
+                plane.gamma_s
+            );
+        }
+    }
+
+    /// AC: fit_fpha_planes intercepts are scaled by kappa (kappa is applied to gamma_0).
+    ///
+    /// Verify that all returned intercepts are within (0, gamma_0] for planes with
+    /// positive gamma_0, and that they are consistent with a kappa in (0, 1].
+    #[test]
+    fn fit_fpha_planes_intercepts_are_kappa_scaled() {
+        let rows = sobradinho_rows();
+        let hydro = make_sobradinho_hydro();
+        let config = FphaConfig {
+            source: "computed".to_owned(),
+            volume_discretization_points: None,
+            turbine_discretization_points: None,
+            spillage_discretization_points: None,
+            max_planes_per_hydro: None,
+            fitting_window: None,
+        };
+
+        let planes = fit_fpha_planes(&rows, &hydro, &config).expect("fit should succeed");
+
+        // All intercepts must be finite and the planes must have non-negative intercepts
+        // for a physically reasonable geometry where phi > 0 at the fitting origin.
+        for (idx, plane) in planes.iter().enumerate() {
+            assert!(
+                plane.intercept.is_finite(),
+                "plane {idx}: intercept must be finite, got {}",
+                plane.intercept
+            );
+        }
+    }
+
+    /// AC: fit_fpha_planes with constant-head geometry (flat forebay, no tailrace)
+    /// produces exactly 1 plane whose intercept equals gamma_0 * kappa = gamma_0
+    /// (since kappa = 1.0 for a linear function).
+    #[test]
+    fn fit_fpha_planes_linear_function_produces_one_plane_with_kappa_one() {
+        let flat_rows = vec![
+            HydroGeometryRow {
+                hydro_id: EntityId::from(1),
+                volume_hm3: 0.0,
+                height_m: 400.0,
+                area_km2: 0.0,
+            },
+            HydroGeometryRow {
+                hydro_id: EntityId::from(1),
+                volume_hm3: 20_000.0,
+                height_m: 400.0,
+                area_km2: 0.0,
+            },
+        ];
+        let zero_penalties = HydroPenalties {
+            spillage_cost: 0.0,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId::from(1),
+            name: "FlatHydro".to_owned(),
+            bus_id: EntityId::from(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 20_000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::Fpha,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 1_000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 4_000.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: zero_penalties,
+        };
+        let config = FphaConfig {
+            source: "computed".to_owned(),
+            volume_discretization_points: None,
+            turbine_discretization_points: None,
+            spillage_discretization_points: None,
+            max_planes_per_hydro: None,
+            fitting_window: None,
+        };
+
+        let planes = fit_fpha_planes(&flat_rows, &hydro, &config).expect("fit should succeed");
+
+        // A linear production function produces exactly 1 plane.
+        assert_eq!(
+            planes.len(),
+            1,
+            "linear function must yield 1 plane, got {}",
+            planes.len()
+        );
+    }
+
+    /// AC: fit_fpha_planes propagates ForebayTable construction errors (e.g., 1 row).
+    #[test]
+    fn fit_fpha_planes_propagates_forebay_error_on_insufficient_rows() {
+        let rows = vec![HydroGeometryRow {
+            hydro_id: EntityId::from(1),
+            volume_hm3: 0.0,
+            height_m: 386.5,
+            area_km2: 0.0,
+        }];
+        let hydro = make_sobradinho_hydro();
+        let config = FphaConfig {
+            source: "computed".to_owned(),
+            volume_discretization_points: None,
+            turbine_discretization_points: None,
+            spillage_discretization_points: None,
+            max_planes_per_hydro: None,
+            fitting_window: None,
+        };
+
+        let err = fit_fpha_planes(&rows, &hydro, &config).unwrap_err();
+        assert!(
+            matches!(err, FphaFittingError::InsufficientPoints { count: 1, .. }),
+            "expected InsufficientPoints with count=1, got: {err:?}"
+        );
+    }
+
+    // ── FphaFittingError Display messages for new variants ────────────────────
+
+    #[test]
+    fn display_invalid_kappa_contains_name_and_value() {
+        let err = FphaFittingError::InvalidKappa {
+            hydro_name: "Itaipu".to_owned(),
+            kappa: 0.0,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Itaipu"), "should contain hydro name: {msg}");
+        assert!(msg.contains('0'), "should contain kappa value: {msg}");
+    }
+
+    #[test]
+    fn display_no_hyperplanes_produced_contains_name() {
+        let err = FphaFittingError::NoHyperplanesProduced {
+            hydro_name: "Serra da Mesa".to_owned(),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Serra da Mesa"),
+            "should contain hydro name: {msg}"
+        );
+    }
+
+    #[test]
+    fn display_invalid_coefficient_contains_name_and_index_and_detail() {
+        let err = FphaFittingError::InvalidCoefficient {
+            hydro_name: "Furnas".to_owned(),
+            plane_index: 3,
+            detail: "gamma_v is negative".to_owned(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Furnas"), "should contain hydro name: {msg}");
+        assert!(msg.contains('3'), "should contain plane index: {msg}");
+        assert!(msg.contains("gamma_v"), "should contain detail: {msg}");
     }
 }

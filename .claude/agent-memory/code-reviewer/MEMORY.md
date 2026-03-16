@@ -269,6 +269,22 @@ BroadcastOpeningTree MPI correctness, EstimationReport -> FittingReport conversi
 design, and EntityId Ord derive. Key confirmed finding: "backward-pass" in `cobre-io/src/scenarios/noise_openings.rs`
 line 1 violates the infrastructure genericity rule.
 
+### FPHA + evaporation plan key facts
+
+See [v014_fpha_evaporation_review.md](v014_fpha_evaporation_review.md) for full details.
+Critical bug: `setup.indexer()` is built with empty FPHA/evap indices, so simulation
+extraction uses wrong (zero) `generation_mw` for FPHA hydros. MPI concern: non-root ranks
+re-run `prepare_hydro_models` independently (no broadcast); shared-filesystem assumption.
+
+### FPHA hyperplane fitting plan key facts (feat/fpha-fitting)
+
+See [project_fpha_fitting_phase.md](project_fpha_fitting_phase.md) for full details.
+Key design decisions: `validate_computed_prerequisites` intentionally requires all 3 optional models
+(tailrace, hydraulic_losses, efficiency) even though the math supports None for each.
+`select_planes` has an undocumented early-break that can return > max_planes_per_hydro planes when no
+valid removal exists — doc says "at most N" but implementation can exceed N. `eprintln!` for kappa < 0.95
+is intentional (no event system in preprocessing). Grid formula duplicated in 4 functions.
+
 ### Review workflow notes
 
 - Run `cargo clippy --package cobre-core` and `cargo test --package cobre-core` to baseline.

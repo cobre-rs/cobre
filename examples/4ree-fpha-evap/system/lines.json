@@ -1,0 +1,60 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json",
+  "lines": [
+    {
+      "id": 0,
+      "name": "SUDESTE_SUL",
+      "source_bus_id": 0,
+      "target_bus_id": 1,
+      "capacity": {
+        "direct_mw": 7500.0,
+        "reverse_mw": 5470.0
+      },
+      "exchange_cost": 0.1
+    },
+    {
+      "id": 1,
+      "name": "SUDESTE_NORDESTE",
+      "source_bus_id": 0,
+      "target_bus_id": 2,
+      "capacity": {
+        "direct_mw": 1000.0,
+        "reverse_mw": 600.0
+      },
+      "exchange_cost": 0.1
+    },
+    {
+      "id": 2,
+      "name": "SUDESTE_NOFICT1",
+      "source_bus_id": 0,
+      "target_bus_id": 4,
+      "capacity": {
+        "direct_mw": 4000.0,
+        "reverse_mw": 2940.0
+      },
+      "exchange_cost": 0.05
+    },
+    {
+      "id": 3,
+      "name": "NORDESTE_NOFICT1",
+      "source_bus_id": 2,
+      "target_bus_id": 4,
+      "capacity": {
+        "direct_mw": 3500.0,
+        "reverse_mw": 3300.0
+      },
+      "exchange_cost": 0.05
+    },
+    {
+      "id": 4,
+      "name": "NORTE_NOFICT1",
+      "source_bus_id": 3,
+      "target_bus_id": 4,
+      "capacity": {
+        "direct_mw": 10000.0,
+        "reverse_mw": 4407.0
+      },
+      "exchange_cost": 0.05
+    }
+  ]
+}

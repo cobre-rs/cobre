@@ -30,9 +30,9 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{write_results, ParquetWriterConfig};
 use cobre_sddp::{
-    build_stochastic_summary, prepare_stochastic, ArOrderSummary, EstimationReport,
-    FutureCostFunction, SimulationScenarioResult, StochasticSource, StochasticSummary, StudySetup,
-    DEFAULT_SEED,
+    build_hydro_model_summary, build_stochastic_summary, prepare_hydro_models, prepare_stochastic,
+    ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary,
+    SimulationScenarioResult, StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -47,6 +47,7 @@ struct RunSummary {
     output_dir: PathBuf,
     simulation: Option<SimSummary>,
     stochastic: Option<StochasticSummary>,
+    hydro_models: Option<HydroModelSummary>,
 }
 
 struct SimSummary {
@@ -314,8 +315,11 @@ fn run_inner(
     let system = result.system;
     let estimation_report = result.estimation_report;
 
-    let mut setup =
-        StudySetup::new(&system, &config, result.stochastic).map_err(|e| e.to_string())?;
+    let hydro_models_result = prepare_hydro_models(&system, case_dir)
+        .map_err(|e| format!("hydro model preprocessing error: {e}"))?;
+
+    let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
+        .map_err(|e| e.to_string())?;
 
     // Export stochastic artifacts when requested.
     if config.exports.stochastic {
@@ -366,6 +370,8 @@ fn run_inner(
         estimation_report.as_ref(),
         seed,
     );
+
+    let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
     if should_simulate {
         let io_capacity = setup.simulation_config().io_channel_capacity;
@@ -422,6 +428,7 @@ fn run_inner(
             output_dir,
             simulation: Some(sim_summary),
             stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
         })
     } else {
         write_results(&output_dir, &training_output, None, &system, &config)
@@ -436,6 +443,7 @@ fn run_inner(
             output_dir,
             simulation: None,
             stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
         })
     }
 }
@@ -460,6 +468,20 @@ fn ar_order_to_dict<'py>(
     dict.set_item("max_order", summary.max_order)?;
     dict.set_item("n_hydros", summary.n_hydros)?;
     dict.set_item("order_counts", summary.order_counts.clone())?;
+    Ok(dict)
+}
+
+/// Convert a [`HydroModelSummary`] to a Python dict.
+fn hydro_model_summary_to_dict<'py>(
+    py: Python<'py>,
+    summary: &HydroModelSummary,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("n_constant", summary.n_constant)?;
+    dict.set_item("n_fpha", summary.n_fpha)?;
+    dict.set_item("total_planes", summary.total_planes)?;
+    dict.set_item("n_evaporation", summary.n_evaporation)?;
+    dict.set_item("n_no_evaporation", summary.n_no_evaporation)?;
     Ok(dict)
 }
 
@@ -549,6 +571,13 @@ pub fn run(
                 dict.set_item("stochastic", stoch_dict)?;
             } else {
                 dict.set_item("stochastic", py.None())?;
+            }
+
+            if let Some(hydro) = &summary.hydro_models {
+                let hydro_dict = hydro_model_summary_to_dict(py, hydro)?;
+                dict.set_item("hydro_models", hydro_dict)?;
+            } else {
+                dict.set_item("hydro_models", py.None())?;
             }
 
             Ok(dict.into())

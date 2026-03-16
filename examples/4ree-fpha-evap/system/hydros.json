@@ -1,0 +1,117 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
+  "hydros": [
+    {
+      "id": 0,
+      "name": "1",
+      "bus_id": 0,
+      "downstream_id": null,
+      "reservoir": {
+        "min_storage_hm3": 0.0,
+        "max_storage_hm3": 204078.3
+      },
+      "outflow": {
+        "min_outflow_m3s": 0.0,
+        "max_outflow_m3s": null
+      },
+      "generation": {
+        "model": "fpha",
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 45578.9,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 45578.9
+      },
+      "evaporation": {
+        "coefficients_mm": [
+          150.0, 130.0, 120.0, 90.0, 60.0, 40.0, 30.0, 40.0, 70.0, 100.0, 130.0,
+          150.0
+        ],
+        "reference_volumes_hm3": [
+          140000, 150000, 160000, 170000, 170000, 150000, 130000, 110000,
+          100000, 100000, 110000, 125000
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "name": "2",
+      "bus_id": 1,
+      "downstream_id": null,
+      "reservoir": {
+        "min_storage_hm3": 0.0,
+        "max_storage_hm3": 19929.2
+      },
+      "outflow": {
+        "min_outflow_m3s": 0.0,
+        "max_outflow_m3s": null
+      },
+      "generation": {
+        "model": "fpha",
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 13967.0,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 13967.0
+      },
+      "evaporation": {
+        "coefficients_mm": [
+          140.0, 120.0, 110.0, 80.0, 55.0, 35.0, 25.0, 35.0, 65.0, 95.0, 120.0,
+          140.0
+        ],
+        "reference_volumes_hm3": [
+          14000, 15000, 16000, 17000, 17000, 15000, 12500, 10000, 9000, 9000,
+          10500, 12500
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "3",
+      "bus_id": 2,
+      "downstream_id": null,
+      "reservoir": {
+        "min_storage_hm3": 0.0,
+        "max_storage_hm3": 51806.1
+      },
+      "outflow": {
+        "min_outflow_m3s": 0.0,
+        "max_outflow_m3s": null
+      },
+      "generation": {
+        "model": "constant_productivity",
+        "productivity_mw_per_m3s": 1.0,
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 9573.1,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 9573.1
+      },
+      "evaporation": {
+        "coefficients_mm": [
+          130.0, 110.0, 100.0, 75.0, 50.0, 30.0, 20.0, 30.0, 60.0, 90.0, 115.0,
+          135.0
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "4",
+      "bus_id": 3,
+      "downstream_id": null,
+      "reservoir": {
+        "min_storage_hm3": 0.0,
+        "max_storage_hm3": 15765.5
+      },
+      "outflow": {
+        "min_outflow_m3s": 0.0,
+        "max_outflow_m3s": null
+      },
+      "generation": {
+        "model": "constant_productivity",
+        "productivity_mw_per_m3s": 1.0,
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 9666.2,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 9666.2
+      }
+    }
+  ]
+}

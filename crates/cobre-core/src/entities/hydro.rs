@@ -215,6 +215,11 @@ pub struct Hydro {
     /// Monthly evaporation coefficients, one per calendar month \[mm/month\].
     /// Index 0 = January, index 11 = December. None = no evaporation modelled.
     pub evaporation_coefficients_mm: Option<[f64; 12]>,
+    /// Monthly reference storage volumes for evaporation linearization \[hm3\].
+    /// Index 0 = January, index 11 = December. When `Some`, each entry is the
+    /// reservoir volume at which the evaporation area-volume curve is linearized
+    /// for that month. None = use default midpoint `(min_storage + max_storage) / 2`.
+    pub evaporation_reference_volumes_hm3: Option<[f64; 12]>,
     /// Diversion channel configuration. None = no diversion channel.
     pub diversion: Option<DiversionChannel>,
     /// Reservoir filling configuration. None = no filling operation.
@@ -264,6 +269,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: penalties_all(0.0),
@@ -305,6 +311,7 @@ mod tests {
         assert!(hydro.hydraulic_losses.is_none());
         assert!(hydro.efficiency.is_none());
         assert_eq!(hydro.evaporation_coefficients_mm, None);
+        assert_eq!(hydro.evaporation_reference_volumes_hm3, None);
         assert!(hydro.diversion.is_none());
         assert!(hydro.filling.is_none());
     }
@@ -337,6 +344,10 @@ mod tests {
             evaporation_coefficients_mm: Some([
                 80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0,
             ]),
+            evaporation_reference_volumes_hm3: Some([
+                12_000.0, 11_500.0, 11_000.0, 10_500.0, 10_000.0, 9_500.0, 10_000.0, 10_500.0,
+                11_000.0, 11_500.0, 12_000.0, 12_500.0,
+            ]),
             diversion: Some(DiversionChannel {
                 downstream_id: EntityId::from(4),
                 max_flow_m3s: 200.0,
@@ -358,6 +369,11 @@ mod tests {
         assert!(hydro.evaporation_coefficients_mm.is_some());
         // The fixed-size array always has exactly 12 elements.
         assert_eq!(hydro.evaporation_coefficients_mm.map(|a| a.len()), Some(12));
+        assert!(hydro.evaporation_reference_volumes_hm3.is_some());
+        assert_eq!(
+            hydro.evaporation_reference_volumes_hm3.map(|a| a.len()),
+            Some(12)
+        );
         assert!(hydro.diversion.is_some());
         assert!(hydro.filling.is_some());
     }
@@ -495,6 +511,10 @@ mod tests {
             evaporation_coefficients_mm: Some([
                 80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0,
             ]),
+            evaporation_reference_volumes_hm3: Some([
+                12_000.0, 11_500.0, 11_000.0, 10_500.0, 10_000.0, 9_500.0, 10_000.0, 10_500.0,
+                11_000.0, 11_500.0, 12_000.0, 12_500.0,
+            ]),
             diversion: Some(DiversionChannel {
                 downstream_id: EntityId::from(4),
                 max_flow_m3s: 200.0,
@@ -520,5 +540,32 @@ mod tests {
         let json = serde_json::to_string(&hydro).unwrap();
         let deserialized: Hydro = serde_json::from_str(&json).unwrap();
         assert_eq!(hydro, deserialized);
+    }
+
+    #[test]
+    fn test_hydro_evaporation_reference_volumes() {
+        let volumes: [f64; 12] = [
+            12_000.0, 11_500.0, 11_000.0, 10_500.0, 10_000.0, 9_500.0, 10_000.0, 10_500.0,
+            11_000.0, 11_500.0, 12_000.0, 12_500.0,
+        ];
+        let hydro = Hydro {
+            evaporation_reference_volumes_hm3: Some(volumes),
+            ..minimal_hydro(HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 1.0,
+            })
+        };
+
+        assert_eq!(hydro.evaporation_reference_volumes_hm3, Some(volumes));
+        assert_eq!(
+            hydro.evaporation_reference_volumes_hm3.map(|a| a.len()),
+            Some(12)
+        );
+        // Spot-check seasonal values: January and June.
+        assert!(
+            (hydro.evaporation_reference_volumes_hm3.unwrap()[0] - 12_000.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (hydro.evaporation_reference_volumes_hm3.unwrap()[5] - 9_500.0).abs() < f64::EPSILON
+        );
     }
 }

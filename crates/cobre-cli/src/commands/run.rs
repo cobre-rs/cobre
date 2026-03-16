@@ -29,9 +29,10 @@ use cobre_io::output::{
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
 use cobre_sddp::{
-    EstimationReport, PrepareStochasticResult, SimulationScenarioResult, StudySetup,
-    build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
-    inflow_models_to_stats_rows, prepare_stochastic,
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, SimulationScenarioResult,
+    StudySetup, build_hydro_model_summary, build_stochastic_summary,
+    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    prepare_hydro_models, prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -90,7 +91,14 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
 ///
 /// The [`PrepareStochasticResult`] bundles the updated system, built stochastic
 /// context, and optional estimation report from the pre-setup pipeline.
-type LoadedCase = (PrepareStochasticResult, BroadcastConfig, cobre_io::Config);
+/// The [`PrepareHydroModelsResult`] bundles the resolved production and evaporation
+/// models for all hydro plants.
+type LoadedCase = (
+    PrepareStochasticResult,
+    PrepareHydroModelsResult,
+    BroadcastConfig,
+    cobre_io::Config,
+);
 
 /// Load the case directory and parse the config on rank 0.
 ///
@@ -122,7 +130,9 @@ fn load_case_and_config(
     let seed = bcast.seed;
     let prepared =
         prepare_stochastic(system, &args.case_dir, &config, seed).map_err(CliError::from)?;
-    Ok((prepared, bcast, config))
+    let hydro_models =
+        prepare_hydro_models(&prepared.system, &args.case_dir).map_err(CliError::from)?;
+    Ok((prepared, hydro_models, bcast, config))
 }
 
 /// Execute the `run` subcommand.
@@ -191,10 +201,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         root_stochastic,
         root_estimation_report,
         raw_bcast_tree,
+        root_hydro_models,
         load_err,
     ) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
-            Ok((prepared, bcast, config)) => {
+            Ok((prepared, hydro_models, bcast, config)) => {
                 // Extract the opening tree for broadcast to non-root ranks.
                 // If the stochastic context was built from a user-supplied tree,
                 // re-serialize it into BroadcastOpeningTree; otherwise broadcast None.
@@ -222,18 +233,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     Some(stochastic),
                     Some(estimation_report),
                     Some(bcast_tree),
+                    Some(hydro_models),
                     None,
                 )
             }
-            Err(e) => (None, None, None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None)
     };
     let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
     let system_result = broadcast_value(raw_system, &comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
+    let root_hydro_models: Option<PrepareHydroModelsResult> = root_hydro_models;
 
     // Broadcast the optional opening tree. Wrap in Option<BroadcastOpeningTree> so that
     // both the "no user tree" (None) and "user tree present" (Some) cases can be broadcast
@@ -268,6 +281,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         })?
     };
 
+    // Rank 0 uses the hydro models result already built by `prepare_hydro_models`.
+    // Non-root ranks reconstruct it independently from the system and case_dir.
+    // All ranks have access to the same shared filesystem, so independent loading
+    // produces identical results.
+    let hydro_models = if is_root {
+        root_hydro_models.ok_or_else(|| CliError::Internal {
+            message: "hydro models missing on rank 0 after successful load".to_string(),
+        })?
+    } else {
+        prepare_hydro_models(&system, &args.case_dir).map_err(|e| CliError::Internal {
+            message: format!("hydro model preprocessing error on non-root rank: {e}"),
+        })?
+    };
+
     // Construct StudySetup on all ranks from broadcast parameters.
     // Ownership of stochastic moves into setup; use setup.stochastic() for all
     // subsequent stochastic references.
@@ -288,6 +315,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         bcast_config.policy_path.clone(),
         bcast_config.inflow_method.clone(),
         cut_selection,
+        hydro_models,
     )
     .map_err(CliError::from)?;
 
@@ -297,6 +325,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let stochastic_summary =
             build_stochastic_summary(&system, setup.stochastic(), estimation, seed);
         crate::summary::print_stochastic_summary(&stderr, &stochastic_summary);
+        let hydro_summary = build_hydro_model_summary(setup.hydro_models(), &system);
+        crate::summary::print_hydro_model_summary(&stderr, &hydro_summary);
     }
 
     // Export stochastic preprocessing artifacts when requested (rank 0 only).

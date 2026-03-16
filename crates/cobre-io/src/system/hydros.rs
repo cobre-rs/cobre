@@ -291,6 +291,13 @@ pub(crate) struct RawEvaporation {
     /// Monthly evaporation coefficients [mm/month], one per calendar month.
     /// Index 0 = January, index 11 = December.
     coefficients_mm: Vec<f64>,
+    /// Monthly reservoir reference volumes [hm³] used as the linearization
+    /// reference point for evaporation, one per calendar month.
+    /// Index 0 = January, index 11 = December.
+    /// Absent = no reference volume override; the calling algorithm uses its
+    /// own default (e.g., mid-point of the storage range).
+    #[serde(default)]
+    reference_volumes_hm3: Option<Vec<f64>>,
 }
 
 /// Intermediate type for the `diversion` sub-object.
@@ -428,7 +435,13 @@ fn validate_raw_hydros(raw: &RawHydroFile, path: &Path) -> Result<(), LoadError>
         validate_outflow(&hydro.outflow, i, path)?;
         validate_generation(&hydro.generation, i, path)?;
         if let Some(evap) = &hydro.evaporation {
-            validate_evaporation(evap, i, path)?;
+            validate_evaporation(
+                evap,
+                i,
+                path,
+                hydro.reservoir.min_storage_hm3,
+                hydro.reservoir.max_storage_hm3,
+            )?;
         }
     }
     Ok(())
@@ -558,13 +571,18 @@ fn validate_generation(
     Ok(())
 }
 
-/// Validate evaporation coefficients array for hydro at `hydro_index`.
+/// Validate evaporation sub-object for hydro at `hydro_index`.
 ///
-/// Checks: the array must contain exactly 12 elements (one per calendar month).
+/// Checks:
+/// - `coefficients_mm` must contain exactly 12 elements (one per calendar month).
+/// - `reference_volumes_hm3`, when present, must contain exactly 12 elements,
+///   all finite, and all within `[min_storage_hm3, max_storage_hm3]`.
 fn validate_evaporation(
     evaporation: &RawEvaporation,
     hydro_index: usize,
     path: &Path,
+    min_storage_hm3: f64,
+    max_storage_hm3: f64,
 ) -> Result<(), LoadError> {
     let len = evaporation.coefficients_mm.len();
     if len != 12 {
@@ -576,6 +594,49 @@ fn validate_evaporation(
             ),
         });
     }
+
+    if let Some(ref_vols) = &evaporation.reference_volumes_hm3 {
+        let ref_len = ref_vols.len();
+        if ref_len != 12 {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: format!("hydros[{hydro_index}].evaporation.reference_volumes_hm3"),
+                message: format!(
+                    "evaporation reference_volumes_hm3 must have exactly 12 elements (one per calendar month), got {ref_len}"
+                ),
+            });
+        }
+        for (month, &vol) in ref_vols.iter().enumerate() {
+            if !vol.is_finite() {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("hydros[{hydro_index}].evaporation.reference_volumes_hm3"),
+                    message: format!(
+                        "evaporation reference_volumes_hm3[{month}] must be finite, got {vol}"
+                    ),
+                });
+            }
+            if vol < min_storage_hm3 {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("hydros[{hydro_index}].evaporation.reference_volumes_hm3"),
+                    message: format!(
+                        "evaporation reference_volumes_hm3[{month}] ({vol}) must be >= min_storage_hm3 ({min_storage_hm3})"
+                    ),
+                });
+            }
+            if vol > max_storage_hm3 {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("hydros[{hydro_index}].evaporation.reference_volumes_hm3"),
+                    message: format!(
+                        "evaporation reference_volumes_hm3[{month}] ({vol}) must be <= max_storage_hm3 ({max_storage_hm3})"
+                    ),
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -607,14 +668,25 @@ fn convert_hydros(raw: RawHydroFile, global: &GlobalPenaltyDefaults) -> Vec<Hydr
             // Convert optional efficiency model.
             let efficiency = raw_hydro.efficiency.map(convert_efficiency);
 
-            // Convert optional evaporation coefficients to [f64; 12].
-            let evaporation_coefficients_mm = raw_hydro.evaporation.map(|evap| {
-                let v = evap.coefficients_mm;
-                // SAFETY: validated to have exactly 12 elements by validate_evaporation.
-                // We use try_into() which succeeds because the length was validated.
-                v.try_into()
-                    .unwrap_or_else(|_| unreachable!("evaporation length validated to be 12"))
-            });
+            // Convert optional evaporation coefficients and reference volumes to [f64; 12].
+            let (evaporation_coefficients_mm, evaporation_reference_volumes_hm3) =
+                match raw_hydro.evaporation {
+                    None => (None, None),
+                    Some(evap) => {
+                        // SAFETY: validated to have exactly 12 elements by validate_evaporation.
+                        let coeffs: [f64; 12] =
+                            evap.coefficients_mm.try_into().unwrap_or_else(|_| {
+                                unreachable!("evaporation length validated to be 12")
+                            });
+                        let ref_vols: Option<[f64; 12]> = evap.reference_volumes_hm3.map(|v| {
+                            // SAFETY: validated to have exactly 12 elements by validate_evaporation.
+                            v.try_into().unwrap_or_else(|_| {
+                                unreachable!("reference_volumes_hm3 length validated to be 12")
+                            })
+                        });
+                        (Some(coeffs), ref_vols)
+                    }
+                };
 
             // Convert optional diversion channel.
             let diversion = raw_hydro.diversion.map(|d| DiversionChannel {
@@ -653,6 +725,7 @@ fn convert_hydros(raw: RawHydroFile, global: &GlobalPenaltyDefaults) -> Vec<Hydr
                 hydraulic_losses,
                 efficiency,
                 evaporation_coefficients_mm,
+                evaporation_reference_volumes_hm3,
                 diversion,
                 filling,
                 penalties,
@@ -1660,6 +1733,293 @@ mod tests {
             result.is_ok(),
             "min_storage == max_storage should be valid, got: {result:?}"
         );
+    }
+
+    // ── AC: evaporation reference_volumes_hm3 ─────────────────────────────────
+
+    /// Helper: reservoir with min=1000 hm³, max=20000 hm³ and evaporation coefficients.
+    const HYDRO_WITH_EVAP_BASE: &str = r#"{
+      "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+      "downstream_id": null,
+      "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+      "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+      "generation": {
+        "model": "constant_productivity",
+        "productivity_mw_per_m3s": 0.75,
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 1000.0,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 750.0
+      }
+    }"#;
+
+    /// Given a `hydros.json` with `evaporation.reference_volumes_hm3` containing 12
+    /// valid values within reservoir bounds, the returned `Hydro` has
+    /// `evaporation_reference_volumes_hm3 == Some([f64; 12])`.
+    #[test]
+    fn test_evaporation_reference_volumes_happy_path() {
+        // Reservoir bounds: [1000, 20000]. All reference volumes within range.
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": {
+              "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150],
+              "reference_volumes_hm3": [15000, 12000, 10000, 8000, 6000, 5000, 5500, 7000, 9000, 11000, 13000, 14500]
+            }
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global();
+        let hydros = parse_hydros(f.path(), &global).unwrap();
+
+        let ref_vols = hydros[0]
+            .evaporation_reference_volumes_hm3
+            .expect("reference_volumes_hm3 should be Some");
+        assert_eq!(ref_vols.len(), 12);
+        assert!((ref_vols[0] - 15000.0).abs() < f64::EPSILON);
+        assert!((ref_vols[5] - 5000.0).abs() < f64::EPSILON);
+        assert!((ref_vols[11] - 14500.0).abs() < f64::EPSILON);
+    }
+
+    /// Given a `hydros.json` where the evaporation block has no
+    /// `reference_volumes_hm3` key, the returned `Hydro` has
+    /// `evaporation_reference_volumes_hm3 == None` (backward compatible).
+    #[test]
+    fn test_evaporation_reference_volumes_absent_is_none() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": { "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150] }
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global();
+        let hydros = parse_hydros(f.path(), &global).unwrap();
+
+        assert!(
+            hydros[0].evaporation_reference_volumes_hm3.is_none(),
+            "reference_volumes_hm3 should be None when key is absent from JSON"
+        );
+    }
+
+    /// Given `reference_volumes_hm3` with 11 elements (wrong length), `parse_hydros`
+    /// returns `LoadError::SchemaError` with a message containing "exactly 12 elements".
+    #[test]
+    fn test_evaporation_reference_volumes_wrong_length() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": {
+              "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150],
+              "reference_volumes_hm3": [10000, 9000, 8000, 7000, 6000, 5000, 5500, 6500, 7500, 8500, 9500]
+            }
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global();
+        let err = parse_hydros(f.path(), &global).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("reference_volumes_hm3"),
+                    "field should contain 'reference_volumes_hm3', got: {field}"
+                );
+                assert!(
+                    message.contains("exactly 12 elements"),
+                    "message should contain 'exactly 12 elements', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Given `reference_volumes_hm3` with a NaN value, `parse_hydros` returns
+    /// `LoadError::SchemaError`.
+    #[test]
+    fn test_evaporation_reference_volumes_nan_value() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": {
+              "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150],
+              "reference_volumes_hm3": [null, 9000, 8000, 7000, 6000, 5000, 5500, 6500, 7500, 8500, 9500, 10000]
+            }
+          }]
+        }"#;
+        // Note: `null` in JSON for a f64 field will fail to deserialize,
+        // yielding a ParseError. We test a NaN by injecting it directly.
+        // Construct the test via the internal validate_evaporation function,
+        // as JSON has no NaN literal.
+        let _ = json; // JSON path not feasible for NaN; use direct unit test.
+
+        let evap = RawEvaporation {
+            coefficients_mm: vec![0.0; 12],
+            reference_volumes_hm3: Some({
+                let mut v = vec![5000.0; 12];
+                v[3] = f64::NAN;
+                v
+            }),
+        };
+        let path = Path::new("hydros.json");
+        let err = validate_evaporation(&evap, 0, path, 1000.0, 20000.0).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("reference_volumes_hm3"),
+                    "field should contain 'reference_volumes_hm3', got: {field}"
+                );
+                assert!(
+                    message.contains("finite"),
+                    "message should contain 'finite', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Given `reference_volumes_hm3` with a value exceeding `max_storage_hm3`,
+    /// `parse_hydros` returns `LoadError::SchemaError` with a message containing
+    /// "`max_storage_hm3`".
+    #[test]
+    fn test_evaporation_reference_volumes_exceeds_max_storage() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": {
+              "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150],
+              "reference_volumes_hm3": [25000, 12000, 10000, 8000, 6000, 5000, 5500, 7000, 9000, 11000, 13000, 14500]
+            }
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global();
+        let err = parse_hydros(f.path(), &global).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("reference_volumes_hm3"),
+                    "field should contain 'reference_volumes_hm3', got: {field}"
+                );
+                assert!(
+                    message.contains("max_storage_hm3"),
+                    "message should contain 'max_storage_hm3', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Given `reference_volumes_hm3` with a value below `min_storage_hm3`,
+    /// `parse_hydros` returns `LoadError::SchemaError` with a message containing
+    /// "`min_storage_hm3`".
+    #[test]
+    fn test_evaporation_reference_volumes_below_min_storage() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "ReservoirEvap", "bus_id": 0,
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 1000.0, "max_storage_hm3": 20000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "productivity_mw_per_m3s": 0.75,
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 1000.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 750.0
+            },
+            "evaporation": {
+              "coefficients_mm": [150, 130, 120, 90, 60, 40, 30, 40, 70, 100, 130, 150],
+              "reference_volumes_hm3": [500, 12000, 10000, 8000, 6000, 5000, 5500, 7000, 9000, 11000, 13000, 14500]
+            }
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global();
+        let err = parse_hydros(f.path(), &global).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("reference_volumes_hm3"),
+                    "field should contain 'reference_volumes_hm3', got: {field}"
+                );
+                assert!(
+                    message.contains("min_storage_hm3"),
+                    "message should contain 'min_storage_hm3', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    // ── Additional edge case: no evaporation block → reference volumes also None ─
+
+    /// When the entire `evaporation` block is absent, both evaporation fields are
+    /// `None` (backward compatible).
+    #[test]
+    fn test_no_evaporation_block_both_fields_none() {
+        let json = format!(r#"{{ "hydros": [{HYDRO_WITH_EVAP_BASE}] }}"#);
+        let f = write_json(&json);
+        let global = make_global();
+        let hydros = parse_hydros(f.path(), &global).unwrap();
+
+        assert!(hydros[0].evaporation_coefficients_mm.is_none());
+        assert!(hydros[0].evaporation_reference_volumes_hm3.is_none());
     }
 
     /// `$schema` field is accepted and ignored.

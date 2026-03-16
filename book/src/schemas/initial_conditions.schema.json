@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "RawHydroStorage": {
+      "description": "Intermediate type for one hydro storage entry.",
+      "properties": {
+        "hydro_id": {
+          "description": "Hydro plant identifier. Must be unique within its array.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "value_hm3": {
+          "description": "Reservoir volume [hm³]. Must be >= 0.0.",
+          "format": "double",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": ["hydro_id", "value_hm3"],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Initial reservoir storage conditions for all hydro plants in the case.\n\nTwo arrays specify starting volumes at simulation time zero:\n- `storage` — operating hydros (those participating in generation dispatch).\n- `filling_storage` — filling hydros (reservoirs under construction or filling).\n\nA hydro may appear in at most one of the two arrays. Duplicate `hydro_id`\nvalues within the same array are rejected. Cross-reference validation\n(checking that IDs exist in the hydro registry) is deferred to Layer 3.",
+  "properties": {
+    "$schema": {
+      "description": "JSON schema URI — informational, not validated.",
+      "type": ["string", "null"]
+    },
+    "filling_storage": {
+      "description": "Initial reservoir volumes for filling hydros [hm³].\nA filling hydro may not also appear in `storage`.",
+      "items": {
+        "$ref": "#/$defs/RawHydroStorage"
+      },
+      "type": "array"
+    },
+    "storage": {
+      "description": "Initial reservoir volumes for operating hydros [hm³].",
+      "items": {
+        "$ref": "#/$defs/RawHydroStorage"
+      },
+      "type": "array"
+    }
+  },
+  "required": ["storage", "filling_storage"],
+  "title": "RawInitialConditions",
+  "type": "object"
+}

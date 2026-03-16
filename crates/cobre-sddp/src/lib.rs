@@ -46,6 +46,7 @@ pub mod error;
 pub mod estimation;
 pub mod forward;
 pub mod horizon_mode;
+pub mod hydro_models;
 pub mod indexer;
 pub mod inflow_method;
 pub mod lower_bound;
@@ -75,7 +76,14 @@ pub use error::SddpError;
 pub use estimation::{EstimationError, EstimationReport};
 pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
-pub use indexer::StageIndexer;
+pub use hydro_models::{
+    EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
+    FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
+    PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource, ResolvedProductionModel,
+    build_hydro_model_summary, prepare_hydro_models, resolve_evaporation_models,
+    resolve_production_models,
+};
+pub use indexer::{EvaporationIndices, FphaRowRange, StageIndexer};
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};

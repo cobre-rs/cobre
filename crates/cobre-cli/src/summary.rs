@@ -13,7 +13,7 @@
 // ArOrderSummary is not referenced directly in non-test code here (only via StochasticSummary
 // fields), so suppress the false-positive unused-import warning on the pub use.
 #[allow(unused_imports)]
-pub use cobre_sddp::{ArOrderSummary, StochasticSource, StochasticSummary};
+pub use cobre_sddp::{ArOrderSummary, HydroModelSummary, StochasticSource, StochasticSummary};
 use console::Term;
 
 fn source_label(source: &StochasticSource) -> &'static str {
@@ -78,6 +78,101 @@ pub fn print_stochastic_summary(stderr: &Term, summary: &StochasticSummary) {
         "  Load noise:    {} stochastic buses",
         summary.n_load_buses
     ));
+}
+
+/// Print the hydro model preprocessing summary to `stderr`.
+///
+/// Renders a bold header followed by two indented lines:
+/// - `Production:` — counts of constant and FPHA hydros with plane totals.
+/// - `Evaporation:` — counts of linearized and un-modelled hydro plants.
+///
+/// The singular/plural form `"hydro"` vs `"hydros"` is applied to the
+/// evaporation counts. Write errors are silently ignored (fire-and-forget).
+pub fn print_hydro_model_summary(stderr: &Term, summary: &HydroModelSummary) {
+    let _ = stderr.write_line(&format!("{}", console::style("Hydro models").bold()));
+    let _ = stderr.write_line(&format!(
+        "  Production:    {}",
+        format_production_line(summary)
+    ));
+    let _ = stderr.write_line(&format!(
+        "  Evaporation:   {}",
+        format_evaporation_line(summary)
+    ));
+}
+
+/// Format the production detail line for a [`HydroModelSummary`].
+fn format_production_line(summary: &HydroModelSummary) -> String {
+    match (summary.n_constant, summary.n_fpha) {
+        (0, 0) => "0 hydros".to_string(),
+        (n_const, 0) => format!("{n_const} constant"),
+        (0, n_fpha) => {
+            // All-FPHA case: show filename for clarity.
+            format!(
+                "{n_fpha} FPHA ({} planes, loaded from fpha_hyperplanes.parquet)",
+                summary.total_planes
+            )
+        }
+        (n_const, n_fpha) => {
+            // Mixed case: short label without filename.
+            format!(
+                "{n_const} constant, {n_fpha} FPHA ({} planes, loaded)",
+                summary.total_planes
+            )
+        }
+    }
+}
+
+/// Pluralize "hydro" or "hydros" based on count.
+fn hydro_plural(count: usize) -> &'static str {
+    if count == 1 { "hydro" } else { "hydros" }
+}
+
+/// Format the evaporation detail line for a [`HydroModelSummary`].
+///
+/// When there are no evaporating hydros the line has no reference source detail.
+/// When all evaporating hydros share a single source the label is unqualified;
+/// when they are split between sources the counts are shown explicitly.
+fn format_evaporation_line(summary: &HydroModelSummary) -> String {
+    if summary.n_evaporation == 0 {
+        return format!(
+            "0 hydros linearized, {} {} without",
+            summary.n_no_evaporation,
+            hydro_plural(summary.n_no_evaporation),
+        );
+    }
+    let ref_detail = match (summary.n_user_supplied_ref, summary.n_default_midpoint_ref) {
+        (0, _) => "midpoint v_ref".to_string(),
+        (_, 0) => "user v_ref".to_string(),
+        (u, m) => format!("{u} user v_ref, {m} midpoint v_ref"),
+    };
+    format!(
+        "{} {} linearized (from geometry, {ref_detail}), {} {} without",
+        summary.n_evaporation,
+        hydro_plural(summary.n_evaporation),
+        summary.n_no_evaporation,
+        hydro_plural(summary.n_no_evaporation),
+    )
+}
+
+/// Render the hydro model preprocessing summary as a plain-text `String`.
+///
+/// The returned string contains no ANSI escape sequences. Color and styling
+/// are applied by [`print_hydro_model_summary`] when writing to the terminal.
+/// This function exists to allow unit tests to assert on summary content
+/// without requiring a real terminal.
+#[cfg(test)]
+pub fn format_hydro_model_summary_string(summary: &HydroModelSummary) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Hydro models".to_string());
+    lines.push(format!(
+        "  Production:    {}",
+        format_production_line(summary)
+    ));
+    lines.push(format!(
+        "  Evaporation:   {}",
+        format_evaporation_line(summary)
+    ));
+    lines.join("\n")
 }
 
 /// Render the stochastic preprocessing summary as a plain-text `String`.
@@ -1047,6 +1142,300 @@ mod tests {
         assert!(
             s.contains("3 stochastic buses"),
             "output must contain '3 stochastic buses', got: {s}"
+        );
+    }
+
+    // ── HydroModelSummary tests ────────────────────────────────────────────
+
+    use super::{HydroModelSummary, format_hydro_model_summary_string, print_hydro_model_summary};
+    use cobre_core::EntityId;
+    use cobre_sddp::FphaHydroDetail;
+
+    fn make_hydro_model_summary_mixed() -> HydroModelSummary {
+        HydroModelSummary {
+            n_constant: 2,
+            n_fpha: 2,
+            total_planes: 10,
+            fpha_details: vec![
+                FphaHydroDetail {
+                    hydro_id: EntityId(3),
+                    name: "Hydro3".to_string(),
+                    source: cobre_sddp::ProductionModelSource::PrecomputedHyperplanes,
+                    n_planes: 5,
+                },
+                FphaHydroDetail {
+                    hydro_id: EntityId(4),
+                    name: "Hydro4".to_string(),
+                    source: cobre_sddp::ProductionModelSource::PrecomputedHyperplanes,
+                    n_planes: 5,
+                },
+            ],
+            n_evaporation: 3,
+            n_no_evaporation: 1,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 3,
+        }
+    }
+
+    fn make_hydro_model_summary_all_constant() -> HydroModelSummary {
+        HydroModelSummary {
+            n_constant: 4,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 0,
+            n_no_evaporation: 4,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 0,
+        }
+    }
+
+    fn make_hydro_model_summary_all_fpha() -> HydroModelSummary {
+        HydroModelSummary {
+            n_constant: 0,
+            n_fpha: 165,
+            total_planes: 825,
+            fpha_details: vec![],
+            n_evaporation: 162,
+            n_no_evaporation: 3,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 162,
+        }
+    }
+
+    /// Acceptance criterion: 2 FPHA hydros → output contains "2 FPHA" and "planes" and "loaded".
+    #[test]
+    fn format_hydro_model_summary_with_fpha_contains_key_terms() {
+        let summary = make_hydro_model_summary_mixed();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("2 FPHA"),
+            "mixed summary must contain '2 FPHA', got: {s}"
+        );
+        assert!(
+            s.contains("planes"),
+            "mixed summary must contain 'planes', got: {s}"
+        );
+        assert!(
+            s.contains("loaded"),
+            "mixed summary must contain 'loaded', got: {s}"
+        );
+    }
+
+    /// Acceptance criterion: 0 FPHA hydros → output contains "constant" and NOT "FPHA".
+    #[test]
+    fn format_hydro_model_summary_without_fpha_contains_constant_not_fpha() {
+        let summary = make_hydro_model_summary_all_constant();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("constant"),
+            "all-constant summary must contain 'constant', got: {s}"
+        );
+        assert!(
+            !s.contains("FPHA"),
+            "all-constant summary must NOT contain 'FPHA', got: {s}"
+        );
+    }
+
+    /// Header line is always present.
+    #[test]
+    fn format_hydro_model_summary_contains_header() {
+        let summary = make_hydro_model_summary_mixed();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("Hydro models"),
+            "summary must contain 'Hydro models' header, got: {s}"
+        );
+    }
+
+    /// Mixed summary: production line shows plane count and "loaded".
+    #[test]
+    fn format_hydro_model_summary_mixed_production_line() {
+        let summary = make_hydro_model_summary_mixed();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("10"),
+            "mixed summary must contain plane count '10', got: {s}"
+        );
+        assert!(
+            s.contains("2 constant"),
+            "mixed summary must contain '2 constant', got: {s}"
+        );
+    }
+
+    /// All-FPHA large system: production line includes filename.
+    #[test]
+    fn format_hydro_model_summary_all_fpha_shows_filename() {
+        let summary = make_hydro_model_summary_all_fpha();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("165 FPHA"),
+            "all-fpha summary must contain '165 FPHA', got: {s}"
+        );
+        assert!(
+            s.contains("825"),
+            "all-fpha summary must contain '825' (plane count), got: {s}"
+        );
+        assert!(
+            s.contains("fpha_hyperplanes.parquet"),
+            "all-fpha summary must contain the filename, got: {s}"
+        );
+    }
+
+    /// Singular/plural: "1 hydro" vs "3 hydros" in evaporation line.
+    #[test]
+    fn format_hydro_model_summary_singular_evaporation() {
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 1,
+            n_no_evaporation: 2,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 1,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("1 hydro linearized"),
+            "singular evaporation must use 'hydro' not 'hydros', got: {s}"
+        );
+    }
+
+    #[test]
+    fn format_hydro_model_summary_plural_evaporation() {
+        let summary = make_hydro_model_summary_mixed();
+        let s = format_hydro_model_summary_string(&summary);
+
+        assert!(
+            s.contains("3 hydros linearized"),
+            "plural evaporation must use 'hydros', got: {s}"
+        );
+    }
+
+    /// Acceptance criterion: `print_hydro_model_summary` does not panic with buffered stderr.
+    #[test]
+    fn print_hydro_model_summary_does_not_panic() {
+        let summary = make_hydro_model_summary_mixed();
+        print_hydro_model_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    #[test]
+    fn print_hydro_model_summary_all_constant_does_not_panic() {
+        let summary = make_hydro_model_summary_all_constant();
+        print_hydro_model_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    #[test]
+    fn print_hydro_model_summary_all_fpha_does_not_panic() {
+        let summary = make_hydro_model_summary_all_fpha();
+        print_hydro_model_summary(&Term::buffered_stderr(), &summary);
+    }
+
+    // ── format_evaporation_line reference-source variant tests ───────────────
+
+    /// AC: all-midpoint — line contains "midpoint `v_ref`" and does NOT contain "user `v_ref`".
+    #[test]
+    fn test_evaporation_line_all_midpoint() {
+        let summary = HydroModelSummary {
+            n_constant: 2,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 2,
+            n_no_evaporation: 0,
+            n_user_supplied_ref: 0,
+            n_default_midpoint_ref: 2,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("midpoint v_ref"),
+            "all-midpoint must contain 'midpoint v_ref', got: {s}"
+        );
+        assert!(
+            !s.contains("user v_ref"),
+            "all-midpoint must NOT contain 'user v_ref', got: {s}"
+        );
+    }
+
+    /// AC: all-user-supplied — line contains "user `v_ref`" and does NOT contain "midpoint `v_ref`".
+    #[test]
+    fn test_evaporation_line_all_user_supplied() {
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 3,
+            n_no_evaporation: 1,
+            n_user_supplied_ref: 3,
+            n_default_midpoint_ref: 0,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("user v_ref"),
+            "all-user-supplied must contain 'user v_ref', got: {s}"
+        );
+        assert!(
+            !s.contains("midpoint v_ref"),
+            "all-user-supplied must NOT contain 'midpoint v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("3 hydros linearized"),
+            "all-user-supplied must contain '3 hydros linearized', got: {s}"
+        );
+        assert!(
+            s.contains("1 hydro without"),
+            "all-user-supplied must contain '1 hydro without', got: {s}"
+        );
+    }
+
+    /// AC: mixed — line contains "2 user `v_ref`" and "1 midpoint `v_ref`".
+    #[test]
+    fn test_evaporation_line_mixed() {
+        let summary = HydroModelSummary {
+            n_constant: 3,
+            n_fpha: 0,
+            total_planes: 0,
+            fpha_details: vec![],
+            n_evaporation: 3,
+            n_no_evaporation: 1,
+            n_user_supplied_ref: 2,
+            n_default_midpoint_ref: 1,
+        };
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            s.contains("2 user v_ref"),
+            "mixed must contain '2 user v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("1 midpoint v_ref"),
+            "mixed must contain '1 midpoint v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("3 hydros linearized"),
+            "mixed must contain '3 hydros linearized', got: {s}"
+        );
+    }
+
+    /// AC: no evaporation — line does NOT contain "`v_ref`".
+    #[test]
+    fn test_evaporation_line_no_evaporation() {
+        let summary = make_hydro_model_summary_all_constant();
+        let s = format_hydro_model_summary_string(&summary);
+        assert!(
+            !s.contains("v_ref"),
+            "zero-evaporation must NOT contain 'v_ref', got: {s}"
+        );
+        assert!(
+            s.contains("0 hydros linearized"),
+            "zero-evaporation must contain '0 hydros linearized', got: {s}"
         );
     }
 }

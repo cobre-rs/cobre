@@ -39,6 +39,33 @@ pub use production_models::{
 use crate::LoadError;
 use std::path::Path;
 
+/// Load `system/hydro_geometry.parquet` when the path is known, or return
+/// an empty `Vec` when the file is absent (optional file).
+///
+/// This wrapper is the standard entry point used by the loading pipeline. When
+/// `path` is `None` (the structural validation step found no file at the expected
+/// location), it returns `Ok(Vec::new())` without touching the filesystem.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from [`parse_hydro_geometry`] when `path` is `Some`.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_io::extensions::load_hydro_geometry;
+///
+/// // No file present — returns empty vec.
+/// let rows = load_hydro_geometry(None).expect("no file is fine");
+/// assert!(rows.is_empty());
+/// ```
+pub fn load_hydro_geometry(path: Option<&Path>) -> Result<Vec<HydroGeometryRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_hydro_geometry(p),
+    }
+}
+
 /// Load `system/hydro_production_models.json` when the path is known, or return
 /// an empty `Vec` when the file is absent (optional file).
 ///
@@ -111,6 +138,13 @@ mod tests {
     #[test]
     fn test_load_fpha_hyperplanes_none_returns_empty() {
         let result = load_fpha_hyperplanes(None).unwrap();
+        assert!(result.is_empty(), "expected empty vec for None path");
+    }
+
+    /// `load_hydro_geometry(None)` returns `Ok(Vec::new())` without I/O.
+    #[test]
+    fn test_load_hydro_geometry_none_returns_empty() {
+        let result = load_hydro_geometry(None).unwrap();
         assert!(result.is_empty(), "expected empty vec for None path");
     }
 }

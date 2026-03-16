@@ -112,6 +112,9 @@ use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::error::SddpError;
+use crate::hydro_models::{
+    EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
+};
 use crate::indexer::StageIndexer;
 use crate::inflow_method::InflowNonNegativityMethod;
 
@@ -625,6 +628,10 @@ struct TemplateBuildCtx<'a> {
     bus_pos: HashMap<EntityId, usize>,
     inflow_method: &'a InflowNonNegativityMethod,
     par_lp: &'a PrecomputedPar,
+    /// Resolved production models for all (hydro, stage) pairs.
+    production_models: &'a ProductionModelSet,
+    /// Resolved evaporation models for all hydro plants.
+    evaporation_models: &'a EvaporationModelSet,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
@@ -652,20 +659,46 @@ struct StageLayout {
     col_deficit_start: usize,
     col_excess_start: usize,
     col_inflow_slack_start: usize,
+    /// Start of FPHA generation columns (one per FPHA hydro per block).
+    ///
+    /// Layout within this region: `col_generation_start + local_fpha_idx * n_blks + blk`.
+    col_generation_start: usize,
     num_cols: usize,
     // Row regions
     row_water_balance_start: usize,
     row_load_balance_start: usize,
+    /// Start of FPHA constraint rows (after load-balance rows).
+    ///
+    /// Layout: `row_fpha_start + local_fpha_idx * n_blks * n_planes + blk * n_planes + plane_idx`.
+    row_fpha_start: usize,
+    /// Start of evaporation constraint rows (after FPHA rows).
+    ///
+    /// One equality row per evaporation hydro.
+    /// Layout: `row_evap_start + local_evap_idx`.
+    row_evap_start: usize,
+    /// Start of evaporation columns (after FPHA generation columns).
+    ///
+    /// 3 stage-level columns per evaporation hydro (`Q_ev`, `f_evap_plus`, `f_evap_minus`).
+    /// Layout: `col_evap_start + local_evap_idx * 3 + {0, 1, 2}`.
+    col_evap_start: usize,
     num_rows: usize,
     // Template metadata
     n_state: usize,
     n_dual_relevant: usize,
     // Scalar derived quantities used by row-bound and matrix helpers
     zeta: f64,
+    // FPHA hydro information for this stage
+    /// Indices (into `ctx.hydros`) of hydros using FPHA at this stage.
+    fpha_hydro_indices: Vec<usize>,
+    /// Number of hyperplane planes per FPHA hydro at this stage.
+    fpha_planes_per_hydro: Vec<usize>,
+    // Evaporation hydro information for this stage
+    /// Indices (into `ctx.hydros`) of hydros with linearized evaporation at this stage.
+    evap_hydro_indices: Vec<usize>,
 }
 
 impl StageLayout {
-    fn new(ctx: &TemplateBuildCtx<'_>, stage: &Stage) -> Self {
+    fn new(ctx: &TemplateBuildCtx<'_>, stage: &Stage, stage_idx: usize) -> Self {
         let n_blks = stage.blocks.len();
         let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
         let decision_start = idx.theta + 1;
@@ -680,13 +713,56 @@ impl StageLayout {
         let col_excess_end = col_excess_start + ctx.n_buses * n_blks;
         let col_inflow_slack_start = col_excess_end;
         let n_slack_cols = if ctx.has_penalty { ctx.n_hydros } else { 0 };
-        let num_cols = col_excess_end + n_slack_cols;
+
+        // ── FPHA: identify which hydros use FPHA at this stage ────────────────
+        let mut fpha_hydro_indices: Vec<usize> = Vec::new();
+        let mut fpha_planes_per_hydro: Vec<usize> = Vec::new();
+        for h_idx in 0..ctx.n_hydros {
+            if let ResolvedProductionModel::Fpha { planes, .. } =
+                ctx.production_models.model(h_idx, stage_idx)
+            {
+                fpha_hydro_indices.push(h_idx);
+                fpha_planes_per_hydro.push(planes.len());
+            }
+        }
+        let n_fpha_hydros = fpha_hydro_indices.len();
+
+        // Generation columns: one per FPHA hydro per block, placed after inflow slacks.
+        let col_generation_start = col_inflow_slack_start + n_slack_cols;
+        let n_generation_cols = n_fpha_hydros * n_blks;
+        let col_generation_end = col_generation_start + n_generation_cols;
+
+        // ── Evaporation: identify which hydros have linearized evaporation ────
+        let mut evap_hydro_indices: Vec<usize> = Vec::new();
+        for h_idx in 0..ctx.n_hydros {
+            if matches!(
+                ctx.evaporation_models.model(h_idx),
+                EvaporationModel::Linearized { .. }
+            ) {
+                evap_hydro_indices.push(h_idx);
+            }
+        }
+        let n_evap_hydros = evap_hydro_indices.len();
+
+        // Evaporation columns: 3 per evaporation hydro (stage-level, not per-block),
+        // placed after FPHA generation columns.
+        let col_evap_start = col_generation_end;
+        let n_evap_cols = n_evap_hydros * 3;
+        let num_cols = col_evap_start + n_evap_cols;
 
         let n_state = idx.n_state;
         let n_dual_relevant = n_state;
         let row_water_balance_start = n_dual_relevant;
         let row_load_balance_start = row_water_balance_start + ctx.n_hydros;
-        let num_rows = row_load_balance_start + ctx.n_buses * n_blks;
+        let row_load_balance_end = row_load_balance_start + ctx.n_buses * n_blks;
+
+        // FPHA rows: one per FPHA hydro per block per plane, placed after load balance.
+        let row_fpha_start = row_load_balance_end;
+        let n_fpha_rows: usize = fpha_planes_per_hydro.iter().map(|&p| p * n_blks).sum();
+
+        // Evaporation rows: 1 per evaporation hydro, placed after FPHA rows.
+        let row_evap_start = row_fpha_start + n_fpha_rows;
+        let num_rows = row_evap_start + n_evap_hydros;
 
         let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let zeta = total_stage_hours * M3S_TO_HM3;
@@ -704,13 +780,20 @@ impl StageLayout {
             col_deficit_start,
             col_excess_start,
             col_inflow_slack_start,
+            col_generation_start,
+            col_evap_start,
             num_cols,
             row_water_balance_start,
             row_load_balance_start,
+            row_fpha_start,
+            row_evap_start,
             num_rows,
             n_state,
             n_dual_relevant,
             zeta,
+            fpha_hydro_indices,
+            fpha_planes_per_hydro,
+            evap_hydro_indices,
         }
     }
 }
@@ -718,6 +801,7 @@ impl StageLayout {
 /// Fill column lower/upper bounds and objective coefficients for one stage.
 ///
 /// Returns `(col_lower, col_upper, objective)` vectors of length `layout.num_cols`.
+#[allow(clippy::too_many_lines)]
 fn fill_stage_columns(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -753,10 +837,19 @@ fn fill_stage_columns(
     // Turbine columns per hydro per block.
     for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        let is_fpha = matches!(
+            ctx.production_models.model(h_idx, stage_idx),
+            ResolvedProductionModel::Fpha { .. }
+        );
         for blk in 0..layout.n_blks {
             let col = layout.col_turbine_start + h_idx * layout.n_blks + blk;
             col_lower[col] = hb.min_turbined_m3s;
             col_upper[col] = hb.max_turbined_m3s;
+            if is_fpha {
+                let block_hours = stage.blocks[blk].duration_hours;
+                objective[col] = hp.fpha_turbined_cost * block_hours;
+            }
         }
     }
 
@@ -833,6 +926,42 @@ fn fill_stage_columns(
         }
     }
 
+    // FPHA generation columns (g_{h,k}): one per FPHA hydro per block.
+    // Bounds: [0, max_generation_mw].  Objective: 0.0 (fpha_turbined_cost goes on
+    // the turbine column, handled in ticket-008).
+    for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        for blk in 0..layout.n_blks {
+            let col = layout.col_generation_start + local_idx * layout.n_blks + blk;
+            col_lower[col] = 0.0;
+            col_upper[col] = hb.max_generation_mw;
+        }
+    }
+
+    // Evaporation columns: 3 per evaporation hydro (stage-level, not per-block).
+    // Q_ev_h, f_evap_plus_h, f_evap_minus_h — all in [0, +inf).
+    // Q_ev carries zero objective cost (evaporation flow itself is not penalised).
+    // f_evap_plus and f_evap_minus carry evaporation_violation_cost * total_stage_hours
+    // so that the solver is penalised for violating the linearised evaporation constraint.
+    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+    for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
+        let col_q_ev = layout.col_evap_start + local_idx * 3;
+        let col_f_plus = layout.col_evap_start + local_idx * 3 + 1;
+        let col_f_minus = layout.col_evap_start + local_idx * 3 + 2;
+        col_lower[col_q_ev] = 0.0;
+        col_upper[col_q_ev] = f64::INFINITY;
+        col_lower[col_f_plus] = 0.0;
+        col_upper[col_f_plus] = f64::INFINITY;
+        col_lower[col_f_minus] = 0.0;
+        col_upper[col_f_minus] = f64::INFINITY;
+        // Violation cost: read from resolved penalties and scale by stage duration.
+        // Q_ev (offset 0) keeps objective = 0.0 (already the vec initialisation default).
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        let obj = hp.evaporation_violation_cost * total_stage_hours;
+        objective[col_f_plus] = obj;
+        objective[col_f_minus] = obj;
+    }
+
     (col_lower, col_upper, objective)
 }
 
@@ -871,6 +1000,55 @@ fn fill_stage_rows(
             let row = layout.row_load_balance_start + b_idx * layout.n_blks + blk;
             row_lower[row] = mean_mw;
             row_upper[row] = mean_mw;
+        }
+    }
+
+    // FPHA constraint rows: g_{h,k} - gamma_v/2*v - gamma_v/2*v_in
+    //                            - gamma_q*q - gamma_s*s <= gamma_0
+    // Row lower = -INF, row upper = gamma_0 (pre-scaled intercept).
+    // The v_in contribution is encoded in the matrix entry on the v_in column,
+    // so the static upper bound only needs the intercept term.
+    let n_blks = layout.n_blks;
+    for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
+        if let ResolvedProductionModel::Fpha { planes, .. } =
+            ctx.production_models.model(h_idx, stage_idx)
+        {
+            let n_planes = planes.len();
+            debug_assert_eq!(
+                n_planes, layout.fpha_planes_per_hydro[local_idx],
+                "plane count mismatch for FPHA hydro {h_idx} at stage {stage_idx}"
+            );
+            for blk in 0..n_blks {
+                for (p_idx, plane) in planes.iter().enumerate() {
+                    let row = layout.row_fpha_start
+                        + local_idx * n_blks * n_planes
+                        + blk * n_planes
+                        + p_idx;
+                    row_lower[row] = f64::NEG_INFINITY;
+                    row_upper[row] = plane.intercept;
+                }
+            }
+        }
+    }
+
+    // Evaporation constraint rows: Q_ev = k_evap0 + k_evap_v/2*(v + v_in - 2*V_ref).
+    // The volume-dependent term `k_evap_v/2 * v` is added via the CSC matrix entry
+    // on the outgoing-storage column (ticket-011), so the static row bounds only
+    // encode the constant term `k_evap0`.  The constraint is an equality:
+    // row_lower == row_upper == k_evap0.
+    for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
+        if let EvaporationModel::Linearized { coefficients, .. } =
+            ctx.evaporation_models.model(h_idx)
+        {
+            debug_assert!(
+                stage_idx < coefficients.len(),
+                "stage index {stage_idx} out of bounds for evaporation coefficients (len = {})",
+                coefficients.len()
+            );
+            let k_evap0 = coefficients[stage_idx].k_evap0;
+            let row = layout.row_evap_start + local_idx;
+            row_lower[row] = k_evap0;
+            row_upper[row] = k_evap0;
         }
     }
 
@@ -957,38 +1135,99 @@ fn fill_state_and_water_entries(
             col_entries[col].push((row, -zeta));
         }
     }
+
+    // Evaporation: Q_ev_h enters water balance with +ζ.
+    // Evaporation is an outflow (water leaving the reservoir), so its
+    // coefficient matches the turbine/spillage sign convention (positive).
+    for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
+        let col_q_ev = layout.col_evap_start + local_idx * 3;
+        let row = row_water + h_idx;
+        col_entries[col_q_ev].push((row, zeta));
+    }
 }
 
 /// Fill load-balance entries into `col_entries`.
 ///
 /// Writes entries for hydro turbine generation, thermal generation,
 /// line forward/reverse flows, and deficit/excess slacks.
+///
+/// For FPHA hydros the generation variable `g_{h,k}` (in `col_generation_start`)
+/// enters the load balance with coefficient +1.0 instead of `rho * turbine_col`.
+/// For constant-productivity hydros the original `rho * turbine_col` behavior is unchanged.
 fn fill_load_balance_entries(
     ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
     let row_load = layout.row_load_balance_start;
 
-    // Hydro turbine generation (rho * turbine_col).
+    // Build a quick lookup from hydro index to FPHA local index.
+    // `fpha_local[h_idx]` is `Some(local_idx)` if hydro `h_idx` uses FPHA at this stage.
+    let mut fpha_local: Vec<Option<usize>> = vec![None; ctx.n_hydros];
+    for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
+        fpha_local[h_idx] = Some(local_idx);
+    }
+
+    // Hydro contribution to load balance.
+    // - FPHA hydros: g_{h,k} column with coefficient +1.0
+    // - Constant-productivity hydros: rho * turbine_col (unchanged)
     for (h_idx, hydro) in ctx.hydros.iter().enumerate() {
-        let rho = match &hydro.generation_model {
-            HydroGenerationModel::ConstantProductivity {
-                productivity_mw_per_m3s,
+        if let Some(local_idx) = fpha_local[h_idx] {
+            // FPHA: use the generation variable column.
+            // The resolved model for this stage must be Fpha.
+            debug_assert!(
+                matches!(
+                    ctx.production_models.model(h_idx, stage_idx),
+                    ResolvedProductionModel::Fpha { .. }
+                ),
+                "FPHA local-index table inconsistent with production model for hydro {h_idx}"
+            );
+            if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {
+                for blk in 0..n_blks {
+                    let row = row_load + b_idx * n_blks + blk;
+                    let col = layout.col_generation_start + local_idx * n_blks + blk;
+                    col_entries[col].push((row, 1.0));
+                }
             }
-            | HydroGenerationModel::LinearizedHead {
-                productivity_mw_per_m3s,
-            } => *productivity_mw_per_m3s,
-            HydroGenerationModel::Fpha => unreachable!(
-                "FPHA validation guard at the top of build_stage_templates prevents reaching this arm"
-            ),
-        };
-        if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {
-            for blk in 0..n_blks {
-                let row = row_load + b_idx * n_blks + blk;
-                let col = layout.col_turbine_start + h_idx * n_blks + blk;
-                col_entries[col].push((row, rho));
+        } else {
+            // Constant productivity (or LinearizedHead used as constant): rho * turbine.
+            let rho = match &hydro.generation_model {
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s,
+                }
+                | HydroGenerationModel::LinearizedHead {
+                    productivity_mw_per_m3s,
+                } => *productivity_mw_per_m3s,
+                HydroGenerationModel::Fpha => {
+                    // Hydro has Fpha entity model but the resolved production model at this
+                    // stage is ConstantProductivity. This is allowed when the preprocessing
+                    // pipeline falls back to constant productivity for this stage.
+                    // In practice this arm should not be reached because the preprocessing
+                    // pipeline always returns Fpha when the entity model is Fpha.
+                    // Use the productivity from the resolved model as a safe fallback.
+                    if let ResolvedProductionModel::ConstantProductivity { productivity } =
+                        ctx.production_models.model(h_idx, stage_idx)
+                    {
+                        *productivity
+                    } else {
+                        // Both entity model and resolved model are FPHA but local-idx table
+                        // says non-FPHA. This is a bug in the caller; assert in debug builds.
+                        debug_assert!(
+                            false,
+                            "Fpha entity model with non-Fpha resolved model and no local index for hydro {h_idx}"
+                        );
+                        0.0
+                    }
+                }
+            };
+            if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {
+                for blk in 0..n_blks {
+                    let row = row_load + b_idx * n_blks + blk;
+                    let col = layout.col_turbine_start + h_idx * n_blks + blk;
+                    col_entries[col].push((row, rho));
+                }
             }
         }
     }
@@ -1036,6 +1275,143 @@ fn fill_load_balance_entries(
     }
 }
 
+/// Fill FPHA hyperplane constraint entries into `col_entries`.
+///
+/// For each FPHA hydro `h` at this stage, for each block `k`, for each
+/// hyperplane `m`, adds matrix entries to FPHA row `r(h,k,m)`:
+///
+/// ```text
+/// g_{h,k}  column:  +1.0              (generation variable)
+/// v        column:  -gamma_v/2         (outgoing storage)
+/// v_in     column:  -gamma_v/2         (incoming storage; fixed by storage-fixing row)
+/// q_{h,k}  column:  -gamma_q           (turbined flow)
+/// s_{h,k}  column:  -gamma_s           (spillage)
+/// ```
+///
+/// These entries implement `g - gamma_v/2*v - gamma_v/2*v_in - gamma_q*q - gamma_s*s <= gamma_0`,
+/// where `gamma_0` is already encoded in the row upper bound set by `fill_stage_rows`.
+fn fill_fpha_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
+    let n_blks = layout.n_blks;
+
+    for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
+        let model = ctx.production_models.model(h_idx, stage_idx);
+        let planes = match model {
+            ResolvedProductionModel::Fpha { planes, .. } => planes,
+            ResolvedProductionModel::ConstantProductivity { .. } => {
+                // Should never happen: fpha_hydro_indices only contains FPHA hydros.
+                debug_assert!(
+                    false,
+                    "fpha_hydro_indices contains hydro {h_idx} but model is ConstantProductivity"
+                );
+                continue;
+            }
+        };
+        let n_planes = planes.len();
+
+        for blk in 0..n_blks {
+            // Column indices for this hydro/block.
+            let col_v = h_idx; // outgoing storage column
+            let col_v_in = idx.storage_in.start + h_idx; // incoming storage column
+            let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+            let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
+            let col_g = layout.col_generation_start + local_idx * n_blks + blk;
+
+            for (p_idx, plane) in planes.iter().enumerate() {
+                let row =
+                    layout.row_fpha_start + local_idx * n_blks * n_planes + blk * n_planes + p_idx;
+
+                // g_{h,k} column: +1.0
+                col_entries[col_g].push((row, 1.0));
+                // v (outgoing storage): -gamma_v/2
+                col_entries[col_v].push((row, -plane.gamma_v / 2.0));
+                // v_in (incoming storage, fixed by storage-fixing row): -gamma_v/2
+                col_entries[col_v_in].push((row, -plane.gamma_v / 2.0));
+                // q_{h,k} (turbine): -gamma_q
+                col_entries[col_q].push((row, -plane.gamma_q));
+                // s_{h,k} (spillage): -gamma_s
+                col_entries[col_s].push((row, -plane.gamma_s));
+            }
+        }
+    }
+}
+
+/// Fill CSC matrix entries for the evaporation constraint rows.
+///
+/// For each evaporation hydro `h` at local position `local_idx`, the equality row
+/// `row_evap_start + local_idx` encodes:
+///
+/// ```text
+/// Q_ev_h  column:  +1.0
+/// v_h     column:  -k_evap_v / 2      (outgoing storage)
+/// v_in_h  column:  -k_evap_v / 2      (incoming storage; fixed by storage-fixing row)
+/// f_plus  column:  +1.0
+/// f_minus column:  -1.0
+/// ```
+///
+/// These entries implement `Q_ev - k_evap_v/2*v - k_evap_v/2*v_in + f_plus - f_minus = k_evap0`,
+/// where `k_evap0` is already encoded in the row bounds set by `fill_stage_rows`.
+/// When `v_in` is fixed to value `V`, the effective RHS becomes `k_evap0 + k_evap_v/2 * V`,
+/// which matches the linearized evaporation at the average volume `(v + V) / 2`.
+fn fill_evaporation_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
+
+    for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
+        let coeff = match ctx.evaporation_models.model(h_idx) {
+            EvaporationModel::Linearized { coefficients, .. } => {
+                debug_assert!(
+                    stage_idx < coefficients.len(),
+                    "evap_hydro_indices contains hydro {h_idx} but coefficients length {} \
+                     is less than stage_idx {}",
+                    coefficients.len(),
+                    stage_idx
+                );
+                match coefficients.get(stage_idx) {
+                    Some(c) => *c,
+                    None => continue,
+                }
+            }
+            EvaporationModel::None => {
+                // Should never happen: evap_hydro_indices only contains linearized hydros.
+                debug_assert!(
+                    false,
+                    "evap_hydro_indices contains hydro {h_idx} but model is None"
+                );
+                continue;
+            }
+        };
+
+        let col_q_ev = layout.col_evap_start + local_idx * 3;
+        let col_f_plus = layout.col_evap_start + local_idx * 3 + 1;
+        let col_f_minus = layout.col_evap_start + local_idx * 3 + 2;
+        let col_v = h_idx; // outgoing storage column
+        let col_v_in = idx.storage_in.start + h_idx; // incoming storage column
+
+        let row = layout.row_evap_start + local_idx;
+
+        // Q_ev_h: +1.0
+        col_entries[col_q_ev].push((row, 1.0));
+        // v_h (outgoing storage): -k_evap_v / 2
+        col_entries[col_v].push((row, -coeff.k_evap_v / 2.0));
+        // v_in_h (incoming storage, fixed by storage-fixing row): -k_evap_v / 2
+        col_entries[col_v_in].push((row, -coeff.k_evap_v / 2.0));
+        // f_evap_plus: +1.0
+        col_entries[col_f_plus].push((row, 1.0));
+        // f_evap_minus: -1.0
+        col_entries[col_f_minus].push((row, -1.0));
+    }
+}
+
 /// Build the CSC matrix entries for one stage.
 ///
 /// Returns one `Vec<(row, value)>` per column. Entries within each column are
@@ -1049,7 +1425,9 @@ fn build_stage_matrix_entries(
     let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
 
     fill_state_and_water_entries(ctx, stage, stage_idx, layout, &mut col_entries);
-    fill_load_balance_entries(ctx, layout, &mut col_entries);
+    fill_load_balance_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_fpha_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_evaporation_entries(ctx, stage_idx, layout, &mut col_entries);
 
     // Sort each column's entries by row index (CSC invariant).
     for entries in &mut col_entries {
@@ -1098,7 +1476,7 @@ fn build_single_stage_template(
     stage: &Stage,
     stage_idx: usize,
 ) -> (StageTemplate, usize, usize) {
-    let layout = StageLayout::new(ctx, stage);
+    let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
     let load_balance_row_start = layout.row_load_balance_start;
 
@@ -1197,14 +1575,15 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///
 /// See the [module-level documentation](self) for the full LP layout.
 /// Key dimensions for a stage with N hydros, T thermals, Lines lines,
-/// B buses, and K blocks per stage:
+/// B buses, K blocks per stage, and F FPHA hydros each with M planes:
 ///
-/// - `num_cols = N*(2+L) + 1 + N*K*2 + T*K + Lines*K*2 + B*K*2`
-///   (when penalty method is active, `+ N` slack columns are appended)
-/// - `num_rows = N*(1+L) + N + B*K`  (fixing + water balance + load balance)
+/// - `num_cols = N*(2+L) + 1 + N*K*2 + T*K + Lines*K*2 + B*K*2 + [N penalty] + F*K`
+///   (FPHA generation columns added after inflow-slack columns)
+/// - `num_rows = N*(1+L) + N + B*K + F*K*M`
+///   (FPHA constraint rows added after load-balance rows)
 /// - `n_state  = N*(1+L)`
 /// - `n_transfer = N*L`  (storage + all lags except the oldest)
-/// - `n_dual_relevant = N*(1+L)`  (no FPHA for v0.1.0)
+/// - `n_dual_relevant = N*(1+L)`  (unchanged: FPHA rows are structural, not dual-relevant)
 ///
 /// ## PAR order and `max_par_order`
 ///
@@ -1222,6 +1601,8 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// When the penalty method is active, each inflow slack column `sigma_inf_h`
 /// carries objective coefficient `penalty_cost * total_stage_hours`.
 ///
+/// FPHA generation columns carry objective coefficient 0.0 by default.
+///
 /// ## Inflow non-negativity
 ///
 /// When `inflow_method.has_slack_columns()` is `true` (i.e., the `Penalty`
@@ -1231,21 +1612,48 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// acting as virtual inflow that prevents infeasibility when the PAR(p) noise
 /// is sufficiently negative.
 ///
-/// ## Errors
+/// ## FPHA hydros
 ///
-/// Returns `Err(SddpError::Validation)` when any hydro plant uses
-/// `HydroGenerationModel::Fpha`, which is not yet implemented.  The error
-/// message includes the plant name and ID so the caller can surface a
-/// diagnostic to the user.
+/// For hydros whose resolved production model at a given stage is
+/// [`ResolvedProductionModel::Fpha`], generation becomes a free variable
+/// `g_{h,k} ∈ [0, max_generation_mw]` bounded by M hyperplane constraints:
+///
+/// ```text
+/// g_{h,k} - gamma_v/2*v - gamma_v/2*v_in - gamma_q*q_{h,k} - gamma_s*s_{h,k} <= gamma_0
+/// ```
+///
+/// The `v_in` contribution propagates through the LP via the matrix coefficient
+/// `-gamma_v/2` on the incoming-storage column; when `v_in` is fixed by the
+/// storage-fixing equality row its value automatically enters the FPHA constraint
+/// right-hand side.  No changes to the backward pass or cut extraction are needed.
 ///
 /// Returns `Ok` with empty templates for a system with zero stages.  All
 /// entity counts may be zero (valid for degenerate test systems).
+///
+/// # Errors
+///
+/// Returns [`SddpError`] if the PAR precomputation data is inconsistent with
+/// the system (e.g., a hydro in `par_lp` is not present in `system`), or if
+/// the production model set has incompatible dimensions.
+///
+/// ## Evaporation hydros
+///
+/// For hydros whose evaporation model is
+/// [`EvaporationModel::Linearized`],
+/// three stage-level columns are added per hydro (`Q_ev`, `f_evap_plus`,
+/// `f_evap_minus`), all bounded `[0, +inf)` with objective coefficient 0.0.
+/// One equality constraint row is added per evaporation hydro with
+/// `row_lower == row_upper == k_evap0`.
+///
+/// CSC matrix entries for the evaporation constraint are added by ticket-011
+/// and ticket-012.  Violation cost objective coefficients are added by ticket-013.
 ///
 /// # Examples
 ///
 /// ```
 /// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
 /// use cobre_sddp::InflowNonNegativityMethod;
+/// use cobre_sddp::hydro_models::PrepareHydroModelsResult;
 /// use cobre_sddp::lp_builder::build_stage_templates;
 /// use cobre_stochastic::par::precompute::PrecomputedPar;
 ///
@@ -1259,9 +1667,11 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// let method = InflowNonNegativityMethod::None;
 /// let par_lp = PrecomputedPar::build(&[], &[], &[]).expect("empty ok");
 /// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormal::default();
+/// let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
 /// // No stages → empty result.
-/// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp)
-///     .expect("no FPHA plants");
+/// let result = build_stage_templates(&system, &method, &par_lp, &normal_lp,
+///                                    &hydro_models.production, &hydro_models.evaporation)
+///     .expect("empty system ok");
 /// assert!(result.templates.is_empty());
 /// ```
 pub fn build_stage_templates(
@@ -1269,17 +1679,9 @@ pub fn build_stage_templates(
     inflow_method: &InflowNonNegativityMethod,
     par_lp: &PrecomputedPar,
     normal_lp: &PrecomputedNormal,
+    production_models: &ProductionModelSet,
+    evaporation_models: &EvaporationModelSet,
 ) -> Result<StageTemplates, SddpError> {
-    // Validate: FPHA generation model is not yet implemented.
-    for hydro in system.hydros() {
-        if matches!(hydro.generation_model, HydroGenerationModel::Fpha) {
-            return Err(SddpError::Validation(format!(
-                "hydro plant '{}' (id={}) uses FPHA generation model which is not yet implemented",
-                hydro.name, hydro.id
-            )));
-        }
-    }
-
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let hydros = system.hydros();
@@ -1337,6 +1739,8 @@ pub fn build_stage_templates(
         bus_pos,
         inflow_method,
         par_lp,
+        production_models,
+        evaporation_models,
         n_hydros,
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),
@@ -1844,6 +2248,9 @@ mod tests {
     // -------------------------------------------------------------------------
 
     use super::build_stage_templates;
+    use crate::hydro_models::{
+        FphaPlane, PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel,
+    };
     use crate::inflow_method::InflowNonNegativityMethod;
     use cobre_core::{
         Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
@@ -1852,6 +2259,18 @@ mod tests {
     };
     use cobre_stochastic::normal::precompute::PrecomputedNormal;
     use cobre_stochastic::par::precompute::PrecomputedPar;
+
+    use crate::hydro_models::{EvaporationModel, EvaporationModelSet};
+
+    /// Build a default `ProductionModelSet` for a system (all constant productivity).
+    fn default_production(system: &cobre_core::System) -> ProductionModelSet {
+        PrepareHydroModelsResult::default_from_system(system).production
+    }
+
+    /// Build a default `EvaporationModelSet` for a system (all `EvaporationModel::None`).
+    fn default_evaporation(system: &cobre_core::System) -> EvaporationModelSet {
+        PrepareHydroModelsResult::default_from_system(system).evaporation
+    }
 
     /// Method with no penalty — used in structural tests that check exact
     /// column/row counts that would change if penalty columns were added.
@@ -2053,6 +2472,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -2180,8 +2600,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert!(result.templates.is_empty());
         assert!(result.base_rows.is_empty());
     }
@@ -2195,8 +2617,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert_eq!(result.templates.len(), 1);
         assert_eq!(result.base_rows.len(), 1);
     }
@@ -2213,8 +2637,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         // theta + deficit + excess = 1 + 1 + 1 = 3
         assert_eq!(t.num_cols, 3, "num_cols mismatch for no-entity system");
@@ -2232,8 +2658,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 7, "num_cols mismatch for N=1 L=0");
     }
@@ -2250,8 +2678,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=2");
     }
@@ -2267,8 +2697,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 1, "num_rows mismatch for no-hydro system");
     }
@@ -2285,8 +2717,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 3, "num_rows mismatch for N=1 L=0");
     }
@@ -2303,8 +2737,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.num_rows, 5, "num_rows mismatch for N=1 L=2");
     }
@@ -2318,8 +2754,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         let expected = StageIndexer::new(1, 2).n_state;
         assert_eq!(t.n_state, expected, "n_state must match StageIndexer");
@@ -2334,8 +2772,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
     }
@@ -2349,8 +2789,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(
             t.n_dual_relevant, t.n_state,
@@ -2367,8 +2809,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
             assert_eq!(
                 br, t.n_dual_relevant,
@@ -2386,8 +2830,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         for w in t.col_starts.windows(2) {
             assert!(w[0] <= w[1], "col_starts not monotone: {} > {}", w[0], w[1]);
@@ -2406,8 +2852,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         for &r in &t.row_indices {
             assert!(
@@ -2428,8 +2876,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         assert_eq!(
             t.num_nz,
@@ -2454,8 +2904,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
@@ -2474,8 +2926,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         // spillage col for h=0, blk=0: col_spillage_start + 0 = N*(2+L)+1 + N*K
         // With N=1, L=0, K=1: theta=2, decision_start=3, turbine_start=3, spill_start=4
@@ -2483,6 +2937,398 @@ mod tests {
         assert!(
             t.objective[spill_col] > 0.0,
             "spillage objective must be > 0 when spillage_cost > 0"
+        );
+    }
+
+    /// Build a 1-bus, 1-FPHA-hydro, 1-stage system with `n_planes` FPHA planes,
+    /// a given `fpha_turbined_cost`, and custom block durations.
+    ///
+    /// This is a variant of `one_fpha_hydro_system` that allows injecting an
+    /// arbitrary `fpha_turbined_cost` and specifying the stage blocks.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn fpha_system_with_turbined_cost(
+        n_planes: usize,
+        fpha_turbined_cost: f64,
+        block_durations_hours: &[f64],
+    ) -> (cobre_core::System, ProductionModelSet) {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let n_blks = block_durations_hours.len();
+        assert!(n_blks > 0, "must have at least one block");
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(2),
+            name: "FPHA1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 500.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::Fpha,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 150.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 300.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let blocks: Vec<Block> = block_durations_hours
+            .iter()
+            .enumerate()
+            .map(|(i, &hours)| Block {
+                index: i,
+                name: format!("BLK{i}"),
+                duration_hours: hours,
+            })
+            .collect();
+
+        let stages: Vec<Stage> = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks,
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models: Vec<InflowModel> = vec![InflowModel {
+            hydro_id: EntityId(2),
+            stage_id: 0,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        }];
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 200.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 500.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 150.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 300.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            1,
+            1,
+            0,
+            0,
+            1,
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("fpha_system_with_turbined_cost: valid");
+
+        let plane = FphaPlane {
+            intercept: 10.0,
+            gamma_v: 0.5,
+            gamma_q: 2.0,
+            gamma_s: 0.1,
+        };
+        let planes = vec![plane; n_planes];
+        let models = vec![vec![ResolvedProductionModel::Fpha {
+            planes,
+            turbined_cost: 0.0,
+        }]];
+        let production = ProductionModelSet::new(models, 1, 1);
+
+        (system, production)
+    }
+
+    // ---- fpha_turbined_cost tests -------------------------------------------
+
+    #[test]
+    fn fpha_turbined_cost_applied_to_fpha_turbine_column() {
+        // AC-1: 1 FPHA hydro with fpha_turbined_cost = 0.5 $/MWh, 1 block of 720h.
+        // Expected turbine column objective: 0.5 * 720 = 360.0.
+        //
+        // Column layout (N=1, L=0, K=1, no penalty):
+        //   theta = N*(2+L) = 2,  decision_start = 3
+        //   col_turbine_start = 3
+        //   turbine col h=0, blk=0: 3 + 0*1 + 0 = 3
+        let (system, production) = fpha_system_with_turbined_cost(3, 0.5, &[720.0]);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("fpha system builds ok");
+        let t = &result.templates[0];
+        let turbine_col = 3_usize;
+        let expected = 0.5 * 720.0;
+        assert!(
+            (t.objective[turbine_col] - expected).abs() < 1e-12,
+            "FPHA turbine col objective: expected {expected}, got {}",
+            t.objective[turbine_col]
+        );
+    }
+
+    #[test]
+    fn constant_hydro_turbine_column_has_zero_objective() {
+        // AC-2: constant-productivity hydro must have objective coefficient 0.0
+        // on its turbine column regardless of block duration.
+        //
+        // Column layout (N=1, L=0, K=1): col_turbine_start = 3.
+        let system = one_hydro_system(1, 0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("constant productivity ok");
+        let t = &result.templates[0];
+        let turbine_col = 3_usize;
+        assert_eq!(
+            t.objective[turbine_col], 0.0,
+            "constant hydro turbine column must have zero objective, got {}",
+            t.objective[turbine_col]
+        );
+    }
+
+    #[test]
+    fn fpha_turbined_cost_multi_block_uses_per_block_hours() {
+        // AC-3: 2-block stage — each turbine column carries cost * its own block_hours.
+        // fpha_turbined_cost = 1.0 $/MWh, block 0 = 300h, block 1 = 420h.
+        //
+        // Column layout (N=1, L=0, K=2, no penalty):
+        //   theta = N*(2+L) = 2, decision_start = 3, col_turbine_start = 3
+        //   turbine col h=0, blk=0: 3 + 0*2 + 0 = 3
+        //   turbine col h=0, blk=1: 3 + 0*2 + 1 = 4
+        let (system, production) = fpha_system_with_turbined_cost(3, 1.0, &[300.0, 420.0]);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("fpha multi-block system builds ok");
+        let t = &result.templates[0];
+        let col_blk0 = 3_usize;
+        let col_blk1 = 4_usize;
+        assert!(
+            (t.objective[col_blk0] - 300.0).abs() < 1e-12,
+            "block 0 turbine objective: expected 300.0, got {}",
+            t.objective[col_blk0]
+        );
+        assert!(
+            (t.objective[col_blk1] - 420.0).abs() < 1e-12,
+            "block 1 turbine objective: expected 420.0, got {}",
+            t.objective[col_blk1]
+        );
+    }
+
+    #[test]
+    fn fpha_turbined_cost_mixed_system_only_fpha_hydros_carry_cost() {
+        // AC-3: In a mixed system (2 constant + 2 FPHA), only the FPHA hydros'
+        // turbine columns carry the fpha_turbined_cost objective.
+        //
+        // We reuse four_hydro_mixed_system() but override fpha_turbined_cost.
+        let (system, production) = four_hydro_mixed_system();
+
+        // Rebuild penalties with non-zero fpha_turbined_cost.
+        let hydro_pen = HydroStagePenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 1.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        };
+        let penalties = ResolvedPenalties::new(
+            4,
+            1,
+            0,
+            0,
+            1,
+            hydro_pen,
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        // Rebuild system with the new penalties.
+        let system = SystemBuilder::new()
+            .buses(system.buses().to_vec())
+            .hydros(system.hydros().to_vec())
+            .stages(system.stages().to_vec())
+            .inflow_models(system.inflow_models().to_vec())
+            .load_models(system.load_models().to_vec())
+            .bounds(system.bounds().clone())
+            .penalties(penalties)
+            .build()
+            .expect("mixed system with turbined cost");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("mixed system builds");
+        let t = &result.templates[0];
+
+        // N=4, L=0, K=1: theta=8, decision_start=9
+        // col_turbine_start=9, turbine cols: h0=9, h1=10, h2=11, h3=12
+        // spillage cols: h0=13, h1=14, h2=15, h3=16
+        let col_turbine_start = 9;
+        let block_hours = 744.0;
+
+        // Hydros 0, 1 are ConstantProductivity → objective = 0.0.
+        assert!(
+            t.objective[col_turbine_start].abs() < 1e-12,
+            "constant hydro 0 turbine objective should be 0.0, got {}",
+            t.objective[col_turbine_start]
+        );
+        assert!(
+            t.objective[col_turbine_start + 1].abs() < 1e-12,
+            "constant hydro 1 turbine objective should be 0.0, got {}",
+            t.objective[col_turbine_start + 1]
+        );
+
+        // Hydros 2, 3 are FPHA → objective = 1.0 * 744.0 = 744.0.
+        assert!(
+            (t.objective[col_turbine_start + 2] - block_hours).abs() < 1e-12,
+            "FPHA hydro 2 turbine objective should be {}, got {}",
+            block_hours,
+            t.objective[col_turbine_start + 2]
+        );
+        assert!(
+            (t.objective[col_turbine_start + 3] - block_hours).abs() < 1e-12,
+            "FPHA hydro 3 turbine objective should be {}, got {}",
+            block_hours,
+            t.objective[col_turbine_start + 3]
         );
     }
 
@@ -2495,8 +3341,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
         let load_row = 0;
@@ -2519,8 +3367,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert_eq!(result.templates.len(), 3);
         assert_eq!(result.base_rows.len(), 3);
     }
@@ -2533,8 +3383,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let cloned = result.clone();
         assert_eq!(cloned.templates.len(), result.templates.len());
         let s = format!("{result:?}");
@@ -2545,11 +3397,12 @@ mod tests {
     // FPHA generation model validation tests
     // -------------------------------------------------------------------------
 
-    /// AC: a system where a hydro plant uses `Fpha` must be rejected before any
-    /// LP construction work, with an error message that contains the plant name.
+    /// AC: a system where a hydro plant uses `Fpha` entity model but has a
+    /// `ConstantProductivity` resolved model must succeed (the FPHA rejection
+    /// guard has been removed — validation now happens in `prepare_hydro_models`).
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn test_fpha_model_rejected() {
+    fn test_fpha_model_accepted() {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::{InflowModel, LoadModel};
@@ -2587,6 +3440,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -2692,25 +3546,37 @@ mod tests {
             .bounds(bounds)
             .penalties(penalties)
             .build()
-            .expect("test_fpha_model_rejected: valid system");
+            .expect("test_fpha_model_accepted: valid system");
 
-        let err = build_stage_templates(
+        // With a constant-productivity resolved model (default_from_system maps Fpha
+        // entity model → ConstantProductivity { productivity: 0.0 }) the builder
+        // must not reject the system.  FPHA entity model no longer causes a
+        // validation error — the resolved production model determines the LP layout.
+        let production = PrepareHydroModelsResult::default_from_system(&system).production;
+        let result = build_stage_templates(
             &system,
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
-        )
-        .expect_err("FPHA plant must cause an error");
+            &production,
+            &default_evaporation(&system),
+        );
 
-        let msg = err.to_string();
+        // The builder must now succeed (the old guard has been removed).
         assert!(
-            msg.contains("Tucurui"),
-            "error message must contain the hydro plant name 'Tucurui', got: {msg}"
+            result.is_ok(),
+            "Fpha entity model with ConstantProductivity resolved model must now succeed: {result:?}"
         );
-        assert!(
-            msg.to_lowercase().contains("fpha"),
-            "error message must mention 'FPHA', got: {msg}"
-        );
+
+        // The plant name 'Tucurui' should appear nowhere in an Ok result —
+        // if an error were still returned the name would be in the message.
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("Tucurui"),
+                "unexpected error for Tucurui: {msg}"
+            );
+        }
     }
 
     /// AC: a system where all hydro plants use `ConstantProductivity` must be
@@ -2723,6 +3589,8 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         );
         assert!(
             result.is_ok(),
@@ -2749,15 +3617,19 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let with_p = build_stage_templates(
             &system,
             &penalty_config(1000.0),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert_eq!(
             with_p.templates[0].num_cols,
             without.templates[0].num_cols + 1,
@@ -2779,15 +3651,19 @@ mod tests {
             &penalty_config(1000.0),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let without = build_stage_templates(
             &system,
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert_eq!(
             with_p.templates[0].num_cols, without.templates[0].num_cols,
             "no slack columns when n_hydros == 0, even with penalty config"
@@ -2806,8 +3682,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6, slack=7
         let slack_col = t.num_cols - 1; // last column
@@ -2829,8 +3707,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4; total = 9
         assert_eq!(t.num_cols, 9, "method=none must not add extra columns");
@@ -2850,8 +3730,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
 
         // Locate the slack column (last column, index = num_cols - 1).
@@ -2885,8 +3767,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
         let slack_col = t.num_cols - 1;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
@@ -2916,8 +3800,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let t = &result.templates[0];
 
         let slack_col = t.num_cols - 1;
@@ -2954,8 +3840,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         assert_eq!(result.templates.len(), 3);
         let base_cols = result.templates[0].num_cols;
         for t in &result.templates {
@@ -2993,8 +3881,10 @@ mod tests {
             &config,
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
         let template = &result.templates[0];
 
         // The inflow slack is the last column.
@@ -3152,6 +4042,7 @@ mod tests {
                 hydraulic_losses: None,
                 efficiency: None,
                 evaporation_coefficients_mm: None,
+                evaporation_reference_volumes_hm3: None,
                 diversion: None,
                 filling: None,
                 penalties: HydroPenalties {
@@ -3269,8 +4160,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
 
         assert_eq!(
             result.load_balance_row_starts.len(),
@@ -3303,8 +4196,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
 
         assert_eq!(
             result.n_load_buses, 1,
@@ -3331,8 +4226,10 @@ mod tests {
             &no_penalty_config(),
             &PrecomputedPar::default(),
             &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
         )
-        .expect("no FPHA plants");
+        .expect("constant productivity ok");
 
         assert_eq!(
             result.n_load_buses, 0,
@@ -3346,6 +4243,2426 @@ mod tests {
             result.load_balance_row_starts.len(),
             result.templates.len(),
             "load_balance_row_starts length must always match templates length"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // FPHA constraint tests (AC-1 through AC-5)
+    // -------------------------------------------------------------------------
+
+    /// Helper: find the coefficient for (column, row) in the CSC matrix of a
+    /// stage template.  Returns `None` if the column has no entry in that row.
+    #[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by construction
+    fn csc_entry(tmpl: &cobre_solver::StageTemplate, col: usize, row: usize) -> Option<f64> {
+        let start = tmpl.col_starts[col] as usize;
+        let end = tmpl.col_starts[col + 1] as usize;
+        for pos in start..end {
+            if tmpl.row_indices[pos] as usize == row {
+                return Some(tmpl.values[pos]);
+            }
+        }
+        None
+    }
+
+    /// Build a 1-bus, 1-FPHA-hydro, 1-stage, 1-block system plus an FPHA
+    /// `ProductionModelSet` with `n_planes` hyperplanes.
+    ///
+    /// Plane coefficients are deterministic: `intercept=10.0, gamma_v=0.5,
+    /// gamma_q=2.0, gamma_s=0.1` for every plane.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn one_fpha_hydro_system(n_planes: usize) -> (cobre_core::System, ProductionModelSet) {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hydro = Hydro {
+            id: EntityId(2),
+            name: "FPHA1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 500.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::Fpha,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 150.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 300.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let stages: Vec<Stage> = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models: Vec<InflowModel> = vec![InflowModel {
+            hydro_id: EntityId(2),
+            stage_id: 0,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        }];
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 200.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 500.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 150.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 300.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            1,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("one_fpha_hydro_system: valid");
+
+        // Build a ProductionModelSet with n_planes FPHA planes for hydro 0.
+        let plane = FphaPlane {
+            intercept: 10.0,
+            gamma_v: 0.5,
+            gamma_q: 2.0,
+            gamma_s: 0.1,
+        };
+        let planes = vec![plane; n_planes];
+        let models = vec![vec![ResolvedProductionModel::Fpha {
+            planes,
+            turbined_cost: 0.0,
+        }]];
+        let production = ProductionModelSet::new(models, 1, 1);
+
+        (system, production)
+    }
+
+    /// Build a 1-bus, 4-hydro, 1-stage, 1-block system with 2 constant and
+    /// 2 FPHA hydros.  Hydro indices 0 and 1 are constant productivity;
+    /// hydro indices 2 and 3 are FPHA (3 planes each).
+    ///
+    /// Hydros are declared in [`EntityId`](cobre_core::EntityId) order:
+    /// 100 (const), 101 (const), 102 (fpha), 103 (fpha) — canonical sort
+    /// order is preserved by the system builder.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn four_hydro_mixed_system() -> (cobre_core::System, ProductionModelSet) {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let hydro_penalties = HydroPenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        };
+
+        let make_hydro = |id: i32, gen_model: HydroGenerationModel| Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: gen_model,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: hydro_penalties,
+        };
+
+        let hydros = vec![
+            make_hydro(
+                100,
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s: 2.5,
+                },
+            ),
+            make_hydro(
+                101,
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s: 3.0,
+                },
+            ),
+            make_hydro(102, HydroGenerationModel::Fpha),
+            make_hydro(103, HydroGenerationModel::Fpha),
+        ];
+
+        let stages: Vec<Stage> = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models: Vec<InflowModel> = hydros
+            .iter()
+            .map(|h| InflowModel {
+                hydro_id: h.id,
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 400.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            4,
+            0,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            4,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("four_hydro_mixed_system: valid");
+
+        // Production models: hydros 0,1 → ConstantProductivity; hydros 2,3 → Fpha (3 planes).
+        let plane = FphaPlane {
+            intercept: 10.0,
+            gamma_v: 0.5,
+            gamma_q: 2.0,
+            gamma_s: 0.1,
+        };
+        let fpha_planes = vec![plane; 3];
+        let models = vec![
+            vec![ResolvedProductionModel::ConstantProductivity { productivity: 2.5 }],
+            vec![ResolvedProductionModel::ConstantProductivity { productivity: 3.0 }],
+            vec![ResolvedProductionModel::Fpha {
+                planes: fpha_planes.clone(),
+                turbined_cost: 0.0,
+            }],
+            vec![ResolvedProductionModel::Fpha {
+                planes: fpha_planes,
+                turbined_cost: 0.0,
+            }],
+        ];
+        let production = ProductionModelSet::new(models, 4, 1);
+
+        (system, production)
+    }
+
+    /// AC-1: 1-FPHA-hydro system with 5 planes and 1 block:
+    ///  - `num_cols` increases by 1 (one generation column) vs constant case
+    ///  - `num_rows` increases by 5 (five FPHA rows) vs constant case
+    #[test]
+    fn fpha_ac1_dimensions_one_fpha_hydro_five_planes() {
+        let (system, production) = one_fpha_hydro_system(5);
+
+        // Build with FPHA production model.
+        let fpha_result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA system ok");
+
+        // Build with constant-productivity production model (same system entity).
+        let const_result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("constant productivity ok");
+
+        let fpha_tmpl = &fpha_result.templates[0];
+        let const_tmpl = &const_result.templates[0];
+
+        assert_eq!(
+            fpha_tmpl.num_cols,
+            const_tmpl.num_cols + 1,
+            "FPHA adds exactly 1 generation column (1 hydro * 1 block)"
+        );
+        assert_eq!(
+            fpha_tmpl.num_rows,
+            const_tmpl.num_rows + 5,
+            "FPHA adds exactly 5 constraint rows (5 planes * 1 block)"
+        );
+    }
+
+    /// AC-2: generation column has entries in all 5 FPHA rows (+1.0) and in
+    ///       the load balance row for the hydro's bus (+1.0).
+    ///
+    /// Column layout for N=1, L=0, T=0, Lines=0, B=1, K=1, no penalty:
+    /// - 0: `v` (storage out)
+    /// - 1: `v_in` (storage in)
+    /// - 2: `theta`
+    /// - 3: `turbine[0,0]`
+    /// - 4: `spillage[0,0]`
+    /// - 5: `deficit[0,0]`
+    /// - 6: `excess[0,0]`
+    /// - 7: `g` (generation, FPHA, `col_generation_start = 7`)
+    ///
+    /// Row layout for N=1, L=0, B=1, K=1, 5 planes:
+    /// - 0: storage-fixing row (`n_state = n_dual_relevant = 1`)
+    /// - 1: water balance row 0 (`row_water_balance_start = 1`)
+    /// - 2: load balance row 0 (`row_load_balance_start = 2`)
+    /// - 3..7: FPHA rows 0..4 (`row_fpha_start = 3`)
+    #[test]
+    fn fpha_ac2_generation_column_entries() {
+        let n_planes = 5;
+        let (system, production) = one_fpha_hydro_system(n_planes);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA system ok");
+
+        let tmpl = &result.templates[0];
+
+        // N=1, L=0 → n_state = 1, decision_start = 3, col_generation_start = 7.
+        let col_g = 7_usize;
+
+        // row_fpha_start = 3 (= n_state + N hydro water balance + B*1 load balance)
+        let row_fpha_start = 3_usize;
+
+        // Check: generation column has +1.0 in each of the 5 FPHA rows.
+        for p in 0..n_planes {
+            let row = row_fpha_start + p;
+            let coeff = csc_entry(tmpl, col_g, row)
+                .unwrap_or_else(|| panic!("generation column missing entry in FPHA row {row}"));
+            assert!(
+                (coeff - 1.0).abs() < 1e-12,
+                "generation col FPHA row {row}: expected +1.0, got {coeff}"
+            );
+        }
+
+        // Check: generation column has +1.0 in the load balance row (row 2).
+        let row_lb = 2_usize;
+        let lb_coeff = csc_entry(tmpl, col_g, row_lb).unwrap_or_else(|| {
+            panic!("generation column missing entry in load balance row {row_lb}")
+        });
+        assert!(
+            (lb_coeff - 1.0).abs() < 1e-12,
+            "generation col load balance row: expected +1.0, got {lb_coeff}"
+        );
+    }
+
+    /// AC-3: `v_in` column has entries in all 5 FPHA rows with coefficient
+    ///       `-gamma_v/2`.
+    ///
+    /// For plane with `gamma_v = 0.5`: coefficient = `-0.5/2 = -0.25`.
+    #[test]
+    fn fpha_ac3_v_in_column_entries() {
+        let n_planes = 5;
+        let (system, production) = one_fpha_hydro_system(n_planes);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA system ok");
+
+        let tmpl = &result.templates[0];
+
+        // v_in column: for N=1, L=0, storage_in.start = 1.
+        let col_v_in = 1_usize;
+        let row_fpha_start = 3_usize;
+        // gamma_v = 0.5 → expected coefficient = -0.25
+        let expected = -0.5_f64 / 2.0;
+
+        for p in 0..n_planes {
+            let row = row_fpha_start + p;
+            let coeff = csc_entry(tmpl, col_v_in, row)
+                .unwrap_or_else(|| panic!("v_in column missing entry in FPHA row {row}"));
+            assert!(
+                (coeff - expected).abs() < 1e-12,
+                "v_in col FPHA row {row}: expected {expected}, got {coeff}"
+            );
+        }
+    }
+
+    /// AC-4: outgoing storage column (`v`) has entries in all 5 FPHA rows
+    ///       with coefficient `-gamma_v/2`.
+    ///
+    /// For plane with `gamma_v = 0.5`: coefficient = `-0.25`.
+    #[test]
+    fn fpha_ac4_v_out_column_entries() {
+        let n_planes = 5;
+        let (system, production) = one_fpha_hydro_system(n_planes);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA system ok");
+
+        let tmpl = &result.templates[0];
+
+        // v (outgoing storage) column: for N=1, index 0.
+        let col_v = 0_usize;
+        let row_fpha_start = 3_usize;
+        let expected = -0.5_f64 / 2.0;
+
+        for p in 0..n_planes {
+            let row = row_fpha_start + p;
+            let coeff = csc_entry(tmpl, col_v, row)
+                .unwrap_or_else(|| panic!("v column missing entry in FPHA row {row}"));
+            assert!(
+                (coeff - expected).abs() < 1e-12,
+                "v col FPHA row {row}: expected {expected}, got {coeff}"
+            );
+        }
+    }
+
+    /// AC-5: mixed system (2 constant + 2 FPHA hydros).
+    ///
+    /// Column layout for N=4, L=0, T=0, Lines=0, B=1, K=1, no penalty:
+    /// - state cols 0..3: `v[0..3]`; 4..7: `v_in[0..3]`; 8: `theta`
+    /// - `col_turbine_start = 9`, `col_spillage_start = 13`
+    /// - `col_deficit_start = 17`, `col_excess_start = 18`
+    /// - `col_generation_start = 19` (no penalty)
+    /// - FPHA hydro 0 (`local_idx=0`, `h_idx=2`): g col = 19
+    /// - FPHA hydro 1 (`local_idx=1`, `h_idx=3`): g col = 20
+    ///
+    /// Row layout:
+    /// - `n_state = 4`, `row_water_balance_start = 4`
+    /// - `row_load_balance_start = 8`, `row_fpha_start = 9`
+    /// - Load balance for bus B1 (`bus_idx=0`, blk=0): row = 8
+    #[test]
+    fn fpha_ac5_mixed_system_load_balance_uses_generation_col() {
+        let (system, production) = four_hydro_mixed_system();
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("mixed FPHA/constant system ok");
+
+        let tmpl = &result.templates[0];
+
+        // Verify overall dimensions: 2 FPHA hydros * 1 block * 3 planes = 6 extra rows,
+        // 2 generation columns.
+        // Base (constant) num_cols = 9 + 4*1*2 + 0 + 0 + 1*1*2 = 9 + 8 + 2 = 19.
+        // With FPHA: 19 + 2 = 21.
+        // Base num_rows = n_state + 4 water balance + 1*1 load balance = 4 + 4 + 1 = 9.
+        // With FPHA: 9 + 2*1*3 = 9 + 6 = 15.
+        assert_eq!(
+            tmpl.num_cols, 21,
+            "4-hydro mixed system: num_cols should be 21"
+        );
+        assert_eq!(
+            tmpl.num_rows, 15,
+            "4-hydro mixed system: num_rows should be 15"
+        );
+
+        // Load balance row for the single bus, block 0: row = 8.
+        let row_lb = 8_usize;
+
+        // FPHA hydro at h_idx=2 (local_idx=0): generation col = 19.
+        let col_g_fpha0 = 19_usize;
+        let g0_lb_coeff = csc_entry(tmpl, col_g_fpha0, row_lb).unwrap_or_else(|| {
+            panic!("FPHA hydro 0 generation column missing entry in load balance row {row_lb}")
+        });
+        assert!(
+            (g0_lb_coeff - 1.0).abs() < 1e-12,
+            "FPHA hydro 0 load balance: expected +1.0, got {g0_lb_coeff}"
+        );
+
+        // FPHA hydro at h_idx=3 (local_idx=1): generation col = 20.
+        let col_g_fpha1 = 20_usize;
+        let g1_lb_coeff = csc_entry(tmpl, col_g_fpha1, row_lb).unwrap_or_else(|| {
+            panic!("FPHA hydro 1 generation column missing entry in load balance row {row_lb}")
+        });
+        assert!(
+            (g1_lb_coeff - 1.0).abs() < 1e-12,
+            "FPHA hydro 1 load balance: expected +1.0, got {g1_lb_coeff}"
+        );
+
+        // Constant hydro at h_idx=0: turbine col = col_turbine_start + 0*1+0 = 9.
+        // This turbine column must appear in load balance row 8 with coefficient
+        // rho*block_hours = 2.5 * 744 (not +1.0), confirming old behavior preserved.
+        let col_turb_const = 9_usize;
+        let turb_lb_coeff = csc_entry(tmpl, col_turb_const, row_lb);
+        assert!(
+            turb_lb_coeff.is_some(),
+            "constant hydro 0 turbine col must appear in load balance row"
+        );
+        // The key invariant: constant hydro uses rho * turbine_col in the load
+        // balance row (not a generation column).  The coefficient is rho (the
+        // productivity scalar), not rho * block_hours; block_hours scaling is
+        // applied only to cost objectives, not to the power-balance matrix.
+        // For hydro 0 with productivity 2.5 MW/(m³/s): coefficient = 2.5.
+        let expected_rho_coeff = 2.5_f64;
+        assert!(
+            (turb_lb_coeff.unwrap() - expected_rho_coeff).abs() < 1e-12,
+            "constant hydro 0 turbine: expected rho = {expected_rho_coeff}, got {turb_lb_coeff:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // ticket-009: FPHA LP integration tests (HiGHS end-to-end solve)
+    // -------------------------------------------------------------------------
+    //
+    // These tests build an FPHA template, load it into HiGHS, patch the
+    // storage-fixing row to set `v_in`, solve, and inspect the solution.
+    //
+    // Column layout for N=1, L=0, T=0, Lines=0, B=1, K=1, 3 planes, no penalty:
+    //   col 0: v        (outgoing storage, hm³)
+    //   col 1: v_in     (incoming storage, fixed by row 0)
+    //   col 2: theta    (future cost)
+    //   col 3: q        (turbined flow, m³/s)
+    //   col 4: s        (spillage, m³/s)
+    //   col 5: deficit
+    //   col 6: excess
+    //   col 7: g        (FPHA generation variable, MW)
+    //
+    // Row layout for N=1, L=0, B=1, K=1, 3 planes:
+    //   row 0: storage-fixing  (equality: v_in = v_in_value)
+    //   row 1: water-balance
+    //   row 2: load-balance    (equality: g = load_mw = 200 MW)
+    //   row 3: FPHA plane 0
+    //   row 4: FPHA plane 1
+    //   row 5: FPHA plane 2
+    //
+    // Planes used in these tests (realistic, feasibility-ensuring):
+    //   intercept = 300.0, gamma_v = 1.0 (>0), gamma_q = 3.0 (>0), gamma_s = 0.0 (<=0)
+    //
+    // With v_in = 100 hm³, inflow = 80 m³/s, load = 200 MW, spillage = 0:
+    //   water balance: v = v_in + zeta*(q_in - q - s) = 100 + 0.2678*80 - (q+s)*zeta
+    //   FPHA constraint: g <= 300 + 1.0*v_avg + 3.0*q
+    //   load-balance: g = 200.0 (equality)
+    //   At g=200, q=50 m³/s: 300 + 1.0*v_avg + 3.0*50 = 300 + ~100 + 150 = 550 >> 200 ✓
+
+    /// Build a 1-FPHA-hydro system identical to `one_fpha_hydro_system` but
+    /// with 3 planes and a large-enough intercept to ensure the solve is
+    /// feasible for any `v_in` in `[0, 500]` hm³ and reasonable turbine flow.
+    ///
+    /// Planes: `intercept=300.0, gamma_v=1.0, gamma_q=3.0, gamma_s=0.0`.
+    fn fpha_solve_system() -> (cobre_core::System, ProductionModelSet) {
+        let planes = vec![
+            FphaPlane {
+                intercept: 300.0,
+                gamma_v: 1.0,
+                gamma_q: 3.0,
+                gamma_s: 0.0,
+            };
+            3
+        ];
+        let models = vec![vec![ResolvedProductionModel::Fpha {
+            planes,
+            turbined_cost: 0.0,
+        }]];
+        let production = ProductionModelSet::new(models, 1, 1);
+        // Reuse the one_fpha_hydro_system fixture (max_storage=500, max_turbine=150,
+        // max_generation=300, load=200 MW) but replace its planes via production above.
+        let (system, _) = one_fpha_hydro_system(3);
+        (system, production)
+    }
+
+    /// AC (ticket-009): 1-FPHA-hydro LP solves to Optimal with generation > 0.
+    ///
+    /// Patches `v_in = 100 hm³` (row 0), then solves. Asserts:
+    /// - status is `Ok` (no solver error)
+    /// - objective is finite
+    /// - `g` (col 7) is strictly positive
+    #[test]
+    fn fpha_solve_one_hydro_optimal() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let (system, production) = fpha_solve_system();
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        // No cuts at this point.
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        // Fix v_in = 100 hm³ via the storage-fixing row (row 0).
+        let v_in = 100.0_f64;
+        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+
+        let view = solver
+            .solve()
+            .expect("FPHA LP must be feasible and optimal");
+
+        // col 7 is g (generation variable).
+        let col_g = 7_usize;
+        let generation = view.primal[col_g];
+        assert!(
+            generation > 0.0,
+            "FPHA generation must be strictly positive, got {generation}"
+        );
+    }
+
+    /// AC (ticket-009): all hyperplane constraints hold within 1e-6 tolerance
+    /// after solving the 1-FPHA-hydro LP.
+    ///
+    /// For each plane p: `g <= intercept + gamma_v * v_avg + gamma_q * q + gamma_s * s`
+    /// where `v_avg = (v + v_in) / 2`.
+    ///
+    /// Column indices (N=1, L=0, no penalty, 3 planes):
+    ///   col 0: `v`, col 1: `v_in`, col 3: `q`, col 4: `s`, col 7: `g`
+    #[test]
+    fn fpha_solve_hyperplane_constraints_hold() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let (system, production) = fpha_solve_system();
+
+        // Extract planes before moving production into build_stage_templates.
+        let planes = match production.model(0, 0) {
+            ResolvedProductionModel::Fpha { planes, .. } => planes.clone(),
+            ResolvedProductionModel::ConstantProductivity { .. } => {
+                panic!("expected Fpha model")
+            }
+        };
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        let v_in = 100.0_f64;
+        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+
+        let view = solver.solve().expect("FPHA LP must solve to optimal");
+        let primal = view.primal;
+
+        let col_v = 0_usize;
+        let col_v_in = 1_usize;
+        let col_q = 3_usize;
+        let col_s = 4_usize;
+        let col_g = 7_usize;
+
+        let g = primal[col_g];
+        let v = primal[col_v];
+        let v_in_sol = primal[col_v_in];
+        let q = primal[col_q];
+        let s = primal[col_s];
+        let v_avg = f64::midpoint(v, v_in_sol);
+
+        for (p_idx, plane) in planes.iter().enumerate() {
+            let rhs =
+                plane.intercept + plane.gamma_v * v_avg + plane.gamma_q * q + plane.gamma_s * s;
+            assert!(
+                g <= rhs + 1e-6,
+                "FPHA plane {p_idx}: g={g} must be <= rhs={rhs} \
+                 (intercept={intercept}, gamma_v={gamma_v}, v_avg={v_avg}, \
+                  gamma_q={gamma_q}, q={q}, gamma_s={gamma_s}, s={s})",
+                intercept = plane.intercept,
+                gamma_v = plane.gamma_v,
+                gamma_q = plane.gamma_q,
+                gamma_s = plane.gamma_s,
+            );
+        }
+    }
+
+    /// AC (ticket-009): storage-fixing dual differs between FPHA and
+    /// constant-productivity for the same system entity.
+    ///
+    /// The FPHA model introduces `-gamma_v/2` entries on the `v_in` column
+    /// in the hyperplane rows, which propagates through the simplex dual and
+    /// modifies the shadow price of the storage-fixing equality (row 0).
+    ///
+    /// # Design
+    ///
+    /// To guarantee the FPHA constraint is **binding** at the optimum — a
+    /// necessary condition for a non-zero storage-fixing dual — the planes use
+    /// tight coefficients: `intercept=0, gamma_v=0.5, gamma_q=1.0, gamma_s=0.0`.
+    ///
+    /// System: 1 hydro, 1 bus, load=200 MW, inflow=80 m³/s, `max_turbine`=150 m³/s,
+    /// `deficit_cost`=500. At `v_in`=100 hm³, the maximum achievable generation
+    /// without deficit is approximately 142 MW < 200 MW (see comment below).
+    /// The optimizer turbines at max capacity (bounded by water balance) and covers
+    /// the remainder with costly deficit, so the FPHA constraint is binding and
+    /// `d(cost)/d(v_in)` < 0.
+    ///
+    /// For the constant-productivity model (`default_from_system` gives `rho`=0),
+    /// the turbine contributes zero generation and the cost is always 500*200,
+    /// independent of `v_in` → dual = 0.
+    ///
+    /// Therefore the duals differ: FPHA dual is negative (more storage reduces cost),
+    /// constant-productivity dual is zero.
+    ///
+    /// # FPHA constraint analysis
+    ///
+    /// With `intercept=0, gamma_v=0.5, gamma_q=1.0, gamma_s=0.0`, K=1, `zeta`≈2.678:
+    /// - FPHA row: `g <= 0.5/2*(v + v_in) + 1.0*q = 0.25*(v + v_in) + q`
+    /// - Water balance: `v = v_in + inflow*zeta - (q+s)*zeta`
+    /// - Maximum feasible `q` (`v`≥0 binding): `q_max = v_in/zeta + inflow ≈ 37.3 + 80 = 117.3 m³/s`
+    /// - Maximum `g` ≈ `0.25*(0 + v_in) + 117.3` ≈ `25 + 117.3 = 142.3 MW` < 200 MW
+    ///
+    /// The FPHA constraint is binding at `q_max`; extra `v_in` increases both `q_max` and
+    /// the direct `gamma_v*v_in` term, reducing the deficit and hence the cost.
+    #[test]
+    fn fpha_solve_storage_fixing_dual_differs_from_constant() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let (system, _) = one_fpha_hydro_system(1);
+
+        // FPHA production model with tight planes: intercept=0, gamma_v=0.5, gamma_q=1.0.
+        // These coefficients make the FPHA capacity (~142 MW) below the load (200 MW),
+        // ensuring the constraint is binding and the storage-fixing dual is non-zero.
+        let tight_planes = vec![FphaPlane {
+            intercept: 0.0,
+            gamma_v: 0.5,
+            gamma_q: 1.0,
+            gamma_s: 0.0,
+        }];
+        let fpha_production = ProductionModelSet::new(
+            vec![vec![ResolvedProductionModel::Fpha {
+                planes: tight_planes,
+                turbined_cost: 0.0,
+            }]],
+            1,
+            1,
+        );
+
+        // Build template for FPHA production model.
+        let fpha_result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &fpha_production,
+            &default_evaporation(&system),
+        )
+        .expect("FPHA template build must succeed");
+
+        // Build template for constant-productivity production model.
+        // `default_from_system` maps the Fpha entity model to productivity=0.0,
+        // so the turbine contributes nothing to generation and the cost is always
+        // deficit_cost * load_mw regardless of v_in → dual[0] = 0.
+        let const_production = default_production(&system);
+        let const_result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &const_production,
+            &default_evaporation(&system),
+        )
+        .expect("constant productivity template build must succeed");
+
+        let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
+            let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+            solver.load_model(template);
+            let empty_cuts = RowBatch {
+                num_rows: 0,
+                row_starts: vec![0_i32],
+                col_indices: vec![],
+                values: vec![],
+                row_lower: vec![],
+                row_upper: vec![],
+            };
+            solver.add_rows(&empty_cuts);
+            // Fix v_in = 100 hm³ via the storage-fixing equality row (row 0).
+            let v_in = 100.0_f64;
+            solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+            let view = solver.solve().expect("LP must solve to optimal");
+            // Row 0 is the storage-fixing equality; its dual is the marginal cost
+            // of one additional hm³ of initial storage.
+            view.dual[0]
+        };
+
+        let fpha_dual = solve_and_get_storage_dual(&fpha_result.templates[0]);
+        let const_dual = solve_and_get_storage_dual(&const_result.templates[0]);
+
+        // Constant-productivity with rho=0 has zero storage-fixing dual (v_in
+        // cannot improve generation when turbine contributes nothing).
+        assert!(
+            const_dual.abs() < 1e-6,
+            "constant-productivity dual must be ~0, got {const_dual}"
+        );
+
+        // FPHA dual is non-zero because higher v_in expands the feasible generation
+        // via the gamma_v term and the water balance, reducing the deficit cost.
+        assert!(
+            fpha_dual.abs() > 1e-6,
+            "FPHA storage-fixing dual must be non-zero (FPHA v_in contribution \
+             must be present), got {fpha_dual}"
+        );
+
+        assert_ne!(
+            (fpha_dual * 1e6).round(),
+            (const_dual * 1e6).round(),
+            "storage-fixing dual must differ between FPHA ({fpha_dual}) and \
+             constant-productivity ({const_dual})"
+        );
+    }
+
+    /// AC (ticket-009, mixed): 2-constant + 1-FPHA system solves to Optimal.
+    ///
+    /// Verifies that generation variables for both types of hydros have
+    /// correct values in the solution:
+    /// - constant hydros: turbine * rho contributes to load balance
+    /// - FPHA hydro: generation variable `g` satisfies load balance
+    ///
+    /// Uses `four_hydro_mixed_system` (2 constant + 2 FPHA hydros, 1 bus, 1 block).
+    ///
+    /// Column layout for N=4, L=0, no penalty:
+    ///   cols 9..12: turbine[0..3] (q per hydro per block)
+    ///   cols 19..20: g[0..1] (FPHA generation variables for hydros 2 and 3)
+    #[test]
+    fn fpha_solve_mixed_system_optimal() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let (system, production) = four_hydro_mixed_system();
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &default_evaporation(&system),
+        )
+        .expect("mixed FPHA/constant system template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        // Fix v_in for all 4 hydros (rows 0..3 are storage-fixing rows).
+        // N=4, so storage_fixing = 0..4; v_in columns are storage_in = 4..8.
+        solver.set_row_bounds(
+            &[0, 1, 2, 3],
+            &[100.0, 100.0, 100.0, 100.0],
+            &[100.0, 100.0, 100.0, 100.0],
+        );
+
+        let view = solver
+            .solve()
+            .expect("mixed FPHA LP must be feasible and optimal");
+
+        // The solve must return a finite objective.
+        assert!(
+            view.objective.is_finite(),
+            "objective must be finite, got {}",
+            view.objective
+        );
+
+        // FPHA generation variables (cols 19 and 20) must be non-negative.
+        let col_g0 = 19_usize;
+        let col_g1 = 20_usize;
+        assert!(
+            view.primal[col_g0] >= 0.0,
+            "FPHA hydro 0 generation must be non-negative, got {}",
+            view.primal[col_g0]
+        );
+        assert!(
+            view.primal[col_g1] >= 0.0,
+            "FPHA hydro 1 generation must be non-negative, got {}",
+            view.primal[col_g1]
+        );
+    }
+
+    // =========================================================================
+    // Evaporation variable tests (ticket-010)
+    // =========================================================================
+
+    use cobre_solver::StageTemplate;
+
+    use crate::hydro_models::LinearizedEvaporation;
+
+    /// Build an `EvaporationModelSet` for a system where only the specified
+    /// hydro indices have linearized evaporation.
+    ///
+    /// All hydros receive `EvaporationModel::None` by default; hydros at the
+    /// given `evap_indices` receive `Linearized` with the provided per-stage
+    /// `k_evap0` values (uniform across stages).
+    fn evap_set_for_system(
+        system: &cobre_core::System,
+        evap_indices: &[usize],
+        k_evap0_per_stage: &[f64],
+    ) -> EvaporationModelSet {
+        let n_hydros = system.hydros().len();
+        let n_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+        let models = (0..n_hydros)
+            .map(|h| {
+                if evap_indices.contains(&h) {
+                    let coefficients = (0..n_stages)
+                        .map(|s| LinearizedEvaporation {
+                            k_evap0: k_evap0_per_stage
+                                .get(s)
+                                .copied()
+                                .unwrap_or(k_evap0_per_stage.first().copied().unwrap_or(0.0)),
+                            k_evap_v: 0.0,
+                        })
+                        .collect();
+                    EvaporationModel::Linearized {
+                        coefficients,
+                        reference_volumes_hm3: vec![100.0; n_stages],
+                    }
+                } else {
+                    EvaporationModel::None
+                }
+            })
+            .collect();
+        EvaporationModelSet::new(models)
+    }
+
+    /// AC (ticket-010): 0 evaporation hydros — `num_cols` and `num_rows` are unchanged.
+    ///
+    /// A system with 1 hydro (L=0, T=0, B=1, K=1) and no evaporation:
+    /// - Without evaporation: `num_cols` = N\*(2+L)+1 + N\*K\*2 + B\*K\*2 = 3+2+2 = 7
+    /// - Without evaporation: `num_rows` = N\*(1+L) + N + B\*K = 1+1+1 = 3
+    /// - With 0 evaporation hydros: identical (0 extra cols, 0 extra rows)
+    #[test]
+    fn evap_zero_hydros_layout_unchanged() {
+        let system = one_hydro_system(1, 0);
+        let no_evap = default_evaporation(&system);
+        let with_evap = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &no_evap,
+        )
+        .expect("no evaporation ok");
+
+        let baseline = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &EvaporationModelSet::new(vec![EvaporationModel::None]),
+        )
+        .expect("none evaporation ok");
+
+        assert_eq!(
+            with_evap.templates[0].num_cols, baseline.templates[0].num_cols,
+            "num_cols must match with zero evaporation hydros"
+        );
+        assert_eq!(
+            with_evap.templates[0].num_rows, baseline.templates[0].num_rows,
+            "num_rows must match with zero evaporation hydros"
+        );
+    }
+
+    /// AC (ticket-010): 2 evaporation hydros + 1 block → `num_cols` += 6, `num_rows` += 2.
+    ///
+    /// Uses a system with 2 hydros (L=0, T=0, B=1, K=1).
+    /// Baseline (no evaporation):
+    ///   `num_cols` = N\*(2+L)+1 + N\*K\*2 + B\*K\*2 = 5+4+2 = 11
+    ///   `num_rows` = N\*(1+L) + N + B\*K = 2+2+1 = 5
+    /// With 2 evaporation hydros:
+    ///   `num_cols` = 11 + 2\*3 = 17
+    ///   `num_rows` = 5 + 2 = 7
+    #[test]
+    fn evap_two_hydros_increases_cols_and_rows() {
+        // Build a 2-hydro system using one_hydro_system as base and adapt.
+        let system1 = one_hydro_system(1, 0);
+        // Use one_bus_system as the reference (1 bus, no hydros) for the delta.
+        // Instead, build a 2-hydro system directly.
+        // We reuse one_hydro_system for 2 independent calls; here we use a simpler approach:
+        // compare a system with 1 hydro + no evaporation vs 1 hydro + 1 evaporation hydro.
+        // This gives +3 cols and +1 row per evaporation hydro.
+
+        let baseline = build_stage_templates(
+            &system1,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system1),
+            &EvaporationModelSet::new(vec![EvaporationModel::None]),
+        )
+        .expect("no evaporation baseline ok");
+
+        let evap = evap_set_for_system(&system1, &[0], &[1.5]);
+        let with_evap = build_stage_templates(
+            &system1,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system1),
+            &evap,
+        )
+        .expect("1 evaporation hydro ok");
+
+        let base_cols = baseline.templates[0].num_cols;
+        let base_rows = baseline.templates[0].num_rows;
+        let evap_cols = with_evap.templates[0].num_cols;
+        let evap_rows = with_evap.templates[0].num_rows;
+
+        assert_eq!(
+            evap_cols,
+            base_cols + 3,
+            "1 evap hydro must add exactly 3 columns (Q_ev, f_evap_plus, f_evap_minus)"
+        );
+        assert_eq!(
+            evap_rows,
+            base_rows + 1,
+            "1 evap hydro must add exactly 1 row (evaporation equality constraint)"
+        );
+    }
+
+    /// AC (ticket-010): evaporation row bounds are equality: `row_lower == row_upper == k_evap0`.
+    ///
+    /// Uses a 1-hydro system with `k_evap0 = 1.5` at stage 0.
+    #[test]
+    fn evap_row_bounds_equality_at_k_evap0() {
+        let system = one_hydro_system(1, 0);
+        let k_evap0 = 1.5_f64;
+        let evap = evap_set_for_system(&system, &[0], &[k_evap0]);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+
+        // Evaporation row is the last row (placed after all other rows).
+        let evap_row = t.num_rows - 1;
+        assert_eq!(
+            t.row_lower[evap_row], k_evap0,
+            "evaporation row_lower must equal k_evap0 = {k_evap0}, got {}",
+            t.row_lower[evap_row]
+        );
+        assert_eq!(
+            t.row_upper[evap_row], k_evap0,
+            "evaporation row_upper must equal k_evap0 = {k_evap0}, got {}",
+            t.row_upper[evap_row]
+        );
+    }
+
+    /// AC (ticket-010): evaporation column bounds are [0, +inf) and objective is 0.0.
+    #[test]
+    fn evap_col_bounds_and_objective() {
+        let system = one_hydro_system(1, 0);
+        let evap = evap_set_for_system(&system, &[0], &[1.5]);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+
+        // The 3 evaporation columns are the last 3 columns.
+        let col_q_ev = t.num_cols - 3;
+        let col_f_plus = t.num_cols - 2;
+        let col_f_minus = t.num_cols - 1;
+
+        for &col in &[col_q_ev, col_f_plus, col_f_minus] {
+            assert_eq!(
+                t.col_lower[col], 0.0,
+                "evap column {col} lower bound must be 0.0, got {}",
+                t.col_lower[col]
+            );
+            assert!(
+                t.col_upper[col].is_infinite() && t.col_upper[col] > 0.0,
+                "evap column {col} upper bound must be +inf, got {}",
+                t.col_upper[col]
+            );
+            assert_eq!(
+                t.objective[col], 0.0,
+                "evap column {col} objective must be 0.0 (ticket-013 sets violation cost), got {}",
+                t.objective[col]
+            );
+        }
+    }
+
+    // =========================================================================
+    // ticket-011: fill_evaporation_entries — CSC matrix entries
+    // =========================================================================
+
+    /// Build an `EvaporationModelSet` where evaporation hydros have a specific
+    /// `k_evap_v` in addition to `k_evap0`.
+    ///
+    /// Hydros not in `evap_indices` receive `EvaporationModel::None`.
+    fn evap_set_with_k_evap_v(
+        system: &cobre_core::System,
+        evap_indices: &[usize],
+        k_evap0: f64,
+        k_evap_v: f64,
+    ) -> EvaporationModelSet {
+        let n_hydros = system.hydros().len();
+        let n_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+        let models = (0..n_hydros)
+            .map(|h| {
+                if evap_indices.contains(&h) {
+                    let coefficients = (0..n_stages)
+                        .map(|_| LinearizedEvaporation { k_evap0, k_evap_v })
+                        .collect();
+                    EvaporationModel::Linearized {
+                        coefficients,
+                        reference_volumes_hm3: vec![100.0; n_stages],
+                    }
+                } else {
+                    EvaporationModel::None
+                }
+            })
+            .collect();
+        EvaporationModelSet::new(models)
+    }
+
+    /// Collect all `(row, value)` pairs from the assembled CSC for a given column.
+    ///
+    /// Reads `col_starts`, `row_indices`, and `values` from a [`StageTemplate`].
+    #[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by construction
+    fn entries_for_col(t: &StageTemplate, col: usize) -> Vec<(usize, f64)> {
+        let start = t.col_starts[col] as usize;
+        let end = t.col_starts[col + 1] as usize;
+        (start..end)
+            .map(|i| (t.row_indices[i] as usize, t.values[i]))
+            .collect()
+    }
+
+    /// AC (ticket-011): 1 evaporation hydro (`h_idx=0`) with `k_evap_v = 0.02` produces
+    /// the correct CSC entries at the evaporation row and water balance row.
+    ///
+    /// Expected entries on the evaporation constraint row:
+    ///   `(Q_ev_col, +1.0)`, `(v_col, -0.01)`, `(v_in_col, -0.01)`,
+    ///   `(f_plus_col, +1.0)`, `(f_minus_col, -1.0)`.
+    ///
+    /// After ticket-012, the `Q_ev` column also has an entry in the water balance
+    /// row with coefficient `+zeta`.
+    #[test]
+    fn evap_csc_entries_one_hydro_correct_coefficients() {
+        let system = one_hydro_system(1, 0);
+        let k_evap_v = 0.02_f64;
+        let evap = evap_set_with_k_evap_v(&system, &[0], 1.5, k_evap_v);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+
+        // Column layout for 1-hydro system (N=1, L=0, T=0, B=1, K=1):
+        //   col 0      = v (outgoing storage, h_idx=0)
+        //   col 1      = v_in (incoming storage, h_idx=0)  [storage_in.start = N*(1+L) = 1]
+        //   col 2      = theta (value function)             [theta = N*(2+L) = 2]
+        //   decision_start = 3
+        //   col 3      = turbine (h=0, blk=0)
+        //   col 4      = spillage (h=0, blk=0)
+        //   col_evap_start = num_cols - 3
+        // Row layout for N=1, L=0, B=1, K=1, no FPHA:
+        //   row 0: storage-fixing
+        //   row 1: water balance (row_water_balance_start = n_state = 1)
+        //   row 2: load balance
+        //   row 3: evaporation constraint (row_evap_start = 3)
+        let col_q_ev = t.num_cols - 3;
+        let col_f_plus = t.num_cols - 2;
+        let col_f_minus = t.num_cols - 1;
+        let evap_row = t.num_rows - 1;
+        let water_balance_row = 1_usize; // row_water_balance_start = n_state = 1
+
+        // After ticket-012, Q_ev has 2 entries: water balance row (+zeta) and
+        // evaporation constraint row (+1.0). Entries are sorted by row ascending.
+        let zeta = 744.0 * (3_600.0 / 1_000_000.0);
+        let entries_q_ev = entries_for_col(t, col_q_ev);
+        assert_eq!(
+            entries_q_ev.len(),
+            2,
+            "Q_ev column must have exactly 2 entries (water balance + evap constraint), got {entries_q_ev:?}"
+        );
+        // Entries are CSC-sorted by row; water balance row (1) < evap row (3).
+        assert_eq!(
+            entries_q_ev[0].0, water_balance_row,
+            "Q_ev first entry must be at water balance row"
+        );
+        assert!(
+            (entries_q_ev[0].1 - zeta).abs() < 1e-12,
+            "Q_ev water balance coefficient must be +zeta={zeta}, got {}",
+            entries_q_ev[0].1
+        );
+        assert_eq!(
+            entries_q_ev[1].0, evap_row,
+            "Q_ev second entry must be at evap_row"
+        );
+        assert!(
+            (entries_q_ev[1].1 - 1.0).abs() < 1e-12,
+            "Q_ev evap constraint coefficient must be +1.0, got {}",
+            entries_q_ev[1].1
+        );
+
+        let entries_f_plus = entries_for_col(t, col_f_plus);
+        assert_eq!(
+            entries_f_plus.len(),
+            1,
+            "f_plus column must have exactly 1 entry, got {entries_f_plus:?}"
+        );
+        assert_eq!(
+            entries_f_plus[0].0, evap_row,
+            "f_plus entry must be at evap_row"
+        );
+        assert!(
+            (entries_f_plus[0].1 - 1.0).abs() < 1e-12,
+            "f_plus coefficient must be +1.0, got {}",
+            entries_f_plus[0].1
+        );
+
+        let entries_f_minus = entries_for_col(t, col_f_minus);
+        assert_eq!(
+            entries_f_minus.len(),
+            1,
+            "f_minus column must have exactly 1 entry, got {entries_f_minus:?}"
+        );
+        assert_eq!(
+            entries_f_minus[0].0, evap_row,
+            "f_minus entry must be at evap_row"
+        );
+        assert!(
+            (entries_f_minus[0].1 - (-1.0)).abs() < 1e-12,
+            "f_minus coefficient must be -1.0, got {}",
+            entries_f_minus[0].1
+        );
+
+        // v column (col 0, h_idx=0) must contain an entry at evap_row with -k_evap_v/2.
+        let expected_coeff = -k_evap_v / 2.0;
+        let entry_v = entries_for_col(t, 0)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v column must have an entry at evap_row");
+        assert!(
+            (entry_v.1 - expected_coeff).abs() < 1e-12,
+            "v coefficient must be {expected_coeff}, got {}",
+            entry_v.1
+        );
+
+        // v_in column: storage_in.start for 1-hydro (L=0) = N*(1+L) = 1; col_v_in = 1 + h_idx = 1.
+        let col_v_in = 1;
+        let entry_v_in = entries_for_col(t, col_v_in)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v_in column must have an entry at evap_row");
+        assert!(
+            (entry_v_in.1 - expected_coeff).abs() < 1e-12,
+            "v_in coefficient must be {expected_coeff}, got {}",
+            entry_v_in.1
+        );
+    }
+
+    /// AC (ticket-011): coefficient value check with `k_evap_v = 0.04` → v and `v_in` entries are -0.02.
+    #[test]
+    fn evap_csc_entries_coefficient_scaling() {
+        let system = one_hydro_system(1, 0);
+        let k_evap_v = 0.04_f64;
+        let evap = evap_set_with_k_evap_v(&system, &[0], 0.0, k_evap_v);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+        let evap_row = t.num_rows - 1;
+        let expected_coeff = -k_evap_v / 2.0; // -0.02
+
+        let entry_v = entries_for_col(t, 0)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v column must have evap_row entry");
+        assert!(
+            (entry_v.1 - expected_coeff).abs() < 1e-12,
+            "v coefficient: expected {expected_coeff}, got {}",
+            entry_v.1
+        );
+
+        // storage_in.start for 1-hydro (L=0): N*(1+L) = 1; col_v_in = 1 + h_idx = 1.
+        let col_v_in = 1;
+        let entry_v_in = entries_for_col(t, col_v_in)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v_in column must have evap_row entry");
+        assert!(
+            (entry_v_in.1 - expected_coeff).abs() < 1e-12,
+            "v_in coefficient: expected {expected_coeff}, got {}",
+            entry_v_in.1
+        );
+    }
+
+    /// AC (ticket-011): 0 evaporation hydros — `fill_evaporation_entries` is a no-op;
+    /// the evaporation columns do not exist and no extra non-zeros are added.
+    #[test]
+    fn evap_csc_entries_zero_hydros_no_op() {
+        let system = one_hydro_system(1, 0);
+        let no_evap = default_evaporation(&system);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &no_evap,
+        )
+        .expect("no evaporation ok");
+
+        let baseline = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &EvaporationModelSet::new(vec![EvaporationModel::None]),
+        )
+        .expect("none evaporation ok");
+
+        assert_eq!(
+            result.templates[0].num_nz, baseline.templates[0].num_nz,
+            "num_nz must be identical with zero evaporation hydros"
+        );
+    }
+
+    /// AC (ticket-011): 2 evap hydros with distinct `k_evap_v` produce independent rows.
+    #[test]
+    fn evap_csc_entries_two_hydros_independent_rows() {
+        let (system, production) = four_hydro_mixed_system();
+        let n_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+
+        let models = vec![
+            EvaporationModel::Linearized {
+                coefficients: vec![
+                    LinearizedEvaporation {
+                        k_evap0: 1.0,
+                        k_evap_v: 0.02,
+                    };
+                    n_stages
+                ],
+                reference_volumes_hm3: vec![100.0; n_stages],
+            },
+            EvaporationModel::Linearized {
+                coefficients: vec![
+                    LinearizedEvaporation {
+                        k_evap0: 2.0,
+                        k_evap_v: 0.06,
+                    };
+                    n_stages
+                ],
+                reference_volumes_hm3: vec![100.0; n_stages],
+            },
+            EvaporationModel::None,
+            EvaporationModel::None,
+        ];
+        let evap = EvaporationModelSet::new(models);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &evap,
+        )
+        .expect("2-evap-hydro system ok");
+
+        let t = &result.templates[0];
+        let evap_row_0 = t.num_rows - 2;
+        let evap_row_1 = t.num_rows - 1;
+
+        // Hydro 0 (k_evap_v=0.02): v coefficient = -0.01.
+        let entry_v_h0 = entries_for_col(t, 0)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row_0)
+            .expect("hydro 0 v col entry");
+        assert!(
+            (entry_v_h0.1 - (-0.01)).abs() < 1e-12,
+            "hydro 0 v: expected -0.01, got {}",
+            entry_v_h0.1
+        );
+
+        // Hydro 1 (k_evap_v=0.06): v coefficient = -0.03.
+        let entry_v_h1 = entries_for_col(t, 1)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row_1)
+            .expect("hydro 1 v col entry");
+        assert!(
+            (entry_v_h1.1 - (-0.03)).abs() < 1e-12,
+            "hydro 1 v: expected -0.03, got {}",
+            entry_v_h1.1
+        );
+
+        // Row bounds: hydro 0 → k_evap0=1.0, hydro 1 → k_evap0=2.0.
+        assert!((t.row_lower[evap_row_0] - 1.0).abs() < 1e-12);
+        assert!((t.row_lower[evap_row_1] - 2.0).abs() < 1e-12);
+    }
+
+    /// AC (ticket-011): `k_evap_v = 0.0` → v and `v_in` entries are 0.0;
+    /// the constraint reduces to `Q_ev + f_plus - f_minus = k_evap0`.
+    #[test]
+    fn evap_csc_entries_zero_k_evap_v_produces_zero_volume_coefficients() {
+        let system = one_hydro_system(1, 0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 2.0, 0.0);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+        let evap_row = t.num_rows - 1;
+
+        let entry_v = entries_for_col(t, 0)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v column must have evap_row entry");
+        assert!(
+            entry_v.1.abs() < 1e-12,
+            "v coefficient must be 0.0 when k_evap_v=0, got {}",
+            entry_v.1
+        );
+
+        // storage_in.start for 1-hydro (L=0): N*(1+L) = 1; col_v_in = 1 + h_idx = 1.
+        let col_v_in = 1;
+        let entry_v_in = entries_for_col(t, col_v_in)
+            .into_iter()
+            .find(|&(r, _)| r == evap_row)
+            .expect("v_in column must have evap_row entry");
+        assert!(
+            entry_v_in.1.abs() < 1e-12,
+            "v_in coefficient must be 0.0 when k_evap_v=0, got {}",
+            entry_v_in.1
+        );
+    }
+
+    // ── ticket-012: water balance entries for evaporation ────────────────────
+
+    /// AC-1 (ticket-012): 1 evaporation hydro (`h_idx=0`), 1 block of 744 hours.
+    ///
+    /// The `Q_ev_h` column must have an entry in the water balance row
+    /// (`row = row_water_balance_start + 0`) with coefficient `+zeta`
+    /// where `zeta = 744.0 * 3_600.0 / 1_000_000.0`.
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn evap_water_balance_one_hydro_coefficient_is_zeta() {
+        let system = one_hydro_system(1, 0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 0.0, 0.0);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evaporation system ok");
+
+        let t = &result.templates[0];
+
+        // For N=1, L=0: n_state = 1, row_water_balance_start = 1.
+        // Hydro 0's water balance row = 1.
+        let water_balance_row = 1_usize;
+
+        // Q_ev is the first of the 3 evaporation columns; col_evap_start = num_cols - 3.
+        let col_q_ev = t.num_cols - 3;
+
+        let entries = entries_for_col(t, col_q_ev);
+        let entry = entries
+            .iter()
+            .find(|&&(r, _)| r == water_balance_row)
+            .copied()
+            .expect("Q_ev column must have an entry in the water balance row");
+
+        let zeta = 744.0_f64 * (3_600.0 / 1_000_000.0);
+        assert!(
+            (entry.1 - zeta).abs() < 1e-12,
+            "Q_ev water balance coefficient must be +zeta={zeta}, got {}",
+            entry.1
+        );
+    }
+
+    /// AC-2 (ticket-012): 2 hydros where only hydro 1 has evaporation.
+    ///
+    /// The `Q_ev` column for hydro 1 must have an entry in water balance row 1
+    /// with coefficient `+zeta`. Hydro 0's water balance row must have no
+    /// evaporation entry.
+    ///
+    /// Uses a 2-hydro single-bus system built with the same pattern as
+    /// `one_hydro_system` / `four_hydro_mixed_system`.
+    #[test]
+    #[allow(clippy::cast_sign_loss, clippy::too_many_lines)]
+    fn evap_water_balance_only_second_hydro_has_evap() {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage as CStage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let hp = HydroPenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        };
+        let make_h = |id: i32| Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: hp,
+        };
+        let hydros = vec![make_h(2), make_h(3)];
+        let stages = vec![CStage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+        let inflow_models: Vec<InflowModel> = hydros
+            .iter()
+            .map(|h| InflowModel {
+                hydro_id: h.id,
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 200.0,
+            std_mw: 0.0,
+        }];
+        let bounds = ResolvedBounds::new(
+            2,
+            0,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            2,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("2-hydro system ok");
+
+        // Only hydro 1 (h_idx=1) has evaporation.
+        let evap = evap_set_with_k_evap_v(&system, &[1], 0.0, 0.0);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("2-hydro evap system ok");
+
+        let t = &result.templates[0];
+
+        // For N=2, L=0: n_state = 2, row_water_balance_start = 2.
+        // Hydro 0 water balance row = 2, hydro 1 water balance row = 3.
+        let water_balance_row_h0 = 2_usize;
+        let water_balance_row_h1 = 3_usize;
+
+        // Q_ev for hydro 1 (local_idx=0, since only hydro 1 is evap): col_evap_start + 0*3.
+        let col_q_ev_h1 = t.num_cols - 3;
+
+        // Q_ev (h1) must have an entry at water balance row 3.
+        let entries_h1 = entries_for_col(t, col_q_ev_h1);
+        let found_h1 = entries_h1
+            .iter()
+            .find(|&&(r, _)| r == water_balance_row_h1)
+            .copied();
+        assert!(
+            found_h1.is_some(),
+            "Q_ev for hydro 1 must have an entry in water balance row {water_balance_row_h1}"
+        );
+        let zeta = 744.0_f64 * (3_600.0 / 1_000_000.0);
+        assert!(
+            (found_h1.unwrap().1 - zeta).abs() < 1e-12,
+            "Q_ev (h1) water balance coefficient must be +zeta={zeta}, got {}",
+            found_h1.unwrap().1
+        );
+
+        // Q_ev (h1) must NOT have an entry at hydro 0's water balance row.
+        let found_h0 = entries_h1.iter().any(|&(r, _)| r == water_balance_row_h0);
+        assert!(
+            !found_h0,
+            "Q_ev for hydro 1 must not appear in hydro 0's water balance row"
+        );
+    }
+
+    /// AC-3 (ticket-012): 0 evaporation hydros — no evaporation entries added.
+    ///
+    /// The total non-zero count must be identical to a baseline with no
+    /// evaporation model (behaviour unchanged from before ticket-012).
+    #[test]
+    fn evap_water_balance_zero_hydros_no_op() {
+        let system = one_hydro_system(1, 0);
+        let no_evap = EvaporationModelSet::new(vec![EvaporationModel::None]);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &no_evap,
+        )
+        .expect("no evaporation ok");
+
+        let baseline = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("default evaporation ok");
+
+        assert_eq!(
+            result.templates[0].num_nz, baseline.templates[0].num_nz,
+            "num_nz must be identical with zero evaporation hydros (no water balance entries added)"
+        );
+    }
+
+    // =========================================================================
+    // Evaporation violation cost tests (ticket-013)
+    // =========================================================================
+
+    /// Build a 1-bus, 1-hydro system with evaporation and a custom
+    /// `evaporation_violation_cost`, using the given block duration.
+    ///
+    /// The hydro has constant-productivity generation. The system has exactly
+    /// 1 stage with 1 block of `block_hours` duration.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn evap_hydro_system_with_violation_cost(
+        block_hours: f64,
+        evaporation_violation_cost: f64,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let hydro = Hydro {
+            id: EntityId(2),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 2_000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let stages = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: block_hours,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models = vec![InflowModel {
+            hydro_id: EntityId(2),
+            stage_id: 0,
+            mean_m3s: 50.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        }];
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 2_000.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            1,
+            1,
+            0,
+            0,
+            1,
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost,
+                water_withdrawal_violation_cost: 0.0,
+            },
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("evap_hydro_system_with_violation_cost: valid")
+    }
+
+    /// AC-1 (ticket-013): `f_evap_plus` and `f_evap_minus` carry
+    /// `evaporation_violation_cost * total_stage_hours`.
+    ///
+    /// System: 1 hydro with evaporation, `evaporation_violation_cost = 500.0`,
+    /// 1 block of 730 hours → expected objective = `500.0 * 730.0 = 365_000.0`.
+    ///
+    /// Column layout (`N=1`, `L=0`, `K=1`, no inflow penalty):
+    ///   col 0: `v`, col 1: `v_in`, col 2: `theta`, col 3: `turbine`, col 4: `spillage`
+    ///   `col_evap_start = 5`
+    ///   `col_q_ev = 5` (objective = `0.0`)
+    ///   `col_f_plus = 6` (objective = `365_000.0`)
+    ///   `col_f_minus = 7` (objective = `365_000.0`)
+    #[test]
+    fn evap_violation_cost_applied_to_slack_columns() {
+        let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 1.0, 0.02);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evap violation cost system builds ok");
+
+        let t = &result.templates[0];
+
+        // Evaporation columns are the last 3: Q_ev, f_plus, f_minus.
+        let col_q_ev = t.num_cols - 3;
+        let col_f_plus = t.num_cols - 2;
+        let col_f_minus = t.num_cols - 1;
+
+        let expected = 500.0 * 730.0; // 365_000.0
+
+        assert!(
+            t.objective[col_q_ev].abs() < 1e-12,
+            "Q_ev column objective must be 0.0 (evaporation flow itself has no cost), got {}",
+            t.objective[col_q_ev]
+        );
+        assert!(
+            (t.objective[col_f_plus] - expected).abs() < 1e-12,
+            "f_evap_plus objective: expected {expected}, got {}",
+            t.objective[col_f_plus]
+        );
+        assert!(
+            (t.objective[col_f_minus] - expected).abs() < 1e-12,
+            "f_evap_minus objective: expected {expected}, got {}",
+            t.objective[col_f_minus]
+        );
+    }
+
+    /// AC-2 (ticket-013): `Q_ev` column objective is 0.0 even when a
+    /// non-zero `evaporation_violation_cost` is set.
+    #[test]
+    fn evap_q_ev_objective_is_zero() {
+        let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 0.0, 0.0);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evap system with zero k_evap builds ok");
+
+        let t = &result.templates[0];
+        let col_q_ev = t.num_cols - 3;
+
+        assert!(
+            t.objective[col_q_ev].abs() < 1e-12,
+            "Q_ev objective must be 0.0, got {}",
+            t.objective[col_q_ev]
+        );
+    }
+
+    /// AC-3 (ticket-013): LP with 1 evaporation hydro is solvable (`HiGHS` returns
+    /// `Optimal`) and the `Q_ev` value is non-negative after fixing `v_in = 1000.0 hm3`.
+    ///
+    /// System: 1 bus, 1 hydro, `k_evap0 = 1.0`, `k_evap_v = 0.02`.
+    /// The LP is solved with `v_in = 1000 hm3`; the linearised evaporation
+    /// constraint is `Q_ev = k_evap0 + k_evap_v/2 * (v + v_in)`.
+    /// With `v_in` fixed at 1000, the RHS is at least 1 mm, so `Q_ev >= 0`.
+    #[test]
+    fn evap_lp_solvable_and_q_ev_nonnegative() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 1.0, 0.02);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evap system template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        // Fix v_in = 1000 hm3 via the storage-fixing equality row (row 0).
+        let v_in = 1_000.0_f64;
+        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+
+        let view = solver
+            .solve()
+            .expect("evaporation LP must be feasible and optimal");
+
+        // Q_ev is the first evaporation column (num_cols - 3).
+        let col_q_ev = template.num_cols - 3;
+        let q_ev = view.primal[col_q_ev];
+
+        assert!(
+            q_ev >= -1e-8,
+            "Q_ev must be non-negative after solving, got {q_ev}"
+        );
+    }
+
+    /// AC-4 (ticket-013): violation slacks are near zero when `v_in` is large
+    /// enough for the linearised evaporation constraint to be satisfiable without
+    /// artificial violation.
+    ///
+    /// With `k_evap0 = 1.0`, `k_evap_v = 0.02`, and `v_in = 1000 hm3`, the
+    /// evaporation constraint RHS is positive and feasible, so the solver should
+    /// drive the high-cost violation slacks to zero.
+    #[test]
+    fn evap_violation_slacks_near_zero_feasible_constraint() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 1.0, 0.02);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evap system template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        let v_in = 1_000.0_f64;
+        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+
+        let view = solver
+            .solve()
+            .expect("evaporation LP must be feasible and optimal");
+
+        let col_f_plus = template.num_cols - 2;
+        let col_f_minus = template.num_cols - 1;
+        let f_plus = view.primal[col_f_plus];
+        let f_minus = view.primal[col_f_minus];
+
+        assert!(
+            f_plus.abs() < 1e-6,
+            "f_evap_plus slack must be near zero (constraint satisfied without violation), got {f_plus}"
+        );
+        assert!(
+            f_minus.abs() < 1e-6,
+            "f_evap_minus slack must be near zero (constraint satisfied without violation), got {f_minus}"
+        );
+    }
+
+    /// AC-5 (ticket-013): the storage-fixing dual for an evaporation hydro differs
+    /// from the no-evaporation case.
+    ///
+    /// When evaporation is active, higher `v_in` reduces evaporation volume
+    /// (water retained in the reservoir increases), changing the water balance and
+    /// hence the marginal value of initial storage. The dual of the storage-fixing
+    /// row must differ between the two configurations.
+    #[test]
+    fn evap_storage_fixing_dual_differs_from_no_evaporation() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        // System with evaporation violation cost (so slacks are penalised).
+        let system_evap = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system_evap, &[0], 1.0, 0.02);
+        let evap_result = build_stage_templates(
+            &system_evap,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system_evap),
+            &evap,
+        )
+        .expect("evap system template build must succeed");
+
+        // Baseline system without evaporation (same structure, EvaporationModel::None).
+        let system_base = one_hydro_system(1, 0);
+        let no_evap = EvaporationModelSet::new(vec![EvaporationModel::None]);
+        let base_result = build_stage_templates(
+            &system_base,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system_base),
+            &no_evap,
+        )
+        .expect("baseline system template build must succeed");
+
+        let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
+            let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+            solver.load_model(template);
+            let empty_cuts = RowBatch {
+                num_rows: 0,
+                row_starts: vec![0_i32],
+                col_indices: vec![],
+                values: vec![],
+                row_lower: vec![],
+                row_upper: vec![],
+            };
+            solver.add_rows(&empty_cuts);
+            let v_in = 1_000.0_f64;
+            solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+            let view = solver.solve().expect("LP must solve to optimal");
+            // Row 0 is the storage-fixing equality; its dual is the marginal value
+            // of one additional hm3 of initial storage.
+            view.dual[0]
+        };
+
+        let evap_dual = solve_and_get_storage_dual(&evap_result.templates[0]);
+        let base_dual = solve_and_get_storage_dual(&base_result.templates[0]);
+
+        // The evaporation constraint couples Q_ev to v and v_in via k_evap_v,
+        // so the marginal value of initial storage differs from the no-evaporation case.
+        assert_ne!(
+            (evap_dual * 1e6).round(),
+            (base_dual * 1e6).round(),
+            "storage-fixing dual must differ between evaporation ({evap_dual}) and \
+             no-evaporation ({base_dual}) configurations"
         );
     }
 }

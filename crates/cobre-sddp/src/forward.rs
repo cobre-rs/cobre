@@ -966,6 +966,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -2113,6 +2114,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: HydroPenalties {
@@ -2481,6 +2483,7 @@ mod tests {
             hydraulic_losses: None,
             efficiency: None,
             evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
             diversion: None,
             filling: None,
             penalties: cobre_core::entities::hydro::HydroPenalties {

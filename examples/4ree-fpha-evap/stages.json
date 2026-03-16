@@ -1,0 +1,177 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2015-01-01",
+      "end_date": "2015-02-01",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 1,
+      "start_date": "2015-02-01",
+      "end_date": "2015-03-01",
+      "season_id": 1,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 672
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 2,
+      "start_date": "2015-03-01",
+      "end_date": "2015-04-01",
+      "season_id": 2,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 3,
+      "start_date": "2015-04-01",
+      "end_date": "2015-05-01",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 4,
+      "start_date": "2015-05-01",
+      "end_date": "2015-06-01",
+      "season_id": 4,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 5,
+      "start_date": "2015-06-01",
+      "end_date": "2015-07-01",
+      "season_id": 5,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 6,
+      "start_date": "2015-07-01",
+      "end_date": "2015-08-01",
+      "season_id": 6,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 7,
+      "start_date": "2015-08-01",
+      "end_date": "2015-09-01",
+      "season_id": 7,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 8,
+      "start_date": "2015-09-01",
+      "end_date": "2015-10-01",
+      "season_id": 8,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 9,
+      "start_date": "2015-10-01",
+      "end_date": "2015-11-01",
+      "season_id": 9,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 10,
+      "start_date": "2015-11-01",
+      "end_date": "2015-12-01",
+      "season_id": 10,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720
+        }
+      ],
+      "num_scenarios": 10
+    },
+    {
+      "id": 11,
+      "start_date": "2015-12-01",
+      "end_date": "2016-01-01",
+      "season_id": 11,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744
+        }
+      ],
+      "num_scenarios": 10
+    }
+  ]
+}

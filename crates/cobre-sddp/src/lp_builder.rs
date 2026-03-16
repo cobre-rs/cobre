@@ -1639,7 +1639,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// ## Evaporation hydros
 ///
 /// For hydros whose evaporation model is
-/// [`EvaporationModel::Linearized`](crate::hydro_models::EvaporationModel::Linearized),
+/// [`EvaporationModel::Linearized`],
 /// three stage-level columns are added per hydro (`Q_ev`, `f_evap_plus`,
 /// `f_evap_minus`), all bounded `[0, +inf)` with objective coefficient 0.0.
 /// One equality constraint row is added per evaporation hydro with
@@ -1779,7 +1779,7 @@ pub fn build_stage_templates(
 
 #[cfg(test)]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

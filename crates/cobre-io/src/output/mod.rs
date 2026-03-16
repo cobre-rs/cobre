@@ -10,6 +10,7 @@
 pub mod convergence_reader;
 pub mod dictionary;
 pub mod error;
+pub mod hydro_models;
 pub mod manifest;
 pub mod parquet_config;
 pub mod policy;
@@ -21,6 +22,7 @@ pub mod training_writer;
 pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
+pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
     ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
     ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,

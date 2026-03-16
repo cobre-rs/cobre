@@ -26,7 +26,7 @@ use cobre_io::extensions::{
 };
 
 use crate::SddpError;
-use crate::fpha_fitting::fit_fpha_planes;
+use crate::fpha_fitting::{FphaFitResult, fit_fpha_planes};
 
 // ── Hyperplane types ──────────────────────────────────────────────────────────
 
@@ -695,6 +695,7 @@ pub fn resolve_production_models(
     // ── Step 8: resolve per-hydro per-stage model ─────────────────────────────
     let mut all_models: Vec<Vec<ResolvedProductionModel>> = Vec::with_capacity(n_hydros);
     let mut provenance: Vec<(EntityId, ProductionModelSource)> = Vec::with_capacity(n_hydros);
+    let mut export_rows: Vec<cobre_io::FphaHyperplaneRow> = Vec::new();
 
     for hydro in system.hydros() {
         let config_entry = config_map.get(&hydro.id).copied();
@@ -705,12 +706,27 @@ pub fn resolve_production_models(
         // For computed sources, fit planes once per hydro and reuse for each stage.
         let cached_computed_planes: Option<Vec<FphaPlane>> =
             if source == ProductionModelSource::ComputedFromGeometry {
-                Some(fit_planes_for_hydro(
-                    hydro,
-                    config_entry,
-                    &geometry_map,
-                    &study_stages,
-                )?)
+                let fit_result =
+                    fit_planes_for_hydro(hydro, config_entry, &geometry_map, &study_stages)?;
+                // Collect export rows for this computed-source hydro.
+                for (plane_id, plane) in fit_result.planes.iter().enumerate() {
+                    let raw_gamma_0 = plane.intercept / fit_result.kappa;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    export_rows.push(cobre_io::FphaHyperplaneRow {
+                        hydro_id: hydro.id,
+                        stage_id: None,
+                        plane_id: plane_id as i32,
+                        gamma_0: raw_gamma_0,
+                        gamma_v: plane.gamma_v,
+                        gamma_q: plane.gamma_q,
+                        gamma_s: plane.gamma_s,
+                        kappa: fit_result.kappa,
+                        valid_v_min_hm3: None,
+                        valid_v_max_hm3: None,
+                        valid_q_max_m3s: None,
+                    });
+                }
+                Some(fit_result.planes)
             } else {
                 None
             };
@@ -729,6 +745,16 @@ pub fn resolve_production_models(
         }
 
         all_models.push(stage_models);
+    }
+
+    // Write exported hyperplane rows for computed-source hydros when any exist.
+    if !export_rows.is_empty() {
+        let export_path = case_dir
+            .join("output")
+            .join("hydro_models")
+            .join("fpha_hyperplanes.parquet");
+        cobre_io::output::write_fpha_hyperplanes(&export_path, &export_rows)
+            .map_err(|e| SddpError::Validation(e.to_string()))?;
     }
 
     let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
@@ -797,13 +823,14 @@ fn build_geometry_map(
 
 /// Validate prerequisites and call `fit_fpha_planes` once for a computed-source hydro.
 ///
-/// Returns the fitted planes; the outer loop caches them and clones for each stage.
+/// Returns the full fitting result including planes and kappa; the outer loop
+/// caches the planes for each stage and uses kappa to reconstruct export rows.
 fn fit_planes_for_hydro(
     hydro: &cobre_core::entities::hydro::Hydro,
     config_entry: Option<&ProductionModelConfig>,
     geometry_map: &HashMap<EntityId, Vec<&HydroGeometryRow>>,
     study_stages: &[&cobre_core::temporal::Stage],
-) -> Result<Vec<FphaPlane>, SddpError> {
+) -> Result<FphaFitResult, SddpError> {
     validate_computed_prerequisites(hydro, geometry_map)?;
 
     // Use the first study stage as representative for FphaConfig lookup.
@@ -4063,8 +4090,10 @@ mod tests {
         let stage_refs: Vec<&cobre_core::temporal::Stage> = study_stages.iter().collect();
 
         // Fit planes once (simulating the outer loop in resolve_production_models).
-        let planes = super::fit_planes_for_hydro(&hydro, Some(&config), &geometry_map, &stage_refs)
-            .expect("fit_planes_for_hydro must succeed for valid Sobradinho-style input");
+        let fit_result =
+            super::fit_planes_for_hydro(&hydro, Some(&config), &geometry_map, &stage_refs)
+                .expect("fit_planes_for_hydro must succeed for valid Sobradinho-style input");
+        let planes = &fit_result.planes;
 
         // Plane count must be within the expected range for default FphaConfig.
         assert!(
@@ -4101,7 +4130,7 @@ mod tests {
             Some(&config),
             ProductionModelSource::ComputedFromGeometry,
             &empty_hyperplane_map,
-            Some(&planes),
+            Some(planes),
         )
         .expect("resolve_stage_model must succeed for ComputedFromGeometry with cached planes");
 
@@ -4168,7 +4197,7 @@ mod tests {
         );
 
         // Fit computed planes for hydro 1.
-        let computed_planes =
+        let computed_fit =
             super::fit_planes_for_hydro(&hydro1, Some(&config1), &geometry_map, &stage_refs)
                 .expect("fit_planes_for_hydro must succeed for hydro 1");
 
@@ -4192,7 +4221,7 @@ mod tests {
             Some(&config1),
             src1,
             &empty_hyperplane_map,
-            Some(&computed_planes),
+            Some(&computed_fit.planes),
         )
         .expect("resolve_stage_model must succeed for hydro 1 (computed)");
 
@@ -4236,7 +4265,7 @@ mod tests {
         let stage_refs: Vec<&cobre_core::temporal::Stage> = stages.iter().collect();
 
         // Fit once.
-        let cached_planes =
+        let cached_fit =
             super::fit_planes_for_hydro(&hydro, Some(&config), &geometry_map, &stage_refs)
                 .expect("fit_planes_for_hydro must succeed");
 
@@ -4253,7 +4282,7 @@ mod tests {
                     Some(&config),
                     ProductionModelSource::ComputedFromGeometry,
                     &empty_hyperplane_map,
-                    Some(&cached_planes),
+                    Some(&cached_fit.planes),
                 )
                 .expect("resolve_stage_model must succeed");
                 match model {

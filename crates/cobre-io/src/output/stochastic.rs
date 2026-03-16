@@ -432,7 +432,7 @@ pub fn write_load_seasonal_stats(
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 /// Ensure the parent directory of `path` exists, creating it if necessary.
-fn ensure_parent_dir(path: &Path) -> Result<(), OutputError> {
+pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), OutputError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| OutputError::io(parent, e))?;
     }
@@ -707,7 +707,7 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
     Ok(())
 }
 
-fn write_parquet_atomic(
+pub(crate) fn write_parquet_atomic(
     path: &Path,
     batch: &RecordBatch,
     config: &ParquetWriterConfig,

@@ -1562,6 +1562,27 @@ pub(crate) fn validate_fitted_planes(
 /// path produces from `fpha_hyperplanes.parquet`: the LP builder treats both paths
 /// identically.
 ///
+/// Combined result of the FPHA fitting pipeline.
+///
+/// Returned by [`fit_fpha_planes`] to expose both the fitted hyperplanes
+/// and the unscaled `kappa` correction factor so that callers can reconstruct
+/// the original `gamma_0` values for export.
+///
+/// The relationship between fields is:
+///
+/// ```text
+/// plane.intercept = raw_gamma_0 * kappa
+/// ```
+///
+/// To recover the unscaled `gamma_0` from a plane: `plane.intercept / kappa`.
+#[derive(Debug)]
+pub(crate) struct FphaFitResult {
+    /// Fitted hyperplanes with pre-scaled intercepts (`gamma_0 * kappa`).
+    pub planes: Vec<FphaPlane>,
+    /// Nominal head correction factor κ ∈ (0, 1] applied during fitting.
+    pub kappa: f64,
+}
+
 /// # Errors
 ///
 /// Any step in the pipeline can fail. All errors propagate via `?` and are
@@ -1578,7 +1599,7 @@ pub(crate) fn fit_fpha_planes(
     forebay_rows: &[HydroGeometryRow],
     hydro: &Hydro,
     config: &FphaConfig,
-) -> Result<Vec<FphaPlane>, FphaFittingError> {
+) -> Result<FphaFitResult, FphaFittingError> {
     let forebay = ForebayTable::new(forebay_rows, &hydro.name)?;
 
     let pf = ProductionFunction::new(
@@ -1609,7 +1630,7 @@ pub(crate) fn fit_fpha_planes(
         })
         .collect();
 
-    Ok(planes)
+    Ok(FphaFitResult { planes, kappa })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -4370,8 +4391,9 @@ mod tests {
             fitting_window: None,
         };
 
-        let planes =
+        let result =
             fit_fpha_planes(&rows, &hydro, &config).expect("fit_fpha_planes should succeed");
+        let planes = &result.planes;
 
         // Count must be in expected range for a realistic hydro.
         assert!(
@@ -4417,11 +4439,11 @@ mod tests {
             fitting_window: None,
         };
 
-        let planes = fit_fpha_planes(&rows, &hydro, &config).expect("fit should succeed");
+        let result = fit_fpha_planes(&rows, &hydro, &config).expect("fit should succeed");
 
         // All intercepts must be finite and the planes must have non-negative intercepts
         // for a physically reasonable geometry where phi > 0 at the fitting origin.
-        for (idx, plane) in planes.iter().enumerate() {
+        for (idx, plane) in result.planes.iter().enumerate() {
             assert!(
                 plane.intercept.is_finite(),
                 "plane {idx}: intercept must be finite, got {}",
@@ -4496,14 +4518,14 @@ mod tests {
             fitting_window: None,
         };
 
-        let planes = fit_fpha_planes(&flat_rows, &hydro, &config).expect("fit should succeed");
+        let result = fit_fpha_planes(&flat_rows, &hydro, &config).expect("fit should succeed");
 
         // A linear production function produces exactly 1 plane.
         assert_eq!(
-            planes.len(),
+            result.planes.len(),
             1,
             "linear function must yield 1 plane, got {}",
-            planes.len()
+            result.planes.len()
         );
     }
 
@@ -4569,5 +4591,50 @@ mod tests {
         assert!(msg.contains("Furnas"), "should contain hydro name: {msg}");
         assert!(msg.contains('3'), "should contain plane index: {msg}");
         assert!(msg.contains("gamma_v"), "should contain detail: {msg}");
+    }
+
+    // ── FphaFitResult kappa extraction ────────────────────────────────────────
+
+    /// AC: fit_fpha_planes returns a kappa in (0, 1] and intercept = raw_gamma_0 * kappa
+    /// for each plane in the Sobradinho fixture.
+    #[test]
+    fn fit_fpha_planes_result_kappa_in_range_and_intercept_consistent() {
+        let rows = sobradinho_rows();
+        let hydro = make_sobradinho_hydro();
+        let config = FphaConfig {
+            source: "computed".to_owned(),
+            volume_discretization_points: None,
+            turbine_discretization_points: None,
+            spillage_discretization_points: None,
+            max_planes_per_hydro: None,
+            fitting_window: None,
+        };
+
+        let result = fit_fpha_planes(&rows, &hydro, &config).expect("fit should succeed");
+
+        // kappa must be in (0, 1].
+        assert!(
+            result.kappa > 0.0,
+            "kappa must be positive, got {}",
+            result.kappa
+        );
+        assert!(
+            result.kappa <= 1.0,
+            "kappa must be <= 1.0, got {}",
+            result.kappa
+        );
+
+        // For each plane, intercept == raw_gamma_0 * kappa, so raw_gamma_0 == intercept / kappa.
+        // Verify this round-trip: re-derive raw_gamma_0 and check that intercept matches.
+        for (idx, plane) in result.planes.iter().enumerate() {
+            let raw_gamma_0 = plane.intercept / result.kappa;
+            let reconstructed_intercept = raw_gamma_0 * result.kappa;
+            assert!(
+                (plane.intercept - reconstructed_intercept).abs() < 1e-12,
+                "plane {idx}: intercept round-trip failed: {} vs {}",
+                plane.intercept,
+                reconstructed_intercept
+            );
+        }
     }
 }

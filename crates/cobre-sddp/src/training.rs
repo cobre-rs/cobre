@@ -65,10 +65,10 @@ pub struct TrainingResult {
     /// Final lower bound at termination.
     pub final_lb: f64,
 
-    /// Final upper bound mean at termination (smoothed EWMA).
+    /// Final upper bound mean at termination.
     pub final_ub: f64,
 
-    /// Final upper bound standard deviation (smoothed EWMA).
+    /// Final upper bound standard deviation at termination.
     pub final_ub_std: f64,
 
     /// Final convergence gap: `(UB - LB) / max(1.0, |UB|)`.

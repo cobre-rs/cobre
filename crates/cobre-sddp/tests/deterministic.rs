@@ -28,7 +28,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
-use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
+use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for deterministic testing.
@@ -310,6 +310,79 @@ fn d03_two_hydro_cascade() {
     assert!(
         result.iterations <= 10,
         "D03: expected convergence in <= 10 iterations, got {}",
+        result.iterations
+    );
+}
+
+/// Two-stage 2-bus transmission dispatch. Optimal cost is hand-computed via LP.
+///
+/// ## Case setup
+///
+/// - 2 buses (B0, B1), 1 line (B0→B1, capacity 15 MW bidirectional, exchange_cost 0.01 $/MWh)
+/// - T0 (bus=0): 100 MW at 50 $/MWh
+/// - H0 (bus=0): productivity 1.0 MW/(m3/s), max 50 m3/s / 50 MW, storage 0–200 hm3, initial 100 hm3
+/// - H1 (bus=1): productivity 1.0 MW/(m3/s), max 20 m3/s / 20 MW, storage 0–100 hm3, initial 50 hm3
+/// - Deterministic inflows: H0 = [35, 20] m3/s, H1 = [15, 5] m3/s (std=0)
+/// - Deterministic load: B0 = 30 MW, B1 = 40 MW (both stages, std=0)
+/// - 2 stages, 730 h each, no discounting
+///
+/// ## Expected cost derivation
+///
+/// **Conversion:** κ = 730 × 3600 / 1 000 000 = 657/250 = 2.628 hm3 per (m3/s · stage)
+///
+/// ### Bus power balance
+///
+/// B1 needs 40 MW per stage. H1 max = 20 MW. Line capacity = 15 MW.
+/// B1 can receive at most 35 MW, so **B1 has deficit ≥ 5 MW every stage**.
+/// The line always flows B0→B1 at full capacity (B1 is deficit; B0 has excess hydro).
+/// B0 must produce 30 + 15 = 45 MW per stage (local demand + export).
+///
+/// ### H0 capacity check
+///
+/// H0 initial = 100 hm3. Stage 0: inflow 35 m3/s, turbine 45 m3/s (generation 45 MW).
+///   S_H0_1 = 100 + (35 − 45) × κ = 100 − 10 × 2.628 = 73.72 hm3
+/// Stage 1: inflow 20 m3/s. Max turbine = min(73.72/κ + 20, 50) = min(48.05, 50) = 48.05 m3/s.
+/// Need only 45 m3/s → T0 = 0 MW both stages. **Thermal cost = 0.**
+///
+/// ### H1 total turbined (water budget)
+///
+/// Total H1 water available = 50 + (15 + 5) × κ = 102.56 hm3 = (50/κ + 20) × κ
+/// Total H1 turbined = 50/κ + 20 = 12500/657 + 20 m3/s (summed over 2 stages)
+///
+/// The split between stages is indeterminate (degenerate LP: water value identical
+/// at both stages since deficit cost is constant). SDDP converges to the same
+/// **total** cost regardless of intra-period split.
+///
+/// ### B1 total deficit
+///
+/// B1 needs 2 × 25 = 50 MW total from H1 (since line provides 2 × 15 MW).
+/// H1 provides 50/κ + 20 = 12500/657 + 20 MW total.
+/// Total deficit = 50 − (12500/657 + 20) = 30 − 12500/657 = 7210/657 MW (summed)
+///
+/// ### Cost components
+///
+/// Deficit cost:  7210/657 × 1000 × 730 = 5 263 300 000/657 ≈ 8 011 111.11 $
+/// Line cost:     2 × 15 × 0.01 × 730  = 219.00 $
+/// Thermal cost:  0 (H0 turbines cover B0 demand both stages)
+///
+/// Total = 5 263 300 000/657 + 219 = 5 263 443 883/657 ≈ **8 011 330.11 $**
+///
+/// ### Verification invariants
+///
+/// - B1 deficit > 0 in at least one stage (line capacity binding at 15 MW)
+/// - Line flow ≈ 15 MW both stages (always at capacity)
+/// - T0 = 0 MW (H0 surplus covers B0 demand plus export)
+/// - H1 depleted to 0 at end of stage 1 (all water used to minimize deficit)
+pub const D04_EXPECTED_COST: f64 = 5_263_443_883.0 / 657.0;
+
+#[test]
+fn d04_transmission() {
+    let case_dir = Path::new("../../examples/deterministic/d04-transmission");
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, D04_EXPECTED_COST, 1e-4, "D04");
+    assert!(
+        result.iterations <= 10,
+        "D04: expected convergence in <= 10 iterations, got {}",
         result.iterations
     );
 }

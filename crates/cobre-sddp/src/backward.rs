@@ -74,7 +74,7 @@ use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, SddpError,
+    FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     noise::{transform_inflow_noise, transform_load_noise},
@@ -136,9 +136,20 @@ struct StagedCut {
 /// Groups the iteration-varying scalars and slices that would otherwise push
 /// the argument count of [`run_backward_pass`] beyond seven.
 pub struct BackwardPassSpec<'a> {
-    /// Exchange buffers containing trial-point states from all ranks (after
-    /// `allgatherv`). Each rank processes only its own slice.
-    pub exchange: &'a ExchangeBuffers,
+    /// Exchange buffers for gathering trial-point states via `allgatherv`.
+    ///
+    /// When `records` is non-empty, `run_backward_pass` calls
+    /// `exchange.exchange(records, t, ...)` once per stage before processing
+    /// trial points at that stage. When `records` is empty (test path), the
+    /// caller is responsible for pre-populating the exchange buffers before
+    /// calling `run_backward_pass`.
+    pub exchange: &'a mut ExchangeBuffers,
+
+    /// Forward-pass trajectory records used to populate `exchange` per stage.
+    ///
+    /// Length must be `local_work * num_stages` when non-empty. Pass `&[]` in
+    /// tests that pre-populate `exchange` directly.
+    pub records: &'a [TrajectoryRecord],
 
     /// Current training iteration index (1-based), used for cut metadata.
     pub iteration: u64,
@@ -427,7 +438,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     ctx: &StageContext<'_>,
     fcf: &mut FutureCostFunction,
     training_ctx: &TrainingContext<'_>,
-    spec: &BackwardPassSpec<'_>,
+    spec: &mut BackwardPassSpec<'_>,
     comm: &C,
 ) -> Result<BackwardResult, SddpError> {
     let TrainingContext {
@@ -452,6 +463,14 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     let tree_view = stochastic.tree_view();
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
+        // When the caller supplies forward-pass records, perform the per-stage
+        // allgatherv here so that `exchange.state_at(rank, m)` returns the
+        // state for stage `t` (the state entering stage `t+1`). When records
+        // is empty the caller has pre-populated the exchange buffers (test path).
+        if !spec.records.is_empty() {
+            spec.exchange.exchange(spec.records, t, num_stages, comm)?;
+        }
+
         let successor = t + 1;
         let n_openings = tree_view.n_openings(successor);
         #[allow(clippy::cast_precision_loss)]
@@ -984,7 +1003,7 @@ mod tests {
         let n_stages = 1_usize;
         let forward_passes = 2_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1018,12 +1037,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1050,7 +1070,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
 
         // Two trial points with states [10.0] and [20.0] at stage 0.
-        let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1087,12 +1107,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1122,7 +1143,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
 
         // 3 trial points (forward_passes=3 on a single rank).
-        let exchange = exchange_with_states(n_state, vec![vec![5.0], vec![10.0], vec![15.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![5.0], vec![10.0], vec![15.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1156,12 +1177,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 2,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1187,7 +1209,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1221,12 +1243,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1252,7 +1275,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![5.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1286,12 +1309,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1314,7 +1338,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1349,12 +1373,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         );
@@ -1421,7 +1446,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1456,12 +1481,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1505,7 +1531,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![50.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![50.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1541,12 +1567,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1595,7 +1622,7 @@ mod tests {
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
         let x_hat = 30.0_f64;
-        let exchange = exchange_with_states(n_state, vec![vec![x_hat]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![x_hat]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1631,12 +1658,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1674,7 +1702,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 2_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1708,12 +1736,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1750,7 +1779,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
 
         // 6 trial points (m = 0..5). ExchangeBuffers: local_count=6, num_ranks=1.
-        let exchange = exchange_with_states(
+        let mut exchange = exchange_with_states(
             n_state,
             vec![
                 vec![1.0],
@@ -1794,12 +1823,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 2,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1837,7 +1867,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1875,12 +1905,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1913,7 +1944,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1949,12 +1980,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -1993,7 +2025,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2031,12 +2063,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         );
@@ -2083,7 +2116,7 @@ mod tests {
 
         // Build 8 distinct trial-point states.
         let states: Vec<Vec<f64>> = (0..n_trial_points).map(|i| vec![i as f64 + 1.0]).collect();
-        let exchange = exchange_with_states(n_state, states);
+        let mut exchange = exchange_with_states(n_state, states);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2133,12 +2166,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -2176,12 +2210,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -2427,7 +2462,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2483,12 +2518,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -2547,7 +2583,7 @@ mod tests {
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2595,12 +2631,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )
@@ -2660,7 +2697,7 @@ mod tests {
         let n_state = indexer.n_state; // 1
         let forward_passes = 1_u32;
         let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
-        let exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2712,12 +2749,13 @@ mod tests {
                 stochastic: &stochastic,
                 initial_state: &[],
             },
-            &BackwardPassSpec {
-                exchange: &exchange,
+            &mut BackwardPassSpec {
+                records: &[],
                 iteration: 0,
                 local_work: exchange.local_count(),
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
+                exchange: &mut exchange,
             },
             &comm,
         )

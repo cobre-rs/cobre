@@ -51,7 +51,7 @@ use cobre_sddp::{
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
     RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
     StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    lp_builder::build_stage_templates, simulate, train,
+    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -436,6 +436,7 @@ fn build_fixture() -> Fixture {
         &inflow_method,
         &par_lp,
         &cobre_stochastic::normal::precompute::PrecomputedNormal::default(),
+        &PrepareHydroModelsResult::default_from_system(&system).production,
     )
     .expect("no FPHA plants in integration test fixture");
     let stochastic = build_stochastic();
@@ -453,6 +454,8 @@ fn build_fixture() -> Fixture {
         system.buses().len(),
         n_blks,
         has_inflow_penalty,
+        vec![],
+        &[],
     );
 
     let initial_state = vec![0.0_f64; indexer.n_state];

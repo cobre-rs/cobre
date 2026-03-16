@@ -57,11 +57,25 @@ use std::ops::Range;
 
 use cobre_solver::StageTemplate;
 
+/// FPHA constraint row range for one hydro at one stage.
+///
+/// Locates the block of FPHA hyperplane rows assigned to a single FPHA hydro
+/// within a stage LP. Rows for hydro `i` at block `k` and plane `p` are at:
+/// `start + k * planes_per_block + p`.
+#[derive(Debug, Clone, Copy)]
+pub struct FphaRowRange {
+    /// First row index of this hydro's FPHA constraints (for block 0, plane 0).
+    pub start: usize,
+    /// Number of hyperplanes per block.
+    pub planes_per_block: usize,
+}
+
 /// Read-only LP layout index map for one SDDP stage subproblem.
 ///
 /// Computed once from `hydro_count` (N) and `max_par_order` (L), then shared
-/// read-only across all threads for the duration of training. All fields are
-/// plain `usize` or `Range<usize>` — no heap allocation, trivially `Copy`.
+/// read-only across all threads for the duration of training. Most fields are
+/// plain `usize` or `Range<usize>`; FPHA fields use `Vec` for variable-length
+/// hydro lists.
 ///
 /// See the [module-level documentation](self) for the full column and row
 /// layout, and [`StageIndexer::new`] for the construction formulas.
@@ -71,6 +85,11 @@ use cobre_solver::StageTemplate;
 /// [`StageIndexer::with_equipment`]. When constructed via [`StageIndexer::new`]
 /// or [`StageIndexer::from_stage_template`], those ranges are all empty (`0..0`)
 /// and `n_blks`, `n_thermals`, `n_lines`, `n_buses` are zero.
+///
+/// FPHA fields (`generation`, `fpha_hydro_indices`, `fpha_rows`) are also
+/// populated only by [`StageIndexer::with_equipment`] when FPHA hydros are
+/// present. They are empty when built via [`StageIndexer::new`] or when no FPHA
+/// hydros exist.
 #[derive(Debug, Clone)]
 pub struct StageIndexer {
     /// Column range `[0, N)` for outgoing storage volumes.
@@ -226,6 +245,32 @@ pub struct StageIndexer {
     /// whose `has_slack_columns()` returns `true` and `n_hydros > 0`.
     /// `false` otherwise (including when built via [`StageIndexer::new`]).
     pub has_inflow_penalty: bool,
+
+    // ── FPHA column and row ranges ─────────────────────────────────────────
+    // Populated only by `with_equipment`; empty when built via `new`.
+    /// Column range for FPHA generation variables, one per (`fpha_hydro`, block) pair.
+    ///
+    /// Index for FPHA hydro at local position `i`, block `b`:
+    /// `generation.start + i * n_blks + b`.
+    /// Empty when no FPHA hydros exist or when built via [`StageIndexer::new`].
+    pub generation: Range<usize>,
+
+    /// Number of FPHA hydros in this stage.
+    ///
+    /// Zero when built via [`StageIndexer::new`].
+    pub n_fpha_hydros: usize,
+
+    /// Mapping from FPHA local index to system hydro index.
+    ///
+    /// `fpha_hydro_indices[i]` is the system-level hydro position for FPHA hydro `i`.
+    /// Empty when no FPHA hydros exist or when built via [`StageIndexer::new`].
+    pub fpha_hydro_indices: Vec<usize>,
+
+    /// FPHA constraint row ranges per FPHA hydro.
+    ///
+    /// `fpha_rows[i]` is the [`FphaRowRange`] for FPHA hydro at local position `i`.
+    /// Empty when no FPHA hydros exist or when built via [`StageIndexer::new`].
+    pub fpha_rows: Vec<FphaRowRange>,
 }
 
 impl StageIndexer {
@@ -301,6 +346,11 @@ impl StageIndexer {
             inflow_slack: 0..0,
             inflow_slack_rows: 0..0,
             has_inflow_penalty: false,
+            // FPHA ranges are empty until `with_equipment` is called with FPHA hydros.
+            generation: 0..0,
+            n_fpha_hydros: 0,
+            fpha_hydro_indices: Vec::new(),
+            fpha_rows: Vec::new(),
         }
     }
 
@@ -320,7 +370,13 @@ impl StageIndexer {
     /// line_rev_start      = line_fwd_start + n_lines * n_blks
     /// deficit_start       = line_rev_start + n_lines * n_blks
     /// excess_start        = deficit_start  + n_buses * n_blks
+    /// inflow_slack_start  = excess_end  (only when has_inflow_penalty && hydro_count > 0)
+    /// generation_start    = inflow_slack_end  (FPHA generation columns)
     /// ```
+    ///
+    /// FPHA generation columns come immediately after `inflow_slack` (or after
+    /// `excess` when `has_inflow_penalty == false`), one column per FPHA hydro
+    /// per block.  FPHA constraint rows are placed after `load_balance`.
     ///
     /// # Notes
     ///
@@ -344,7 +400,7 @@ impl StageIndexer {
     /// // line_rev:  8..9   (1 line * 1 block)
     /// // deficit:   9..11  (2 buses * 1 block)
     /// // excess:   11..13  (2 buses * 1 block)
-    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false);
+    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
     /// assert_eq!(idx.turbine,   3..4);
     /// assert_eq!(idx.spillage,  4..5);
     /// assert_eq!(idx.thermal,   5..7);
@@ -353,12 +409,14 @@ impl StageIndexer {
     /// assert_eq!(idx.deficit,   9..11);
     /// assert_eq!(idx.excess,   11..13);
     /// assert!(idx.inflow_slack.is_empty());
+    /// assert!(idx.generation.is_empty());
     /// assert_eq!(idx.n_blks, 1);
     /// assert_eq!(idx.n_thermals, 2);
     /// assert_eq!(idx.n_lines, 1);
     /// assert_eq!(idx.n_buses, 2);
     /// ```
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn with_equipment(
         hydro_count: usize,
         max_par_order: usize,
@@ -367,7 +425,15 @@ impl StageIndexer {
         n_buses: usize,
         n_blks: usize,
         has_inflow_penalty: bool,
+        fpha_hydro_indices: Vec<usize>,
+        fpha_planes_per_hydro: &[usize],
     ) -> Self {
+        debug_assert_eq!(
+            fpha_hydro_indices.len(),
+            fpha_planes_per_hydro.len(),
+            "fpha_hydro_indices and fpha_planes_per_hydro must have equal length"
+        );
+
         let base = Self::new(hydro_count, max_par_order);
         let decision_start = base.theta + 1;
 
@@ -388,11 +454,38 @@ impl StageIndexer {
             (0..0, false)
         };
 
-        // Row layout: [storage_fixing | lag_fixing | water_balance | load_balance]
+        // FPHA generation columns are placed immediately after inflow_slack (or after
+        // excess when no penalty), one column per FPHA hydro per block.
+        let n_fpha_hydros = fpha_hydro_indices.len();
+        let generation_start = if active_penalty {
+            inflow_slack.end
+        } else {
+            excess_end
+        };
+        let generation_end = generation_start + n_fpha_hydros * n_blks;
+        let generation = if n_fpha_hydros > 0 {
+            generation_start..generation_end
+        } else {
+            0..0
+        };
+
+        // Row layout: [storage_fixing | lag_fixing | water_balance | load_balance | fpha_rows]
         // water_balance_start = n_state (= n_dual_relevant)
         // load_balance_start = water_balance_start + hydro_count
         let load_balance_start = base.n_state + hydro_count;
         let load_balance_end = load_balance_start + n_buses * n_blks;
+
+        // FPHA constraint rows are placed after load_balance, one block per FPHA hydro
+        // containing planes_per_block * n_blks rows.
+        let mut fpha_rows: Vec<FphaRowRange> = Vec::with_capacity(n_fpha_hydros);
+        let mut fpha_row_cursor = load_balance_end;
+        for &planes in fpha_planes_per_hydro {
+            fpha_rows.push(FphaRowRange {
+                start: fpha_row_cursor,
+                planes_per_block: planes,
+            });
+            fpha_row_cursor += planes * n_blks;
+        }
 
         Self {
             turbine: turbine_start..spillage_start,
@@ -410,6 +503,10 @@ impl StageIndexer {
             inflow_slack,
             inflow_slack_rows: 0..0,
             has_inflow_penalty: active_penalty,
+            generation,
+            n_fpha_hydros,
+            fpha_hydro_indices,
+            fpha_rows,
             ..base
         }
     }
@@ -455,9 +552,9 @@ impl StageIndexer {
     }
 }
 
-// StageIndexer contains only Copy types (Range<usize> and usize),
-// so Send + Sync are automatically derived. The explicit bounds below
-// serve as a compile-time assertion that the safety invariant holds.
+// StageIndexer contains only Send + Sync types (Range<usize>, usize, Vec<usize>,
+// Vec<FphaRowRange>), so Send + Sync are automatically derived. The explicit bounds
+// below serve as a compile-time assertion that the safety invariant holds.
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     fn check() {
@@ -470,7 +567,7 @@ const _: () = {
 mod tests {
     use cobre_solver::StageTemplate;
 
-    use super::StageIndexer;
+    use super::{FphaRowRange, StageIndexer};
 
     // Worked example from spec SS5.5.3: N = 3, L = 2
 
@@ -706,7 +803,7 @@ mod tests {
     // excess:   [11, 11+2*1) = 11..13
     #[test]
     fn with_equipment_doctest_n1_l0_t2_l1_b2_k1() {
-        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false);
+        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
 
         // State ranges are identical to new(1, 0)
         assert_eq!(idx.storage, 0..1);
@@ -744,7 +841,7 @@ mod tests {
     // excess:   [37, 37+4*2)  = 37..45
     #[test]
     fn with_equipment_n2_l1_t3_l2_b4_k2() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false);
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false, vec![], &[]);
 
         // State ranges identical to new(2, 1)
         assert_eq!(idx.theta, 6);
@@ -763,7 +860,7 @@ mod tests {
     // with_equipment: no equipment (all counts zero), matches new() state layout
     #[test]
     fn with_equipment_all_counts_zero_matches_new() {
-        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0, false);
+        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0, false, vec![], &[]);
         let base = StageIndexer::new(3, 2);
 
         assert_eq!(with_eq.storage, base.storage);
@@ -784,7 +881,7 @@ mod tests {
     // with_equipment: adjacency invariant — ranges must be contiguous and non-overlapping
     #[test]
     fn with_equipment_ranges_are_contiguous() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false);
+        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false, vec![], &[]);
 
         // turbine immediately follows theta
         assert_eq!(idx.turbine.start, idx.theta + 1);
@@ -801,7 +898,7 @@ mod tests {
     #[test]
     fn with_equipment_column_index_formulas() {
         let n_blks = 3_usize;
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks, false);
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks, false, vec![], &[]);
 
         // turbine[h=0, b=0] = turbine.start (no offset for h=0, b=0)
         assert_eq!(idx.turbine.start, idx.turbine.start);
@@ -828,7 +925,7 @@ mod tests {
     // inflow_slack: [16, 18)  <- excess_end..excess_end+N
     #[test]
     fn with_equipment_inflow_penalty_appends_slack() {
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true);
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true, vec![], &[]);
 
         assert!(idx.has_inflow_penalty, "has_inflow_penalty must be true");
         // inflow_slack must start exactly where excess ends
@@ -849,8 +946,198 @@ mod tests {
             "inflow_slack_rows must remain empty"
         );
         // without penalty the slack range is empty
-        let no_penalty = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
+        let no_penalty = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
         assert!(!no_penalty.has_inflow_penalty);
         assert!(no_penalty.inflow_slack.is_empty());
+    }
+
+    // ── FPHA field tests ───────────────────────────────────────────────────
+
+    // AC-4: no FPHA hydros → generation is empty, fpha_rows is empty.
+    //
+    // N=4, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA.
+    // theta = N*(2+L) = 4*(2+0) = 8
+    // decision_start = 9
+    // turbine:  [9, 13)
+    // spillage: [13, 17)
+    // deficit:  [17, 18)
+    // excess:   [18, 19)
+    // generation: empty (no FPHA hydros)
+    #[test]
+    fn fpha_no_hydros_generation_is_empty() {
+        let idx = StageIndexer::with_equipment(4, 0, 0, 0, 1, 1, false, vec![], &[]);
+
+        assert!(
+            idx.generation.is_empty(),
+            "generation must be empty with no FPHA hydros"
+        );
+        assert_eq!(idx.n_fpha_hydros, 0);
+        assert!(idx.fpha_hydro_indices.is_empty());
+        assert!(idx.fpha_rows.is_empty());
+    }
+
+    // AC-1 + AC-2: 1 FPHA hydro, 1 block, 3 planes.
+    //
+    // N=2, L=0, T=1, Ln=0, B=1, K=1, no penalty.
+    // theta = N*(2+L) = 2*(2+0) = 4
+    // decision_start = 5
+    // turbine:  [5, 7)   (2 hydros * 1 block)
+    // spillage: [7, 9)
+    // thermal:  [9, 10)  (1 thermal * 1 block)
+    // deficit:  [10, 11) (1 bus * 1 block)
+    // excess:   [11, 12)
+    // generation: [12, 13) (1 FPHA hydro * 1 block)
+    //
+    // Row layout:
+    // n_state = N*(1+L) = 2*(1+0) = 2
+    // water_balance_start = 2
+    // load_balance_start  = 2 + 2 = 4
+    // load_balance_end    = 4 + 1*1 = 5
+    // fpha_rows[0].start  = 5 (after load_balance.end)
+    // fpha_rows[0].planes_per_block = 3
+    #[test]
+    fn fpha_one_hydro_one_block_three_planes() {
+        let idx = StageIndexer::with_equipment(2, 0, 1, 0, 1, 1, false, vec![0], &[3]);
+
+        // AC-1: generation spans 1 column (1 FPHA hydro * 1 block)
+        assert_eq!(idx.generation.len(), 1, "generation must span 1 column");
+        assert_eq!(idx.generation, 12..13);
+        assert_eq!(idx.n_fpha_hydros, 1);
+        assert_eq!(idx.fpha_hydro_indices, vec![0]);
+
+        // AC-2: fpha_rows[0].start is after load_balance.end, planes_per_block == 3
+        assert_eq!(idx.fpha_rows.len(), 1);
+        assert_eq!(
+            idx.fpha_rows[0].start, idx.load_balance.end,
+            "fpha_rows[0].start must equal load_balance.end"
+        );
+        assert_eq!(idx.fpha_rows[0].planes_per_block, 3);
+    }
+
+    // AC-3: 2 FPHA hydros, 2 blocks, plane counts [5, 4].
+    //
+    // N=4, L=0, T=0, Ln=0, B=1, K=2, no penalty.
+    // theta = N*(2+L) = 4*(2+0) = 8
+    // decision_start = 9
+    // turbine:  [9, 17)   (4 hydros * 2 blocks)
+    // spillage: [17, 25)
+    // deficit:  [25, 27)  (1 bus * 2 blocks)
+    // excess:   [27, 29)
+    // generation: [29, 33) (2 FPHA hydros * 2 blocks = 4 columns)
+    #[test]
+    fn fpha_two_hydros_two_blocks_different_planes() {
+        let idx = StageIndexer::with_equipment(4, 0, 0, 0, 1, 2, false, vec![1, 3], &[5, 4]);
+
+        // AC-3: generation spans 4 columns (2 FPHA hydros * 2 blocks)
+        assert_eq!(idx.generation.len(), 4, "generation must span 4 columns");
+        assert_eq!(idx.n_fpha_hydros, 2);
+        assert_eq!(idx.fpha_hydro_indices, vec![1, 3]);
+
+        // fpha_rows: 2 entries with correct starts and plane counts
+        assert_eq!(idx.fpha_rows.len(), 2);
+
+        // fpha_rows[0]: hydro at local 0 (system hydro 1), 5 planes, 2 blocks
+        // starts at load_balance.end
+        assert_eq!(
+            idx.fpha_rows[0].start, idx.load_balance.end,
+            "fpha_rows[0].start must equal load_balance.end"
+        );
+        assert_eq!(idx.fpha_rows[0].planes_per_block, 5);
+
+        // fpha_rows[1]: starts after fpha_rows[0]'s region (5 planes * 2 blocks = 10 rows)
+        assert_eq!(
+            idx.fpha_rows[1].start,
+            idx.fpha_rows[0].start + 5 * 2,
+            "fpha_rows[1].start must follow fpha_rows[0]'s 10-row region"
+        );
+        assert_eq!(idx.fpha_rows[1].planes_per_block, 4);
+    }
+
+    // FPHA generation columns are contiguous with the prior column region.
+    //
+    // No penalty: generation immediately follows excess.
+    // With penalty: generation immediately follows inflow_slack.
+    #[test]
+    fn fpha_generation_contiguous_with_prior_region() {
+        // No penalty case: generation.start == excess.end
+        let no_penalty = StageIndexer::with_equipment(2, 0, 0, 0, 1, 1, false, vec![0], &[2]);
+        assert_eq!(
+            no_penalty.generation.start, no_penalty.excess.end,
+            "generation.start must equal excess.end when no penalty"
+        );
+
+        // With penalty case: generation.start == inflow_slack.end
+        let with_penalty = StageIndexer::with_equipment(2, 0, 0, 0, 1, 1, true, vec![0], &[2]);
+        assert_eq!(
+            with_penalty.generation.start, with_penalty.inflow_slack.end,
+            "generation.start must equal inflow_slack.end when penalty active"
+        );
+    }
+
+    // FPHA rows are contiguous with load_balance (start at load_balance.end).
+    #[test]
+    fn fpha_rows_contiguous_with_load_balance() {
+        let idx = StageIndexer::with_equipment(3, 1, 2, 0, 2, 3, false, vec![0, 2], &[4, 6]);
+
+        // First FPHA hydro starts at load_balance.end
+        assert_eq!(
+            idx.fpha_rows[0].start, idx.load_balance.end,
+            "fpha_rows[0] must start at load_balance.end"
+        );
+
+        // Each subsequent FPHA hydro starts after its predecessor's block
+        // fpha_rows[0]: 4 planes * 3 blocks = 12 rows
+        assert_eq!(
+            idx.fpha_rows[1].start,
+            idx.fpha_rows[0].start + 4 * 3,
+            "fpha_rows[1] must start after fpha_rows[0]'s rows"
+        );
+        assert_eq!(idx.fpha_rows[1].planes_per_block, 6);
+    }
+
+    // FphaRowRange is Debug + Clone + Copy.
+    #[test]
+    fn fpha_row_range_debug_clone_copy() {
+        let r = FphaRowRange {
+            start: 42,
+            planes_per_block: 5,
+        };
+        let cloned = r;
+        assert_eq!(cloned.start, 42);
+        assert_eq!(cloned.planes_per_block, 5);
+        let debug_str = format!("{r:?}");
+        assert!(debug_str.contains("FphaRowRange"));
+    }
+
+    // new() produces empty FPHA ranges.
+    #[test]
+    fn new_fpha_ranges_are_empty() {
+        let idx = StageIndexer::new(3, 2);
+        assert!(idx.generation.is_empty());
+        assert_eq!(idx.n_fpha_hydros, 0);
+        assert!(idx.fpha_hydro_indices.is_empty());
+        assert!(idx.fpha_rows.is_empty());
+    }
+
+    // Adjacency invariant extended: generation immediately follows the prior region.
+    #[test]
+    fn extended_adjacency_invariant_with_fpha() {
+        // N=2, L=1, T=1, Ln=1, B=1, K=1, no penalty, 1 FPHA hydro.
+        // theta=6, decision_start=7
+        // turbine:[7,9), spillage:[9,11), thermal:[11,12), line_fwd:[12,13),
+        // line_rev:[13,14), deficit:[14,15), excess:[15,16)
+        // generation:[16,17) (1 FPHA * 1 block, after excess.end since no penalty)
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![0], &[3]);
+
+        assert_eq!(idx.turbine.start, idx.theta + 1);
+        assert_eq!(idx.spillage.start, idx.turbine.end);
+        assert_eq!(idx.thermal.start, idx.spillage.end);
+        assert_eq!(idx.line_fwd.start, idx.thermal.end);
+        assert_eq!(idx.line_rev.start, idx.line_fwd.end);
+        assert_eq!(idx.deficit.start, idx.line_rev.end);
+        assert_eq!(idx.excess.start, idx.deficit.end);
+        // generation follows excess (no penalty)
+        assert_eq!(idx.generation.start, idx.excess.end);
+        assert_eq!(idx.generation.len(), 1);
     }
 }

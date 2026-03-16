@@ -1134,7 +1134,7 @@ mod tests {
     #[test]
     fn extract_equipment_reads_primal_when_with_equipment() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
         // theta = 6, equipment starts at 7
         assert_eq!(indexer.theta, 6);
         assert_eq!(indexer.turbine, 7..9);
@@ -1471,7 +1471,7 @@ mod tests {
     #[test]
     fn test_slack_extraction_with_penalty_active() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=true
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true);
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true, vec![], &[]);
 
         assert!(
             indexer.has_inflow_penalty,
@@ -1553,7 +1553,7 @@ mod tests {
     #[test]
     fn test_slack_extraction_without_penalty_is_zero() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=false
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false);
+        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
         assert!(
             !indexer.has_inflow_penalty,
             "has_inflow_penalty must be false"
@@ -1608,7 +1608,7 @@ mod tests {
         // Use StageIndexer::new (no equipment) but manually set has_inflow_penalty
         // by using with_equipment with zero blocks — turbine.is_empty() triggers fallback.
         // N=2, L=1, T=0, Ln=0, B=0, K=0, has_inflow_penalty=true
-        let indexer = StageIndexer::with_equipment(2, 1, 0, 0, 0, 0, true);
+        let indexer = StageIndexer::with_equipment(2, 1, 0, 0, 0, 0, true, vec![], &[]);
 
         // turbine is empty (n_blks=0) → fallback path
         assert!(

@@ -188,13 +188,34 @@ fn extract_hydro_no_turbine(
         0.0
     };
     let water_value = view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0);
+
+    // Determine if hydro `h` is FPHA. FPHA identification comes from
+    // StageIndexer, not from EntityCounts.hydro_productivities.
+    let is_fpha = indexer.fpha_hydro_indices.contains(&h);
+    let productivity_mw_per_m3s = if is_fpha {
+        None
+    } else {
+        Some(spec.entity_counts.hydro_productivities[h])
+    };
+
+    // Evaporation: read from LP columns when present; fall back to 0.0.
+    let (evaporation_m3s, evaporation_violation_m3s) =
+        if let Some(local_evap_idx) = indexer.evap_hydro_indices.iter().position(|&e| e == h) {
+            let ei = &indexer.evap_indices[local_evap_idx];
+            let q_ev = view.primal[ei.q_ev_col];
+            let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
+            (Some(q_ev), violation)
+        } else {
+            (Some(0.0), 0.0)
+        };
+
     SimulationHydroResult {
         stage_id,
         block_id: None,
         hydro_id,
         turbined_m3s: 0.0,
         spillage_m3s: 0.0,
-        evaporation_m3s: Some(0.0),
+        evaporation_m3s,
         diverted_inflow_m3s: Some(0.0),
         diverted_outflow_m3s: Some(0.0),
         incremental_inflow_m3s: incremental_inflow,
@@ -202,7 +223,7 @@ fn extract_hydro_no_turbine(
         storage_initial_hm3: view.primal[indexer.storage_in.start + h],
         storage_final_hm3: view.primal[indexer.storage.start + h],
         generation_mw: 0.0,
-        productivity_mw_per_m3s: Some(spec.entity_counts.hydro_productivities[h]),
+        productivity_mw_per_m3s,
         spillage_cost: 0.0,
         water_value_per_hm3: water_value,
         storage_binding_code: 0,
@@ -213,7 +234,7 @@ fn extract_hydro_no_turbine(
         generation_slack_mw: 0.0,
         storage_violation_below_hm3: 0.0,
         filling_target_violation_hm3: 0.0,
-        evaporation_violation_m3s: 0.0,
+        evaporation_violation_m3s,
         inflow_nonnegativity_slack_m3s: inflow_slack,
     }
 }
@@ -237,18 +258,49 @@ fn extract_hydro_per_block<'a>(
     } else {
         0.0
     };
-    let productivity = spec.entity_counts.hydro_productivities[h];
     let inflow_slack = if indexer.has_inflow_penalty {
         view.primal[indexer.inflow_slack.start + h]
     } else {
         0.0
     };
     let water_value = view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0);
+
+    // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
+    // can read generation from the LP `g_{h,k}` column rather than computing
+    // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
+    // because they use a piecewise function, not a scalar constant.
+    let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
+    let productivity_mw_per_m3s = if fpha_local.is_some() {
+        None
+    } else {
+        Some(spec.entity_counts.hydro_productivities[h])
+    };
+
+    // Evaporation: stage-level (one column per hydro, same for all blocks).
+    let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
+    let (evaporation_m3s, evaporation_violation_m3s) = if let Some(lei) = local_evap {
+        let ei = &indexer.evap_indices[lei];
+        let q_ev = view.primal[ei.q_ev_col];
+        let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
+        (Some(q_ev), violation)
+    } else {
+        (Some(0.0), 0.0)
+    };
+
     (0..n_blks).map(move |b| {
         let t_col = indexer.turbine.start + h * n_blks + b;
         let s_col = indexer.spillage.start + h * n_blks + b;
         let turbined = view.primal[t_col];
         let spillage = view.primal[s_col];
+
+        // For FPHA hydros, read generation from the LP `g_{h,k}` column.
+        // For constant-productivity hydros, compute generation as turbined * productivity.
+        let generation_mw = if let Some(local_fpha_idx) = fpha_local {
+            view.primal[indexer.generation.start + local_fpha_idx * n_blks + b]
+        } else {
+            turbined * spec.entity_counts.hydro_productivities[h]
+        };
+
         #[allow(clippy::cast_possible_truncation)]
         SimulationHydroResult {
             stage_id,
@@ -256,15 +308,15 @@ fn extract_hydro_per_block<'a>(
             hydro_id,
             turbined_m3s: turbined,
             spillage_m3s: spillage,
-            evaporation_m3s: Some(0.0),
+            evaporation_m3s,
             diverted_inflow_m3s: Some(0.0),
             diverted_outflow_m3s: Some(0.0),
             incremental_inflow_m3s: incremental_inflow,
             inflow_m3s: incremental_inflow,
             storage_initial_hm3: storage_initial,
             storage_final_hm3: storage_final,
-            generation_mw: turbined * productivity,
-            productivity_mw_per_m3s: Some(productivity),
+            generation_mw,
+            productivity_mw_per_m3s,
             spillage_cost: spillage * view.objective_coeffs[s_col],
             water_value_per_hm3: water_value,
             storage_binding_code: 0,
@@ -275,7 +327,7 @@ fn extract_hydro_per_block<'a>(
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_m3s,
             inflow_nonnegativity_slack_m3s: inflow_slack,
         }
     })
@@ -576,6 +628,24 @@ fn compute_cost_result(
         range_sum(indexer.excess.clone())
     };
 
+    // FPHA turbined cost: sum primal[col] * objective[col] over all FPHA turbine
+    // columns. Non-FPHA turbine columns have zero objective coefficient, but we
+    // restrict the sum explicitly to FPHA hydros for clarity.
+    let fpha_turbined_cost = if indexer.generation.is_empty() {
+        0.0
+    } else {
+        let n_blks = indexer.n_blks;
+        indexer
+            .fpha_hydro_indices
+            .iter()
+            .enumerate()
+            .flat_map(|(local_fpha_idx, _sys_h)| {
+                (0..n_blks).map(move |b| indexer.generation.start + local_fpha_idx * n_blks + b)
+            })
+            .map(col_cost)
+            .sum()
+    };
+
     SimulationCostResult {
         stage_id,
         block_id: None,
@@ -593,7 +663,7 @@ fn compute_cost_result(
         inflow_penalty_cost: 0.0,
         generic_violation_cost: 0.0,
         spillage_cost,
-        fpha_turbined_cost: 0.0,
+        fpha_turbined_cost,
         curtailment_cost: 0.0,
         exchange_cost,
         pumping_cost: 0.0,
@@ -1674,5 +1744,335 @@ mod tests {
             result.hydros[0].inflow_nonnegativity_slack_m3s
         );
         assert_eq!(result.hydros[1].inflow_nonnegativity_slack_m3s, 0.0);
+    }
+
+    // ── FPHA and Evaporation extraction tests ────────────────────────────────
+
+    /// Build a `StageIndexer` with 2 hydros (h0 = FPHA, h1 = constant-productivity),
+    /// 1 block, no thermals/lines/buses.
+    ///
+    /// Column layout:
+    /// ```text
+    /// N=2, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[0], planes=[2]
+    /// theta = N*(2+L) = 2*(2+0) = 4
+    /// turbine:   [5, 7)   h0→5, h1→6
+    /// spillage:  [7, 9)   h0→7, h1→8
+    /// generation:[9, 10)  fpha h0 b0 → 9
+    /// ```
+    fn make_indexer_2h_1fpha_1blk() -> StageIndexer {
+        // h0 is FPHA (system index 0), h1 is constant-productivity (system index 1)
+        StageIndexer::with_equipment(2, 0, 0, 0, 0, 1, false, vec![0], &[2])
+    }
+
+    /// Acceptance criterion: FPHA hydro's `generation_mw` equals the LP generation
+    /// variable (not turbined * productivity = 0).
+    #[test]
+    fn fpha_generation_read_from_lp_column() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        // generation.start should be at turbine(5..7) + spillage(7..9) end = 9
+        // generation[0] = generation.start + 0 * 1 + 0 = 9
+        assert_eq!(indexer.generation.start, 9, "generation starts at 9");
+        assert_eq!(indexer.fpha_hydro_indices, vec![0]);
+
+        let n_cols = indexer.generation.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[0] = 50.0; // storage h0
+        primal[1] = 80.0; // storage h1
+        primal[2] = 45.0; // storage_in h0
+        primal[3] = 75.0; // storage_in h1
+        primal[4] = 0.0; // theta
+        primal[5] = 20.0; // turbine h0 b0 (not used for FPHA gen)
+        primal[6] = 30.0; // turbine h1 b0
+        primal[7] = 0.0; // spillage h0 b0
+        primal[8] = 0.0; // spillage h1 b0
+        primal[9] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
+
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5], // FPHA has 0.0, constant has 1.5
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 0.0,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+            },
+            0,
+        );
+
+        // 2 hydros × 1 block = 2 entries
+        assert_eq!(result.hydros.len(), 2);
+
+        // FPHA hydro (h0, block 0): generation from LP column 9 = 75.0
+        assert!(
+            (result.hydros[0].generation_mw - 75.0).abs() < 1e-12,
+            "FPHA generation_mw should be 75.0, got {}",
+            result.hydros[0].generation_mw
+        );
+
+        // Constant-productivity hydro (h1, block 0): generation = turbined * productivity
+        // turbine h1 b0 = primal[6] = 30.0, productivity = 1.5 → 45.0
+        assert!(
+            (result.hydros[1].generation_mw - 45.0).abs() < 1e-12,
+            "constant-productivity generation_mw should be 45.0, got {}",
+            result.hydros[1].generation_mw
+        );
+    }
+
+    /// Acceptance criterion: FPHA hydro has `productivity_mw_per_m3s == None`;
+    /// constant-productivity hydro has `Some(rho)`.
+    #[test]
+    fn fpha_productivity_is_none() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        let n_cols = indexer.generation.end;
+        let primal = vec![0.0_f64; n_cols];
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 0.0,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+            },
+            0,
+        );
+
+        assert_eq!(
+            result.hydros[0].productivity_mw_per_m3s, None,
+            "FPHA hydro must have productivity_mw_per_m3s == None"
+        );
+        assert_eq!(
+            result.hydros[1].productivity_mw_per_m3s,
+            Some(1.5),
+            "constant-productivity hydro must have Some(1.5)"
+        );
+    }
+
+    /// Build a `StageIndexer` with 1 hydro that has evaporation, 1 block.
+    ///
+    /// Column layout:
+    /// ```text
+    /// N=1, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[], evap=[0]
+    /// theta = 1*(2+0) = 2
+    /// turbine:  [3, 4)   h0→3
+    /// spillage: [4, 5)   h0→4
+    /// evap:     [5, 8)   Q_ev→5, f_plus→6, f_minus→7
+    /// ```
+    fn make_indexer_1h_evap_1blk() -> StageIndexer {
+        StageIndexer::with_equipment_and_evaporation(1, 0, 0, 0, 0, 1, false, vec![], &[], vec![0])
+    }
+
+    /// Acceptance criterion: `evaporation_m3s` equals the LP `Q_ev` variable value.
+    #[test]
+    fn evaporation_read_from_lp_column() {
+        let indexer = make_indexer_1h_evap_1blk();
+        assert_eq!(indexer.evap_hydro_indices, vec![0]);
+        let ei = &indexer.evap_indices[0];
+        assert_eq!(ei.q_ev_col, 5);
+        assert_eq!(ei.f_evap_plus_col, 6);
+        assert_eq!(ei.f_evap_minus_col, 7);
+
+        let n_cols = 8;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[0] = 200.0; // storage h0
+        primal[1] = 190.0; // storage_in h0
+        primal[2] = 0.0; // theta
+        primal[3] = 10.0; // turbine h0 b0
+        primal[4] = 0.0; // spillage h0 b0
+        primal[5] = 3.5; // Q_ev — acceptance criterion value
+
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 1];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1],
+            hydro_productivities: vec![1.0],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 0.0,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+            },
+            0,
+        );
+
+        assert_eq!(result.hydros.len(), 1);
+        assert_eq!(
+            result.hydros[0].evaporation_m3s,
+            Some(3.5),
+            "evaporation_m3s should be Some(3.5)"
+        );
+        assert!(
+            result.hydros[0].evaporation_violation_m3s.abs() < 1e-12,
+            "evaporation_violation_m3s should be 0.0"
+        );
+    }
+
+    /// Acceptance criterion: `evaporation_violation_m3s` equals the sum of the two slack columns.
+    #[test]
+    fn evaporation_violation_is_sum_of_slacks() {
+        let indexer = make_indexer_1h_evap_1blk();
+        let n_cols = 8;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[0] = 200.0;
+        primal[1] = 190.0;
+        // primal[2] = theta = 0
+        primal[5] = 2.0; // Q_ev
+        primal[6] = 0.5; // f_evap_plus — acceptance criterion value
+        primal[7] = 0.0; // f_evap_minus
+
+        let obj = vec![0.0_f64; n_cols];
+        let dual = vec![0.0_f64; 1];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1],
+            hydro_productivities: vec![1.0],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 0.0,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+            },
+            0,
+        );
+
+        assert!(
+            (result.hydros[0].evaporation_violation_m3s - 0.5).abs() < 1e-12,
+            "evaporation_violation_m3s should be 0.5, got {}",
+            result.hydros[0].evaporation_violation_m3s
+        );
+    }
+
+    /// Acceptance criterion: `fpha_turbined_cost` equals the sum of primal * obj\_coeff
+    /// over FPHA generation columns.
+    ///
+    /// Setup: 1 FPHA hydro (h0), 1 constant-productivity hydro (h1), 1 block.
+    /// FPHA generation column: primal=30.0, `objective_coeff`=0.01 → cost=0.3
+    #[test]
+    fn fpha_turbined_cost_in_compute_cost_result() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        // generation.start = 9 (fpha h0 b0)
+        let n_cols = indexer.generation.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[4] = 500.0; // theta
+
+        // FPHA generation column 9: primal=30.0
+        primal[9] = 30.0;
+
+        let mut obj = vec![0.0_f64; n_cols];
+        // FPHA generation column 9: objective_coeff=0.01
+        obj[9] = 0.01;
+
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 500.3, // theta + fpha cost
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+            },
+            0,
+        );
+
+        let cost = &result.costs[0];
+        assert!(
+            (cost.fpha_turbined_cost - 0.3).abs() < 1e-12,
+            "fpha_turbined_cost should be 0.3 (30.0 * 0.01), got {}",
+            cost.fpha_turbined_cost
+        );
     }
 }

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/production_models.schema.json",
+  "production_models": [
+    {
+      "hydro_id": 0,
+      "selection_mode": "stage_ranges",
+      "stage_ranges": [
+        {
+          "start_stage_id": 0,
+          "end_stage_id": null,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "precomputed"
+          }
+        }
+      ]
+    },
+    {
+      "hydro_id": 1,
+      "selection_mode": "seasonal",
+      "default_model": "fpha",
+      "seasons": [
+        {
+          "season_id": 0,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "precomputed"
+          }
+        },
+        {
+          "season_id": 1,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "precomputed"
+          }
+        }
+      ]
+    }
+  ]
+}

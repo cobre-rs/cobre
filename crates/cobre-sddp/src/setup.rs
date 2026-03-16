@@ -324,6 +324,7 @@ impl StudySetup {
             stochastic.par(),
             stochastic.normal(),
             &hydro_models.production,
+            &hydro_models.evaporation,
         )?;
 
         if stage_templates.templates.is_empty() {

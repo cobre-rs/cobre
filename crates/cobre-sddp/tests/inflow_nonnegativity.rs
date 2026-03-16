@@ -431,12 +431,14 @@ fn build_fixture() -> Fixture {
     )
     .unwrap();
 
+    let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
     let stage_templates = build_stage_templates(
         &system,
         &inflow_method,
         &par_lp,
         &cobre_stochastic::normal::precompute::PrecomputedNormal::default(),
-        &PrepareHydroModelsResult::default_from_system(&system).production,
+        &hydro_models.production,
+        &hydro_models.evaporation,
     )
     .expect("no FPHA plants in integration test fixture");
     let stochastic = build_stochastic();

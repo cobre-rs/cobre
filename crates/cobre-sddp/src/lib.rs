@@ -82,7 +82,7 @@ pub use hydro_models::{
     ProductionModelSet, ProductionModelSource, ResolvedProductionModel, build_hydro_model_summary,
     prepare_hydro_models, resolve_evaporation_models, resolve_production_models,
 };
-pub use indexer::{FphaRowRange, StageIndexer};
+pub use indexer::{EvaporationIndices, FphaRowRange, StageIndexer};
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};

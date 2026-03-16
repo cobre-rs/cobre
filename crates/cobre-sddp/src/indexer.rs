@@ -57,6 +57,22 @@ use std::ops::Range;
 
 use cobre_solver::StageTemplate;
 
+/// Column and row indices for the evaporation constraint of one hydro.
+///
+/// Locates the three evaporation columns and one evaporation row assigned to
+/// a single hydro within a stage LP.  Columns are stage-level (not per-block).
+#[derive(Debug, Clone, Copy)]
+pub struct EvaporationIndices {
+    /// Column index of the evaporation volume variable `Q_ev_h` (hm³).
+    pub q_ev_col: usize,
+    /// Column index of the positive violation slack `f_evap_plus_h` (hm³).
+    pub f_evap_plus_col: usize,
+    /// Column index of the negative violation slack `f_evap_minus_h` (hm³).
+    pub f_evap_minus_col: usize,
+    /// Row index of the evaporation equality constraint.
+    pub evap_row: usize,
+}
+
 /// FPHA constraint row range for one hydro at one stage.
 ///
 /// Locates the block of FPHA hyperplane rows assigned to a single FPHA hydro
@@ -271,6 +287,26 @@ pub struct StageIndexer {
     /// `fpha_rows[i]` is the [`FphaRowRange`] for FPHA hydro at local position `i`.
     /// Empty when no FPHA hydros exist or when built via [`StageIndexer::new`].
     pub fpha_rows: Vec<FphaRowRange>,
+
+    // ── Evaporation column and row indices ─────────────────────────────────
+    // Populated only by `with_equipment`; empty when built via `new`.
+    /// Number of hydros with linearized evaporation at this stage.
+    ///
+    /// Zero when built via [`StageIndexer::new`] or when no evaporation hydros exist.
+    pub n_evap_hydros: usize,
+
+    /// Mapping from evaporation local index to system hydro index.
+    ///
+    /// `evap_hydro_indices[i]` is the system-level hydro position for evaporation hydro `i`.
+    /// Empty when no evaporation hydros exist or when built via [`StageIndexer::new`].
+    pub evap_hydro_indices: Vec<usize>,
+
+    /// Per-evaporation-hydro column and row indices.
+    ///
+    /// `evap_indices[i]` is the [`EvaporationIndices`] for evaporation hydro at local
+    /// position `i`.  Empty when no evaporation hydros exist or when built via
+    /// [`StageIndexer::new`].
+    pub evap_indices: Vec<EvaporationIndices>,
 }
 
 impl StageIndexer {
@@ -351,6 +387,10 @@ impl StageIndexer {
             n_fpha_hydros: 0,
             fpha_hydro_indices: Vec::new(),
             fpha_rows: Vec::new(),
+            // Evaporation ranges are empty until `with_equipment` is called with evaporation hydros.
+            n_evap_hydros: 0,
+            evap_hydro_indices: Vec::new(),
+            evap_indices: Vec::new(),
         }
     }
 
@@ -372,11 +412,17 @@ impl StageIndexer {
     /// excess_start        = deficit_start  + n_buses * n_blks
     /// inflow_slack_start  = excess_end  (only when has_inflow_penalty && hydro_count > 0)
     /// generation_start    = inflow_slack_end  (FPHA generation columns)
+    /// evap_start          = generation_end  (3 columns per evaporation hydro, stage-level)
     /// ```
     ///
     /// FPHA generation columns come immediately after `inflow_slack` (or after
     /// `excess` when `has_inflow_penalty == false`), one column per FPHA hydro
     /// per block.  FPHA constraint rows are placed after `load_balance`.
+    ///
+    /// Evaporation columns (3 per evaporation hydro: `Q_ev`, `f_evap_plus`,
+    /// `f_evap_minus`) are stage-level (not per-block) and come immediately after
+    /// the FPHA generation columns.  Evaporation rows (1 per evaporation hydro)
+    /// are placed after FPHA rows.
     ///
     /// # Notes
     ///
@@ -428,6 +474,48 @@ impl StageIndexer {
         fpha_hydro_indices: Vec<usize>,
         fpha_planes_per_hydro: &[usize],
     ) -> Self {
+        Self::with_equipment_and_evaporation(
+            hydro_count,
+            max_par_order,
+            n_thermals,
+            n_lines,
+            n_buses,
+            n_blks,
+            has_inflow_penalty,
+            fpha_hydro_indices,
+            fpha_planes_per_hydro,
+            vec![],
+        )
+    }
+
+    /// Construct a [`StageIndexer`] with full equipment column ranges and evaporation.
+    ///
+    /// Extends [`StageIndexer::with_equipment`] with evaporation hydro indices.
+    /// Evaporation columns (3 per evaporation hydro: `Q_ev`, `f_evap_plus`,
+    /// `f_evap_minus`) are stage-level and placed after FPHA generation columns.
+    /// Evaporation rows (1 per evaporation hydro) are placed after FPHA rows.
+    ///
+    /// # Arguments
+    ///
+    /// - `evap_hydro_indices` — system-level hydro positions of hydros with
+    ///   linearized evaporation at this stage, in ascending order.
+    ///
+    /// When `evap_hydro_indices` is empty this produces the same result as
+    /// [`StageIndexer::with_equipment`].
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_equipment_and_evaporation(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_thermals: usize,
+        n_lines: usize,
+        n_buses: usize,
+        n_blks: usize,
+        has_inflow_penalty: bool,
+        fpha_hydro_indices: Vec<usize>,
+        fpha_planes_per_hydro: &[usize],
+        evap_hydro_indices: Vec<usize>,
+    ) -> Self {
         debug_assert_eq!(
             fpha_hydro_indices.len(),
             fpha_planes_per_hydro.len(),
@@ -469,6 +557,17 @@ impl StageIndexer {
             0..0
         };
 
+        // Evaporation columns: 3 per evaporation hydro (stage-level, not per-block),
+        // placed immediately after FPHA generation columns.
+        // Layout within the evaporation region for local evaporation index `i`:
+        //   Q_ev_col        = evap_start + i * 3
+        //   f_evap_plus_col = evap_start + i * 3 + 1
+        //   f_evap_minus_col= evap_start + i * 3 + 2
+        let n_evap_hydros = evap_hydro_indices.len();
+        let evap_col_start = generation_end;
+
+        let mut evap_indices_vec: Vec<EvaporationIndices> = Vec::with_capacity(n_evap_hydros);
+
         // Row layout: [storage_fixing | lag_fixing | water_balance | load_balance | fpha_rows]
         // water_balance_start = n_state (= n_dual_relevant)
         // load_balance_start = water_balance_start + hydro_count
@@ -485,6 +584,17 @@ impl StageIndexer {
                 planes_per_block: planes,
             });
             fpha_row_cursor += planes * n_blks;
+        }
+
+        // Evaporation rows: 1 per evaporation hydro, placed after FPHA rows.
+        let evap_row_start = fpha_row_cursor;
+        for i in 0..n_evap_hydros {
+            evap_indices_vec.push(EvaporationIndices {
+                q_ev_col: evap_col_start + i * 3,
+                f_evap_plus_col: evap_col_start + i * 3 + 1,
+                f_evap_minus_col: evap_col_start + i * 3 + 2,
+                evap_row: evap_row_start + i,
+            });
         }
 
         Self {
@@ -507,8 +617,29 @@ impl StageIndexer {
             n_fpha_hydros,
             fpha_hydro_indices,
             fpha_rows,
+            n_evap_hydros,
+            evap_hydro_indices,
+            evap_indices: evap_indices_vec,
             ..base
         }
+    }
+
+    /// Return the [`EvaporationIndices`] for the evaporation hydro at local position `local_idx`.
+    ///
+    /// `local_idx` is the position within the evaporation hydro list (0-indexed).
+    /// Use `evap_hydro_indices[local_idx]` to map to the system-level hydro position.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `local_idx >= n_evap_hydros`.
+    #[must_use]
+    pub fn evap_indices(&self, local_idx: usize) -> &EvaporationIndices {
+        debug_assert!(
+            local_idx < self.n_evap_hydros,
+            "evap local index {local_idx} out of bounds (n_evap_hydros = {})",
+            self.n_evap_hydros
+        );
+        &self.evap_indices[local_idx]
     }
 
     /// Construct a [`StageIndexer`] from a [`StageTemplate`].
@@ -553,8 +684,9 @@ impl StageIndexer {
 }
 
 // StageIndexer contains only Send + Sync types (Range<usize>, usize, Vec<usize>,
-// Vec<FphaRowRange>), so Send + Sync are automatically derived. The explicit bounds
-// below serve as a compile-time assertion that the safety invariant holds.
+// Vec<FphaRowRange>, Vec<EvaporationIndices>), so Send + Sync are automatically
+// derived. The explicit bounds below serve as a compile-time assertion that the
+// safety invariant holds.
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     fn check() {
@@ -1093,6 +1225,148 @@ mod tests {
             "fpha_rows[1] must start after fpha_rows[0]'s rows"
         );
         assert_eq!(idx.fpha_rows[1].planes_per_block, 6);
+    }
+
+    // ── Evaporation field tests ────────────────────────────────────────────
+
+    // AC (ticket-010): 0 evaporation hydros → evap_indices is empty.
+    #[test]
+    fn evap_no_hydros_indices_empty() {
+        let idx = StageIndexer::with_equipment(3, 0, 1, 0, 1, 1, false, vec![], &[]);
+
+        assert_eq!(idx.n_evap_hydros, 0);
+        assert!(idx.evap_hydro_indices.is_empty());
+        assert!(idx.evap_indices.is_empty());
+    }
+
+    // AC (ticket-010): 1 evaporation hydro — verify column/row positions.
+    //
+    // N=2, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, 1 evap hydro.
+    // theta = N*(2+L) = 2*(2+0) = 4
+    // decision_start = 5
+    // turbine:  [5, 7)   (2 hydros * 1 block)
+    // spillage: [7, 9)
+    // deficit:  [9, 10)  (1 bus * 1 block)
+    // excess:   [10, 11)
+    // generation: empty (no FPHA)
+    // evap cols: [11, 14)  (3 columns: Q_ev, f_evap_plus, f_evap_minus)
+    //
+    // Row layout:
+    // n_state = N*(1+L) = 2
+    // load_balance_start = 2 + 2 = 4
+    // load_balance_end   = 4 + 1*1 = 5
+    // evap_row[0] = 5
+    #[test]
+    fn evap_one_hydro_column_row_positions() {
+        let idx = StageIndexer::with_equipment_and_evaporation(
+            2,
+            0,
+            0,
+            0,
+            1,
+            1,
+            false,
+            vec![],
+            &[],
+            vec![0],
+        );
+
+        assert_eq!(idx.n_evap_hydros, 1);
+        assert_eq!(idx.evap_hydro_indices, vec![0]);
+        assert_eq!(idx.evap_indices.len(), 1);
+
+        let ei = idx.evap_indices(0);
+        // 3 columns placed after generation_end (which equals excess.end = 11)
+        assert_eq!(ei.q_ev_col, 11);
+        assert_eq!(ei.f_evap_plus_col, 12);
+        assert_eq!(ei.f_evap_minus_col, 13);
+        // row placed after load_balance.end = 5
+        assert_eq!(ei.evap_row, 5);
+    }
+
+    // AC (ticket-010): 2 evaporation hydros — verify column/row ranges are
+    // contiguous and non-overlapping with FPHA ranges.
+    //
+    // N=4, L=0, T=0, Ln=0, B=1, K=1, no penalty, 1 FPHA hydro (index 0, 3 planes),
+    // 2 evap hydros (indices 1, 2).
+    // theta = 4*(2+0) = 8
+    // decision_start = 9
+    // turbine:  [9, 13)   (4 hydros * 1 block)
+    // spillage: [13, 17)
+    // deficit:  [17, 18)  (1 bus * 1 block)
+    // excess:   [18, 19)
+    // generation: [19, 20) (1 FPHA hydro * 1 block)
+    //
+    // Row layout:
+    // n_state = 4
+    // load_balance_start = 4 + 4 = 8
+    // load_balance_end   = 8 + 1*1 = 9
+    // fpha_rows[0].start = 9
+    // fpha_row_cursor after FPHA = 9 + 3*1 = 12
+    // evap cols: [20, 26)   (2 evap hydros * 3 = 6 columns)
+    // evap_row[0] = 12, evap_row[1] = 13
+    #[test]
+    fn evap_two_hydros_with_fpha_contiguous() {
+        let idx = StageIndexer::with_equipment_and_evaporation(
+            4,
+            0,
+            0,
+            0,
+            1,
+            1,
+            false,
+            vec![0],
+            &[3],
+            vec![1, 2],
+        );
+
+        assert_eq!(idx.n_evap_hydros, 2);
+        assert_eq!(idx.evap_hydro_indices, vec![1, 2]);
+
+        let ei0 = idx.evap_indices(0);
+        let ei1 = idx.evap_indices(1);
+
+        // Columns start at generation_end = 20
+        assert_eq!(ei0.q_ev_col, 20);
+        assert_eq!(ei0.f_evap_plus_col, 21);
+        assert_eq!(ei0.f_evap_minus_col, 22);
+
+        assert_eq!(ei1.q_ev_col, 23);
+        assert_eq!(ei1.f_evap_plus_col, 24);
+        assert_eq!(ei1.f_evap_minus_col, 25);
+
+        // Rows placed after fpha_rows region: fpha_row_cursor = 9 + 3*1 = 12
+        assert_eq!(ei0.evap_row, 12);
+        assert_eq!(ei1.evap_row, 13);
+
+        // Evap rows do not overlap FPHA rows
+        assert!(ei0.evap_row > idx.fpha_rows[0].start);
+    }
+
+    // new() produces empty evaporation fields.
+    #[test]
+    fn new_evap_ranges_are_empty() {
+        let idx = StageIndexer::new(3, 2);
+        assert_eq!(idx.n_evap_hydros, 0);
+        assert!(idx.evap_hydro_indices.is_empty());
+        assert!(idx.evap_indices.is_empty());
+    }
+
+    // EvaporationIndices is Debug + Clone + Copy.
+    #[test]
+    fn evap_indices_debug_clone_copy() {
+        use super::EvaporationIndices;
+        let ei = EvaporationIndices {
+            q_ev_col: 10,
+            f_evap_plus_col: 11,
+            f_evap_minus_col: 12,
+            evap_row: 5,
+        };
+        let cloned = ei;
+        assert_eq!(cloned.q_ev_col, 10);
+        assert_eq!(cloned.evap_row, 5);
+        let debug_str = format!("{ei:?}");
+        assert!(debug_str.contains("EvaporationIndices"));
     }
 
     // FphaRowRange is Debug + Clone + Copy.

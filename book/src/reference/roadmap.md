@@ -70,6 +70,25 @@ The following features were delivered in v0.1.3:
 - **`StageContext` and `TrainingContext` structs** -- Structured context types
   introduced at pass boundaries to replace ad-hoc parameter threading.
 
+## v0.1.4 Deliverables
+
+The following features were delivered in v0.1.4:
+
+- **FPHA hydro production model** -- Four-piece hyperplane approximation for
+  variable-head hydroelectric plants. Supports precomputed hyperplanes (supplied
+  via `fpha_hyperplanes.parquet`) and computed-from-geometry mode (fitted from
+  forebay/tailrace curves in `hydro_geometry.parquet`).
+- **Evaporation linearization** -- Reservoir surface evaporation modeled as a
+  linearized function of stored volume with per-season reference volumes.
+- **Hydro model preprocessing pipeline** -- Unified resolution of production model
+  configuration and evaporation parameters into solver-ready structures.
+- **FPHA/evaporation result extraction** -- Simulation output now includes
+  FPHA-related variables and evaporation volumes.
+- **Deterministic regression test suite** -- 12 hand-computed test cases (D01--D12)
+  covering thermal dispatch, single hydro, cascade, transmission, FPHA variants,
+  evaporation, multi-deficit, and inflow non-negativity.
+- **MSRV bumped to 1.86** -- Workspace `rust-version` updated from 1.85 to 1.86.
+
 ## Sections
 
 The roadmap is organized into four areas:

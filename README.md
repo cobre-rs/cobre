@@ -108,7 +108,7 @@ Key design decisions:
 > **Warning:** Cobre v0.1 is alpha software. The API and case format are not stable yet.
 
 ```bash
-# Install (requires Rust 1.85+ and HiGHS)
+# Install (requires Rust 1.86+ and HiGHS)
 cargo install cobre-cli
 
 # Scaffold the 1dtoy example
@@ -154,7 +154,7 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.3 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. 2,624 tests across the workspace, including a deterministic regression suite with hand-computed expected costs.
+Cobre v0.1.4 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. 2,624 tests across the workspace, including a deterministic regression suite (D01-D12) with hand-computed expected costs.
 
 **What works today:**
 

@@ -62,7 +62,7 @@ build:  release (lto=thin)
 cargo install cobre-cli
 ```
 
-Requires Rust 1.85+ and build prerequisites (see Build from Source below).
+Requires Rust 1.86+ and build prerequisites (see Build from Source below).
 Installs to `$CARGO_HOME/bin`.
 
 ---
@@ -75,7 +75,7 @@ For contributors or unsupported platforms.
 
 | Dependency     | Minimum Version         | Notes                                   |
 | -------------- | ----------------------- | --------------------------------------- |
-| Rust toolchain | 1.85 (stable)           | Install via [rustup](https://rustup.rs) |
+| Rust toolchain | 1.86 (stable)           | Install via [rustup](https://rustup.rs) |
 | C compiler     | any recent GCC or Clang | Required for the HiGHS LP solver        |
 | CMake          | 3.15                    | Required for the HiGHS build system     |
 | Git            | any                     | Required for submodule initialization   |

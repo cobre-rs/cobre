@@ -12,7 +12,7 @@ Cobre is an ecosystem of Rust crates for power system analysis and optimization.
 The first solver vertical is SDDP-based hydrothermal dispatch -- a production-grade
 distributed solver for long-term energy planning.
 
-- **Language**: Rust 2024 edition, MSRV 1.85
+- **Language**: Rust 2024 edition, MSRV 1.86
 - **License**: Apache-2.0
 - **Workspace**: 11 crates (10 workspace + 1 external `ferrompi`)
 - **Build**: `cargo build --workspace`
@@ -75,7 +75,7 @@ identifiers in the spec files:
 
 ---
 
-## Current State (v0.1.3)
+## Current State (v0.1.4)
 
 The SDDP solver is fully functional. The pipeline covers case loading, stochastic
 scenario generation, training, simulation, policy checkpointing, and output writing.

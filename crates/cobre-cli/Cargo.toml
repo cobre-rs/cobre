@@ -18,12 +18,12 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-cobre-core = { version = "0.1.3", path = "../cobre-core", features = ["serde"] }
-cobre-io = { version = "0.1.3", path = "../cobre-io", features = ["schema"] }
-cobre-sddp = { version = "0.1.3", path = "../cobre-sddp" }
-cobre-solver = { version = "0.1.3", path = "../cobre-solver" }
-cobre-comm = { version = "0.1.3", path = "../cobre-comm" }
-cobre-stochastic = { version = "0.1.3", path = "../cobre-stochastic" }
+cobre-core = { version = "0.1.4", path = "../cobre-core", features = ["serde"] }
+cobre-io = { version = "0.1.4", path = "../cobre-io", features = ["schema"] }
+cobre-sddp = { version = "0.1.4", path = "../cobre-sddp" }
+cobre-solver = { version = "0.1.4", path = "../cobre-solver" }
+cobre-comm = { version = "0.1.4", path = "../cobre-comm" }
+cobre-stochastic = { version = "0.1.4", path = "../cobre-stochastic" }
 clap = { version = "4", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 console = "0.16"

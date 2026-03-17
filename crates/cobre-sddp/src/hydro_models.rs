@@ -729,16 +729,14 @@ pub fn resolve_production_models(
         let source = determine_source(hydro, config_entry)?;
         provenance.push((hydro.id, source));
 
-        // For computed sources, fit planes once per hydro and reuse for each stage.
+        // Fit computed-source planes once per hydro, reuse for each stage.
         let cached_computed_planes: Option<Vec<FphaPlane>> =
             if source == ProductionModelSource::ComputedFromGeometry {
                 let fit_result =
                     fit_planes_for_hydro(hydro, config_entry, &geometry_map, &study_stages)?;
-                // Collect low-kappa warnings for structured diagnostic display.
                 if let Some(kappa) = fit_result.low_kappa_warning {
                     kappa_warnings.push((hydro.name.clone(), kappa));
                 }
-                // Collect export rows for this computed-source hydro.
                 for (plane_id, plane) in fit_result.planes.iter().enumerate() {
                     let raw_gamma_0 = plane.intercept / fit_result.kappa;
                     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -851,21 +849,9 @@ fn build_geometry_map(
     geometry_map
 }
 
-/// Validate prerequisites and call `fit_fpha_planes` once for a computed-source hydro.
-///
-/// Returns the full fitting result including planes and kappa; the outer loop
-/// caches the planes for each stage and uses kappa to reconstruct export rows.
-///
-/// # Prerequisite policy
-///
-/// Before fitting, [`validate_computed_prerequisites`] is called to require
-/// that `tailrace`, `hydraulic_losses`, and `efficiency` are all `Some`.
-/// Although the production function math can technically handle `None` values
-/// (zero tailrace, lossless penstock, 100% efficiency), requiring all three
-/// ensures the reservoir geometry was fully characterized before committing to
-/// the computed path.  Silently accepting partial geometry risks producing
-/// FPHA envelopes that are physically inconsistent with the operator's intent
-/// and are difficult to diagnose after the fact.
+/// Fit FPHA planes from geometry for a computed-source hydro.
+/// Validates prerequisites (tailrace, losses, efficiency present), then calls
+/// `fit_fpha_planes`. Returns planes, kappa, and warnings for caching per hydro.
 fn fit_planes_for_hydro(
     hydro: &cobre_core::entities::hydro::Hydro,
     config_entry: Option<&ProductionModelConfig>,
@@ -893,8 +879,7 @@ fn fit_planes_for_hydro(
             ))
         })?;
 
-    // Collect owned clones from the map's reference slices so that
-    // fit_fpha_planes can work with &[HydroGeometryRow] directly.
+    // Clone geometry rows from map to satisfy fit_fpha_planes signature.
     let geo_rows_owned: Vec<HydroGeometryRow> = geometry_map
         .get(&hydro.id)
         .map_or(&[][..], Vec::as_slice)

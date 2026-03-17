@@ -1,22 +1,7 @@
-//! End-to-end convergence test for the 4ree-fpha-evap case with a computed
-//! FPHA source.
-//!
-//! Exercises the full pipeline -- case loading, hydro model preprocessing,
-//! study setup, training, and simulation -- for a system where hydro 0 uses
-//! `source: "computed"` (geometry-fitted hyperplanes) instead of precomputed
-//! ones.
-//!
-//! ## Design constraints
-//!
-//! - The committed `examples/4ree-fpha-evap/` directory is never modified.
-//! - A temporary directory overlay is constructed by copying all case files
-//!   and writing a modified `hydro_production_models.json` with
-//!   `source: "computed"` for hydro 0.
-//! - Only the public `cobre_sddp::` and `cobre_io::` APIs are used.
-//! - `StubComm` is defined locally (same pattern as `fpha_evaporation.rs`).
-//! - The test is self-contained with no cross-test shared state.
-//! - Path to the source case is relative to the crate root:
-//!   `../../examples/4ree-fpha-evap/`.
+//! End-to-end convergence test for computed-source FPHA hydro models.
+//! Modifies 4ree-fpha-evap case to use `source: "computed"` for hydro 0,
+//! exercises full pipeline (load, preprocess, train, simulate), and verifies
+//! convergence and production model sources.
 
 #![allow(
     clippy::unwrap_used,
@@ -41,9 +26,7 @@ use tempfile::TempDir;
 // Shared helpers
 // ===========================================================================
 
-/// Single-rank communicator that correctly copies data through `allgatherv`
-/// and `allreduce`. Required by the exchange and forward-sync steps so that
-/// state is available to the backward pass.
+/// Single-rank communicator stub (copies data via allgatherv/allreduce).
 struct StubComm;
 
 impl Communicator for StubComm {
@@ -104,18 +87,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
     }
 }
 
-/// Builds a temporary case directory that mirrors `examples/4ree-fpha-evap/`
-/// but modifies two files in the `system/` directory so that hydro 0 can use
-/// `source: "computed"` FPHA hyperplanes:
-///
-/// 1. `system/hydro_production_models.json` — changes hydro 0 from
-///    `source: "precomputed"` to `source: "computed"`.
-/// 2. `system/hydros.json` — adds `tailrace`, `hydraulic_losses`, and
-///    `efficiency` to hydro 0, which are required prerequisites for the
-///    computed FPHA fitting pipeline.
-///
-/// The `output/` directory is intentionally excluded so the pipeline writes
-/// fresh output into the temp directory.
+/// Build temp case overlay: 4ree-fpha-evap with hydro 0 changed to
+/// `source: "computed"` and tailrace/losses/efficiency added.
+/// Excludes `output/` so pipeline writes fresh results.
 #[allow(clippy::too_many_lines, clippy::unreadable_literal)]
 fn setup_computed_case() -> TempDir {
     let src = Path::new("../../examples/4ree-fpha-evap");
@@ -326,48 +300,28 @@ fn setup_computed_case() -> TempDir {
 // E2E convergence test
 // ===========================================================================
 
-/// Given the `examples/4ree-fpha-evap/` case data with hydro 0 changed from
-/// `source: "precomputed"` to `source: "computed"` in a temporary overlay
-/// directory, the full pipeline -- load case, prepare hydro models, build
-/// study setup, train, simulate -- must complete without error, exercise the
-/// computed FPHA path, converge within 256 iterations, and produce a
-/// physically meaningful simulation summary.
+/// Full pipeline with computed-source FPHA: load, prepare, train, simulate.
+/// Must converge within 256 iterations and produce valid simulation summary.
 #[test]
 fn fpha_computed_case_converges() {
-    // Build the temporary case directory (overlay with modified production models).
     let tmp = setup_computed_case();
     let case_dir = tmp.path();
-
-    // ── Step 1: load config ───────────────────────────────────────────────────
 
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config must parse");
 
-    // ── Step 2: load case (system) ────────────────────────────────────────────
-
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
-
-    assert_eq!(
-        system.hydros().len(),
-        4,
-        "system must contain exactly 4 hydro plants"
-    );
-
-    // ── Step 3: prepare stochastic context (rank-0 pipeline) ──────────────────
+    assert_eq!(system.hydros().len(), 4, "system must have 4 hydros");
 
     let prepare_result =
         prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
-
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;
-
-    // ── Step 4: prepare hydro models ──────────────────────────────────────────
 
     let hydro_models =
         prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
 
-    // Acceptance criterion: hydro 0 must have ComputedFromGeometry provenance.
-    // Hydros are stored in canonical ID-sorted order, so index 0 == hydro ID 0.
+    // Verify hydro 0 has ComputedFromGeometry provenance.
     let production_sources = &hydro_models.provenance.production_sources;
     assert_eq!(
         production_sources[0].1,
@@ -375,7 +329,7 @@ fn fpha_computed_case_converges() {
         "hydro 0 must have ComputedFromGeometry provenance"
     );
 
-    // Also verify that hydro 0 resolves to the Fpha variant in the production model set.
+    // Verify production model set has 2 FPHA hydros (hydros 0 and 1).
     let n_fpha = (0..hydro_models.production.n_hydros())
         .filter(|&h| {
             matches!(
@@ -386,67 +340,40 @@ fn fpha_computed_case_converges() {
         .count();
     assert_eq!(n_fpha, 2, "production model set must have 2 FPHA hydros");
 
-    // ── Step 5: build StudySetup ──────────────────────────────────────────────
-
     let mut setup =
         StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
-
-    // Acceptance criterion: templates for all 12 study stages.
     assert_eq!(
         setup.stage_templates().len(),
         12,
-        "study setup must have 12 stage templates"
+        "must have 12 study stages"
     );
-
-    // ── Step 6: train ─────────────────────────────────────────────────────────
 
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
-
     let training_result = setup
         .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
-        .expect("train must return Ok");
-
-    // Acceptance criterion: convergence within the 256-iteration budget.
+        .expect("train must succeed");
     assert!(
         training_result.iterations <= 256,
-        "training must converge within 256 iterations; got {}",
+        "training convergence within 256 iterations; got {}",
         training_result.iterations
     );
 
-    // ── Step 7: simulate ──────────────────────────────────────────────────────
-
     let mut pool = setup
         .create_workspace_pool(1, HighsSolver::new)
-        .expect("simulation workspace pool must build");
-
+        .expect("workspace pool must build");
     let io_capacity = setup.io_channel_capacity().max(1);
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
-
-    // Drain thread collects all SimulationScenarioResult items from the channel.
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
-
     let local_costs = setup
         .simulate(&mut pool.workspaces, &comm, &result_tx, None)
-        .expect("simulate must return Ok");
-
-    // Drop the sender so the drain thread terminates.
+        .expect("simulate must succeed");
     drop(result_tx);
-    let _scenario_results = drain_handle.join().expect("drain thread must not panic");
+    drop(drain_handle.join().expect("drain thread must not panic"));
 
-    // Aggregate to obtain SimulationSummary.
     let sim_config = setup.simulation_config();
     let summary = aggregate_simulation(&local_costs, &sim_config, &comm)
         .expect("aggregate_simulation must succeed");
-
-    // Acceptance criterion: n_scenarios == 100 and mean_cost > 0.
-    assert_eq!(
-        summary.n_scenarios, 100,
-        "simulation must produce exactly 100 scenarios"
-    );
-    assert!(
-        summary.mean_cost > 0.0,
-        "simulation mean cost must be positive; got {}",
-        summary.mean_cost
-    );
+    assert_eq!(summary.n_scenarios, 100, "must simulate 100 scenarios");
+    assert!(summary.mean_cost > 0.0, "mean cost must be positive");
 }

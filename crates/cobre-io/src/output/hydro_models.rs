@@ -134,9 +134,10 @@ fn build_fpha_hyperplanes_batch(rows: &[FphaHyperplaneRow]) -> Result<RecordBatc
 
     for row in rows {
         hydro_id_col.append_value(row.hydro_id.0);
-        match row.stage_id {
-            Some(sid) => stage_id_col.append_value(sid),
-            None => stage_id_col.append_null(),
+        if let Some(sid) = row.stage_id {
+            stage_id_col.append_value(sid);
+        } else {
+            stage_id_col.append_null();
         }
         plane_id_col.append_value(row.plane_id);
         gamma_0_col.append_value(row.gamma_0);
@@ -144,17 +145,20 @@ fn build_fpha_hyperplanes_batch(rows: &[FphaHyperplaneRow]) -> Result<RecordBatc
         gamma_q_col.append_value(row.gamma_q);
         gamma_s_col.append_value(row.gamma_s);
         kappa_col.append_value(row.kappa);
-        match row.valid_v_min_hm3 {
-            Some(v) => valid_v_min_col.append_value(v),
-            None => valid_v_min_col.append_null(),
+        if let Some(v) = row.valid_v_min_hm3 {
+            valid_v_min_col.append_value(v);
+        } else {
+            valid_v_min_col.append_null();
         }
-        match row.valid_v_max_hm3 {
-            Some(v) => valid_v_max_col.append_value(v),
-            None => valid_v_max_col.append_null(),
+        if let Some(v) = row.valid_v_max_hm3 {
+            valid_v_max_col.append_value(v);
+        } else {
+            valid_v_max_col.append_null();
         }
-        match row.valid_q_max_m3s {
-            Some(v) => valid_q_max_col.append_value(v),
-            None => valid_q_max_col.append_null(),
+        if let Some(v) = row.valid_q_max_m3s {
+            valid_q_max_col.append_value(v);
+        } else {
+            valid_q_max_col.append_null();
         }
     }
 

@@ -65,10 +65,10 @@ pub struct TrainingResult {
     /// Final lower bound at termination.
     pub final_lb: f64,
 
-    /// Final upper bound mean at termination (smoothed EWMA).
+    /// Final upper bound mean at termination.
     pub final_ub: f64,
 
-    /// Final upper bound standard deviation (smoothed EWMA).
+    /// Final upper bound standard deviation at termination.
     pub final_ub_std: f64,
 
     /// Final convergence gap: `(UB - LB) / max(1.0, |UB|)`.
@@ -385,11 +385,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 sync_time_ms: sync_result.sync_time_ms,
             },
         );
-        for stage in 0..num_stages {
-            exchange_bufs.exchange(&records, stage, num_stages, comm)?;
-        }
-        let bwd_spec = crate::backward::BackwardPassSpec {
-            exchange: &exchange_bufs,
+        let mut bwd_spec = crate::backward::BackwardPassSpec {
+            exchange: &mut exchange_bufs,
+            records: &records,
             iteration,
             local_work: my_actual_fwd,
             fwd_offset: my_fwd_offset,
@@ -401,7 +399,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             stage_ctx,
             fcf,
             training_ctx,
-            &bwd_spec,
+            &mut bwd_spec,
             comm,
         )?;
 

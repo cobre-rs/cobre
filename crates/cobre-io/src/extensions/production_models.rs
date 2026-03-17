@@ -135,6 +135,10 @@ pub struct FphaConfig {
     pub volume_discretization_points: Option<i32>,
     /// Number of turbine flow discretization points used when computing hyperplanes.
     pub turbine_discretization_points: Option<i32>,
+    /// Number of spillage discretization points used when computing hyperplanes.
+    pub spillage_discretization_points: Option<i32>,
+    /// Maximum number of planes per hydro after heuristic selection.
+    pub max_planes_per_hydro: Option<i32>,
     /// Optional fitting window restricting the volume range for hyperplane computation.
     pub fitting_window: Option<FittingWindow>,
 }
@@ -225,6 +229,8 @@ struct RawFphaConfig {
     source: String,
     volume_discretization_points: Option<i32>,
     turbine_discretization_points: Option<i32>,
+    spillage_discretization_points: Option<i32>,
+    max_planes_per_hydro: Option<i32>,
     fitting_window: Option<RawFittingWindow>,
 }
 
@@ -463,6 +469,8 @@ fn convert_fpha_config(raw: RawFphaConfig) -> FphaConfig {
         source: raw.source,
         volume_discretization_points: raw.volume_discretization_points,
         turbine_discretization_points: raw.turbine_discretization_points,
+        spillage_discretization_points: raw.spillage_discretization_points,
+        max_planes_per_hydro: raw.max_planes_per_hydro,
         fitting_window: raw.fitting_window.map(|fw| convert_fitting_window(&fw)),
     }
 }

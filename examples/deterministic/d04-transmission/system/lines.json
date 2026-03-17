@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/lines.schema.json",
+  "lines": [
+    {
+      "id": 0,
+      "name": "B0_B1",
+      "source_bus_id": 0,
+      "target_bus_id": 1,
+      "capacity": {
+        "direct_mw": 15.0,
+        "reverse_mw": 15.0
+      },
+      "exchange_cost": 0.01
+    }
+  ]
+}

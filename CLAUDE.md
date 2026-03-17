@@ -151,6 +151,8 @@ Phase 1 (core) ──────┬──> Phase 2 (io) ───────�
 
 **v0.1.3 -- Pipeline Deduplication & UX Cleanup.** `StudySetup` struct extracted from `cobre-sddp` to eliminate duplicated case-loading logic between the training loop and simulation pipeline. Noise transformation logic deduplicated into `noise.rs`. Four CLI flags removed (`--skip-simulation`, `--no-banner`, `--verbose`, `--export-stochastic`) in favour of structured config. Stochastic scenario summary extracted into `summary.rs`. Simulation progress reporting fixed: `WelfordAccumulator` moved to `cobre-core` and per-worker accumulation bug corrected. User-supplied opening tree implemented (ADR-008). Stochastic artifact export implemented (ADR-009). `ScratchBuffers` separated from training state. `StageContext` and `TrainingContext` structs introduced for cleaner pass boundaries. Per-crate counts: cobre-core: 159, cobre-io: 745, cobre-stochastic: 204, cobre-solver: 86, cobre-comm: 114, cobre-sddp: 576, cobre-cli: 188. Workspace total: 2,072 tests.
 
+**v0.1.4 -- FPHA Fitting from Geometry.** `source: "computed"` in `hydro_production_models.json` computes FPHA hyperplanes from reservoir geometry at preprocessing time. Production function phi(v,q,s) evaluated from VHA curves, tailrace (Polynomial/Piecewise), hydraulic losses (Factor/Constant), and efficiency models. Concave envelope constructed via tangent hyperplanes with analytical partial derivatives, dominance filtering, and greedy heuristic selection (default 10 planes/hydro). Kappa correction ensures outer approximation. Fitted planes exported to `output/hydro_models/fpha_hyperplanes.parquet` for round-trip precomputed use. Term-based summary reporting distinguishes precomputed vs computed FPHA sources. Per-hydro caching (fit once, clone per stage). 139+ fitting tests, E2E convergence test with 4ree case.
+
 ### Intra-rank thread parallelism (RESOLVED)
 
 Rayon-based thread parallelism is implemented in `cobre-sddp` for the forward
@@ -204,15 +206,15 @@ Deferred variants are documented in `implementation-ordering.md` section 6.
 Four element types are fully modeled. Three are NO-OP stubs (type exists in registry
 but contributes zero LP variables/constraints):
 
-| Element          | Status | Notes                                                    |
-| ---------------- | ------ | -------------------------------------------------------- |
-| Bus              | Full   | Power balance constraint per bus per block               |
-| Line             | Full   | Flow variable with MW capacity bounds                    |
-| Thermal          | Full   | Generation variable with MW bounds and cost              |
-| Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity only |
-| Contract         | Stub   | NO-OP -- entity exists, no LP contribution               |
-| Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution               |
-| Non-Controllable | Stub   | NO-OP -- entity exists, no LP contribution               |
+| Element          | Status | Notes                                                                                                                       |
+| ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Bus              | Full   | Power balance constraint per bus per block                                                                                  |
+| Line             | Full   | Flow variable with MW capacity bounds                                                                                       |
+| Thermal          | Full   | Generation variable with MW bounds and cost                                                                                 |
+| Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity, FPHA (precomputed + computed from geometry), evaporation linearization |
+| Contract         | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
+| Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
+| Non-Controllable | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
 
 Stubs must exist from Phase 1 so that LP construction code iterates over all element
 types from the start (avoids first-time integration surprises).

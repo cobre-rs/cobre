@@ -104,6 +104,7 @@ near zero.
 | `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves         |
 | `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)       |
 | `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors  |
+| `fpha_fitting`   | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry |
 
 ## Configuration
 

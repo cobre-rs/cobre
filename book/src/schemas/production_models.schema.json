@@ -45,19 +45,31 @@
           "default": null,
           "description": "Optional volume fitting window for hyperplane computation. Absent or null = full operating range."
         },
+        "max_planes_per_hydro": {
+          "default": null,
+          "description": "Maximum number of planes per hydro after heuristic selection. Absent = algorithm default (10).",
+          "format": "int32",
+          "type": ["integer", "null"]
+        },
         "source": {
           "description": "Hyperplane source: `\"computed\"` (fit from topology) or `\"precomputed\"` (from `fpha_hyperplanes.parquet`).",
           "type": "string"
         },
+        "spillage_discretization_points": {
+          "default": null,
+          "description": "Number of spillage discretization points used when computing hyperplanes. Absent = algorithm default (5).",
+          "format": "int32",
+          "type": ["integer", "null"]
+        },
         "turbine_discretization_points": {
           "default": null,
-          "description": "Number of turbine flow discretization points used when computing hyperplanes. Absent = solver default.",
+          "description": "Number of turbine flow discretization points used when computing hyperplanes. Absent = algorithm default (5).",
           "format": "int32",
           "type": ["integer", "null"]
         },
         "volume_discretization_points": {
           "default": null,
-          "description": "Number of volume discretization points used when computing hyperplanes. Absent = solver default.",
+          "description": "Number of volume discretization points used when computing hyperplanes. Absent = algorithm default (5).",
           "format": "int32",
           "type": ["integer", "null"]
         }

@@ -414,6 +414,193 @@ Thermal plant registry. Each entry defines a dispatchable generation unit.
 
 ---
 
+### `system/hydro_geometry.parquet`
+
+Volume-Height-Area (VHA) curves for hydro reservoirs. Required when any hydro is
+configured with a computed FPHA production model (`source: "computed"`) or with
+evaporation linearization. When absent, FPHA computation and evaporation
+linearization are unavailable for all plants.
+
+4 columns, all non-nullable. Rows are sorted by `(hydro_id, volume_hm3)` ascending.
+Multiple rows per `hydro_id` together constitute the VHA curve for that plant.
+
+| Column       | Type   | Required | Description                              |
+| ------------ | ------ | -------- | ---------------------------------------- |
+| `hydro_id`   | INT32  | Yes      | Hydro plant ID                           |
+| `volume_hm3` | DOUBLE | Yes      | Total reservoir volume at this point (hm³). Non-negative and finite. |
+| `height_m`   | DOUBLE | Yes      | Reservoir surface elevation at this volume (m). Non-negative and finite. |
+| `area_km2`   | DOUBLE | Yes      | Water surface area at this volume (km²). Non-negative and finite. |
+
+**Validation:** all four columns must be present with the correct types. `volume_hm3`,
+`height_m`, and `area_km2` must be non-negative and finite. Monotonicity of
+`volume_hm3` within each hydro is enforced during Layer 5 semantic validation.
+
+---
+
+### `system/hydro_production_models.json`
+
+Per-hydro production function assignment. When absent, all hydros use
+`constant_productivity` (the productivity factor from `hydros.json`) for
+every stage.
+
+The file contains a `"production_models"` array. Each entry configures one hydro
+plant and is identified by a unique `hydro_id`. Results are loaded in
+`hydro_id`-ascending order regardless of declaration order.
+
+**Top-level structure:**
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/production_models.schema.json",
+  "production_models": [ ... ]
+}
+```
+
+**Per-hydro entry fields:**
+
+| Field            | Required | Description                                                              |
+| ---------------- | -------- | ------------------------------------------------------------------------ |
+| `hydro_id`       | Yes      | Hydro plant ID. Must be unique within the file.                          |
+| `selection_mode` | Yes      | How the model variant is chosen per stage: `"stage_ranges"` or `"seasonal"` |
+
+**`stage_ranges` mode.** The model for each stage is determined by the first
+matching `[start_stage_id, end_stage_id]` range. `end_stage_id` may be `null`
+to mean "until end of horizon".
+
+| Field within each range  | Required | Description                                                            |
+| ------------------------ | -------- | ---------------------------------------------------------------------- |
+| `start_stage_id`         | Yes      | First stage (inclusive) to which this entry applies                    |
+| `end_stage_id`           | Yes      | Last stage (inclusive); `null` means open-ended                        |
+| `model`                  | Yes      | Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"` |
+| `fpha_config`            | No       | Required when `model` is `"fpha"`. See FPHA config fields below.       |
+
+**`seasonal` mode.** The model for a stage is determined by its `season_id`.
+Stages whose season is not listed use `default_model`.
+
+| Field            | Required | Description                                             |
+| ---------------- | -------- | ------------------------------------------------------- |
+| `default_model`  | Yes      | Fallback model name for unlisted seasons                |
+| `seasons`        | Yes      | Array of season overrides: `season_id`, `model`, optional `fpha_config` |
+
+**`fpha_config` fields (required when `model` is `"fpha"`):**
+
+| Field                             | Required | Default | Description                                                          |
+| --------------------------------- | -------- | ------- | -------------------------------------------------------------------- |
+| `source`                          | Yes      | —       | `"precomputed"` or `"computed"`                                      |
+| `volume_discretization_points`    | No       | solver default | Number of volume grid points for hyperplane computation        |
+| `turbine_discretization_points`   | No       | solver default | Number of turbine-flow grid points for hyperplane computation  |
+| `spillage_discretization_points`  | No       | solver default | Number of spillage grid points for hyperplane computation      |
+| `max_planes_per_hydro`            | No       | solver default | Maximum hyperplanes per plant after selection heuristic        |
+| `fitting_window`                  | No       | full range | Volume range restriction for hyperplane computation             |
+
+`source: "precomputed"` means the hyperplanes are loaded from
+`system/fpha_hyperplanes.parquet`. `source: "computed"` means Cobre derives
+them from `system/hydro_geometry.parquet`; in this case `hydro_geometry.parquet`
+must be present and the computed planes are automatically written to
+`output/hydro_models/fpha_hyperplanes.parquet`.
+
+**`fitting_window` fields.** Absolute bounds (`volume_min_hm3`, `volume_max_hm3`)
+and percentile bounds (`volume_min_percentile`, `volume_max_percentile`) are
+mutually exclusive — set one pair or the other, not both.
+
+| Field                    | Type   | Description                                          |
+| ------------------------ | ------ | ---------------------------------------------------- |
+| `volume_min_hm3`         | number | Explicit minimum volume for fitting (hm³)            |
+| `volume_max_hm3`         | number | Explicit maximum volume for fitting (hm³)            |
+| `volume_min_percentile`  | number | Minimum as a percentile of the operating range (0–1) |
+| `volume_max_percentile`  | number | Maximum as a percentile of the operating range (0–1) |
+
+**Example — hydro 0 uses computed FPHA for stages 0–24, then constant productivity:**
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/production_models.schema.json",
+  "production_models": [
+    {
+      "hydro_id": 0,
+      "selection_mode": "stage_ranges",
+      "stage_ranges": [
+        {
+          "start_stage_id": 0,
+          "end_stage_id": 24,
+          "model": "fpha",
+          "fpha_config": {
+            "source": "computed",
+            "volume_discretization_points": 7,
+            "turbine_discretization_points": 15
+          }
+        },
+        {
+          "start_stage_id": 25,
+          "end_stage_id": null,
+          "model": "constant_productivity"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Example — hydro 5 uses FPHA in season 0, linearized_head in all other seasons:**
+
+```json
+{
+  "production_models": [
+    {
+      "hydro_id": 5,
+      "selection_mode": "seasonal",
+      "default_model": "linearized_head",
+      "seasons": [
+        {
+          "season_id": 0,
+          "model": "fpha",
+          "fpha_config": { "source": "precomputed" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### `system/fpha_hyperplanes.parquet`
+
+Pre-computed FPHA hyperplane coefficients for hydros configured with
+`fpha_config.source: "precomputed"`. When absent, only `"computed"` source is
+available.
+
+11 columns. Rows are sorted by `(hydro_id, stage_id, plane_id)` ascending.
+Null `stage_id` sorts before any non-null stage and means the plane is valid for
+all stages of that hydro. One row per hyperplane; at least 3 planes are required
+per `(hydro_id, stage_id)` group.
+
+| Column            | Type    | Nullable | Description                                              |
+| ----------------- | ------- | -------- | -------------------------------------------------------- |
+| `hydro_id`        | INT32   | No       | Hydro plant ID                                           |
+| `stage_id`        | INT32   | Yes      | Stage the plane applies to. `null` = valid for all stages |
+| `plane_id`        | INT32   | No       | Plane index within this hydro (and stage)                |
+| `gamma_0`         | DOUBLE  | No       | Intercept coefficient (MW)                               |
+| `gamma_v`         | DOUBLE  | No       | Volume coefficient (MW/hm³). Positive.                   |
+| `gamma_q`         | DOUBLE  | No       | Turbined flow coefficient (MW per m³/s)                  |
+| `gamma_s`         | DOUBLE  | No       | Spillage coefficient (MW per m³/s). Typically non-positive. |
+| `kappa`           | DOUBLE  | Yes      | Correction factor. Defaults to `1.0` when absent or null. |
+| `valid_v_min_hm3` | DOUBLE  | Yes      | Volume range minimum where this plane is valid (hm³)     |
+| `valid_v_max_hm3` | DOUBLE  | Yes      | Volume range maximum where this plane is valid (hm³)     |
+| `valid_q_max_m3s` | DOUBLE  | Yes      | Maximum turbined flow where this plane is valid (m³/s)   |
+
+**Validation:** required columns (`hydro_id`, `plane_id`, `gamma_0`, `gamma_v`,
+`gamma_q`, `gamma_s`) must be present with the correct types. Optional columns
+that are present must also have the correct types. Minimum planes per
+`(hydro_id, stage_id)` group and sign constraints on `gamma_v` and `gamma_s`
+are enforced during Layer 5 semantic validation.
+
+The file produced by `output/hydro_models/fpha_hyperplanes.parquet` (written when
+`source: "computed"` is used) has this exact same 11-column schema and is
+suitable for use as a future precomputed input.
+
+---
+
 ## `scenarios/` files (Parquet)
 
 ### `scenarios/inflow_seasonal_stats.parquet`

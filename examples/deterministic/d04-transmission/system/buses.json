@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/buses.schema.json",
+  "buses": [
+    {
+      "id": 0,
+      "name": "B0",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1000.0
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "B1",
+      "deficit_segments": [
+        {
+          "depth_mw": null,
+          "cost": 1000.0
+        }
+      ]
+    }
+  ]
+}

@@ -89,8 +89,8 @@ pub use output::{
     MetadataProblemDimensions, MetadataRunInfo, OutputError, ParquetWriterConfig,
     SimulationManifest, SimulationOutput, TrainingManifest, TrainingMetadata, TrainingOutput,
     TrainingParquetWriter, read_convergence_summary, read_simulation_manifest,
-    read_training_manifest, write_dictionaries, write_metadata, write_results,
-    write_simulation_manifest, write_training_manifest,
+    read_training_manifest, write_dictionaries, write_fpha_hyperplanes, write_metadata,
+    write_results, write_simulation_manifest, write_training_manifest,
 };
 pub use penalties::parse_penalties;
 pub use report::{ReportEntry, ValidationReport, generate_report};

@@ -98,13 +98,6 @@ pub struct ConvergenceMonitor {
     start_time: Instant,
     shutdown_requested: bool,
     simulation_costs: Option<Vec<f64>>,
-    /// Exponentially weighted moving average of the per-iteration UB mean.
-    /// Gives more weight to recent iterations (where the policy is better).
-    ub_ewma: f64,
-    /// EWMA variance of the UB, for computing a smoothed standard deviation.
-    ub_ewma_var: f64,
-    /// EWMA smoothing factor (0 < α ≤ 1). Higher α = more weight on recent.
-    ub_alpha: f64,
 }
 
 impl ConvergenceMonitor {
@@ -120,9 +113,6 @@ impl ConvergenceMonitor {
             gap: 0.0,
             lower_bound_history: Vec::new(),
             iteration_count: 0,
-            ub_ewma: 0.0,
-            ub_ewma_var: 0.0,
-            ub_alpha: 0.2,
             start_time: Instant::now(),
             shutdown_requested: false,
             simulation_costs: None,
@@ -154,24 +144,9 @@ impl ConvergenceMonitor {
         self.upper_bound_std = sync_result.global_ub_std;
         self.ci_95_half_width = sync_result.ci_95_half_width;
 
-        // Update EWMA of the upper bound. On the first iteration, initialize
-        // to the raw value; afterwards apply exponential smoothing.
-        let ub = sync_result.global_ub_mean;
-        if self.iteration_count == 0 {
-            self.ub_ewma = ub;
-            self.ub_ewma_var = 0.0;
-        } else {
-            let delta = ub - self.ub_ewma;
-            self.ub_ewma += self.ub_alpha * delta;
-            self.ub_ewma_var =
-                (1.0 - self.ub_alpha) * (self.ub_ewma_var + self.ub_alpha * delta * delta);
-        }
-
         // gap = (UB - LB) / max(1.0, |UB|)  — F-004 resolution
-        // Use the smoothed EWMA upper bound for gap computation so the gap
-        // is also stable across iterations.
-        let denominator = self.ub_ewma.abs().max(1.0_f64);
-        self.gap = (self.ub_ewma - lb) / denominator;
+        let denominator = self.upper_bound.abs().max(1.0_f64);
+        self.gap = (self.upper_bound - lb) / denominator;
 
         self.iteration_count += 1;
         self.lower_bound_history.push(lb);
@@ -213,35 +188,15 @@ impl ConvergenceMonitor {
         self.lower_bound
     }
 
-    /// Smoothed upper bound (EWMA of per-iteration UB means).
-    ///
-    /// Gives more weight to recent iterations where the policy is better.
-    /// Returns `ub_ewma` intentionally — `self.upper_bound` is the raw
-    /// (noisy) per-iteration value.
+    /// Current upper bound mean from the latest forward pass.
     #[must_use]
-    #[allow(clippy::misnamed_getters)]
     pub fn upper_bound(&self) -> f64 {
-        self.ub_ewma
-    }
-
-    /// Raw (unsmoothed) upper bound mean from the latest iteration.
-    #[must_use]
-    pub fn raw_upper_bound(&self) -> f64 {
         self.upper_bound
     }
 
-    /// Smoothed upper bound standard deviation (from EWMA variance).
-    /// Returns `sqrt(ub_ewma_var)` intentionally — the EWMA variance
-    /// captures the smoothed dispersion of per-iteration UB means.
+    /// Current upper bound standard deviation from the latest forward pass.
     #[must_use]
-    #[allow(clippy::misnamed_getters)]
     pub fn upper_bound_std(&self) -> f64 {
-        self.ub_ewma_var.max(0.0).sqrt()
-    }
-
-    /// Raw upper bound standard deviation from the latest forward pass.
-    #[must_use]
-    pub fn raw_upper_bound_std(&self) -> f64 {
         self.upper_bound_std
     }
 
@@ -330,12 +285,8 @@ mod tests {
         };
         monitor.update(150.0, &sync);
         assert!((monitor.lower_bound() - 150.0).abs() < 1e-10);
-        // After 1 iteration, EWMA UB = raw UB (initialized on first call).
         assert!((monitor.upper_bound() - 200.0).abs() < 1e-10);
-        // EWMA std is 0 after 1 iteration (no variance history yet).
-        assert!((monitor.upper_bound_std()).abs() < 1e-10);
-        // Raw std preserves the sync value.
-        assert!((monitor.raw_upper_bound_std() - 10.0).abs() < 1e-10);
+        assert!((monitor.upper_bound_std() - 10.0).abs() < 1e-10);
         assert!((monitor.ci_95_half_width() - 3.0).abs() < 1e-10);
     }
 

@@ -1263,9 +1263,10 @@ fn build_fpha_model(
 ///
 /// Returns `Err(SddpError::Validation(...))` when any constraint is violated.
 ///
-/// Constraints (from design SS4.7):
+/// Constraints:
 ///
-/// - `gamma_v > 0` — higher storage → more generation
+/// - `gamma_v >= 0` — higher storage must not decrease generation; zero is valid
+///   for constant-head plants where head does not depend on volume
 /// - `gamma_s <= 0` — spillage reduces generation
 /// - `gamma_q > 0` — more turbined flow → more generation
 /// - `kappa ∈ (0, 1]` — correction factor range
@@ -1279,10 +1280,10 @@ fn validate_hyperplane_row(
         hydro.name, hydro.id.0, row.plane_id, stage.id
     );
 
-    if row.gamma_v <= 0.0 {
+    if row.gamma_v < 0.0 {
         return Err(SddpError::Validation(format!(
-            "{ctx}: gamma_v must be > 0 (higher storage → more generation), \
-             got gamma_v = {}",
+            "{ctx}: gamma_v must be >= 0 (higher storage must not decrease generation; \
+             zero is valid for constant-head plants), got gamma_v = {}",
             row.gamma_v
         )));
     }
@@ -2142,14 +2143,14 @@ mod tests {
         }
     }
 
-    /// validate_hyperplane_row rejects gamma_v <= 0.
+    /// validate_hyperplane_row rejects negative gamma_v.
     #[test]
-    fn validation_rejects_gamma_v_nonpositive() {
+    fn validation_rejects_gamma_v_negative() {
         let hydro = make_hydro(0, HydroGenerationModel::Fpha);
         let stage = make_stage(0);
 
         let mut row = valid_row(0, None, 0);
-        row.gamma_v = -0.1;
+        row.gamma_v = -0.1; // invalid: must be >= 0
 
         let err = validate_hyperplane_row(&hydro, &stage, &row).expect_err("should fail");
         let msg = err.to_string();
@@ -2157,6 +2158,19 @@ mod tests {
             msg.contains("gamma_v"),
             "error must mention gamma_v, got: {msg}"
         );
+    }
+
+    /// validate_hyperplane_row accepts gamma_v == 0.0 (constant-head plant).
+    #[test]
+    fn validation_accepts_gamma_v_zero() {
+        let hydro = make_hydro(0, HydroGenerationModel::Fpha);
+        let stage = make_stage(0);
+
+        let mut row = valid_row(0, None, 0);
+        row.gamma_v = 0.0; // valid: constant-head plant
+
+        validate_hyperplane_row(&hydro, &stage, &row)
+            .expect("gamma_v = 0.0 must be valid for constant-head plants");
     }
 
     /// validate_hyperplane_row rejects gamma_s > 0.

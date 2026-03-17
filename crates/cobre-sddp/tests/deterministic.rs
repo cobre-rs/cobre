@@ -28,7 +28,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
-use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
+use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for deterministic testing.
@@ -113,55 +113,9 @@ fn assert_cost(actual: f64, expected: f64, tolerance: f64, case_name: &str) {
 }
 
 /// Expected total cost for D02 (single hydro, 2 stages, deterministic inflows).
-///
-/// ## Derivation
-///
-/// Parameters:
-/// - Block hours: h = 730
-/// - Conversion: κ = 730 × 3600 / 1e6 = 2.628 hm3 per (m3/s · stage)
-/// - Initial storage: S₀ = 100.0 hm3
-/// - Inflows: q₀ = 40.0 m3/s, q₁ = 10.0 m3/s
-/// - Thermal: capacity 100 MW, cost 50 $/MWh
-/// - Hydro: productivity 1.0 MW/(m3/s), max_turbined 50 m3/s, max_storage 200 hm3
-/// - Demand: D = 80 MW (> 50 MW hydro max → thermal always non-zero)
-///
-/// ### Stage 1 (terminal, zero future value)
-///
-/// Turbine all available water up to capacity:
-///   turb₁_max = (S₁ + q₁·κ) / κ = S₁/κ + q₁
-///
-/// When S₁ = q_boundary = (50 − 10)·κ = 40·κ = 105.12 hm3:
-///   turb₁ = 50 m3/s (capacity-constrained), gen_th₁ = 30 MW, spill₁ = 0
-///
-/// Water value (∂cost₁/∂S₁) in the unconstrained region S₁ < 105.12:
-///   = −50·730/κ = −50·730/2.628 ≈ −13,889 $/hm3
-///
-/// ### Stage 0 (Benders cut from stage 1)
-///
-/// Cost is flat in S₁ ≤ 105.12 because turbine savings in stage 1 exactly
-/// offset thermal costs in stage 0 (turb₀ terms cancel).  For S₁ > 105.12
-/// the extra water is spilled (tiny spillage cost 0.01 $/hm3) with no
-/// reduction in stage-1 thermal.  Hence the optimum is S₁ = 105.12 exactly.
-///
-/// Water balance without spillage:
-///   S₁ = 100 + (40 − turb₀)·κ = 105.12  →  turb₀ = 100/κ = 25000/657 m3/s
-///
-/// Dispatch:
-///   gen_th₀ = 80 − 25000/657 = 27560/657 MW
-///   gen_th₁ = 30 MW
-///
-/// ### Total cost
-///
-///   cost = (27560/657 × 50 + 30 × 50) × 730
-///        = (27560 × 50 × 730) / 657 + 30 × 50 × 730
-///        = 1 005 940 000 / 657 + 1 095 000
-///        = 23 635 000 / 9
-///        ≈ 2 626 111.111... $
-///
-/// Verification invariants:
-///   - Thermal > 0 in both stages (demand 80 > hydro max 50)
-///   - Water value (Benders cut coefficient for storage) is non-zero
-///   - No spillage at optimum
+/// Derivation: κ=2.628, S₀=100hm³, inflows=[40,10]m³/s, demand=80MW.
+/// Terminal stage turbines at 50m³/s capacity. Backward pass shows optimal
+/// storage at stage boundary = 105.12 hm³. Total cost = 23,635,000/9 $.
 pub const D02_EXPECTED_COST: f64 = 23_635_000.0 / 9.0;
 
 /// Two-stage pure thermal dispatch. Optimal cost is hand-computable.
@@ -403,6 +357,37 @@ fn d04_transmission() {
     assert!(
         result.final_gap.abs() < 1e-6,
         "D04: gap={:.2e}",
+        result.final_gap
+    );
+}
+
+/// Two-stage FPHA hydrothermal dispatch with a single hyperplane encoding constant productivity.
+///
+/// ## Case setup
+///
+/// Identical to D02 except H0 uses `model: "fpha"` with precomputed hyperplanes.
+/// The single hyperplane per stage encodes `generation = 1.0 × turbined_flow`, which
+/// is algebraically identical to `constant_productivity = 1.0 MW/(m3/s)`. The optimal
+/// LP solution must therefore match D02 exactly.
+///
+/// ## Expected cost
+///
+/// See [`D02_EXPECTED_COST`] for the full derivation. The cost must match within 1e-6
+/// because the FPHA LP is algebraically identical to the constant-productivity LP when
+/// γ₀ = 0, γᵥ = 0, γ_q = 1.0, γ_s = 0.0.
+#[test]
+fn d05_fpha_constant_head() {
+    let case_dir = Path::new("../../examples/deterministic/d05-fpha-constant-head");
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, D02_EXPECTED_COST, 1e-6, "D05");
+    assert!(
+        result.iterations <= 10,
+        "D05: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D05: gap={:.2e}",
         result.final_gap
     );
 }

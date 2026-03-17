@@ -18,8 +18,8 @@
 //! | 8 | Geometry `volume_hm3` strictly increasing         | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
 //! | 9 | Geometry `height_m` non-decreasing                | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
 //! |10 | Geometry `area_km2` non-decreasing                | `system/hydro_geometry.parquet`       | `BusinessRuleViolation`|
-//! |11 | FPHA: at least 3 planes per (hydro, stage)        | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
-//! |12 | FPHA: `gamma_v > 0`, `gamma_s <= 0`               | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
+//! |11 | FPHA: at least 1 plane per (hydro, stage)         | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
+//! |12 | FPHA: `gamma_v >= 0`, `gamma_s <= 0`              | `system/fpha_hyperplanes.parquet`     | `BusinessRuleViolation`|
 //! |13 | `min_generation_mw <= max_generation_mw` (thermal)| `system/thermals.json`                | `InvalidValue`         |
 //!
 //! ## Layer 5b rules (stages, penalties, and scenario domain) — `validate_semantic_stages_penalties_scenarios`
@@ -36,7 +36,7 @@
 //! | 8  | `max(deficit_segment_costs) > max(constraint_violation_costs)`          | `penalties.json`                               | `ModelQuality` (warning) |
 //! | 9  | `min(constraint_violation_costs) > max(resource_costs)`                 | `penalties.json`                               | `ModelQuality` (warning) |
 //! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
-//! |11  | FPHA hydros: `fpha_turbined_cost > spillage_cost`                       | `penalties.json`                               | `BusinessRuleViolation`  |
+//! |11  | FPHA hydros: `fpha_turbined_cost >= 0`                                  | `penalties.json`                               | `BusinessRuleViolation`  |
 //! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow)            | `scenarios/inflow_seasonal_stats.parquet`      | `ModelQuality` (warning) |
 //! |13  | `residual_std_ratio` consistent across all lag rows of same group       | `scenarios/inflow_ar_coefficients.parquet`     | `InvalidValue`           |
 //! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
@@ -345,13 +345,14 @@ fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
     for row in &data.fpha_hyperplanes {
         let entity_str = format!("Hydro {}", row.hydro_id.0);
 
-        if row.gamma_v <= 0.0 {
+        if row.gamma_v < 0.0 {
             ctx.add_error(
                 ErrorKind::BusinessRuleViolation,
                 "system/fpha_hyperplanes.parquet",
                 Some(&entity_str),
                 format!(
-                    "{entity_str} (stage={}, plane={}): gamma_v ({}) must be positive (> 0); power must increase with volume/head",
+                    "{entity_str} (stage={}, plane={}): gamma_v ({}) must be non-negative (>= 0); \
+                     power must not decrease with volume/head (zero is valid for constant-head plants)",
                     row.stage_id.map_or_else(|| "all".to_string(), |s| s.to_string()),
                     row.plane_id,
                     row.gamma_v
@@ -391,7 +392,7 @@ fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
 
         let plane_count = i - group_start;
 
-        if plane_count < 3 {
+        if plane_count < 1 {
             let entity_str = format!("Hydro {current_hydro_id}");
             let stage_label = current_stage_id.map_or_else(|| "all".to_string(), |s| s.to_string());
             ctx.add_error(
@@ -399,7 +400,8 @@ fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationContext) {
                 "system/fpha_hyperplanes.parquet",
                 Some(&entity_str),
                 format!(
-                    "{entity_str} (stage={stage_label}): only {plane_count} FPHA plane(s) defined, at least 3 are required for valid piecewise-linear approximation"
+                    "{entity_str} (stage={stage_label}): no FPHA planes defined; \
+                     at least 1 plane is required"
                 ),
             );
         }
@@ -797,24 +799,25 @@ fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationContext) {
 
 // ── Rule 11: FPHA penalty rule ─────────────────────────────────────────────────
 
-/// Checks that FPHA hydros have `fpha_turbined_cost > spillage_cost`.
+/// Checks that FPHA hydros have `fpha_turbined_cost >= 0`.
 ///
-/// This is an error (not a warning) because violating it causes incorrect LP solutions.
+/// A zero cost is valid for constant-head plants (e.g., `gamma_v = 0`) where the
+/// LP has no incentive to spill rather than turbine. Negative values are rejected
+/// because they would make turbining artificially profitable and distort dispatch.
 fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationContext) {
     use cobre_core::entities::HydroGenerationModel;
     for hydro in &data.hydros {
         if hydro.generation_model == HydroGenerationModel::Fpha {
             let fpha_cost = hydro.penalties.fpha_turbined_cost;
-            let spillage = hydro.penalties.spillage_cost;
-            if fpha_cost <= spillage {
+            if fpha_cost < 0.0 {
                 let entity_str = format!("Hydro {}", hydro.id.0);
                 ctx.add_error(
                     ErrorKind::BusinessRuleViolation,
                     "penalties.json",
                     Some(&entity_str),
                     format!(
-                        "{entity_str}: fpha_turbined_cost ({fpha_cost}) must be > spillage_cost \
-                         ({spillage}) for FPHA hydros; violating this causes incorrect LP solutions"
+                        "{entity_str}: fpha_turbined_cost ({fpha_cost}) must be non-negative (>= 0) \
+                         for FPHA hydros; negative values distort LP dispatch"
                     ),
                 );
             }
@@ -1796,14 +1799,10 @@ mod tests {
 
     // ── FPHA minimum planes tests ─────────────────────────────────────────────
 
-    /// 2 planes for (hydro, stage) produces BusinessRuleViolation.
+    /// 1 plane for (hydro, stage) is valid — minimum count is 1.
     #[test]
-    fn test_fpha_too_few_planes() {
-        let rows = vec![
-            make_fpha_row(1, Some(0), 0),
-            make_fpha_row(1, Some(0), 1),
-            // Only 2 planes for (hydro=1, stage=0) — should require ≥ 3.
-        ];
+    fn test_fpha_one_plane_valid() {
+        let rows = vec![make_fpha_row(1, Some(0), 0)];
         let data = make_data(
             vec![make_hydro(1, None)],
             vec![],
@@ -1814,13 +1813,31 @@ mod tests {
         );
         let mut ctx = ValidationContext::new();
         validate_semantic_hydro_thermal(&data, &mut ctx);
-        assert!(ctx.has_errors());
-        let errors = ctx.errors();
         assert!(
-            errors
-                .iter()
-                .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
-            "should have BusinessRuleViolation for too few planes"
+            !ctx.has_errors(),
+            "1 plane should be valid (minimum is 1), got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// 2 planes for (hydro, stage) is valid — minimum count is 1.
+    #[test]
+    fn test_fpha_two_planes_valid() {
+        let rows = vec![make_fpha_row(1, Some(0), 0), make_fpha_row(1, Some(0), 1)];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "2 planes should be valid (minimum is 1), got: {:?}",
+            ctx.errors()
         );
     }
 
@@ -1855,8 +1872,7 @@ mod tests {
     #[test]
     fn test_fpha_negative_gamma_v() {
         let mut row = make_fpha_row(1, None, 0);
-        row.gamma_v = -0.5; // invalid: must be > 0
-        // Add two more valid planes so rule 11 (count) doesn't trigger.
+        row.gamma_v = -0.5; // invalid: must be >= 0
         let rows = vec![row, make_fpha_row(1, None, 1), make_fpha_row(1, None, 2)];
         let data = make_data(
             vec![make_hydro(1, None)],
@@ -1927,6 +1943,29 @@ mod tests {
         assert!(
             !ctx.has_errors(),
             "gamma_s == 0 should be valid, got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// gamma_v == 0.0 is valid (constant-head plant: zero storage coefficient).
+    #[test]
+    fn test_fpha_gamma_v_zero_valid() {
+        let mut row = make_fpha_row(1, None, 0);
+        row.gamma_v = 0.0; // valid: >= 0 (constant-head)
+        let rows = vec![row];
+        let data = make_data(
+            vec![make_hydro(1, None)],
+            vec![],
+            vec![],
+            make_stages(vec![0]),
+            vec![],
+            rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "gamma_v == 0 should be valid for constant-head plants, got: {:?}",
             ctx.errors()
         );
     }
@@ -2690,18 +2729,13 @@ mod tests {
 
     // ── Rule 11: FPHA penalty rule ────────────────────────────────────────────
 
-    /// Hydro 3 with Fpha model, fpha_turbined_cost=0.01, spillage_cost=0.05
+    /// Hydro 3 with Fpha model, fpha_turbined_cost=-0.01
     /// produces a BusinessRuleViolation error with "Hydro 3" and "fpha_turbined_cost".
     #[test]
     fn test_5b_fpha_penalty_violated() {
         let mut hydro = make_hydro_ordered_penalties(3);
         hydro.generation_model = HydroGenerationModel::Fpha;
-        hydro.penalties.fpha_turbined_cost = 0.01;
-        hydro.penalties.spillage_cost = 0.05;
-        // Adjust other penalties so check 10 doesn't trigger (min_resource must be > 0).
-        // Here min_resource = min(0.05, 1.0) = 0.05 > 0, so check 10 is fine.
-        // But we need check 9: min(constraint_viol) > max(resource). min_constraint=50,
-        // max_resource=max(0.05, 1.0)=1.0, so 50 > 1.0 is satisfied.
+        hydro.penalties.fpha_turbined_cost = -0.01; // invalid: must be >= 0
         let data = make_data_5b(
             vec![hydro],
             make_stages_5b(vec![0]),
@@ -2731,6 +2765,61 @@ mod tests {
         assert!(
             msg.contains("fpha_turbined_cost"),
             "message should contain 'fpha_turbined_cost', got: {msg}"
+        );
+    }
+
+    /// FPHA hydro with fpha_turbined_cost == 0.0 (constant-head) produces no error.
+    #[test]
+    fn test_5b_fpha_penalty_zero_valid() {
+        let mut hydro = make_hydro_ordered_penalties(3);
+        hydro.generation_model = HydroGenerationModel::Fpha;
+        hydro.penalties.fpha_turbined_cost = 0.0; // valid: constant-head plant
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "fpha_turbined_cost == 0.0 should be valid for constant-head plants, got: {errors:?}"
+        );
+    }
+
+    /// FPHA hydro with fpha_turbined_cost == spillage_cost produces no error.
+    #[test]
+    fn test_5b_fpha_penalty_equal_spillage_valid() {
+        let mut hydro = make_hydro_ordered_penalties(3);
+        hydro.generation_model = HydroGenerationModel::Fpha;
+        hydro.penalties.fpha_turbined_cost = 1.0;
+        hydro.penalties.spillage_cost = 1.0; // equality is now valid
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "fpha_turbined_cost == spillage_cost should be valid, got: {errors:?}"
         );
     }
 

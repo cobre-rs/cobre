@@ -14,7 +14,9 @@
 //!
 //! After deserializing, three invariants are checked before conversion:
 //!
-//! 1. Every scalar penalty value is strictly positive (> 0.0).
+//! 1. Every scalar penalty value is strictly positive (> 0.0), except
+//!    `hydro.fpha_turbined_cost` which may be zero (valid for constant-head plants
+//!    where `gamma_v = 0` and there is no volume-dependent regularization needed).
 //! 2. The last deficit segment has `depth_mw: null` (unbounded final segment).
 //! 3. Deficit segment costs are monotonically increasing.
 //!
@@ -244,10 +246,19 @@ fn validate_line(raw: &RawPenalties, path: &Path) -> Result<(), LoadError> {
 fn validate_hydro(raw: &RawPenalties, path: &Path) -> Result<(), LoadError> {
     let h = &raw.hydro;
 
-    // Build a list of (field_path, value) pairs for uniform checking.
+    // fpha_turbined_cost is non-negative (>= 0): zero is valid for constant-head
+    // plants where there is no volume-dependent production term (gamma_v = 0).
+    if h.fpha_turbined_cost < 0.0 {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "hydro.fpha_turbined_cost".to_string(),
+            message: format!("penalty value must be >= 0.0, got {}", h.fpha_turbined_cost),
+        });
+    }
+
+    // All other hydro penalties must be strictly positive (> 0.0).
     let fields: &[(&str, f64)] = &[
         ("hydro.spillage_cost", h.spillage_cost),
-        ("hydro.fpha_turbined_cost", h.fpha_turbined_cost),
         ("hydro.diversion_cost", h.diversion_cost),
         (
             "hydro.storage_violation_below_cost",
@@ -349,7 +360,12 @@ fn convert(raw: RawPenalties) -> GlobalPenaltyDefaults {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::too_many_lines
+)]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -735,6 +751,80 @@ mod tests {
                 assert!(
                     field.contains("hydro.spillage_cost"),
                     "field should name hydro.spillage_cost, got: {field}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// `fpha_turbined_cost` == 0.0 is valid (constant-head plants have no
+    /// volume-dependent regularization need).
+    #[test]
+    fn test_parse_penalties_fpha_turbined_cost_zero_valid() {
+        let json = r#"{
+          "bus": {
+            "deficit_segments": [{ "depth_mw": null, "cost": 1000.0 }],
+            "excess_cost": 100.0
+          },
+          "line": { "exchange_cost": 2.0 },
+          "hydro": {
+            "spillage_cost": 0.01, "fpha_turbined_cost": 0.0,
+            "diversion_cost": 0.1, "storage_violation_below_cost": 10000.0,
+            "filling_target_violation_cost": 50000.0,
+            "turbined_violation_below_cost": 500.0,
+            "outflow_violation_below_cost": 500.0,
+            "outflow_violation_above_cost": 500.0,
+            "generation_violation_below_cost": 1000.0,
+            "evaporation_violation_cost": 5000.0,
+            "water_withdrawal_violation_cost": 1000.0
+          },
+          "non_controllable_source": { "curtailment_cost": 0.005 }
+        }"#;
+
+        let f = write_json(json);
+        let defaults = parse_penalties(f.path())
+            .expect("fpha_turbined_cost = 0.0 should be valid for constant-head plants");
+        assert!(
+            (defaults.hydro.fpha_turbined_cost - 0.0).abs() < f64::EPSILON,
+            "fpha_turbined_cost should be 0.0, got: {}",
+            defaults.hydro.fpha_turbined_cost
+        );
+    }
+
+    /// Negative `fpha_turbined_cost` is rejected with `SchemaError` naming the field.
+    #[test]
+    fn test_parse_penalties_fpha_turbined_cost_negative_invalid() {
+        let json = r#"{
+          "bus": {
+            "deficit_segments": [{ "depth_mw": null, "cost": 1000.0 }],
+            "excess_cost": 100.0
+          },
+          "line": { "exchange_cost": 2.0 },
+          "hydro": {
+            "spillage_cost": 0.01, "fpha_turbined_cost": -0.01,
+            "diversion_cost": 0.1, "storage_violation_below_cost": 10000.0,
+            "filling_target_violation_cost": 50000.0,
+            "turbined_violation_below_cost": 500.0,
+            "outflow_violation_below_cost": 500.0,
+            "outflow_violation_above_cost": 500.0,
+            "generation_violation_below_cost": 1000.0,
+            "evaporation_violation_cost": 5000.0,
+            "water_withdrawal_violation_cost": 1000.0
+          },
+          "non_controllable_source": { "curtailment_cost": 0.005 }
+        }"#;
+
+        let f = write_json(json);
+        let err = parse_penalties(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("fpha_turbined_cost"),
+                    "field should name fpha_turbined_cost, got: {field}"
+                );
+                assert!(
+                    message.contains(">= 0.0"),
+                    "message should mention '>= 0.0', got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

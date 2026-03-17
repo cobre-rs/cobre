@@ -1,7 +1,7 @@
 # Cobre -- Development Guidelines
 
 This file is loaded by Claude Code when working in this repository. It captures
-the conventions, source-of-truth references, and implementation ordering that
+the conventions, source-of-truth references, and architectural decisions that
 govern all development on the Cobre ecosystem.
 
 ---
@@ -41,23 +41,6 @@ software book in this repo reflect the current state of the implementation. When
 a spec describes a feature that hasn't been implemented yet, the code is the
 authority on what actually works today.
 
-### Implementation progress tracking
-
-As each phase is implemented, update the "Current phase" section in this file to
-reflect what has been completed and what is next. This gives any agent working in
-this repo an accurate picture of implementation status.
-
-The implementation phases below track what has been **specified** (in cobre-docs)
-versus what has been **implemented** (in cobre). At any point in time:
-
-- Specs in cobre-docs describe the **complete target** for the minimal viable solver
-- Code in cobre represents the **partially completed** implementation
-- The gap between them is the remaining work
-
-When a phase is complete (all types, traits, and tests from the spec reading list
-are implemented and passing), mark it as done in the phase tracker below and
-advance the "Current phase" pointer.
-
 ### Key paths in cobre-docs
 
 | Category              | Path                                            | Purpose                                              |
@@ -92,94 +75,30 @@ identifiers in the spec files:
 
 ---
 
-## Implementation Ordering
+## Current State (v0.1.3)
 
-The minimal viable SDDP solver is built in 8 phases. Each phase produces a testable
-intermediate. Dependencies flow bottom-up:
+The SDDP solver is fully functional. The pipeline covers case loading, stochastic
+scenario generation, training, simulation, policy checkpointing, and output writing.
+2,624 tests across the workspace, including a deterministic regression suite (D01-D12)
+with hand-computed expected costs.
 
-```
-Phase 1 (core) ──────┬──> Phase 2 (io) ──────────────────────────────────────┐
-                      │                                                      │
-                      ├──> Phase 3 (ferrompi + solver) ──> Phase 4 (comm) ──┐│
-                      │                                                     ││
-                      └──> Phase 5 (stochastic) ──────────────────────────┐ ││
-                                                                          v vv
-                                                                     Phase 6 (sddp training)
-                                                                          │
-                                                                          v
-                                                                     Phase 7 (simulation + output)
-                                                                          │
-                                                                          v
-                                                                     Phase 8 (cli)
-```
+**What's implemented:**
 
-### Phase summary
+- Training loop with forward/backward pass, Benders cut management, 5 stopping rules
+- Constant-productivity and FPHA hydro production models (precomputed + computed from geometry)
+- Cascade hydro coupling, evaporation linearization, inflow non-negativity penalties
+- PAR(p) fitting (Levinson-Durbin, AIC order selection), stochastic load demand
+- Simulation pipeline with FlatBuffers policy checkpoint and Parquet output
+- Multi-bus transmission with line flow limits
+- MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
+- CLI: `init`, `run`, `validate`, `report`, `summary`, `version`
+- Python bindings (PyO3, tested on 3.12/3.13/3.14)
 
-| Phase | Crate(s)                    | What becomes testable                                                        |
-| ----- | --------------------------- | ---------------------------------------------------------------------------- |
-| 1     | `cobre-core`                | Entity model, registries, topology validation, penalty resolution            |
-| 2     | `cobre-io`                  | Case directory loading, 5-layer validation pipeline, JSON/Parquet parsing    |
-| 3     | `ferrompi` + `cobre-solver` | MPI bindings, LP solver abstraction, HiGHS backend, warm-starting            |
-| 4     | `cobre-comm`                | Communicator trait, MPI backend, local backend, backend selection            |
-| 5     | `cobre-stochastic`          | PAR(p) preprocessing, noise generation, opening trees, InSample sampling     |
-| 6     | `cobre-sddp`                | Training loop, forward/backward pass, cut management, convergence monitoring |
-| 7     | `cobre-sddp` + `cobre-io`   | Simulation pipeline, Parquet output, FlatBuffers FCF, checkpointing          |
-| 8     | `cobre-cli`                 | Execution lifecycle, config resolution, exit codes                           |
+**Known gaps:**
 
-### Phase tracker
-
-<!-- UPDATE THIS TABLE as phases are completed -->
-
-| Phase | Status   | Notes                                                                                                                                                                                                                                                                        |
-| ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | complete | Entity model, System, topology, validation, penalty resolution -- 177 tests (137 unit + 7 integration + 33 doc)                                                                                                                                                              |
-| 2     | complete | load_case pipeline, 5-layer validation, 33-file JSON/Parquet loading, penalty/bound resolution -- 622 tests                                                                                                                                                                  |
-| 3     | complete | LP solver abstraction, HiGHS backend, 30 conformance tests, ferrompi audit -- 67 tests (35 unit + 30 integration + 2 doc)                                                                                                                                                    |
-| 4     | complete | Communicator trait, LocalBackend, FerrompiBackend, factory, conformance tests -- 90 tests (54 unit + 28 integration + 8 doc)                                                                                                                                                 |
-| 5     | complete | PAR(p) preprocessing, SipHash seed derivation, Cholesky correlation, opening tree, InSample sampling; v0.1.1: PAR fitting (Levinson-Durbin, AIC), inflow estimation, inflow truncation, stochastic load -- 220 tests (187 unit + 5 conformance + 4 reproducibility + 24 doc) |
-| 6     | complete | SDDP training loop, forward/backward pass, cut management, convergence monitoring; v0.1.1: stochastic load demand integration -- 576 tests                                                                                                                                   |
-| 7     | complete | Simulation pipeline, Parquet output writers, FlatBuffers policy checkpoint, manifest/dictionary writers, genericity gate -- cobre-io: 745 tests, cobre-sddp: 576 tests                                                                                                       |
-| 8     | complete | Execution lifecycle, config resolution, exit codes, --threads, --color, progress reporting, banner, summary; v0.1.1: init subcommand, summary subcommand -- cobre-cli: 188 tests                                                                                             |
-
-### Current phase
-
-**Phase 8: cobre-cli -- Complete.** All 8 phases of the minimal viable SDDP solver are done. The CLI binary implements `run`, `validate`, `report`, `summary`, `init`, and `version` subcommands with progress bars, a terminal banner, and a post-run summary. Config resolution handles `COBRE_*` environment variable overrides and structured exit codes. Workspace total: 2,072 tests.
-
-**v0.1.1 -- Stochastic Foundation Complete.** Built on top of the minimal viable solver, v0.1.1 adds: PAR model fitting via Levinson-Durbin with AIC-based order selection; inflow estimation from historical series; inflow truncation to non-negative support; stochastic load demand (noise generation and LP integration); the `cobre summary` subcommand for post-run reporting; the `cobre init` subcommand for case scaffolding; and load validation rules in `cobre-io`. Workspace total: 2,072 tests.
-
-**v0.1.2 -- Quality & Reproducibility.** Canonical upper bound summation for multi-rank determinism (compensated Kahan summation in allreduce). Removed all production clippy suppressions from cobre-sddp. Added ADRs 008-011 for upcoming features. Generic PAR type aliases in cobre-stochastic. Updated software book (4ree example, roadmap, badges). Python bindings now tested on 3.12, 3.13, and 3.14.
-
-**v0.1.3 -- Pipeline Deduplication & UX Cleanup.** `StudySetup` struct extracted from `cobre-sddp` to eliminate duplicated case-loading logic between the training loop and simulation pipeline. Noise transformation logic deduplicated into `noise.rs`. Four CLI flags removed (`--skip-simulation`, `--no-banner`, `--verbose`, `--export-stochastic`) in favour of structured config. Stochastic scenario summary extracted into `summary.rs`. Simulation progress reporting fixed: `WelfordAccumulator` moved to `cobre-core` and per-worker accumulation bug corrected. User-supplied opening tree implemented (ADR-008). Stochastic artifact export implemented (ADR-009). `ScratchBuffers` separated from training state. `StageContext` and `TrainingContext` structs introduced for cleaner pass boundaries. Per-crate counts: cobre-core: 159, cobre-io: 745, cobre-stochastic: 204, cobre-solver: 86, cobre-comm: 114, cobre-sddp: 576, cobre-cli: 188. Workspace total: 2,072 tests.
-
-**v0.1.4 -- FPHA Fitting from Geometry.** `source: "computed"` in `hydro_production_models.json` computes FPHA hyperplanes from reservoir geometry at preprocessing time. Production function phi(v,q,s) evaluated from VHA curves, tailrace (Polynomial/Piecewise), hydraulic losses (Factor/Constant), and efficiency models. Concave envelope constructed via tangent hyperplanes with analytical partial derivatives, dominance filtering, and greedy heuristic selection (default 10 planes/hydro). Kappa correction ensures outer approximation. Fitted planes exported to `output/hydro_models/fpha_hyperplanes.parquet` for round-trip precomputed use. Term-based summary reporting distinguishes precomputed vs computed FPHA sources. Per-hydro caching (fit once, clone per stage). 139+ fitting tests, E2E convergence test with 4ree case.
-
-### Intra-rank thread parallelism (RESOLVED)
-
-Rayon-based thread parallelism is implemented in `cobre-sddp` for the forward
-pass, backward pass, and simulation pipeline. Controlled via the `--threads N`
-CLI flag or `COBRE_THREADS` environment variable; default is 1 thread. See
-`docs/PROJECT-STATUS.md` for full details.
-
-### Parallelizable phases
-
-All 8 phases are complete. The minimal viable SDDP solver is fully implemented. Post-MVP candidates are `cobre-mcp`, `cobre-python`, and `cobre-tui`.
-
-### Per-phase spec reading lists
-
-For the complete spec reading list for each phase, see
-`~/git/cobre-docs/src/specs/overview/implementation-ordering.md` section 5.
-
-Quick reference for Phase 1 (complete):
-
-- `src/specs/overview/notation-conventions.md`
-- `src/specs/overview/design-principles.md`
-- `src/specs/math/hydro-production-models.md`
-- `src/specs/data-model/input-system-entities.md`
-- `src/specs/data-model/input-hydro-extensions.md`
-- `src/specs/data-model/penalty-system.md`
-- `src/specs/data-model/internal-structures.md`
-- `src/specs/math/system-elements.md`
-- `src/specs/math/equipment-formulations.md`
+- Multi-segment deficit pricing (LP builder uses single deficit variable per bus)
+- CVaR risk measure (enum variant exists, LP modification not implemented)
+- GNL thermals, batteries, non-controllable sources (entity stubs exist, no LP contribution)
 
 ---
 
@@ -216,8 +135,8 @@ but contributes zero LP variables/constraints):
 | Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
 | Non-Controllable | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
 
-Stubs must exist from Phase 1 so that LP construction code iterates over all element
-types from the start (avoids first-time integration surprises).
+Stubs exist in the registry so LP construction code iterates over all element
+types uniformly. Implementing an element means adding LP variables/constraints.
 
 ---
 
@@ -294,9 +213,8 @@ comments). This is a first-class requirement from the ecosystem design (see
 - Application crates (`cobre-cli`, `cobre-mcp`, `cobre-tui`, `cobre-python`) and the
   solver vertical (`cobre-sddp`) **may** reference SDDP freely
 
-**Quality gate:** At the end of each implementation phase, all modified infrastructure
-crate files must pass `grep -riE 'sddp' crates/<crate>/src/` with zero matches. This
-check is part of the plan completion protocol.
+**Quality gate:** All infrastructure crate files must pass
+`grep -riE 'sddp' crates/<crate>/src/` with zero matches.
 
 ---
 
@@ -366,23 +284,7 @@ When dispatching any implementation agent:
    the spec before writing code
 2. **Tell the agent what already exists** -- point to the current crate source files
    in this repo so it builds on existing work, not from scratch
-3. **Include the phase context** -- tell the agent which implementation phase this
-   work belongs to, so it knows what dependencies are available
-4. **Specify the target crate and module** -- e.g., "implement in `crates/cobre-core/src/entities/hydro.rs`"
-
-Example dispatch:
-
-```
-Implement the Hydro entity type in cobre-core.
-
-Spec: ~/git/cobre-docs/src/specs/data-model/input-system-entities.md (SS3: Hydro Plants)
-Also read: ~/git/cobre-docs/src/specs/data-model/input-hydro-extensions.md
-Also read: ~/git/cobre-docs/src/specs/math/hydro-production-models.md
-
-Current state: crates/cobre-core/src/lib.rs is an empty stub.
-Phase: 1 (cobre-core foundation)
-Target: crates/cobre-core/src/entities/hydro.rs (new file)
-```
+3. **Specify the target crate and module** -- e.g., "implement in `crates/cobre-sddp/src/risk.rs`"
 
 ---
 

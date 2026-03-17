@@ -152,30 +152,33 @@ The project draws inspiration from:
 
 Cobre is not a replacement for these tools — it's a new entry in the ecosystem, offering the Rust community's strengths (safety, performance, modern tooling) to a domain that can benefit from them.
 
+## Current State
+
+Cobre v0.1.3 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. 2,624 tests across the workspace, including a deterministic regression suite with hand-computed expected costs.
+
+**What works today:**
+
+- Training loop with forward/backward pass, Benders cut management, and 5 stopping rules
+- Constant-productivity and FPHA hydroelectric production models (precomputed and computed from reservoir geometry)
+- Cascade hydro coupling, evaporation, inflow non-negativity penalties
+- PAR(p) fitting from inflow history (Levinson-Durbin, AIC order selection)
+- Stochastic load demand and correlated multi-site scenario generation
+- Simulation pipeline with policy checkpoint (FlatBuffers) and Parquet output
+- Multi-bus transmission networks with line flow limits
+- Distributed execution via MPI (`ferrompi`) and intra-rank thread parallelism (rayon)
+- CLI: `init`, `run`, `validate`, `report`, `summary`
+- Python bindings (PyO3, tested on 3.12/3.13/3.14)
+
 ## Roadmap
 
-The minimal viable solver is built through an [8-phase implementation sequence](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html) defined in cobre-docs. Each phase produces a testable intermediate.
+See the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/overview.html) for the full list of planned features. Highlights:
 
-### v0.1 — Minimal Viable SDDP Solver
-
-**Complete.** 8 implementation phases covering the full training→simulation→output pipeline. 2,179 tests.
-
-### v0.1.1 — Stochastic Foundation
-
-**Complete.** PAR model fitting from inflow history (Levinson-Durbin, AIC order selection), inflow truncation, stochastic load demand, estimation pipeline, `cobre summary` subcommand, load validation rules.
-
-### v0.1.2 — Code Quality and Documentation
-
-**In progress.** Abstraction cleanup (generic PAR evaluation aliases), documentation accuracy fixes, multi-rank reproducibility validation, and design ADRs for upcoming features (opening tree, stochastic export, complete tree work distribution, per-stage warm-start cuts).
-
-### v0.2 — Production Hardening
-
-- [x] FPHA hydroelectric production function
-- [ ] `cobre-python` — PyO3 bindings with NumPy/Arrow zero-copy paths
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
+- [ ] Multi-segment deficit pricing in the LP builder
+- [ ] GNL thermal plants and battery energy storage
+- [ ] Multi-cut formulation and CVaR risk measure
 - [ ] Benchmark suite with published results
-- [ ] Comparison study against reference implementations on public test cases
 
 ## Contributing
 

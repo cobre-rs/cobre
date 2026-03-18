@@ -68,7 +68,7 @@ use super::error::OutputError;
 /// without copying (coefficient vectors can reach 2,080 `f64` values at production
 /// scale).
 ///
-/// Field names correspond to the `BendersCut` table in SS3.1 of the policy schema
+/// Field names correspond to the cut table (`BendersCut`) in SS3.1 of the policy schema
 /// specification.
 #[derive(Debug, Clone)]
 pub struct PolicyCutRecord<'a> {
@@ -239,7 +239,7 @@ fn build_cut_table(
 ///
 /// Produces a buffer containing a root `StageCuts` table. The buffer is ready
 /// for writing directly to a `.bin` policy file. Field layout matches the
-/// `StageCuts` and `BendersCut` table declarations in SS3.1 of the policy schema
+/// `StageCuts` table and cut table (`BendersCut`) declarations in SS3.1 of the policy schema
 /// specification.
 ///
 /// The function is infallible: the `FlatBuffers` builder API only allocates and
@@ -826,7 +826,7 @@ fn read_table_vector_positions(buf: &[u8], vec_pos: usize) -> Option<Vec<usize>>
 
 /// Deserialize a `StageCuts` `FlatBuffers` buffer into an owned [`StageCutsReadResult`].
 ///
-/// Reads the root `StageCuts` table and each nested `BendersCut` table using safe
+/// Reads the root `StageCuts` table and each nested cut table (`BendersCut`) using safe
 /// raw byte parsing of the `FlatBuffers` wire format. No `unsafe` code is used.
 ///
 /// # Errors

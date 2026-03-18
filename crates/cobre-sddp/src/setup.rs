@@ -303,7 +303,7 @@ impl StudySetup {
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
     ///   construction failure.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn from_broadcast_params(
         system: &System,
         stochastic: StochasticContext,
@@ -360,6 +360,13 @@ impl StudySetup {
             }
         }
 
+        let max_deficit_segments = system
+            .buses()
+            .iter()
+            .map(|b| b.deficit_segments.len())
+            .max()
+            .unwrap_or(0);
+
         let indexer = StageIndexer::with_equipment_and_evaporation(
             stage_templates_ref[0].n_hydro,
             stage_templates_ref[0].max_par_order,
@@ -371,6 +378,7 @@ impl StudySetup {
             fpha_hydro_indices,
             &fpha_planes,
             evap_hydro_indices,
+            max_deficit_segments,
         );
 
         // ── Initial state ─────────────────────────────────────────────────────

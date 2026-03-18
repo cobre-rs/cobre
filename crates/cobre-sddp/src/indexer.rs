@@ -21,8 +21,8 @@
 //! [theta+1+H*K,                      theta+1+2*H*K)      spillage    — spilled flow (m³/s)
 //! [theta+1+2*H*K,                    theta+1+2*H*K+T*K)  thermal     — thermal generation (MW)
 //! [theta+1+2*H*K+T*K,                theta+1+2*H*K+T*K+2*L_n*K) line_fwd/rev — line flows
-//! [theta+1+2*H*K+T*K+2*L_n*K,       theta+1+2*H*K+T*K+2*L_n*K+B*K) deficit
-//! [theta+1+2*H*K+T*K+2*L_n*K+B*K,   theta+1+2*H*K+T*K+2*L_n*K+2*B*K) excess
+//! [theta+1+2*H*K+T*K+2*L_n*K,       theta+1+2*H*K+T*K+2*L_n*K+B*S*K) deficit
+//! [theta+1+2*H*K+T*K+2*L_n*K+B*S*K, theta+1+2*H*K+T*K+2*L_n*K+B*S*K+B*K) excess
 //! ```
 //!
 //! When the inflow non-negativity penalty method is active (`has_inflow_penalty == true`),
@@ -32,7 +32,8 @@
 //! [excess_end, excess_end+N)  inflow_slack — sigma_inf_h (m³/s), one per hydro
 //! ```
 //!
-//! where H = `hydro_count`, K = `n_blks`, T = `n_thermals`, Ln = `n_lines`, B = `n_buses`.
+//! where H = `hydro_count`, K = `n_blks`, T = `n_thermals`, Ln = `n_lines`, B = `n_buses`,
+//! S = `max_deficit_segments`.
 //!
 //! ## Row layout (Solver Abstraction SS2.2)
 //!
@@ -195,11 +196,25 @@ pub struct StageIndexer {
     /// Empty when built via [`StageIndexer::new`].
     pub line_rev: Range<usize>,
 
-    /// Column range for bus deficit variables, one per (bus, block) pair.
+    /// Column range for bus deficit variables, `B * S * K` columns total.
     ///
-    /// Index for bus `b_idx`, block `blk`: `deficit.start + b_idx * n_blks + blk`.
+    /// S = `max_deficit_segments` (uniform stride across all buses).  For buses
+    /// with fewer than S segments, the trailing segment slots have zero bounds
+    /// and zero objective and are eliminated by the presolver.
+    ///
+    /// Index for bus `b_idx`, segment `s`, block `blk`:
+    /// `deficit.start + b_idx * max_deficit_segments * n_blks + s * n_blks + blk`.
+    ///
     /// Empty when built via [`StageIndexer::new`].
     pub deficit: Range<usize>,
+
+    /// Maximum number of deficit segments across all buses (S).
+    ///
+    /// Used together with `deficit.start` to compute per-segment column indices.
+    /// Set to `0` when built via [`StageIndexer::new`], `1` when built via
+    /// [`StageIndexer::with_equipment`] (backward-compatible single-segment mode),
+    /// and the true maximum when built via [`StageIndexer::with_equipment_and_evaporation`].
+    pub max_deficit_segments: usize,
 
     /// Column range for bus excess variables, one per (bus, block) pair.
     ///
@@ -371,6 +386,7 @@ impl StageIndexer {
             line_fwd: 0..0,
             line_rev: 0..0,
             deficit: 0..0,
+            max_deficit_segments: 0,
             excess: 0..0,
             n_blks: 0,
             n_thermals: 0,
@@ -409,7 +425,7 @@ impl StageIndexer {
     /// line_fwd_start      = thermal_start  + n_thermals * n_blks
     /// line_rev_start      = line_fwd_start + n_lines * n_blks
     /// deficit_start       = line_rev_start + n_lines * n_blks
-    /// excess_start        = deficit_start  + n_buses * n_blks
+    /// excess_start        = deficit_start  + n_buses * max_deficit_segments * n_blks
     /// inflow_slack_start  = excess_end  (only when has_inflow_penalty && hydro_count > 0)
     /// generation_start    = inflow_slack_end  (FPHA generation columns)
     /// evap_start          = generation_end  (3 columns per evaporation hydro, stage-level)
@@ -485,6 +501,7 @@ impl StageIndexer {
             fpha_hydro_indices,
             fpha_planes_per_hydro,
             vec![],
+            1,
         )
     }
 
@@ -499,6 +516,9 @@ impl StageIndexer {
     ///
     /// - `evap_hydro_indices` — system-level hydro positions of hydros with
     ///   linearized evaporation at this stage, in ascending order.
+    /// - `max_deficit_segments` — maximum number of deficit segments across all
+    ///   buses.  The deficit region spans `B * max_deficit_segments * K` columns.
+    ///   Pass `1` for backward compatibility when all buses have a single segment.
     ///
     /// When `evap_hydro_indices` is empty this produces the same result as
     /// [`StageIndexer::with_equipment`].
@@ -515,6 +535,7 @@ impl StageIndexer {
         fpha_hydro_indices: Vec<usize>,
         fpha_planes_per_hydro: &[usize],
         evap_hydro_indices: Vec<usize>,
+        max_deficit_segments: usize,
     ) -> Self {
         debug_assert_eq!(
             fpha_hydro_indices.len(),
@@ -531,7 +552,7 @@ impl StageIndexer {
         let line_fwd_start = thermal_start + n_thermals * n_blks;
         let line_rev_start = line_fwd_start + n_lines * n_blks;
         let deficit_start = line_rev_start + n_lines * n_blks;
-        let excess_start = deficit_start + n_buses * n_blks;
+        let excess_start = deficit_start + n_buses * max_deficit_segments * n_blks;
         let excess_end = excess_start + n_buses * n_blks;
 
         // Inflow slack columns are appended after excess when the penalty method
@@ -604,6 +625,7 @@ impl StageIndexer {
             line_fwd: line_fwd_start..line_rev_start,
             line_rev: line_rev_start..deficit_start,
             deficit: deficit_start..excess_start,
+            max_deficit_segments,
             excess: excess_start..excess_end,
             n_blks,
             n_thermals,
@@ -1269,6 +1291,7 @@ mod tests {
             vec![],
             &[],
             vec![0],
+            1,
         );
 
         assert_eq!(idx.n_evap_hydros, 1);
@@ -1318,6 +1341,7 @@ mod tests {
             vec![0],
             &[3],
             vec![1, 2],
+            1,
         );
 
         assert_eq!(idx.n_evap_hydros, 2);

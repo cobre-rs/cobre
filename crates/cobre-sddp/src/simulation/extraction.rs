@@ -480,13 +480,23 @@ fn extract_buses(
             })
             .collect()
     } else {
+        let max_segs = indexer.max_deficit_segments;
         spec.entity_counts
             .bus_ids
             .iter()
             .enumerate()
-            .flat_map(|(bus_idx, &bus_id)| {
+            .flat_map(move |(bus_idx, &bus_id)| {
                 (0..n_blks).map(move |b| {
-                    let deficit_col = indexer.deficit.start + bus_idx * n_blks + b;
+                    // Sum all deficit segment columns for this bus/block.
+                    let deficit_mw: f64 = (0..max_segs)
+                        .map(|s| {
+                            let col = indexer.deficit.start
+                                + bus_idx * max_segs * n_blks
+                                + s * n_blks
+                                + b;
+                            view.primal[col]
+                        })
+                        .sum();
                     let excess_col = indexer.excess.start + bus_idx * n_blks + b;
                     let load_row = indexer.load_balance.start + bus_idx * n_blks + b;
                     let raw_dual = view.dual.get(load_row).copied().unwrap_or(0.0);
@@ -497,7 +507,7 @@ fn extract_buses(
                         block_id: Some(b as u32),
                         bus_id,
                         load_mw: view.row_lower[load_row],
-                        deficit_mw: view.primal[deficit_col],
+                        deficit_mw,
                         excess_mw: view.primal[excess_col],
                         spot_price: if hrs > 0.0 { raw_dual / hrs } else { 0.0 },
                     }
@@ -1899,7 +1909,19 @@ mod tests {
     /// evap:     [5, 8)   Q_ev→5, f_plus→6, f_minus→7
     /// ```
     fn make_indexer_1h_evap_1blk() -> StageIndexer {
-        StageIndexer::with_equipment_and_evaporation(1, 0, 0, 0, 0, 1, false, vec![], &[], vec![0])
+        StageIndexer::with_equipment_and_evaporation(
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            false,
+            vec![],
+            &[],
+            vec![0],
+            1,
+        )
     }
 
     /// Acceptance criterion: `evaporation_m3s` equals the LP `Q_ev` variable value.

@@ -56,9 +56,8 @@ struct SimSummary {
 }
 
 fn init_rayon(threads: Option<u32>) {
-    let n = threads.map_or(1, |t| t as usize);
     rayon::ThreadPoolBuilder::new()
-        .num_threads(n)
+        .num_threads(threads.map_or(1, |t| t as usize))
         .build_global()
         .unwrap_or(());
 }
@@ -169,13 +168,10 @@ fn write_policy_checkpoint(
         })
         .collect();
 
-    let created_at = {
-        use std::time::SystemTime;
-        match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(d) => format!("{}s-since-epoch", d.as_secs()),
-            Err(_) => "unknown".to_string(),
-        }
-    };
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| format!("{}s-since-epoch", d.as_secs()))
+        .unwrap_or_else(|_| "unknown".to_string());
 
     let metadata = PolicyCheckpointMetadata {
         version: "1.0.0".to_string(),
@@ -292,6 +288,7 @@ fn export_stochastic_artifacts_py(
 }
 
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
+#[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
     output_dir: PathBuf,
@@ -360,7 +357,6 @@ fn run_inner(
     let converged = training_output.converged;
     let iterations = training_result.iterations;
     let lower_bound = training_result.final_lb;
-    let upper_bound = Some(training_result.final_ub);
     let gap_percent = Some(training_result.final_gap * 100.0);
     let total_time_ms = training_result.total_time_ms;
 
@@ -422,7 +418,7 @@ fn run_inner(
             converged,
             iterations,
             lower_bound,
-            upper_bound,
+            upper_bound: Some(training_result.final_ub),
             gap_percent,
             total_time_ms,
             output_dir,
@@ -437,7 +433,7 @@ fn run_inner(
             converged,
             iterations,
             lower_bound,
-            upper_bound,
+            upper_bound: Some(training_result.final_ub),
             gap_percent,
             total_time_ms,
             output_dir,
@@ -521,8 +517,8 @@ fn stochastic_summary_to_dict<'py>(
 
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
-/// Returns a dict with keys: "converged", "iterations", "lower_bound", "upper_bound",
-/// "gap_percent", "total_time_ms", "output_dir", "simulation", "stochastic".
+/// Returns a dict with keys: `"converged"`, `"iterations"`, `"lower_bound"`, `"upper_bound"`,
+/// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -557,39 +553,43 @@ pub fn run(
             dict.set_item("total_time_ms", summary.total_time_ms)?;
             dict.set_item("output_dir", summary.output_dir.to_string_lossy().as_ref())?;
 
-            if let Some(sim) = summary.simulation {
-                let sim_dict = PyDict::new(py);
-                sim_dict.set_item("n_scenarios", sim.n_scenarios)?;
-                sim_dict.set_item("completed", sim.completed)?;
-                dict.set_item("simulation", sim_dict)?;
-            } else {
-                dict.set_item("simulation", py.None())?;
-            }
+            dict.set_item(
+                "simulation",
+                if let Some(sim) = summary.simulation {
+                    let sim_dict = PyDict::new(py);
+                    sim_dict.set_item("n_scenarios", sim.n_scenarios)?;
+                    sim_dict.set_item("completed", sim.completed)?;
+                    sim_dict.into()
+                } else {
+                    py.None()
+                },
+            )?;
 
-            if let Some(stoch) = &summary.stochastic {
-                let stoch_dict = stochastic_summary_to_dict(py, stoch)?;
-                dict.set_item("stochastic", stoch_dict)?;
+            let stochastic_val = if let Some(stoch) = &summary.stochastic {
+                stochastic_summary_to_dict(py, stoch)?.into()
             } else {
-                dict.set_item("stochastic", py.None())?;
-            }
+                py.None()
+            };
+            dict.set_item("stochastic", stochastic_val)?;
 
-            if let Some(hydro) = &summary.hydro_models {
-                let hydro_dict = hydro_model_summary_to_dict(py, hydro)?;
-                dict.set_item("hydro_models", hydro_dict)?;
+            let hydro_val = if let Some(hydro) = &summary.hydro_models {
+                hydro_model_summary_to_dict(py, hydro)?.into()
             } else {
-                dict.set_item("hydro_models", py.None())?;
-            }
+                py.None()
+            };
+            dict.set_item("hydro_models", hydro_val)?;
 
             Ok(dict.into())
         }
         Err(msg) => {
-            if msg.as_str().starts_with("output write error")
+            let err_fn = if msg.as_str().starts_with("output write error")
                 || msg.as_str().starts_with("policy checkpoint error")
             {
-                Err(PyOSError::new_err(msg))
+                PyOSError::new_err
             } else {
-                Err(PyRuntimeError::new_err(msg))
-            }
+                PyRuntimeError::new_err
+            };
+            Err(err_fn(msg))
         }
     }
 }

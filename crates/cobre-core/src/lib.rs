@@ -62,7 +62,7 @@ pub use error::ValidationError;
 pub use generic_constraint::{
     ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig, VariableRef,
 };
-pub use initial_conditions::{HydroStorage, InitialConditions};
+pub use initial_conditions::{HydroPastInflows, HydroStorage, InitialConditions};
 pub use penalty::{
     GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
     resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,

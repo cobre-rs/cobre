@@ -30,7 +30,7 @@
 //!   thermal gen:     T*K columns
 //!   line fwd flow:   Lines*K columns
 //!   line rev flow:   Lines*K columns
-//!   bus deficit:     B*K columns
+//!   bus deficit:     B*S*K columns  (S = max_deficit_segments across all buses)
 //!   bus excess:      B*K columns
 //!   inflow slack:    N columns (sigma_inf_h, only when penalty method is active)
 //! ```
@@ -648,7 +648,6 @@ struct TemplateBuildCtx<'a> {
 struct StageLayout {
     n_blks: usize,
     n_h: usize,
-    n_b: usize,
     lag_order: usize,
     // Column regions
     col_turbine_start: usize,
@@ -657,6 +656,10 @@ struct StageLayout {
     col_line_fwd_start: usize,
     col_line_rev_start: usize,
     col_deficit_start: usize,
+    /// Maximum number of deficit segments across all buses (S).
+    ///
+    /// The deficit region spans `n_buses * max_deficit_segments * n_blks` columns.
+    max_deficit_segments: usize,
     col_excess_start: usize,
     col_inflow_slack_start: usize,
     /// Start of FPHA generation columns (one per FPHA hydro per block).
@@ -708,8 +711,14 @@ impl StageLayout {
         let col_thermal_start = col_spillage_start + ctx.n_hydros * n_blks;
         let col_line_fwd_start = col_thermal_start + ctx.n_thermals * n_blks;
         let col_line_rev_start = col_line_fwd_start + ctx.n_lines * n_blks;
+        let max_deficit_segments = ctx
+            .buses
+            .iter()
+            .map(|b| b.deficit_segments.len())
+            .max()
+            .unwrap_or(0);
         let col_deficit_start = col_line_rev_start + ctx.n_lines * n_blks;
-        let col_excess_start = col_deficit_start + ctx.n_buses * n_blks;
+        let col_excess_start = col_deficit_start + ctx.n_buses * max_deficit_segments * n_blks;
         let col_excess_end = col_excess_start + ctx.n_buses * n_blks;
         let col_inflow_slack_start = col_excess_end;
         let n_slack_cols = if ctx.has_penalty { ctx.n_hydros } else { 0 };
@@ -770,7 +779,6 @@ impl StageLayout {
         Self {
             n_blks,
             n_h: ctx.n_hydros,
-            n_b: ctx.n_buses,
             lag_order: ctx.max_par_order,
             col_turbine_start,
             col_spillage_start,
@@ -778,6 +786,7 @@ impl StageLayout {
             col_line_fwd_start,
             col_line_rev_start,
             col_deficit_start,
+            max_deficit_segments,
             col_excess_start,
             col_inflow_slack_start,
             col_generation_start,
@@ -897,19 +906,31 @@ fn fill_stage_columns(
     }
 
     // Deficit and excess columns per bus per block.
+    //
+    // The deficit region uses a uniform stride of `max_deficit_segments` segments
+    // per bus.  For bus `b_idx`, segment `seg_idx`, block `blk`:
+    //   col = col_deficit_start + b_idx * max_deficit_segments * n_blks + seg_idx * n_blks + blk
+    //
+    // Buses with fewer than `max_deficit_segments` segments leave the trailing
+    // slots at [lower=0, upper=0, objective=0] (from vec initialisation), which
+    // the HiGHS presolver eliminates before the simplex phase.
     for (b_idx, bus) in ctx.buses.iter().enumerate() {
         let bp = ctx.penalties.bus_penalties(b_idx, stage_idx);
-        let deficit_cost = bus
-            .deficit_segments
-            .last()
-            .map_or(0.0, |seg| seg.cost_per_mwh);
+        for (seg_idx, segment) in bus.deficit_segments.iter().enumerate() {
+            for blk in 0..layout.n_blks {
+                let col_def = layout.col_deficit_start
+                    + b_idx * layout.max_deficit_segments * layout.n_blks
+                    + seg_idx * layout.n_blks
+                    + blk;
+                let block_hours = stage.blocks[blk].duration_hours;
+                col_upper[col_def] = segment.depth_mw.unwrap_or(f64::INFINITY);
+                objective[col_def] = segment.cost_per_mwh * block_hours;
+            }
+        }
         for blk in 0..layout.n_blks {
-            let col_def = layout.col_deficit_start + b_idx * layout.n_blks + blk;
             let col_exc = layout.col_excess_start + b_idx * layout.n_blks + blk;
-            col_upper[col_def] = f64::INFINITY;
-            col_upper[col_exc] = f64::INFINITY;
             let block_hours = stage.blocks[blk].duration_hours;
-            objective[col_def] = deficit_cost * block_hours;
+            col_upper[col_exc] = f64::INFINITY;
             objective[col_exc] = bp.excess_cost * block_hours;
         }
     }
@@ -1263,13 +1284,21 @@ fn fill_load_balance_entries(
         }
     }
 
-    // Deficit (+1) and excess (-1).
-    for b_idx in 0..layout.n_b {
+    // Deficit (+1 for every segment) and excess (-1).
+    //
+    // All deficit segment columns for bus `b_idx` at block `blk` enter the same
+    // load-balance row with coefficient +1.0 (total deficit = sum of segments).
+    for (b_idx, bus) in ctx.buses.iter().enumerate() {
         for blk in 0..n_blks {
             let row = row_load + b_idx * n_blks + blk;
-            let col_def = layout.col_deficit_start + b_idx * n_blks + blk;
+            for seg_idx in 0..bus.deficit_segments.len() {
+                let col_def = layout.col_deficit_start
+                    + b_idx * layout.max_deficit_segments * n_blks
+                    + seg_idx * n_blks
+                    + blk;
+                col_entries[col_def].push((row, 1.0));
+            }
             let col_exc = layout.col_excess_start + b_idx * n_blks + blk;
-            col_entries[col_def].push((row, 1.0));
             col_entries[col_exc].push((row, -1.0));
         }
     }
@@ -6663,6 +6692,476 @@ mod tests {
             (base_dual * 1e6).round(),
             "storage-fixing dual must differ between evaporation ({evap_dual}) and \
              no-evaporation ({base_dual}) configurations"
+        );
+    }
+
+    // ─── Multi-segment deficit tests ──────────────────────────────────────────
+
+    /// Build a no-hydro, no-thermal, no-line system with the given buses and 1 stage / 1 block.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    fn multi_segment_system(buses: Vec<Bus>, block_hours: f64) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
+        };
+
+        let n_buses = buses.len();
+        let load_models: Vec<LoadModel> = buses
+            .iter()
+            .map(|b| LoadModel {
+                bus_id: b.id,
+                stage_id: 0,
+                mean_mw: 0.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: block_hours,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: cobre_core::temporal::NoiseMethod::Saa,
+            },
+        };
+
+        let bounds = ResolvedBounds::new(
+            0,
+            0,
+            0,
+            0,
+            n_buses,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            0,
+            n_buses,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(buses)
+            .stages(vec![stage])
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("multi_segment_system: valid")
+    }
+
+    /// AC: 2 buses (bus0: 3 segments, bus1: 1 segment), 2 blocks → deficit columns = `B*S_max*K` = 2*3*2 = 12.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_multi_segment_deficit_column_count() {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
+        };
+
+        let bus0 = Bus {
+            id: EntityId(1),
+            name: "Bus0".to_string(),
+            deficit_segments: vec![
+                DeficitSegment {
+                    depth_mw: Some(10.0),
+                    cost_per_mwh: 100.0,
+                },
+                DeficitSegment {
+                    depth_mw: Some(20.0),
+                    cost_per_mwh: 200.0,
+                },
+                DeficitSegment {
+                    depth_mw: None,
+                    cost_per_mwh: 5000.0,
+                },
+            ],
+            excess_cost: 0.0,
+        };
+        let bus1 = Bus {
+            id: EntityId(2),
+            name: "Bus1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let load_models = vec![
+            LoadModel {
+                bus_id: EntityId(1),
+                stage_id: 0,
+                mean_mw: 0.0,
+                std_mw: 0.0,
+            },
+            LoadModel {
+                bus_id: EntityId(2),
+                stage_id: 0,
+                mean_mw: 0.0,
+                std_mw: 0.0,
+            },
+        ];
+
+        // 2 blocks per stage
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![
+                Block {
+                    index: 0,
+                    name: "B0".to_string(),
+                    duration_hours: 360.0,
+                },
+                Block {
+                    index: 1,
+                    name: "B1".to_string(),
+                    duration_hours: 360.0,
+                },
+            ],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: cobre_core::temporal::NoiseMethod::Saa,
+            },
+        };
+
+        let bounds = ResolvedBounds::new(
+            0,
+            0,
+            0,
+            0,
+            2,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            0,
+            2,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus0, bus1])
+            .stages(vec![stage])
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("2-bus 2-block system: valid");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=0, L=0 → theta=0, decision_start=1
+        // No thermals, no lines → col_deficit_start = 1
+        // B=2, S_max=3, K=2 → deficit region = 2*3*2 = 12 columns → col_excess_start = 13
+        // excess region = B*K = 2*2 = 4 → num_cols = 13 + 4 = 17
+        let col_deficit_start = 1_usize;
+        let max_deficit_segments = 3_usize;
+        let n_blks = 2_usize;
+        let n_buses = 2_usize;
+        let deficit_region = n_buses * max_deficit_segments * n_blks;
+        assert_eq!(
+            deficit_region, 12,
+            "deficit region must be B*S_max*K = 2*3*2 = 12"
+        );
+        let col_excess_start = col_deficit_start + deficit_region;
+        let excess_region = n_buses * n_blks; // 2*2 = 4
+        let expected_num_cols = col_excess_start + excess_region;
+        assert_eq!(
+            t.num_cols, expected_num_cols,
+            "num_cols must include expanded deficit region"
+        );
+    }
+
+    /// AC: Bus with 2 deficit segments [{10MW, $500}, {None, $5000}], 1 block 730h.
+    /// Verify upper bounds and objective coefficients for both segment columns.
+    #[test]
+    fn test_multi_segment_deficit_bounds_and_objective() {
+        let bus = Bus {
+            id: EntityId(1),
+            name: "Bus0".to_string(),
+            deficit_segments: vec![
+                DeficitSegment {
+                    depth_mw: Some(10.0),
+                    cost_per_mwh: 500.0,
+                },
+                DeficitSegment {
+                    depth_mw: None,
+                    cost_per_mwh: 5000.0,
+                },
+            ],
+            excess_cost: 0.0,
+        };
+
+        let block_hours = 730.0_f64;
+        let system = multi_segment_system(vec![bus], block_hours);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=0 → theta=0, decision_start=1, no thermals/lines
+        // col_deficit_start = 1
+        // B=1, S_max=2, K=1 → deficit region = 1*2*1 = 2
+        // seg0 col = 1 + 0*2*1 + 0*1 + 0 = 1
+        // seg1 col = 1 + 0*2*1 + 1*1 + 0 = 2
+        let col_seg0 = 1_usize;
+        let col_seg1 = 2_usize;
+
+        assert_eq!(
+            t.col_upper[col_seg0], 10.0,
+            "segment 0 upper bound must equal depth_mw = 10.0"
+        );
+        assert!(
+            t.col_upper[col_seg1].is_infinite() && t.col_upper[col_seg1] > 0.0,
+            "segment 1 upper bound must be +infinity (unbounded final segment)"
+        );
+        assert!(
+            (t.objective[col_seg0] - 500.0 * block_hours).abs() < 1e-12,
+            "segment 0 objective must be cost * block_hours = {} but got {}",
+            500.0 * block_hours,
+            t.objective[col_seg0]
+        );
+        assert!(
+            (t.objective[col_seg1] - 5000.0 * block_hours).abs() < 1e-12,
+            "segment 1 objective must be cost * block_hours = {} but got {}",
+            5000.0 * block_hours,
+            t.objective[col_seg1]
+        );
+    }
+
+    /// AC: Single-segment bus must produce identical LP structure to the old single-column behavior.
+    /// Specifically, the single deficit column must be unbounded and carry the correct cost.
+    #[test]
+    fn test_single_segment_backward_compat() {
+        let cost = 1000.0_f64;
+        let block_hours = 744.0_f64;
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "Bus0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: cost,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let system = multi_segment_system(vec![bus], block_hours);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=0 → theta=0, decision_start=1, col_deficit_start=1
+        // B=1, S_max=1, K=1 → 1 deficit column at index 1
+        let col_def = 1_usize;
+
+        assert!(
+            t.col_upper[col_def].is_infinite() && t.col_upper[col_def] > 0.0,
+            "single segment must be unbounded (None depth_mw)"
+        );
+        assert!(
+            (t.objective[col_def] - cost * block_hours).abs() < 1e-12,
+            "single-segment objective must be cost * block_hours"
+        );
+
+        // Excess column immediately follows deficit (S_max=1, B=1, K=1 → excess at col 2)
+        let col_exc = 2_usize;
+        assert!(
+            t.col_upper[col_exc].is_infinite() && t.col_upper[col_exc] > 0.0,
+            "excess column must be unbounded"
+        );
+    }
+
+    /// AC (ticket-003 C4): Bus with 2 deficit segments [{10MW, $500}, {None, $5000}] and 1 block.
+    /// Every deficit segment column for the bus/block must have exactly one entry in the
+    /// load-balance row with coefficient +1.0.
+    ///
+    /// Column layout (`N`=0, no thermals/lines):
+    ///   col 0 = theta (value function),
+    ///   `col_deficit_start` = 1,
+    ///   `col_seg0` = 1 (`b_idx`=0, `seg_idx`=0, `blk`=0),
+    ///   `col_seg1` = 2 (`b_idx`=0, `seg_idx`=1, `blk`=0).
+    ///
+    /// Row layout (`N`=0, `n_hydros`=0):
+    ///   `row_load_balance_start` = 0,
+    ///   load balance row for bus 0, block 0 = 0.
+    #[test]
+    fn test_multi_segment_deficit_load_balance_coefficients() {
+        let bus = Bus {
+            id: EntityId(1),
+            name: "Bus0".to_string(),
+            deficit_segments: vec![
+                DeficitSegment {
+                    depth_mw: Some(10.0),
+                    cost_per_mwh: 500.0,
+                },
+                DeficitSegment {
+                    depth_mw: None,
+                    cost_per_mwh: 5000.0,
+                },
+            ],
+            excess_cost: 0.0,
+        };
+
+        let system = multi_segment_system(vec![bus], 730.0);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=0, no thermals/lines → col_deficit_start = 1
+        // B=1, S_max=2, K=1 → seg0 at col 1, seg1 at col 2
+        let col_seg0 = 1_usize;
+        let col_seg1 = 2_usize;
+
+        // N=0 hydros → row_load_balance_start = 0; bus 0, block 0 → row 0
+        let load_balance_row = 0_usize;
+
+        // Segment 0: must have exactly one CSC entry at the load-balance row with +1.0
+        let entries_seg0 = entries_for_col(t, col_seg0);
+        assert_eq!(
+            entries_seg0.len(),
+            1,
+            "deficit segment 0 column must have exactly 1 CSC entry (load-balance row), got {entries_seg0:?}"
+        );
+        assert_eq!(
+            entries_seg0[0].0, load_balance_row,
+            "deficit segment 0 entry must be at the load-balance row {load_balance_row}, got row {}",
+            entries_seg0[0].0
+        );
+        assert!(
+            (entries_seg0[0].1 - 1.0).abs() < 1e-12,
+            "deficit segment 0 load-balance coefficient must be +1.0, got {}",
+            entries_seg0[0].1
+        );
+
+        // Segment 1: same assertion
+        let entries_seg1 = entries_for_col(t, col_seg1);
+        assert_eq!(
+            entries_seg1.len(),
+            1,
+            "deficit segment 1 column must have exactly 1 CSC entry (load-balance row), got {entries_seg1:?}"
+        );
+        assert_eq!(
+            entries_seg1[0].0, load_balance_row,
+            "deficit segment 1 entry must be at the load-balance row {load_balance_row}, got row {}",
+            entries_seg1[0].0
+        );
+        assert!(
+            (entries_seg1[0].1 - 1.0).abs() < 1e-12,
+            "deficit segment 1 load-balance coefficient must be +1.0, got {}",
+            entries_seg1[0].1
         );
     }
 }

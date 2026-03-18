@@ -83,54 +83,46 @@ fn results_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_function(wrap_pyfunction!(results::load_results, m)?)?;
     m.add_function(wrap_pyfunction!(results::load_convergence, m)?)?;
+    m.add_function(wrap_pyfunction!(results::load_convergence_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(results::load_simulation, m)?)?;
+    m.add_function(wrap_pyfunction!(results::load_simulation_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(results::load_policy, m)?)?;
     Ok(())
 }
 
-/// Register a submodule and make it importable via `sys.modules`.
+/// Register a submodule in `sys.modules` so that `import cobre.foo` works.
 ///
-/// `PyO3`'s `add_submodule` attaches a module as an attribute but does not
-/// register it in `sys.modules`. Without this registration, `import cobre.foo`
-/// fails with `ModuleNotFoundError` even though `cobre.foo` is accessible as
-/// an attribute. See <https://pyo3.rs/v0.23.0/module#python-submodules>.
-///
-/// The `parent_package` parameter is the top-level package name as Python sees
-/// it (e.g. `"cobre"`), not the value of `parent.name()` which may differ when
-/// the entry-point function shares the crate's lib name.
+/// PyO3's `add_submodule` attaches a module as an attribute but does not
+/// register it in `sys.modules`. Without this, `import cobre.foo` fails.
 fn register_submodule<'py>(
     parent: &Bound<'py, PyModule>,
     child: &Bound<'py, PyModule>,
     parent_package: &str,
 ) -> PyResult<()> {
-    let py = parent.py();
-    parent.add_submodule(child)?;
     let child_name = child.name()?;
     let full_name = format!("{parent_package}.{child_name}");
-    py.import("sys")?
+    parent
+        .py()
+        .import("sys")?
         .getattr("modules")?
         .set_item(full_name, child)?;
-    Ok(())
+    parent.add_submodule(child)
 }
 
 /// Python bindings for the Cobre power systems solver. Single-process only -- for distributed execution, launch `mpiexec cobre` as a subprocess.
 #[pymodule]
 fn cobre(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
-
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
-    let model_mod = pyo3::wrap_pymodule!(model_module)(py);
-    register_submodule(m, model_mod.bind(py), "cobre")?;
-
-    let io_mod = pyo3::wrap_pymodule!(io_module)(py);
-    register_submodule(m, io_mod.bind(py), "cobre")?;
-
-    let run_mod = pyo3::wrap_pymodule!(run_module)(py);
-    register_submodule(m, run_mod.bind(py), "cobre")?;
-
-    let results_mod = pyo3::wrap_pymodule!(results_module)(py);
-    register_submodule(m, results_mod.bind(py), "cobre")?;
+    register_submodule(m, pyo3::wrap_pymodule!(model_module)(py).bind(py), "cobre")?;
+    register_submodule(m, pyo3::wrap_pymodule!(io_module)(py).bind(py), "cobre")?;
+    register_submodule(m, pyo3::wrap_pymodule!(run_module)(py).bind(py), "cobre")?;
+    register_submodule(
+        m,
+        pyo3::wrap_pymodule!(results_module)(py).bind(py),
+        "cobre",
+    )?;
 
     Ok(())
 }

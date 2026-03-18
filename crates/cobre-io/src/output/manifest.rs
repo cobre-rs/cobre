@@ -129,7 +129,7 @@ pub struct ManifestConvergence {
 /// Cut pool summary embedded in [`TrainingManifest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestCuts {
-    /// Total Benders cuts generated over the entire run.
+    /// Total cuts generated over the entire run.
     pub total_generated: u64,
     /// Cuts still active in the pool at termination.
     pub total_active: u64,

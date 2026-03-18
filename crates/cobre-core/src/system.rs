@@ -2008,6 +2008,7 @@ mod tests {
                 value_hm3: 15_000.0,
             }],
             filling_storage: vec![],
+            past_inflows: vec![],
         };
 
         let system = SystemBuilder::new()

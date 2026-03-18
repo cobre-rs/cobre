@@ -501,7 +501,15 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         for worker_result in worker_staged {
             all_staged.extend(worker_result?);
         }
-        all_staged.sort_by_key(|c| c.trial_point_idx);
+        // Ordering invariant: each worker processes a contiguous index range
+        // [start_m, end_m) in ascending order, and rayon's indexed collect()
+        // preserves worker order, so concatenation is globally sorted.
+        debug_assert!(
+            all_staged
+                .windows(2)
+                .all(|w| w[0].trial_point_idx <= w[1].trial_point_idx),
+            "backward pass cuts must be sorted by trial_point_idx after worker concatenation"
+        );
 
         for cut in all_staged {
             fcf.add_cut(

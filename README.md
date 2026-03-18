@@ -154,7 +154,7 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.4 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. 2,624 tests across the workspace, including a deterministic regression suite (D01-D12) with hand-computed expected costs.
+Cobre v0.1.5 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Multi-segment deficit pricing, Arrow zero-copy Python results, and inflow history lag initialization are included. Includes a deterministic regression suite (D01-D12) with hand-computed expected costs.
 
 **What works today:**
 

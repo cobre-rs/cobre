@@ -557,7 +557,6 @@ pub const D09_EXPECTED_COST: f64 = 80_738_000.0;
 /// See [`D09_EXPECTED_COST`] for the derivation. With 20 MW deficit per stage
 /// split across both segments, total cost is 80,738,000 $.
 #[test]
-#[ignore = "LP builder lacks per-segment deficit columns — uses only last segment cost"]
 fn d09_multi_deficit() {
     let case_dir = Path::new("../../examples/deterministic/d09-multi-deficit");
     let result = run_deterministic(case_dir);

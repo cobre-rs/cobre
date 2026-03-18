@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-03-18
+
+### Added
+
+- **Multi-segment deficit pricing** -- The LP builder now supports N deficit
+  columns per bus per block (one per segment), with capacity constraints.
+  NEWAVE-converted cases with tiered deficit costs produce correct results.
+  Deterministic test D09 is un-ignored and passes.
+- **Arrow zero-copy result loading** -- `load_convergence_arrow()` and
+  `load_simulation_arrow()` in cobre-python return Arrow RecordBatches via
+  the Arrow C Data Interface, enabling zero-copy `polars.from_arrow()` in
+  Python without intermediate serialization.
+- **Jupyter quickstart notebook** -- `examples/notebooks/quickstart.ipynb`
+  demonstrates the end-to-end Python workflow: run a study, load results
+  with Arrow zero-copy, and visualize convergence with matplotlib.
+- **Past inflows for PAR lag initialization** -- New `past_inflows` field in
+  `initial_conditions.json` allows users to specify historical inflow values
+  for PAR(p) lag initialization at stage 0. Values are provided in recency
+  order (most recent first) per hydro, replacing zero-initialization with
+  actual historical data for accurate first-stage noise realization.
+- **Past inflows validation rules** -- Three new semantic validation rules
+  (22--24) in cobre-io check that `past_inflows` provides sufficient coverage
+  when `inflow_lags: true` and PAR order > 0: entries must be non-empty
+  (rule 22), per-hydro value count must meet the PAR order (rule 23), and
+  all hydro IDs in past_inflows must exist in the registry (rule 24).
+
+### Changed
+
+- **Infrastructure crate doc cleanup** -- Replaced "Benders" terminology with
+  generic "cutting plane" language in cobre-io and cobre-solver doc comments.
+- **Backward pass sort verified redundant** -- The sort in the backward pass
+  was confirmed redundant and replaced with a `debug_assert!` for safety.
+
+### Fixed
+
+- **D09 deterministic test** -- Previously `#[ignore]` due to missing
+  multi-segment deficit support; now passes with correct expected cost.
+
 ## [0.1.4] - 2026-03-17
 
 ### Added

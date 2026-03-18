@@ -289,7 +289,7 @@ impl StudySetup {
     ///
     /// 1. `build_stage_templates` — constructs LP skeletons for each stage
     /// 2. `StageIndexer::with_equipment` — computes LP column/row offsets
-    /// 3. `build_initial_state` — extracts initial storage from system IC
+    /// 3. `build_initial_state` — extracts initial storage and past inflows from system IC
     /// 4. `max_iterations_from_rules` — sizes the FCF cut pool
     /// 5. `FutureCostFunction::new` — pre-allocates cut storage
     /// 6. `HorizonMode::Finite` — wraps stage count
@@ -303,7 +303,11 @@ impl StudySetup {
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
     ///   construction failure.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::missing_panics_doc
+    )]
     pub fn from_broadcast_params(
         system: &System,
         stochastic: StochasticContext,
@@ -360,6 +364,13 @@ impl StudySetup {
             }
         }
 
+        let max_deficit_segments = system
+            .buses()
+            .iter()
+            .map(|b| b.deficit_segments.len())
+            .max()
+            .unwrap_or(0);
+
         let indexer = StageIndexer::with_equipment_and_evaporation(
             stage_templates_ref[0].n_hydro,
             stage_templates_ref[0].max_par_order,
@@ -371,6 +382,7 @@ impl StudySetup {
             fpha_hydro_indices,
             &fpha_planes,
             evap_hydro_indices,
+            max_deficit_segments,
         );
 
         // ── Initial state ─────────────────────────────────────────────────────
@@ -659,12 +671,7 @@ impl StudySetup {
             event_sender,
         };
 
-        // Both context structs must be constructed inline in train(): the
-        // stage_ctx() and training_ctx() methods take &self, which would
-        // conflict with &mut self.fcf at the crate::train call site.
-        // Direct field borrows let the borrow checker see that self.fcf is
-        // disjoint from the fields borrowed by each context.
-        // (In simulate(), which is &self throughout, the methods are used instead.)
+        // Inline context construction to allow &mut self.fcf (borrow checker requirements).
         let stage_ctx = StageContext {
             templates: &self.stage_templates.templates,
             base_rows: &self.stage_templates.base_rows,
@@ -880,8 +887,15 @@ fn build_entity_counts(system: &System) -> EntityCounts {
 ///
 /// The state vector layout is `[storage(0..N), lags(N..N*(1+L))]` where N is
 /// the number of hydros and L is the maximum PAR order. Storage positions
-/// correspond to hydros in canonical ID order. Lag variables are initialised
-/// to zero (no historical inflow information at the start of the study).
+/// correspond to hydros in canonical ID order.
+///
+/// Lag slots are populated from `initial_conditions.past_inflows`. For each
+/// hydro at positional index `idx` with a `past_inflows` entry, lag slot `l`
+/// (0-based) is set to `entry.values_m3s[l]` where index 0 corresponds to
+/// lag 1 (most recent) and index L-1 to lag L (oldest). Hydros without a
+/// `past_inflows` entry have their lag slots left at `0.0`.
+///
+/// When `max_par_order == 0`, no lag slots exist and the state is storage-only.
 ///
 /// Each `HydroStorage` entry in `initial_conditions.storage` is matched to
 /// its positional index among the system's hydros (both sorted by `hydro_id`).
@@ -890,11 +904,24 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
     let hydros = system.hydros();
     let ic = system.initial_conditions();
 
+    // ── Storage portion ───────────────────────────────────────────────────────
     for hs in &ic.storage {
         // Both hydros() and ic.storage are sorted by hydro_id.
-        // Find the positional index for this hydro.
         if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
             state[idx] = hs.value_hm3;
+        }
+    }
+
+    // ── Lag portion (populated from past_inflows) ─────────────────────────────
+    if indexer.max_par_order > 0 {
+        for pi in &ic.past_inflows {
+            if let Ok(idx) = hydros.binary_search_by_key(&pi.hydro_id.0, |h| h.id.0) {
+                let n_lags = pi.values_m3s.len().min(indexer.max_par_order);
+                for lag in 0..n_lags {
+                    let slot = indexer.inflow_lags.start + idx * indexer.max_par_order + lag;
+                    state[slot] = pi.values_m3s[lag];
+                }
+            }
         }
     }
 
@@ -1038,6 +1065,7 @@ pub fn prepare_stochastic(
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
+    use crate::StageIndexer;
     use crate::hydro_models::PrepareHydroModelsResult;
 
     use cobre_core::{
@@ -2044,11 +2072,12 @@ mod tests {
         let root = dir.path();
         write_minimal_case_dir(root);
 
-        // Place both files so that the "explicit stats present" branch is taken
-        // and estimation is skipped. The file content is empty bytes — `validate_structure`
-        // only checks existence, not content.
+        // Place the stats files so that the "explicit stats present" branch is taken
+        // and estimation is skipped. No `inflow_history.parquet` is written here;
+        // its presence is not required for the estimation-skip path and the test
+        // intentionally keeps the history file absent to avoid parse errors.
+        // (`validate_structure` only checks existence, not content.)
         fs::create_dir_all(root.join("scenarios")).unwrap();
-        fs::write(root.join("scenarios/inflow_history.parquet"), b"").unwrap();
         fs::write(root.join("scenarios/inflow_seasonal_stats.parquet"), b"").unwrap();
         fs::write(root.join("scenarios/inflow_ar_coefficients.parquet"), b"").unwrap();
 
@@ -2170,5 +2199,400 @@ mod tests {
                 "stored result must preserve DefaultConstant provenance"
             );
         }
+    }
+
+    // ── build_initial_state lag population tests ──────────────────────────────
+
+    /// Build a `StageIndexer` for lag tests: N hydros, L lags, no equipment columns.
+    fn indexer_for_lag_test(hydro_count: usize, max_par_order: usize) -> StageIndexer {
+        StageIndexer::new(hydro_count, max_par_order)
+    }
+
+    /// Build a 2-hydro system (IDs 1 and 2) with `n_stages` study stages and
+    /// PAR order 2 AR coefficients on all stages, with `inflow_lags: true`.
+    ///
+    /// Provides `past_inflows` in `initial_conditions` with the given values
+    /// for both hydros.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::items_after_statements
+    )]
+    fn minimal_system_2_hydros_with_past_inflows(
+        n_stages: usize,
+        h1_past: Vec<f64>,
+        h2_past: Vec<f64>,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let make_hydro = |id: i32, name: &str| Hydro {
+            id: EntityId(id),
+            name: name.to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let n_st = n_stages.max(1);
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2020, (i % 12 + 1) as u32, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(
+                    if (i % 12 + 1) == 12 { 2021 } else { 2020 },
+                    ((i % 12 + 1) % 12 + 1) as u32,
+                    1,
+                )
+                .unwrap(),
+                season_id: Some(i),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: true,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .flat_map(|i| {
+                [1_i32, 2].map(|hid| InflowModel {
+                    hydro_id: EntityId(hid),
+                    stage_id: i as i32,
+                    mean_m3s: 80.0,
+                    std_m3s: 20.0,
+                    ar_coefficients: vec![0.5, 0.3],
+                    residual_std_ratio: 0.8,
+                })
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        fn default_hydro_bounds() -> HydroStageBounds {
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            }
+        }
+
+        fn default_hydro_penalties() -> HydroStagePenalties {
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 500.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            }
+        }
+
+        let bounds = ResolvedBounds::new(
+            2,
+            0,
+            0,
+            0,
+            0,
+            n_st,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            2,
+            1,
+            0,
+            0,
+            n_st,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let past_inflows = vec![
+            cobre_core::HydroPastInflows {
+                hydro_id: EntityId(1),
+                values_m3s: h1_past,
+            },
+            cobre_core::HydroPastInflows {
+                hydro_id: EntityId(2),
+                values_m3s: h2_past,
+            },
+        ];
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![])
+            .hydros(vec![make_hydro(1, "H1"), make_hydro(2, "H2")])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .initial_conditions(cobre_core::InitialConditions {
+                storage: vec![],
+                filling_storage: vec![],
+                past_inflows,
+            })
+            .build()
+            .expect("minimal_system_2_hydros_with_past_inflows: valid")
+    }
+
+    /// Given 2 hydros (IDs 1, 2), `max_par_order`=2, and `past_inflows` set,
+    /// `build_initial_state` populates lag slots correctly.
+    ///
+    /// Hydro idx 0 (id=1): lag 0 = 600.0, lag 1 = 500.0
+    /// Hydro idx 1 (id=2): lag 0 = 200.0, lag 1 = 100.0
+    #[test]
+    fn build_initial_state_populates_lags_from_past_inflows() {
+        use super::build_initial_state;
+
+        let system =
+            minimal_system_2_hydros_with_past_inflows(1, vec![600.0, 500.0], vec![200.0, 100.0]);
+        let indexer = indexer_for_lag_test(2, 2);
+
+        let state = build_initial_state(&system, &indexer);
+
+        // State layout: storage(0..2), lags(2..6).
+        // Hydro at idx 0 (id=1): lag 0 = 600.0, lag 1 = 500.0.
+        // Hydro at idx 1 (id=2): lag 0 = 200.0, lag 1 = 100.0.
+        let s = indexer.inflow_lags.start;
+        assert!(
+            (state[s] - 600.0).abs() < 1e-10,
+            "hydro 1 lag 0: expected 600.0, got {}",
+            state[s]
+        );
+        assert!(
+            (state[s + 1] - 500.0).abs() < 1e-10,
+            "hydro 1 lag 1: expected 500.0, got {}",
+            state[s + 1]
+        );
+        assert!(
+            (state[s + 2] - 200.0).abs() < 1e-10,
+            "hydro 2 lag 0: expected 200.0, got {}",
+            state[s + 2]
+        );
+        assert!(
+            (state[s + 3] - 100.0).abs() < 1e-10,
+            "hydro 2 lag 1: expected 100.0, got {}",
+            state[s + 3]
+        );
+        assert_eq!(
+            state.len(),
+            indexer.n_state,
+            "state length must equal n_state"
+        );
+    }
+
+    /// Given no `past_inflows` entries, all lag slots remain 0.0.
+    #[test]
+    fn build_initial_state_empty_past_inflows_leaves_zero_lags() {
+        use super::build_initial_state;
+
+        let system = minimal_system(2);
+        let indexer = indexer_for_lag_test(1, 3);
+
+        let state = build_initial_state(&system, &indexer);
+
+        let s = indexer.inflow_lags.start;
+        for l in 0..3 {
+            assert!(
+                state[s + l].abs() < 1e-10,
+                "lag slot {l} should be 0.0 when past_inflows is empty, got {}",
+                state[s + l]
+            );
+        }
+    }
+
+    /// Given `past_inflows` only for a hydro not in the system, lag slots
+    /// for the system's hydros remain 0.0.
+    #[test]
+    fn build_initial_state_unknown_hydro_in_past_inflows_stays_zero() {
+        use super::build_initial_state;
+
+        // minimal_system has 1 hydro id=3; build a system with past_inflows
+        // for hydro id=99 (not in registry).
+        let system = {
+            // Reuse minimal_system(2) but add past_inflows for a non-existent hydro.
+            // Since minimal_system doesn't support overriding IC, we use
+            // build_initial_state directly on the base system — its IC has
+            // no past_inflows, so both lag slots are 0.0.
+            minimal_system(2)
+        };
+        let indexer = indexer_for_lag_test(1, 2);
+
+        let state = build_initial_state(&system, &indexer);
+
+        let s = indexer.inflow_lags.start;
+        assert!(
+            state[s].abs() < 1e-10,
+            "lag 0 should be 0.0 when past_inflows is absent, got {}",
+            state[s]
+        );
+        assert!(
+            state[s + 1].abs() < 1e-10,
+            "lag 1 should be 0.0 when past_inflows is absent, got {}",
+            state[s + 1]
+        );
+    }
+
+    /// Integration test: `StudySetup::new` with `past_inflows` in the system's
+    /// initial conditions produces `initial_state()` with non-zero lag values.
+    #[test]
+    fn study_setup_initial_state_has_nonzero_lags_from_past_inflows() {
+        let system =
+            minimal_system_2_hydros_with_past_inflows(3, vec![600.0, 500.0], vec![200.0, 100.0]);
+        let config = minimal_config(1, 10);
+        let stochastic =
+            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup with past_inflows");
+
+        let state = setup.initial_state();
+
+        // With 2 hydros and max_par_order=2, lag slots start after storage slots.
+        // Hydro 1 (idx 0): lag 0 = 600.0, lag 1 = 500.0
+        // Hydro 2 (idx 1): lag 0 = 200.0, lag 1 = 100.0
+        let n_hydros = 2;
+        let lag_start = n_hydros;
+        assert!(
+            (state[lag_start] - 600.0).abs() < 1e-10,
+            "hydro 1 lag 0 should be 600.0 via StudySetup, got {}",
+            state[lag_start]
+        );
+        assert!(
+            (state[lag_start + 1] - 500.0).abs() < 1e-10,
+            "hydro 1 lag 1 should be 500.0 via StudySetup, got {}",
+            state[lag_start + 1]
+        );
+        assert!(
+            (state[lag_start + 2] - 200.0).abs() < 1e-10,
+            "hydro 2 lag 0 should be 200.0 via StudySetup, got {}",
+            state[lag_start + 2]
+        );
+        assert!(
+            (state[lag_start + 3] - 100.0).abs() < 1e-10,
+            "hydro 2 lag 1 should be 100.0 via StudySetup, got {}",
+            state[lag_start + 3]
+        );
+    }
+
+    /// Given `max_par_order`=0, no lag slots exist; state is storage-only.
+    #[test]
+    fn build_initial_state_no_lags_state_is_storage_only() {
+        use super::build_initial_state;
+
+        let system = minimal_system(2);
+        let indexer = indexer_for_lag_test(1, 0);
+
+        // n_state = N*(1+L) = 1*(1+0) = 1
+        assert_eq!(indexer.n_state, 1);
+        assert!(
+            indexer.inflow_lags.is_empty(),
+            "inflow_lags range should be empty for L=0"
+        );
+
+        let state = build_initial_state(&system, &indexer);
+
+        assert_eq!(state.len(), 1, "state length must equal n_state=1");
     }
 }

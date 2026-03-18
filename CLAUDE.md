@@ -75,28 +75,28 @@ identifiers in the spec files:
 
 ---
 
-## Current State (v0.1.4)
+## Current State (v0.1.5)
 
 The SDDP solver is fully functional. The pipeline covers case loading, stochastic
 scenario generation, training, simulation, policy checkpointing, and output writing.
-2,624 tests across the workspace, including a deterministic regression suite (D01-D12)
-with hand-computed expected costs.
+Includes a deterministic regression suite (D01-D12) with hand-computed expected costs.
 
 **What's implemented:**
 
 - Training loop with forward/backward pass, Benders cut management, 5 stopping rules
 - Constant-productivity and FPHA hydro production models (precomputed + computed from geometry)
 - Cascade hydro coupling, evaporation linearization, inflow non-negativity penalties
+- Multi-segment deficit pricing (N deficit columns per bus per block with capacity constraints)
 - PAR(p) fitting (Levinson-Durbin, AIC order selection), stochastic load demand
+- PAR(p) lag initialization from `past_inflows` in `initial_conditions.json` with validation rules
 - Simulation pipeline with FlatBuffers policy checkpoint and Parquet output
 - Multi-bus transmission with line flow limits
 - MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
 - CLI: `init`, `run`, `validate`, `report`, `summary`, `version`
-- Python bindings (PyO3, tested on 3.12/3.13/3.14)
+- Python bindings (PyO3, tested on 3.12/3.13/3.14) with Arrow zero-copy result loading
 
 **Known gaps:**
 
-- Multi-segment deficit pricing (LP builder uses single deficit variable per bus)
 - CVaR risk measure (enum variant exists, LP modification not implemented)
 - GNL thermals, batteries, non-controllable sources (entity stubs exist, no LP contribution)
 

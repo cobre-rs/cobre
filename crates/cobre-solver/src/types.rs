@@ -272,14 +272,14 @@ pub struct RowBatch {
     /// coefficient at column `col_indices[k]` in its row.
     pub values: Vec<f64>,
 
-    /// Row lower bounds (cut intercepts alpha for Benders cuts).
+    /// Row lower bounds (cut intercepts for cutting-plane cuts).
     ///
     /// Length: `num_rows`. For `>=` cuts, this is the RHS lower bound.
     pub row_lower: Vec<f64>,
 
     /// Row upper bounds.
     ///
-    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` cuts (Benders cuts
+    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` cuts (cutting-plane cuts
     /// have no finite upper bound).
     pub row_upper: Vec<f64>,
 }
@@ -359,13 +359,10 @@ impl fmt::Display for SolverError {
             Self::InternalError {
                 message,
                 error_code,
-            } => {
-                if let Some(code) = error_code {
-                    write!(f, "internal solver error (code {code}): {message}")
-                } else {
-                    write!(f, "internal solver error: {message}")
-                }
-            }
+            } => match error_code {
+                Some(code) => write!(f, "internal solver error (code {code}): {message}"),
+                None => write!(f, "internal solver error: {message}"),
+            },
         }
     }
 }

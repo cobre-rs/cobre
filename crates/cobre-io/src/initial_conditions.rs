@@ -5,10 +5,13 @@
 //!
 //! ## JSON structure
 //!
-//! The file contains two top-level arrays:
+//! The file contains two required top-level arrays and one optional array:
 //!
 //! - `storage` — initial reservoir volumes for operating hydros (hm³).
 //! - `filling_storage` — initial reservoir volumes for filling hydros (hm³).
+//! - `past_inflows` — past inflow values for PAR(p) lag initialization (m³/s),
+//!   ordered from most recent (lag 1) to oldest (lag p). Optional; defaults to
+//!   an empty array when absent.
 //!
 //! ```json
 //! {
@@ -17,26 +20,32 @@
 //!     { "hydro_id": 0, "value_hm3": 15000.0 },
 //!     { "hydro_id": 1, "value_hm3": 8500.0 }
 //!   ],
-//!   "filling_storage": [{ "hydro_id": 10, "value_hm3": 200.0 }]
+//!   "filling_storage": [{ "hydro_id": 10, "value_hm3": 200.0 }],
+//!   "past_inflows": [
+//!     { "hydro_id": 0, "values_m3s": [600.0, 500.0] },
+//!     { "hydro_id": 1, "values_m3s": [200.0, 100.0] }
+//!   ]
 //! }
 //! ```
 //!
 //! ## Validation
 //!
-//! After deserializing, three invariants are checked before conversion:
+//! After deserializing, the following invariants are checked before conversion:
 //!
 //! 1. Every `value_hm3` is non-negative (`>= 0.0`).
 //! 2. No `hydro_id` appears more than once within `storage` or within
 //!    `filling_storage` (no intra-array duplicates).
 //! 3. No `hydro_id` appears in both `storage` and `filling_storage`
 //!    (mutual exclusion).
+//! 4. No `hydro_id` appears more than once in `past_inflows`.
+//! 5. Every value in `past_inflows[i].values_m3s` is finite and non-negative.
 //!
 //! Cross-reference validation (checking that hydro IDs exist in the hydro
 //! registry) is deferred to Layer 3 (Epic 06). Storage bounds validation
 //! (value within `[min_storage_hm3, max_storage_hm3]`) also requires the
 //! hydro registry and is likewise deferred.
 
-use cobre_core::{EntityId, HydroStorage, InitialConditions};
+use cobre_core::{EntityId, HydroPastInflows, HydroStorage, InitialConditions};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -59,6 +68,10 @@ struct RawInitialConditions {
 
     /// Initial storage for filling hydros.
     filling_storage: Vec<RawHydroStorage>,
+
+    /// Past inflow values for PAR(p) lag initialization.
+    #[serde(default)]
+    past_inflows: Vec<RawHydroPastInflows>,
 }
 
 /// Intermediate type for one hydro storage entry.
@@ -68,6 +81,15 @@ struct RawHydroStorage {
     hydro_id: i32,
     /// Reservoir volume in hm³.
     value_hm3: f64,
+}
+
+/// Intermediate type for one hydro past-inflows entry.
+#[derive(Deserialize)]
+struct RawHydroPastInflows {
+    /// Hydro plant identifier.
+    hydro_id: i32,
+    /// Past inflow values in m³/s, ordered from most recent (lag 1) to oldest.
+    values_m3s: Vec<f64>,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -88,6 +110,8 @@ struct RawHydroStorage {
 /// | Duplicate `hydro_id` within `storage`                 | [`LoadError::SchemaError`] |
 /// | Duplicate `hydro_id` within `filling_storage`         | [`LoadError::SchemaError`] |
 /// | `hydro_id` in both `storage` and `filling_storage`    | [`LoadError::SchemaError`] |
+/// | Duplicate `hydro_id` within `past_inflows`            | [`LoadError::SchemaError`] |
+/// | Non-finite or negative value in `past_inflows`        | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -121,6 +145,8 @@ fn validate_raw(raw: &RawInitialConditions, path: &Path) -> Result<(), LoadError
     validate_no_duplicates(&raw.storage, "storage", path)?;
     validate_no_duplicates(&raw.filling_storage, "filling_storage", path)?;
     validate_mutual_exclusion(raw, path)?;
+    validate_past_inflows_no_duplicates(&raw.past_inflows, path)?;
+    validate_past_inflows_values(&raw.past_inflows, path)?;
     Ok(())
 }
 
@@ -181,12 +207,59 @@ fn validate_mutual_exclusion(raw: &RawInitialConditions, path: &Path) -> Result<
     Ok(())
 }
 
+/// Check that no `hydro_id` appears more than once in `past_inflows`.
+fn validate_past_inflows_no_duplicates(
+    entries: &[RawHydroPastInflows],
+    path: &Path,
+) -> Result<(), LoadError> {
+    let mut seen: HashSet<i32> = HashSet::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if !seen.insert(entry.hydro_id) {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: format!("past_inflows[{i}].hydro_id"),
+                message: format!("duplicate hydro_id {} in past_inflows", entry.hydro_id),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Check that every value in `past_inflows[i].values_m3s` is finite and non-negative.
+fn validate_past_inflows_values(
+    entries: &[RawHydroPastInflows],
+    path: &Path,
+) -> Result<(), LoadError> {
+    for (i, entry) in entries.iter().enumerate() {
+        for (j, &v) in entry.values_m3s.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("past_inflows[{i}].values_m3s[{j}]"),
+                    message: format!(
+                        "past_inflows[{i}].values_m3s[{j}] is not finite (got {v}); \
+                         all inflow values must be finite numbers"
+                    ),
+                });
+            }
+            if v < 0.0 {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("past_inflows[{i}].values_m3s[{j}]"),
+                    message: format!("past_inflows[{i}].values_m3s[{j}] must be >= 0.0, got {v}"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Conversion ────────────────────────────────────────────────────────────────
 
 /// Convert validated raw data into [`InitialConditions`].
 ///
 /// Precondition: [`validate_raw`] has returned `Ok(())` for this data.
-/// Both arrays are sorted by `hydro_id` to satisfy the declaration-order
+/// All arrays are sorted by `hydro_id` to satisfy the declaration-order
 /// invariance requirement.
 fn convert(raw: RawInitialConditions) -> InitialConditions {
     let mut storage: Vec<HydroStorage> = raw
@@ -209,9 +282,20 @@ fn convert(raw: RawInitialConditions) -> InitialConditions {
         .collect();
     filling_storage.sort_by_key(|e| e.hydro_id.0);
 
+    let mut past_inflows: Vec<HydroPastInflows> = raw
+        .past_inflows
+        .into_iter()
+        .map(|e| HydroPastInflows {
+            hydro_id: EntityId(e.hydro_id),
+            values_m3s: e.values_m3s,
+        })
+        .collect();
+    past_inflows.sort_by_key(|e| e.hydro_id.0);
+
     InitialConditions {
         storage,
         filling_storage,
+        past_inflows,
     }
 }
 
@@ -255,6 +339,10 @@ mod tests {
 
         assert_eq!(ic.storage.len(), 2);
         assert_eq!(ic.filling_storage.len(), 1);
+        assert!(
+            ic.past_inflows.is_empty(),
+            "past_inflows absent defaults to empty"
+        );
 
         // Both storage entries present with correct IDs and values
         assert_eq!(ic.storage[0].hydro_id, EntityId(0));
@@ -279,6 +367,32 @@ mod tests {
         );
     }
 
+    /// Given a valid `initial_conditions.json` with `past_inflows`, the values
+    /// are parsed correctly and sorted by `hydro_id`.
+    #[test]
+    fn test_parse_valid_past_inflows() {
+        let json = r#"{
+          "storage": [
+            { "hydro_id": 0, "value_hm3": 1000.0 },
+            { "hydro_id": 1, "value_hm3": 2000.0 }
+          ],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 1, "values_m3s": [200.0, 100.0] },
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let ic = parse_initial_conditions(f.path()).unwrap();
+
+        assert_eq!(ic.past_inflows.len(), 2);
+        // Sorted by hydro_id ascending
+        assert_eq!(ic.past_inflows[0].hydro_id, EntityId(0));
+        assert_eq!(ic.past_inflows[0].values_m3s, vec![600.0, 500.0]);
+        assert_eq!(ic.past_inflows[1].hydro_id, EntityId(1));
+        assert_eq!(ic.past_inflows[1].values_m3s, vec![200.0, 100.0]);
+    }
+
     // ── AC: empty arrays → Ok ─────────────────────────────────────────────────
 
     /// Given an `initial_conditions.json` with empty arrays, `parse_initial_conditions`
@@ -290,6 +404,7 @@ mod tests {
         let ic = parse_initial_conditions(f.path()).unwrap();
         assert!(ic.storage.is_empty());
         assert!(ic.filling_storage.is_empty());
+        assert!(ic.past_inflows.is_empty());
     }
 
     // ── AC: negative value_hm3 → SchemaError ─────────────────────────────────
@@ -442,6 +557,67 @@ mod tests {
         }
     }
 
+    // ── AC: past_inflows duplicate hydro_id → SchemaError ─────────────────────
+
+    /// Given `past_inflows` with a duplicate `hydro_id`, `parse_initial_conditions`
+    /// returns `Err(LoadError::SchemaError)` mentioning "duplicate" and "`past_inflows`".
+    #[test]
+    fn test_duplicate_hydro_id_in_past_inflows() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 3, "values_m3s": [100.0] },
+            { "hydro_id": 3, "values_m3s": [200.0] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let err = parse_initial_conditions(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("past_inflows"),
+                    "field should mention 'past_inflows', got: {field}"
+                );
+                assert!(
+                    message.contains("duplicate"),
+                    "message should mention 'duplicate', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    // ── AC: past_inflows negative value → SchemaError ─────────────────────────
+
+    /// Given `past_inflows` with a negative value in `values_m3s`,
+    /// `parse_initial_conditions` returns `Err(LoadError::SchemaError)`.
+    #[test]
+    fn test_negative_past_inflows_value() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 1, "values_m3s": [100.0, -50.0] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let err = parse_initial_conditions(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("past_inflows"),
+                    "field should mention 'past_inflows', got: {field}"
+                );
+                assert!(
+                    message.contains(">= 0.0") || message.contains("negative"),
+                    "message should mention non-negativity, got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
     // ── AC: file not found → IoError ─────────────────────────────────────────
 
     /// Given a nonexistent path, `parse_initial_conditions` returns
@@ -504,14 +680,22 @@ mod tests {
             { "hydro_id": 0, "value_hm3": 1000.0 },
             { "hydro_id": 1, "value_hm3": 2000.0 }
           ],
-          "filling_storage": []
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0] },
+            { "hydro_id": 1, "values_m3s": [200.0, 100.0] }
+          ]
         }"#;
         let json_reversed = r#"{
           "storage": [
             { "hydro_id": 1, "value_hm3": 2000.0 },
             { "hydro_id": 0, "value_hm3": 1000.0 }
           ],
-          "filling_storage": []
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 1, "values_m3s": [200.0, 100.0] },
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0] }
+          ]
         }"#;
 
         let f1 = write_json(json_ordered);
@@ -526,6 +710,8 @@ mod tests {
         // Sorted by hydro_id ascending
         assert_eq!(ic1.storage[0].hydro_id, EntityId(0));
         assert_eq!(ic1.storage[1].hydro_id, EntityId(1));
+        assert_eq!(ic1.past_inflows[0].hydro_id, EntityId(0));
+        assert_eq!(ic1.past_inflows[1].hydro_id, EntityId(1));
     }
 
     /// Invalid JSON syntax → `ParseError`.
@@ -548,6 +734,42 @@ mod tests {
         assert!(
             matches!(err, LoadError::ParseError { .. }),
             "expected ParseError for missing storage field, got: {err:?}"
+        );
+    }
+
+    /// Zero value in `past_inflows.values_m3s` is valid (dry season).
+    #[test]
+    fn test_zero_past_inflow_value_is_valid() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 1, "values_m3s": [0.0, 50.0] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let result = parse_initial_conditions(f.path());
+        assert!(
+            result.is_ok(),
+            "0.0 in past_inflows is valid (dry season), got: {result:?}"
+        );
+    }
+
+    /// Empty `values_m3s` array is accepted — no lag initialization needed.
+    #[test]
+    fn test_empty_values_m3s_is_valid() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 1, "values_m3s": [] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let result = parse_initial_conditions(f.path());
+        assert!(
+            result.is_ok(),
+            "empty values_m3s should be accepted, got: {result:?}"
         );
     }
 }

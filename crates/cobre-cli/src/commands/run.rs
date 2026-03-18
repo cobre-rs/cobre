@@ -158,9 +158,6 @@ fn load_case_and_config(
 pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let comm = create_communicator()?;
     let is_root = comm.rank() == 0;
-
-    // Non-root ranks are always quiet: they produce no terminal output and
-    // write no files. This single flag controls all UI/banner/summary paths.
     let quiet = args.quiet || !is_root;
 
     // Under MPI, mpiexec pipes rank 0's stderr through to the user's terminal
@@ -185,15 +182,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
 
-    // Only rank 0 accesses the filesystem. `prepare_stochastic` runs the full
-    // pre-setup pipeline (estimation + opening tree loading + stochastic context
-    // construction) on rank 0. The system and BroadcastConfig are then broadcast
-    // to all ranks. The estimation report and rank-0 stochastic context are
-    // rank-0-only and are NOT broadcast.
-    // Destructure the prepared result so that `system` can be moved into
-    // `broadcast_value` while `stochastic` and `estimation_report` remain
-    // available. `System` does not implement `Clone`, so destructuring is the
-    // only way to move each field independently.
+    // Rank 0 loads from disk; system and config are broadcast to all ranks.
     let (
         raw_system,
         raw_bcast_config,
@@ -796,33 +785,13 @@ fn export_stochastic_artifacts(
 mod tests {
     use super::resolve_thread_count;
 
-    // ------------------------------------------------------------------
-    // resolve_thread_count tests
-    //
-    // Note: env var mutation (`set_var`/`remove_var`) is unsafe in Rust 2024
-    // and is forbidden by the workspace `unsafe_code = "forbid"` lint.
-    // These tests therefore exercise only the paths that do not require env
-    // var mutation: the CLI argument path and the fixed default value.
-    // ------------------------------------------------------------------
-
-    /// CLI `--threads` value is returned directly without consulting env vars.
     #[test]
     fn test_resolve_thread_count_cli_value() {
-        assert_eq!(
-            resolve_thread_count(Some(4)),
-            4,
-            "CLI value must be returned as-is"
-        );
+        assert_eq!(resolve_thread_count(Some(4)), 4);
     }
 
-    /// Single-thread default: passing Some(1) yields 1, matching the hardcoded
-    /// fallback value and confirming single-threaded operation is always available.
     #[test]
     fn test_resolve_thread_count_default() {
-        assert_eq!(
-            resolve_thread_count(Some(1)),
-            1,
-            "single-thread CLI value must produce 1"
-        );
+        assert_eq!(resolve_thread_count(Some(1)), 1);
     }
 }

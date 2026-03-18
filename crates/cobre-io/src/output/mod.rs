@@ -67,7 +67,7 @@ pub struct IterationRecord {
     /// `None` when the lower bound is zero or negative (gap is ill-defined).
     pub gap_percent: Option<f64>,
 
-    /// Number of Benders cuts added to the cut pool during this iteration.
+    /// Number of cuts added to the cut pool during this iteration.
     pub cuts_added: u32,
 
     /// Number of cuts removed from the cut pool during this iteration.
@@ -146,7 +146,7 @@ pub struct IterationRecord {
 /// Carried inside [`TrainingOutput`] and written to `training/timing/cut_stats.parquet`.
 #[derive(Debug, Clone)]
 pub struct CutStatistics {
-    /// Total number of Benders cuts generated over the entire training run.
+    /// Total number of cuts generated over the entire training run.
     pub total_generated: u64,
 
     /// Number of cuts still active in the pool at the end of training.

@@ -6790,8 +6790,9 @@ mod tests {
             .expect("multi_segment_system: valid")
     }
 
-    /// AC: 2 buses (bus0: 3 segments, bus1: 1 segment), 2 blocks → deficit columns = B*S_max*K = 2*3*2 = 12.
+    /// AC: 2 buses (bus0: 3 segments, bus1: 1 segment), 2 blocks → deficit columns = `B*S_max*K` = 2*3*2 = 12.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_multi_segment_deficit_column_count() {
         use chrono::NaiveDate;
         use cobre_core::scenario::LoadModel;
@@ -7078,15 +7079,15 @@ mod tests {
     /// Every deficit segment column for the bus/block must have exactly one entry in the
     /// load-balance row with coefficient +1.0.
     ///
-    /// Column layout (N=0, no thermals/lines):
-    ///   col 0      = theta (value function)
-    ///   col_deficit_start = 1
-    ///   col_seg0   = 1  (b_idx=0, seg_idx=0, blk=0)
-    ///   col_seg1   = 2  (b_idx=0, seg_idx=1, blk=0)
+    /// Column layout (`N`=0, no thermals/lines):
+    ///   col 0 = theta (value function),
+    ///   `col_deficit_start` = 1,
+    ///   `col_seg0` = 1 (`b_idx`=0, `seg_idx`=0, `blk`=0),
+    ///   `col_seg1` = 2 (`b_idx`=0, `seg_idx`=1, `blk`=0).
     ///
-    /// Row layout (N=0, n_hydros=0):
-    ///   row_load_balance_start = 0
-    ///   load balance row for bus 0, block 0 = 0
+    /// Row layout (`N`=0, `n_hydros`=0):
+    ///   `row_load_balance_start` = 0,
+    ///   load balance row for bus 0, block 0 = 0.
     #[test]
     fn test_multi_segment_deficit_load_balance_coefficients() {
         let bus = Bus {

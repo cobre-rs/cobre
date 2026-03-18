@@ -2484,10 +2484,10 @@ mod tests {
             .expect("minimal_system_2_hydros: valid")
     }
 
-    /// Given 2 hydros (IDs 1, 2), max_par_order=2, and 4 history rows,
+    /// Given 2 hydros (IDs 1, 2), `max_par_order`=2, and 4 history rows,
     /// `build_initial_state` populates lag slots correctly.
     ///
-    /// stage_0_start = 2020-01-01
+    /// `stage_0_start` = 2020-01-01
     /// Hydro idx 0 (id=1): lag 0 = Dec 2019 (600.0), lag 1 = Nov 2019 (500.0)
     /// Hydro idx 1 (id=2): lag 0 = Dec 2019 (200.0), lag 1 = Nov 2019 (100.0)
     #[test]
@@ -2557,7 +2557,7 @@ mod tests {
         );
     }
 
-    /// Given empty inflow_history, all lag slots remain 0.0 (backward-compatible).
+    /// Given empty `inflow_history`, all lag slots remain 0.0 (backward-compatible).
     #[test]
     fn build_initial_state_empty_history_leaves_zero_lags() {
         use super::build_initial_state;
@@ -2579,7 +2579,7 @@ mod tests {
         }
     }
 
-    /// Given history only for hydro id=3 (the one hydro in minimal_system), but
+    /// Given history only for hydro `id=3` (the one hydro in `minimal_system`), but
     /// the system has 1 hydro, all lags are populated correctly. Tests partial
     /// coverage (history only for the existing hydro, no extras).
     #[test]
@@ -2895,7 +2895,7 @@ mod tests {
         );
     }
 
-    /// Given max_par_order=0, no lag slots exist; state is storage-only.
+    /// Given `max_par_order`=0, no lag slots exist; state is storage-only.
     #[test]
     fn build_initial_state_no_lags_state_is_storage_only() {
         use super::build_initial_state;

@@ -26,7 +26,7 @@ cobre-stochastic = { version = "0.1.4", path = "../cobre-stochastic" }
 cobre-solver = { version = "0.1.4", path = "../cobre-solver" }
 cobre-comm = { version = "0.1.4", path = "../cobre-comm" }
 rayon = "1"
-arrow = { version = "58", default-features = false }
+arrow = { version = "58", default-features = false, features = ["ipc"] }
 parquet = { version = "58", default-features = false, features = ["arrow"] }
 serde_json = "1"
 

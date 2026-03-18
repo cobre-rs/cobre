@@ -28,7 +28,6 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
-use cobre_io::{ValidationContext, parse_inflow_history, validate_structure};
 use cobre_sddp::{
     EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, SimulationScenarioResult,
     StudySetup, build_hydro_model_summary, build_stochastic_summary,
@@ -192,7 +191,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         root_estimation_report,
         raw_bcast_tree,
         root_hydro_models,
-        root_inflow_history,
         load_err,
     ) = if is_root {
         match load_case_and_config(&args, quiet, &stderr) {
@@ -216,7 +214,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     system,
                     stochastic,
                     estimation_report,
-                    inflow_history,
                 } = prepared;
                 (
                     Some(system),
@@ -226,14 +223,13 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     Some(estimation_report),
                     Some(bcast_tree),
                     Some(hydro_models),
-                    Some(inflow_history),
                     None,
                 )
             }
-            Err(e) => (None, None, None, None, None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None)
     };
     let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
@@ -288,30 +284,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         })?
     };
 
-    // Rank 0 reuses the inflow history loaded during `prepare_stochastic`.
-    // Non-root ranks load it independently from the shared filesystem.
-    // When `inflow_history.parquet` is absent, all ranks use an empty vec
-    // (lag slots remain zero-initialised).
-    let inflow_history = if is_root {
-        root_inflow_history.ok_or_else(|| CliError::Internal {
-            message: "inflow history missing on rank 0 after successful load".to_string(),
-        })?
-    } else {
-        let mut ctx = ValidationContext::new();
-        let manifest = validate_structure(&args.case_dir, &mut ctx);
-        if manifest.scenarios_inflow_history_parquet {
-            let path = args
-                .case_dir
-                .join("scenarios")
-                .join("inflow_history.parquet");
-            parse_inflow_history(&path).map_err(|e| CliError::Internal {
-                message: format!("inflow history load error on non-root rank: {e}"),
-            })?
-        } else {
-            Vec::new()
-        }
-    };
-
     // Construct StudySetup on all ranks from broadcast parameters.
     // Ownership of stochastic moves into setup; use setup.stochastic() for all
     // subsequent stochastic references.
@@ -333,7 +305,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         bcast_config.inflow_method.clone(),
         cut_selection,
         hydro_models,
-        &inflow_history,
     )
     .map_err(CliError::from)?;
 

@@ -311,19 +311,12 @@ fn run_inner(
         .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
     let system = result.system;
     let estimation_report = result.estimation_report;
-    let inflow_history = result.inflow_history;
 
     let hydro_models_result = prepare_hydro_models(&system, case_dir)
         .map_err(|e| format!("hydro model preprocessing error: {e}"))?;
 
-    let mut setup = StudySetup::new(
-        &system,
-        &config,
-        result.stochastic,
-        hydro_models_result,
-        &inflow_history,
-    )
-    .map_err(|e| e.to_string())?;
+    let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
+        .map_err(|e| e.to_string())?;
 
     // Export stochastic artifacts when requested.
     if config.exports.stochastic {

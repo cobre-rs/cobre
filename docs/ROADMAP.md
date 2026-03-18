@@ -10,10 +10,6 @@ see the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/over
 
 ### Solver Enhancements
 
-- **Multi-segment deficit pricing** — The LP builder currently uses a single deficit
-  variable per bus per block. Tiered deficit segments (each with its own depth and
-  cost) need per-segment columns with capacity constraints in the LP.
-
 - **Multi-cut formulation** (C.3) — One future-cost variable per forward scenario
   instead of the current single-cut (expected value) formulation. Improves lower
   bound convergence for problems with high-variance costs.

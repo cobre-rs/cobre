@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-03-18
+
+### Added
+
+- **Multi-segment deficit pricing** -- The LP builder now supports N deficit
+  columns per bus per block (one per segment), with capacity constraints.
+  NEWAVE-converted cases with tiered deficit costs produce correct results.
+  Deterministic test D09 is un-ignored and passes.
+- **Arrow zero-copy result loading** -- `load_convergence_arrow()` and
+  `load_simulation_arrow()` in cobre-python return Arrow RecordBatches via
+  the Arrow C Data Interface, enabling zero-copy `polars.from_arrow()` in
+  Python without intermediate serialization.
+- **Jupyter quickstart notebook** -- `examples/notebooks/quickstart.ipynb`
+  demonstrates the end-to-end Python workflow: run a study, load results
+  with Arrow zero-copy, and visualize convergence with matplotlib.
+- **Inflow history lag initialization** -- `build_initial_state` populates
+  PAR(p) lag slots from `scenarios/inflow_history.parquet` when available,
+  replacing zero-initialization with actual historical inflow values for
+  accurate first-stage noise realization.
+- **Inflow history validation rules** -- Three new semantic validation rules
+  (22--24) in cobre-io check that `inflow_history.parquet` provides sufficient
+  coverage when `inflow_lags: true` and PAR order > 0: history must be
+  non-empty (rule 22), per-hydro date coverage must span the lag window
+  (rule 23), and all hydro IDs in history must exist in the registry (rule 24).
+
+### Changed
+
+- **Infrastructure crate doc cleanup** -- Replaced "Benders" terminology with
+  generic "cutting plane" language in cobre-io and cobre-solver doc comments.
+- **Backward pass sort verified redundant** -- The sort in the backward pass
+  was confirmed redundant and replaced with a `debug_assert!` for safety.
+
+### Fixed
+
+- **D09 deterministic test** -- Previously `#[ignore]` due to missing
+  multi-segment deficit support; now passes with correct expected cost.
+
 ## [0.1.4] - 2026-03-17
 
 ### Added

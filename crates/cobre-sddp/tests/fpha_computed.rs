@@ -340,8 +340,8 @@ fn fpha_computed_case_converges() {
         .count();
     assert_eq!(n_fpha, 2, "production model set must have 2 FPHA hydros");
 
-    let mut setup =
-        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+    let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, &[])
+        .expect("StudySetup must build");
     assert_eq!(
         setup.stage_templates().len(),
         12,

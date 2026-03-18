@@ -47,8 +47,13 @@
 //! |19  | `season_definitions` required in `stages.json` when estimating          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
 //! |20  | Minimum observations per `(hydro, season)` group for estimation         | `scenarios/inflow_history.parquet`             | `ModelQuality` (warning) |
 //! |21  | All hydros in `hydros.json` must have observations in history           | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
+//! |22  | `inflow_lags: true` with PAR order > 0 requires non-empty history       | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
+//! |23  | Each hydro with PAR order `p` must have `p` history rows before stage 0 | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
+//! |24  | All hydro IDs in history must exist in the hydro registry               | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
 
 use std::collections::{HashMap, HashSet};
+
+use chrono::Datelike as _;
 
 use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
@@ -71,10 +76,8 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
     let all_ids: Vec<i32> = data.hydros.iter().map(|h| h.id.0).collect();
     let downstream_set: HashSet<i32> = all_ids.iter().copied().collect();
 
-    let mut adjacency: HashMap<i32, Vec<i32>> = HashMap::new();
-    for id in &all_ids {
-        adjacency.insert(*id, Vec::new());
-    }
+    let mut adjacency: HashMap<i32, Vec<i32>> =
+        all_ids.iter().copied().map(|id| (id, Vec::new())).collect();
     for hydro in &data.hydros {
         if let Some(ds) = hydro.downstream_id {
             if downstream_set.contains(&ds.0) {
@@ -83,10 +86,7 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
         }
     }
 
-    let mut in_degree: HashMap<i32, usize> = HashMap::new();
-    for id in &all_ids {
-        in_degree.insert(*id, 0);
-    }
+    let mut in_degree: HashMap<i32, usize> = all_ids.iter().copied().map(|id| (id, 0)).collect();
     for hydro in &data.hydros {
         if let Some(ds) = hydro.downstream_id {
             if downstream_set.contains(&ds.0) {
@@ -458,6 +458,7 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_correlation_matrices(data, ctx);
     check_load_factor_consistency(data, ctx);
     check_estimation_prerequisites(data, ctx);
+    check_inflow_lag_history_coverage(data, ctx);
 }
 
 // ── Tolerances ────────────────────────────────────────────────────────────────
@@ -1151,6 +1152,172 @@ fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext
                     "hydro {hid} season {sid} has {n} observations \
                      (minimum recommended: {min_obs}); estimation accuracy may be \
                      insufficient with so few observations"
+                ),
+            );
+        }
+    }
+}
+
+// ── Rules 22-24: Inflow lag history coverage ──────────────────────────────────
+
+/// Validates that `inflow_history.parquet` provides sufficient date coverage for
+/// lag initialization when `inflow_lags: true` and PAR order > 0.
+///
+/// Runs only when at least one stage has `state_config.inflow_lags: true` AND
+/// `inflow_ar_coefficients` is non-empty with maximum PAR order > 0.
+///
+/// Rule 22: `inflow_history` must be non-empty when lag initialization is needed.
+///
+/// Rule 23: For each hydro with per-hydro PAR order `p` (max lag across all its
+/// `(hydro_id, stage_id)` groups), there must be at least `p` history rows with
+/// dates in `[stage_0_start - p_months, stage_0_start)`.
+///
+/// Rule 24: Every hydro ID present in `inflow_history` must exist in the hydro
+/// registry. Unknown IDs produce a `BusinessRuleViolation`.
+#[allow(clippy::too_many_lines)]
+fn check_inflow_lag_history_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
+    // Precondition: at least one study stage (id >= 0) has inflow_lags: true.
+    let lags_enabled = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .any(|s| s.state_config.inflow_lags);
+    if !lags_enabled {
+        return;
+    }
+
+    // Precondition: AR coefficients present and max lag order > 0.
+    // The per-hydro PAR order is the maximum `lag` value across all rows for
+    // that hydro (lags are 1-based, so max lag == PAR order p).
+    let max_order_overall: i32 = data
+        .inflow_ar_coefficients
+        .iter()
+        .map(|c| c.lag)
+        .max()
+        .unwrap_or(0);
+    if max_order_overall == 0 {
+        return;
+    }
+
+    // Rule 22: history must be non-empty.
+    if data.inflow_history.is_empty() {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "scenarios/inflow_history.parquet",
+            None::<&str>,
+            "inflow_lags is enabled with PAR order > 0 but \
+             scenarios/inflow_history.parquet is absent or empty; \
+             lag initialization requires historical inflow data",
+        );
+        return; // rules 23-24 require non-empty history
+    }
+
+    // Find the first study stage (id >= 0, sorted by id ascending — the
+    // stages list is in canonical ID order per the architecture invariant).
+    let Some(stage_0) = data.stages.stages.iter().find(|s| s.id >= 0) else {
+        return; // no study stages — nothing to check
+    };
+    let stage_0_start = stage_0.start_date;
+
+    // Build per-hydro maximum PAR order from inflow_ar_coefficients.
+    // Key: hydro_id; value: max lag seen for that hydro across all stages.
+    let mut max_order_per_hydro: HashMap<i32, i32> = HashMap::new();
+    for row in &data.inflow_ar_coefficients {
+        let entry = max_order_per_hydro.entry(row.hydro_id.0).or_insert(0);
+        if row.lag > *entry {
+            *entry = row.lag;
+        }
+    }
+
+    // Rule 23: for each hydro with PAR order p, count history rows in
+    // [stage_0_start - p months, stage_0_start).
+    // We check month-level coverage: there must be at least p distinct
+    // calendar months represented in that window.
+    {
+        // Build a set of (hydro_id, year-month) present in history for
+        // fast coverage lookup.
+        let mut history_months: HashMap<i32, HashSet<(i32, u32)>> = HashMap::new();
+        for row in &data.inflow_history {
+            history_months
+                .entry(row.hydro_id.0)
+                .or_default()
+                .insert((row.date.year(), row.date.month()));
+        }
+
+        let mut coverage_violations: Vec<(i32, i32)> = Vec::new(); // (hydro_id, order)
+        for (&hydro_id, &order) in &max_order_per_hydro {
+            if order == 0 {
+                continue;
+            }
+            // Generate the set of (year, month) pairs expected in the window.
+            let mut expected_months: HashSet<(i32, u32)> = HashSet::new();
+            for lag in 1..=order {
+                // stage_0_start minus `lag` months.
+                let months_back = u32::try_from(lag).unwrap_or(u32::MAX);
+                let target = stage_0_start.checked_sub_months(chrono::Months::new(months_back));
+                if let Some(date) = target {
+                    expected_months.insert((date.year(), date.month()));
+                }
+            }
+
+            let available = history_months.get(&hydro_id);
+            let covered = expected_months
+                .iter()
+                .filter(|ym| available.is_some_and(|s| s.contains(*ym)))
+                .count();
+
+            if covered < expected_months.len() {
+                coverage_violations.push((hydro_id, order));
+            }
+        }
+
+        // Sort for deterministic output order.
+        coverage_violations.sort_unstable_by_key(|&(hid, _)| hid);
+        for (hydro_id, order) in coverage_violations {
+            // Compute the expected window start for the error message.
+            let months_back = u32::try_from(order).unwrap_or(u32::MAX);
+            let window_start = stage_0_start
+                .checked_sub_months(chrono::Months::new(months_back))
+                .map_or_else(
+                    || format!("{order} months before {stage_0_start}"),
+                    |d| d.to_string(),
+                );
+            let entity_str = format!("Hydro {hydro_id}");
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "scenarios/inflow_history.parquet",
+                Some(&entity_str),
+                format!(
+                    "Hydro {hydro_id}: insufficient inflow history for lag initialization; \
+                     PAR order is {order} but history does not cover all {order} month(s) \
+                     in [{window_start}, {stage_0_start}); add history rows for the \
+                     missing months"
+                ),
+            );
+        }
+    }
+
+    // Rule 24: every hydro ID in history must exist in the hydro registry.
+    {
+        let hydro_registry: HashSet<i32> = data.hydros.iter().map(|h| h.id.0).collect();
+        let history_hydro_ids: HashSet<i32> =
+            data.inflow_history.iter().map(|r| r.hydro_id.0).collect();
+        let mut unknown_ids: Vec<i32> = history_hydro_ids
+            .difference(&hydro_registry)
+            .copied()
+            .collect();
+        unknown_ids.sort_unstable();
+        for id in unknown_ids {
+            let entity_str = format!("Hydro {id}");
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "scenarios/inflow_history.parquet",
+                Some(&entity_str),
+                format!(
+                    "Hydro {id} appears in inflow_history.parquet but does not exist \
+                     in the hydro registry (system/hydros.json); \
+                     remove the unknown hydro or add it to the registry"
                 ),
             );
         }
@@ -3560,6 +3727,358 @@ mod tests {
             estimation_errors.is_empty() && estimation_warnings.is_empty(),
             "stats present should disable estimation checks; \
              errors: {estimation_errors:?}, warnings: {estimation_warnings:?}"
+        );
+    }
+
+    // ── Rules 22-24: Inflow lag history coverage tests ────────────────────────
+
+    /// Build an `InflowArCoefficientRow` with the given hydro_id, stage_id, and lag.
+    fn make_ar_row(hydro_id: i32, stage_id: i32, lag: i32) -> InflowArCoefficientRow {
+        InflowArCoefficientRow {
+            hydro_id: EntityId::from(hydro_id),
+            stage_id,
+            lag,
+            coefficient: 0.5,
+            residual_std_ratio: 0.9,
+        }
+    }
+
+    /// Build a `ParsedData` suitable for rules 22-24 tests.
+    ///
+    /// `stage_0_start` is the start date of study stage 0. `inflow_lags_enabled`
+    /// controls `state_config.inflow_lags` on that stage.
+    fn make_data_lag_coverage(
+        hydros: Vec<Hydro>,
+        stage_0_start: chrono::NaiveDate,
+        inflow_lags_enabled: bool,
+        inflow_history: Vec<InflowHistoryRow>,
+        inflow_ar_coefficients: Vec<InflowArCoefficientRow>,
+    ) -> ParsedData {
+        let stage_0 = Stage {
+            id: 0,
+            index: 0,
+            start_date: stage_0_start,
+            end_date: stage_0_start
+                .checked_add_months(chrono::Months::new(1))
+                .unwrap_or(stage_0_start),
+            season_id: None,
+            blocks: vec![],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: inflow_lags_enabled,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        ParsedData {
+            config: minimal_config(),
+            penalties: minimal_global_penalties(),
+            stages: StagesData {
+                stages: vec![stage_0],
+                policy_graph: PolicyGraph {
+                    graph_type: PolicyGraphType::FiniteHorizon,
+                    annual_discount_rate: 0.06,
+                    transitions: vec![],
+                    season_map: None,
+                },
+                scenario_source: ScenarioSource {
+                    sampling_scheme: SamplingScheme::InSample,
+                    seed: Some(42),
+                    selection_mode: None,
+                },
+            },
+            initial_conditions: cobre_core::initial_conditions::InitialConditions {
+                storage: vec![],
+                filling_storage: vec![],
+            },
+            buses: vec![Bus {
+                id: EntityId::from(1),
+                name: "BUS_1".to_string(),
+                deficit_segments: vec![],
+                excess_cost: 100.0,
+            }],
+            thermals: vec![],
+            hydros,
+            lines: vec![],
+            non_controllable_sources: vec![],
+            pumping_stations: vec![],
+            energy_contracts: vec![],
+            hydro_geometry: vec![],
+            production_models: vec![],
+            fpha_hyperplanes: vec![],
+            inflow_history,
+            // Populate a sentinel entry so the estimation path (rules 19-21) is
+            // inactive. Rules 22-24 are independent of the estimation path.
+            inflow_seasonal_stats: vec![crate::scenarios::InflowSeasonalStatsRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                mean_m3s: 500.0,
+                std_m3s: 50.0,
+            }],
+            inflow_ar_coefficients,
+            external_scenarios: vec![],
+            load_seasonal_stats: vec![],
+            load_factors: vec![],
+            correlation: None,
+            thermal_bounds: vec![],
+            hydro_bounds: vec![],
+            line_bounds: vec![],
+            pumping_bounds: vec![],
+            contract_bounds: vec![],
+            exchange_factors: vec![],
+            generic_constraints: vec![],
+            generic_constraint_bounds: vec![],
+            penalty_overrides_bus: vec![],
+            penalty_overrides_line: vec![],
+            penalty_overrides_hydro: vec![],
+            penalty_overrides_ncs: vec![],
+        }
+    }
+
+    /// Rule 22: inflow_lags true, PAR order 3, empty history -> one
+    /// `BusinessRuleViolation` mentioning "inflow_lags is enabled" and
+    /// "inflow_history.parquet".
+    #[test]
+    fn test_rule22_lags_enabled_no_history_errors() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let ar_rows = vec![
+            make_ar_row(1, 0, 1),
+            make_ar_row(1, 0, 2),
+            make_ar_row(1, 0, 3),
+        ];
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)],
+            stage_0_start,
+            true,
+            vec![], // empty history
+            ar_rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let matching: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("inflow_lags is enabled")
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected exactly one rule-22 BusinessRuleViolation, got: {:?}",
+            ctx.errors()
+        );
+        assert!(
+            matching[0]
+                .file
+                .to_string_lossy()
+                .contains("inflow_history.parquet"),
+            "error file should reference inflow_history.parquet"
+        );
+    }
+
+    /// Rule 23: inflow_lags true, hydro 1 PAR order 3, study starts Jan 2020,
+    /// history contains Oct 2019, Nov 2019, Dec 2019 -> no rule-22/23/24 violations.
+    #[test]
+    fn test_rule23_sufficient_coverage_no_error() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let history = vec![
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 10, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 11, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 12, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+        ];
+        let ar_rows = vec![
+            make_ar_row(1, 0, 1),
+            make_ar_row(1, 0, 2),
+            make_ar_row(1, 0, 3),
+        ];
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)],
+            stage_0_start,
+            true,
+            history,
+            ar_rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let lag_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file.to_string_lossy().contains("inflow_history.parquet")
+            })
+            .collect();
+        assert!(
+            lag_errors.is_empty(),
+            "sufficient coverage should produce no errors, got: {lag_errors:?}"
+        );
+    }
+
+    /// Rule 23: inflow_lags true, hydro 1 PAR order 3, study starts Jan 2020,
+    /// only Nov 2019 and Dec 2019 in history (missing Oct 2019) -> one
+    /// `BusinessRuleViolation` for hydro 1 mentioning insufficient coverage.
+    #[test]
+    fn test_rule23_insufficient_coverage_errors() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let history = vec![
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 11, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 12, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+            // Oct 2019 is missing
+        ];
+        let ar_rows = vec![
+            make_ar_row(1, 0, 1),
+            make_ar_row(1, 0, 2),
+            make_ar_row(1, 0, 3),
+        ];
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)],
+            stage_0_start,
+            true,
+            history,
+            ar_rows,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let coverage_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("Hydro 1")
+                    && e.message.contains("insufficient inflow history")
+            })
+            .collect();
+        assert!(
+            !coverage_errors.is_empty(),
+            "insufficient coverage should produce a BusinessRuleViolation for Hydro 1; \
+             got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Rules 22-24 are skipped when no stage has `inflow_lags: true` —
+    /// no rule-22/23/24 errors regardless of history content.
+    #[test]
+    fn test_rules_skip_when_lags_disabled() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        // History is present but inflow_lags is false — rules must be silent.
+        let history = vec![InflowHistoryRow {
+            hydro_id: EntityId::from(1),
+            date: chrono::NaiveDate::from_ymd_opt(2019, 12, 15).unwrap(),
+            value_m3s: 100.0,
+        }];
+        let ar_rows = vec![make_ar_row(1, 0, 1), make_ar_row(1, 0, 2)];
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)],
+            stage_0_start,
+            false, // lags disabled
+            history,
+            ar_rows,
+        );
+        let mut ctx = ValidationContext::new();
+        // Rules 22-24 fire only from check_inflow_lag_history_coverage; call directly.
+        check_inflow_lag_history_coverage(&data, &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "lags disabled should produce no rule-22/23/24 errors; got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Rules 22-24 are skipped when `inflow_ar_coefficients` is empty —
+    /// no PAR model means no lags needed regardless of the `inflow_lags` flag.
+    #[test]
+    fn test_rules_skip_when_par_order_zero() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)],
+            stage_0_start,
+            true,   // lags enabled
+            vec![], // empty history — would trigger rule 22 if AR coefficients present
+            vec![], // no AR coefficients -> max_order == 0, early return
+        );
+        let mut ctx = ValidationContext::new();
+        check_inflow_lag_history_coverage(&data, &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "no AR coefficients should produce no rule-22/23/24 errors; got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Rule 24: hydro ID in history that does not exist in the hydro registry
+    /// produces a `BusinessRuleViolation` mentioning the unknown hydro ID.
+    #[test]
+    fn test_rule24_unknown_hydro_in_history_errors() {
+        let stage_0_start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        // History contains hydro 99, which is not in the registry.
+        let history = vec![
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 12, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(99), // unknown
+                date: chrono::NaiveDate::from_ymd_opt(2019, 12, 15).unwrap(),
+                value_m3s: 100.0,
+            },
+        ];
+        // Provide enough AR rows so rule 22 and 23 are satisfied for hydro 1.
+        let ar_rows = vec![make_ar_row(1, 0, 1)];
+        let data = make_data_lag_coverage(
+            vec![make_hydro(1, None)], // only hydro 1 in registry
+            stage_0_start,
+            true,
+            history,
+            ar_rows,
+        );
+        let mut ctx = ValidationContext::new();
+        check_inflow_lag_history_coverage(&data, &mut ctx);
+
+        let rule24_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation && e.message.contains("Hydro 99")
+            })
+            .collect();
+        assert!(
+            !rule24_errors.is_empty(),
+            "unknown hydro 99 in history should produce a BusinessRuleViolation; \
+             got errors: {:?}",
+            ctx.errors()
         );
     }
 }

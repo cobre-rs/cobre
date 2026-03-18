@@ -138,8 +138,8 @@ fn fpha_evaporation_case_converges() {
 
     // ── Step 5: build StudySetup ──────────────────────────────────────────────
 
-    let mut setup =
-        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+    let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, &[])
+        .expect("StudySetup must build");
 
     // Acceptance criterion: templates for all 12 study stages.
     assert_eq!(

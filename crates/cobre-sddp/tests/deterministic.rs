@@ -100,8 +100,8 @@ fn run_deterministic_with_solver(case_dir: &Path) -> (cobre_sddp::TrainingResult
     let hydro_models =
         prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
 
-    let mut setup =
-        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+    let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, &[])
+        .expect("StudySetup must build");
 
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
@@ -128,8 +128,8 @@ fn run_deterministic(case_dir: &Path) -> cobre_sddp::TrainingResult {
     let hydro_models =
         prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
 
-    let mut setup =
-        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+    let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, &[])
+        .expect("StudySetup must build");
 
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
@@ -762,7 +762,7 @@ fn d12_checkpoint_round_trip() {
 
     // ── Step 4: build StudySetup and train ────────────────────────────────────
 
-    let mut setup = StudySetup::new(&system, &config_with_sim, stochastic, hydro_models)
+    let mut setup = StudySetup::new(&system, &config_with_sim, stochastic, hydro_models, &[])
         .expect("StudySetup must build");
 
     let comm = StubComm;

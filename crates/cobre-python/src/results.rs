@@ -270,108 +270,19 @@ pub fn load_convergence(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAn
 
         let n_rows = batch.num_rows();
 
-        let col_iteration = batch
-            .column_by_name("iteration")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'iteration' column"))?
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| PyOSError::new_err("'iteration' column is not Int32"))?;
-
-        let col_lower_bound = batch
-            .column_by_name("lower_bound")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'lower_bound' column"))?
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| PyOSError::new_err("'lower_bound' column is not Float64"))?;
-
-        let col_upper_bound_mean = batch
-            .column_by_name("upper_bound_mean")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'upper_bound_mean' column")
-            })?
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| PyOSError::new_err("'upper_bound_mean' column is not Float64"))?;
-
-        let col_upper_bound_std = batch
-            .column_by_name("upper_bound_std")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'upper_bound_std' column")
-            })?
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| PyOSError::new_err("'upper_bound_std' column is not Float64"))?;
-
-        let col_gap_percent = batch
-            .column_by_name("gap_percent")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'gap_percent' column"))?
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| PyOSError::new_err("'gap_percent' column is not Float64"))?;
-
-        let col_cuts_added = batch
-            .column_by_name("cuts_added")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'cuts_added' column"))?
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| PyOSError::new_err("'cuts_added' column is not Int32"))?;
-
-        let col_cuts_removed = batch
-            .column_by_name("cuts_removed")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'cuts_removed' column"))?
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| PyOSError::new_err("'cuts_removed' column is not Int32"))?;
-
-        let col_cuts_active = batch
-            .column_by_name("cuts_active")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'cuts_active' column"))?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| PyOSError::new_err("'cuts_active' column is not Int64"))?;
-
-        let col_time_forward_ms = batch
-            .column_by_name("time_forward_ms")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'time_forward_ms' column")
-            })?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| PyOSError::new_err("'time_forward_ms' column is not Int64"))?;
-
-        let col_time_backward_ms = batch
-            .column_by_name("time_backward_ms")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'time_backward_ms' column")
-            })?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| PyOSError::new_err("'time_backward_ms' column is not Int64"))?;
-
-        let col_time_total_ms = batch
-            .column_by_name("time_total_ms")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'time_total_ms' column")
-            })?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| PyOSError::new_err("'time_total_ms' column is not Int64"))?;
-
-        let col_forward_passes = batch
-            .column_by_name("forward_passes")
-            .ok_or_else(|| {
-                PyOSError::new_err("convergence.parquet missing 'forward_passes' column")
-            })?
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| PyOSError::new_err("'forward_passes' column is not Int32"))?;
-
-        let col_lp_solves = batch
-            .column_by_name("lp_solves")
-            .ok_or_else(|| PyOSError::new_err("convergence.parquet missing 'lp_solves' column"))?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| PyOSError::new_err("'lp_solves' column is not Int64"))?;
+        let col_iteration = get_column_by_name::<Int32Array>(&batch, "iteration")?;
+        let col_lower_bound = get_column_by_name::<Float64Array>(&batch, "lower_bound")?;
+        let col_upper_bound_mean = get_column_by_name::<Float64Array>(&batch, "upper_bound_mean")?;
+        let col_upper_bound_std = get_column_by_name::<Float64Array>(&batch, "upper_bound_std")?;
+        let col_gap_percent = get_column_by_name::<Float64Array>(&batch, "gap_percent")?;
+        let col_cuts_added = get_column_by_name::<Int32Array>(&batch, "cuts_added")?;
+        let col_cuts_removed = get_column_by_name::<Int32Array>(&batch, "cuts_removed")?;
+        let col_cuts_active = get_column_by_name::<Int64Array>(&batch, "cuts_active")?;
+        let col_time_forward_ms = get_column_by_name::<Int64Array>(&batch, "time_forward_ms")?;
+        let col_time_backward_ms = get_column_by_name::<Int64Array>(&batch, "time_backward_ms")?;
+        let col_time_total_ms = get_column_by_name::<Int64Array>(&batch, "time_total_ms")?;
+        let col_forward_passes = get_column_by_name::<Int32Array>(&batch, "forward_passes")?;
+        let col_lp_solves = get_column_by_name::<Int64Array>(&batch, "lp_solves")?;
 
         for i in 0..n_rows {
             let row = PyDict::new(py);
@@ -517,6 +428,19 @@ pub fn load_convergence_arrow(py: Python<'_>, output_dir: PathBuf) -> PyResult<P
     Ok(table.unbind())
 }
 
+/// Extract a column from a batch and downcast to its expected type, or return an error.
+fn get_column_by_name<'a, T: Array + 'static>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> PyResult<&'a T> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| PyOSError::new_err(format!("convergence.parquet missing '{name}' column")))?
+        .as_any()
+        .downcast_ref::<T>()
+        .ok_or_else(|| PyOSError::new_err(format!("'{name}' column has unexpected type")))
+}
+
 /// Convert an Arrow column value at row `i` to a Python object based on the array's data type.
 ///
 /// Handles the Arrow types present in simulation output schemas:
@@ -583,12 +507,9 @@ fn arrow_value_to_py(py: Python<'_>, col: &dyn Array, i: usize) -> PyResult<Py<P
                 .ok_or_else(|| PyOSError::new_err("Boolean column downcast failed"))?;
             Ok(PyBool::new(py, arr.value(i)).to_owned().unbind().into())
         }
-        other => {
-            // Fallback: represent unsupported types as their debug string.
-            Ok(PyString::new(py, &format!("<unsupported type: {other}>"))
-                .unbind()
-                .into())
-        }
+        other => Ok(PyString::new(py, &format!("<unsupported type: {other}>"))
+            .unbind()
+            .into()),
     }
 }
 
@@ -870,27 +791,21 @@ fn read_parquet_partition_as_batches(
         let scenario_id_array = std::sync::Arc::new(Int64Array::from(vec![scenario_id_val; n_rows]))
             as std::sync::Arc<dyn arrow::array::Array>;
 
-        // Build the extended schema on the first batch encountered.
         let extended_schema = if let Some(schema) = out_schema.as_ref() {
             schema.clone()
         } else {
             let orig_schema = batch.schema();
             let mut fields: Vec<Field> = vec![Field::new("scenario_id", DataType::Int64, false)];
-            for field in orig_schema.fields() {
-                fields.push(field.as_ref().clone());
-            }
+            fields.extend(orig_schema.fields().iter().map(|f| f.as_ref().clone()));
             let schema = std::sync::Arc::new(Schema::new(fields));
             *out_schema = Some(schema.clone());
             schema
         };
 
-        // Prepend the scenario_id column before the original columns.
         let mut columns: Vec<std::sync::Arc<dyn arrow::array::Array>> =
             Vec::with_capacity(batch.num_columns() + 1);
         columns.push(scenario_id_array);
-        for col in batch.columns() {
-            columns.push(col.clone());
-        }
+        columns.extend(batch.columns().iter().cloned());
 
         let extended_batch = RecordBatch::try_new(extended_schema, columns).map_err(|e| {
             PyOSError::new_err(format!("failed to construct extended RecordBatch: {e}"))

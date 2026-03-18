@@ -553,39 +553,43 @@ pub fn run(
             dict.set_item("total_time_ms", summary.total_time_ms)?;
             dict.set_item("output_dir", summary.output_dir.to_string_lossy().as_ref())?;
 
-            if let Some(sim) = summary.simulation {
-                let sim_dict = PyDict::new(py);
-                sim_dict.set_item("n_scenarios", sim.n_scenarios)?;
-                sim_dict.set_item("completed", sim.completed)?;
-                dict.set_item("simulation", sim_dict)?;
-            } else {
-                dict.set_item("simulation", py.None())?;
-            }
+            dict.set_item(
+                "simulation",
+                if let Some(sim) = summary.simulation {
+                    let sim_dict = PyDict::new(py);
+                    sim_dict.set_item("n_scenarios", sim.n_scenarios)?;
+                    sim_dict.set_item("completed", sim.completed)?;
+                    sim_dict.into()
+                } else {
+                    py.None()
+                },
+            )?;
 
-            if let Some(stoch) = &summary.stochastic {
-                let stoch_dict = stochastic_summary_to_dict(py, stoch)?;
-                dict.set_item("stochastic", stoch_dict)?;
+            let stochastic_val = if let Some(stoch) = &summary.stochastic {
+                stochastic_summary_to_dict(py, stoch)?.into()
             } else {
-                dict.set_item("stochastic", py.None())?;
-            }
+                py.None()
+            };
+            dict.set_item("stochastic", stochastic_val)?;
 
-            if let Some(hydro) = &summary.hydro_models {
-                let hydro_dict = hydro_model_summary_to_dict(py, hydro)?;
-                dict.set_item("hydro_models", hydro_dict)?;
+            let hydro_val = if let Some(hydro) = &summary.hydro_models {
+                hydro_model_summary_to_dict(py, hydro)?.into()
             } else {
-                dict.set_item("hydro_models", py.None())?;
-            }
+                py.None()
+            };
+            dict.set_item("hydro_models", hydro_val)?;
 
             Ok(dict.into())
         }
         Err(msg) => {
-            if msg.as_str().starts_with("output write error")
+            let err_fn = if msg.as_str().starts_with("output write error")
                 || msg.as_str().starts_with("policy checkpoint error")
             {
-                Err(PyOSError::new_err(msg))
+                PyOSError::new_err
             } else {
-                Err(PyRuntimeError::new_err(msg))
-            }
+                PyRuntimeError::new_err
+            };
+            Err(err_fn(msg))
         }
     }
 }

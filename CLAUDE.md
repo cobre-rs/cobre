@@ -88,7 +88,7 @@ Includes a deterministic regression suite (D01-D12) with hand-computed expected 
 - Cascade hydro coupling, evaporation linearization, inflow non-negativity penalties
 - Multi-segment deficit pricing (N deficit columns per bus per block with capacity constraints)
 - PAR(p) fitting (Levinson-Durbin, AIC order selection), stochastic load demand
-- Inflow history lag initialization from `inflow_history.parquet` with validation rules
+- PAR(p) lag initialization from `past_inflows` in `initial_conditions.json` with validation rules
 - Simulation pipeline with FlatBuffers policy checkpoint and Parquet output
 - Multi-bus transmission with line flow limits
 - MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)

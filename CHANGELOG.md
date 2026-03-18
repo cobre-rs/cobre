@@ -24,15 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Jupyter quickstart notebook** -- `examples/notebooks/quickstart.ipynb`
   demonstrates the end-to-end Python workflow: run a study, load results
   with Arrow zero-copy, and visualize convergence with matplotlib.
-- **Inflow history lag initialization** -- `build_initial_state` populates
-  PAR(p) lag slots from `scenarios/inflow_history.parquet` when available,
-  replacing zero-initialization with actual historical inflow values for
-  accurate first-stage noise realization.
-- **Inflow history validation rules** -- Three new semantic validation rules
-  (22--24) in cobre-io check that `inflow_history.parquet` provides sufficient
-  coverage when `inflow_lags: true` and PAR order > 0: history must be
-  non-empty (rule 22), per-hydro date coverage must span the lag window
-  (rule 23), and all hydro IDs in history must exist in the registry (rule 24).
+- **Past inflows for PAR lag initialization** -- New `past_inflows` field in
+  `initial_conditions.json` allows users to specify historical inflow values
+  for PAR(p) lag initialization at stage 0. Values are provided in recency
+  order (most recent first) per hydro, replacing zero-initialization with
+  actual historical data for accurate first-stage noise realization.
+- **Past inflows validation rules** -- Three new semantic validation rules
+  (22--24) in cobre-io check that `past_inflows` provides sufficient coverage
+  when `inflow_lags: true` and PAR order > 0: entries must be non-empty
+  (rule 22), per-hydro value count must meet the PAR order (rule 23), and
+  all hydro IDs in past_inflows must exist in the registry (rule 24).
 
 ### Changed
 

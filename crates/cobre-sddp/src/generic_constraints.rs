@@ -2,7 +2,7 @@
 //!
 //! This module provides [`resolve_variable_ref`], which maps a [`VariableRef`]
 //! and block index to a list of `(column_index, coefficient_multiplier)` pairs.
-//! The LP builder (ticket-004) calls this function for each [`LinearTerm`] in a
+//! The LP builder (ticket-004) calls this function for each [`cobre_core::LinearTerm`] in a
 //! generic constraint expression to produce the CSC matrix entries.
 //!
 //! ## Column index arithmetic
@@ -304,6 +304,12 @@ fn resolve_block_variable<S: BuildHasher>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::doc_markdown,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::erasing_op
+)]
 mod tests {
     use std::collections::HashMap;
 

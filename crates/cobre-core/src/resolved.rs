@@ -1349,7 +1349,7 @@ mod tests {
         );
     }
 
-    /// `bounds_for_stage()` with block_id=None returns the correct single-entry slice.
+    /// `bounds_for_stage()` with `block_id=None` returns the correct single-entry slice.
     #[test]
     fn test_generic_bounds_single_block_none() {
         let id_map: HashMap<i32, usize> = [(0, 0)].into_iter().collect();
@@ -1361,7 +1361,7 @@ mod tests {
         assert_eq!(slice[0], (None, 100.0));
     }
 
-    /// Multiple (block_id, bound) pairs for the same (constraint, stage).
+    /// Multiple (`block_id`, bound) pairs for the same (constraint, stage).
     #[test]
     fn test_generic_bounds_multiple_blocks() {
         let id_map: HashMap<i32, usize> = [(0, 0)].into_iter().collect();
@@ -1381,7 +1381,7 @@ mod tests {
         assert_eq!(slice[2], (Some(1), 70.0));
     }
 
-    /// Rows with unknown constraint_id are silently skipped.
+    /// Rows with unknown `constraint_id` are silently skipped.
     #[test]
     fn test_generic_bounds_unknown_constraint_id_skipped() {
         let id_map: HashMap<i32, usize> = [(0, 0)].into_iter().collect();
@@ -1393,7 +1393,7 @@ mod tests {
         assert!(t.bounds_for_stage(0, 0).is_empty());
     }
 
-    /// Empty raw_bounds produces a table identical to `empty()`.
+    /// Empty `raw_bounds` produces a table identical to `empty()`.
     #[test]
     fn test_generic_bounds_no_rows() {
         let id_map: HashMap<i32, usize> = [(0, 0), (1, 1)].into_iter().collect();

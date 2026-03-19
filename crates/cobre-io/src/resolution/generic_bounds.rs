@@ -143,7 +143,7 @@ mod tests {
         assert!(table.bounds_for_stage(0, 0).is_empty());
     }
 
-    /// Two constraints with no bound rows: is_active always false.
+    /// Two constraints with no bound rows: `is_active` always false.
     #[test]
     fn test_constraints_no_bounds() {
         let constraints = vec![make_constraint(0), make_constraint(1)];
@@ -175,7 +175,7 @@ mod tests {
         assert!((s1[0].1 - 200.0).abs() < f64::EPSILON);
     }
 
-    /// Block-specific bounds: multiple (block_id, bound) pairs for one (constraint, stage).
+    /// Block-specific bounds: multiple (`block_id`, bound) pairs for one (constraint, stage).
     #[test]
     fn test_block_specific_bounds() {
         let constraints = vec![make_constraint(0)];
@@ -211,7 +211,7 @@ mod tests {
         assert!((slice[0].1 - 100.0).abs() < f64::EPSILON);
     }
 
-    /// Acceptance criterion: constraint 0 at stage 0 is_active returns true.
+    /// Acceptance criterion: constraint 0 at stage 0 `is_active` returns true.
     #[test]
     fn test_ac_is_active_true() {
         let constraints = vec![make_constraint(0), make_constraint(1)];
@@ -220,7 +220,7 @@ mod tests {
         assert!(table.is_active(0, 0));
     }
 
-    /// Acceptance criterion: constraint 1 at stage 0 is_active returns false when no bounds.
+    /// Acceptance criterion: constraint 1 at stage 0 `is_active` returns false when no bounds.
     #[test]
     fn test_ac_is_active_false() {
         let constraints = vec![make_constraint(0), make_constraint(1)];
@@ -229,7 +229,7 @@ mod tests {
         assert!(!table.is_active(1, 0));
     }
 
-    /// Acceptance criterion: bounds_for_stage returns (None, 100.0) for single bound row.
+    /// Acceptance criterion: `bounds_for_stage` returns (None, 100.0) for single bound row.
     #[test]
     fn test_ac_bounds_for_stage() {
         let constraints = vec![make_constraint(0)];

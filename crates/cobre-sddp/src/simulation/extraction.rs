@@ -775,6 +775,8 @@ fn extract_generic_violations(
 
         results.push(SimulationGenericViolationResult {
             stage_id,
+            // SAFETY: block_idx is a stage block index, always < n_blocks which is << 2^32.
+            #[allow(clippy::cast_possible_truncation)]
             block_id: Some(entry.block_idx as u32),
             constraint_id: entry.entity_id,
             slack_value,
@@ -935,7 +937,7 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
 mod tests {
     use super::{
         EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,

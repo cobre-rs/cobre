@@ -2083,6 +2083,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///     .expect("empty system ok");
 /// assert!(result.templates.is_empty());
 /// ```
+#[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
@@ -2207,6 +2208,12 @@ pub fn build_stage_templates(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::doc_markdown,
+    clippy::too_many_lines,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;

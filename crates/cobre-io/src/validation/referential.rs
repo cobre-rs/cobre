@@ -590,22 +590,20 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
 
     // ── Rule 33: GenericConstraint expression entity ID existence ────────────
 
+    let entity_ids = EntityIdSets {
+        hydro: &hydro_ids,
+        thermal: &thermal_ids,
+        line: &line_ids,
+        bus: &bus_ids,
+        pumping: &pumping_ids,
+        contract: &contract_ids,
+        ncs: &ncs_ids,
+    };
     for constraint in &data.generic_constraints {
         let gc_label = format!("GenericConstraint {}", constraint.id.0);
         for (term_idx, term) in constraint.expression.terms.iter().enumerate() {
             let label = format!("{gc_label} term[{term_idx}]");
-            validate_variable_ref_entity(
-                &term.variable,
-                &label,
-                &hydro_ids,
-                &thermal_ids,
-                &line_ids,
-                &bus_ids,
-                &pumping_ids,
-                &contract_ids,
-                &ncs_ids,
-                ctx,
-            );
+            validate_variable_ref_entity(&term.variable, &label, &entity_ids, ctx);
         }
     }
 
@@ -663,6 +661,17 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
     }
 }
 
+/// Entity ID sets used by Rule 33 to check [`cobre_core::VariableRef`] existence.
+struct EntityIdSets<'a> {
+    hydro: &'a HashSet<i32>,
+    thermal: &'a HashSet<i32>,
+    line: &'a HashSet<i32>,
+    bus: &'a HashSet<i32>,
+    pumping: &'a HashSet<i32>,
+    contract: &'a HashSet<i32>,
+    ncs: &'a HashSet<i32>,
+}
+
 /// Helper for Rule 33: validate that a [`VariableRef`] references an existing entity.
 ///
 /// Emits an error if the entity ID does not exist in the corresponding registry.
@@ -671,37 +680,22 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
 fn validate_variable_ref_entity(
     var: &cobre_core::VariableRef,
     label: &str,
-    hydro_ids: &HashSet<i32>,
-    thermal_ids: &HashSet<i32>,
-    line_ids: &HashSet<i32>,
-    bus_ids: &HashSet<i32>,
-    pumping_ids: &HashSet<i32>,
-    contract_ids: &HashSet<i32>,
-    ncs_ids: &HashSet<i32>,
+    ids: &EntityIdSets<'_>,
     ctx: &mut ValidationContext,
 ) {
     use cobre_core::VariableRef;
 
     let file = "system/generic_constraints.json";
     match var {
-        VariableRef::HydroStorage { hydro_id }
-        | VariableRef::HydroEvaporation { hydro_id }
-        | VariableRef::HydroWithdrawal { hydro_id } => {
-            if !hydro_ids.contains(&hydro_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
-                    file,
-                    Some(label.to_string()),
-                    format!("{label} references non-existent Hydro {}", hydro_id.0),
-                );
-            }
-        }
-        VariableRef::HydroTurbined { hydro_id, .. }
+        VariableRef::HydroStorage { hydro_id, .. }
+        | VariableRef::HydroEvaporation { hydro_id, .. }
+        | VariableRef::HydroWithdrawal { hydro_id, .. }
+        | VariableRef::HydroTurbined { hydro_id, .. }
         | VariableRef::HydroSpillage { hydro_id, .. }
         | VariableRef::HydroDiversion { hydro_id, .. }
         | VariableRef::HydroOutflow { hydro_id, .. }
         | VariableRef::HydroGeneration { hydro_id, .. } => {
-            if !hydro_ids.contains(&hydro_id.0) {
+            if !ids.hydro.contains(&hydro_id.0) {
                 ctx.add_error(
                     ErrorKind::InvalidReference,
                     file,
@@ -711,7 +705,7 @@ fn validate_variable_ref_entity(
             }
         }
         VariableRef::ThermalGeneration { thermal_id, .. } => {
-            if !thermal_ids.contains(&thermal_id.0) {
+            if !ids.thermal.contains(&thermal_id.0) {
                 ctx.add_error(
                     ErrorKind::InvalidReference,
                     file,
@@ -721,7 +715,7 @@ fn validate_variable_ref_entity(
             }
         }
         VariableRef::LineDirect { line_id, .. } | VariableRef::LineReverse { line_id, .. } => {
-            if !line_ids.contains(&line_id.0) {
+            if !ids.line.contains(&line_id.0) {
                 ctx.add_error(
                     ErrorKind::InvalidReference,
                     file,
@@ -731,7 +725,7 @@ fn validate_variable_ref_entity(
             }
         }
         VariableRef::BusDeficit { bus_id, .. } | VariableRef::BusExcess { bus_id, .. } => {
-            if !bus_ids.contains(&bus_id.0) {
+            if !ids.bus.contains(&bus_id.0) {
                 ctx.add_error(
                     ErrorKind::InvalidReference,
                     file,
@@ -742,7 +736,7 @@ fn validate_variable_ref_entity(
         }
         VariableRef::PumpingFlow { station_id, .. }
         | VariableRef::PumpingPower { station_id, .. } => {
-            if !pumping_ids.contains(&station_id.0) {
+            if !ids.pumping.contains(&station_id.0) {
                 ctx.add_warning(
                     ErrorKind::UnusedEntity,
                     file,
@@ -756,7 +750,7 @@ fn validate_variable_ref_entity(
         }
         VariableRef::ContractImport { contract_id, .. }
         | VariableRef::ContractExport { contract_id, .. } => {
-            if !contract_ids.contains(&contract_id.0) {
+            if !ids.contract.contains(&contract_id.0) {
                 ctx.add_warning(
                     ErrorKind::UnusedEntity,
                     file,
@@ -770,7 +764,7 @@ fn validate_variable_ref_entity(
         }
         VariableRef::NonControllableGeneration { source_id, .. }
         | VariableRef::NonControllableCurtailment { source_id, .. } => {
-            if !ncs_ids.contains(&source_id.0) {
+            if !ids.ncs.contains(&source_id.0) {
                 ctx.add_warning(
                     ErrorKind::UnusedEntity,
                     file,

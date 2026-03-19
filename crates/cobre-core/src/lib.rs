@@ -70,8 +70,8 @@ pub use penalty::{
 };
 pub use resolved::{
     BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,
-    LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds, ResolvedPenalties,
-    ThermalStageBounds,
+    LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+    ResolvedGenericConstraintBounds, ResolvedPenalties, ThermalStageBounds,
 };
 pub use scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,

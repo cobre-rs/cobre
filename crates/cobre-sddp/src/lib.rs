@@ -46,6 +46,7 @@ pub mod error;
 pub mod estimation;
 pub mod forward;
 pub(crate) mod fpha_fitting;
+pub mod generic_constraints;
 pub mod horizon_mode;
 pub mod hydro_models;
 pub mod indexer;
@@ -87,7 +88,10 @@ pub use hydro_models::{
 pub use indexer::{EvaporationIndices, FphaRowRange, StageIndexer};
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
-pub use lp_builder::{PatchBuffer, StageTemplates, ar_dynamics_row_offset, build_stage_templates};
+pub use lp_builder::{
+    GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
+    build_stage_templates,
+};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use setup::{
     DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,

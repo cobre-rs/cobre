@@ -62,7 +62,8 @@ use crate::LoadError;
 ///
 /// Private — only used during deserialization. Not re-exported.
 #[derive(Deserialize)]
-struct RawGenericConstraintsFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawGenericConstraintsFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -73,6 +74,7 @@ struct RawGenericConstraintsFile {
 
 /// Intermediate type for a single constraint entry.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct RawConstraint {
     /// Constraint identifier. Must be unique within the file.
     id: i32,
@@ -95,6 +97,7 @@ struct RawConstraint {
 
 /// Intermediate type for the slack configuration.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct RawSlackConfig {
     /// Whether a slack variable is allowed.
     enabled: bool,

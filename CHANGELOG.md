@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-03-19
+
+### Added
+
+- **Generic constraints** -- User-defined linear constraints over LP variables,
+  specified via `constraints/generic_constraints.json` with stage-varying bounds
+  from `constraints/generic_constraint_bounds.parquet`. Supports all 19 variable
+  types (thermal generation, hydro storage, hydro outflow, line flows, etc.),
+  optional slack variables with per-constraint penalties, and three constraint
+  senses (`<=`, `>=`, `==`). Includes dual and slack extraction during training
+  and simulation, violation cost accounting, and Hive-partitioned Parquet output
+  for generic constraint violations.
+- **Water withdrawal** -- Hydro plants can now model water withdrawal schedules
+  (e.g., irrigation, municipal supply) with configurable bounds and violation
+  penalties. Withdrawal constraints are integrated into the LP water balance,
+  with slack variables and violation cost tracking in simulation output.
+- **Generic constraint validation rules** -- Three new referential validation
+  rules (33--35) in cobre-io: entity ID existence in constraint expressions,
+  block ID validity for referenced stages, and duplicate bounds key detection.
+- **Deterministic test D13** -- New regression test case exercising generic
+  constraints with a thermal plant capped by a user-defined constraint,
+  verifying the hand-computed expected cost.
+- **JSON schemas for generic constraints, exchange factors, and load factors** --
+  Added `generic_constraints.schema.json`, `exchange_factors.schema.json`, and
+  `load_factors.schema.json` to the schema reference. The schema generator now
+  produces 13 schemas (up from 10).
+
+### Changed
+
+- **Schema reference expanded** -- The JSON Schemas reference page now lists all
+  16 available schemas, including `production_models`, `initial_conditions`,
+  `correlation`, and the three newly generated schemas.
+
 ## [0.1.5] - 2026-03-18
 
 ### Added
@@ -249,7 +282,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 
-[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/cobre-rs/cobre/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/cobre-rs/cobre/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/cobre-rs/cobre/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/cobre-rs/cobre/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/cobre-rs/cobre/compare/v0.1.1...v0.1.2

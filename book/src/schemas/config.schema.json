@@ -101,6 +101,31 @@
       },
       "type": "object"
     },
+    "EstimationConfig": {
+      "description": "Time series estimation settings (`config.json → estimation`).\n\nControls automatic parameter estimation when historical inflow data is\nprovided without explicit model statistics or coefficients.",
+      "properties": {
+        "max_order": {
+          "default": 6,
+          "description": "Maximum lag order considered during autoregressive model fitting.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_observations_per_season": {
+          "default": 30,
+          "description": "Minimum number of observations required per (entity, season) group\nto proceed with estimation. Groups below this threshold are skipped.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "order_selection": {
+          "$ref": "#/$defs/OrderSelectionMethod",
+          "default": "aic",
+          "description": "Order selection criterion: fixed maximum or information-criterion-based."
+        }
+      },
+      "type": "object"
+    },
     "ExportsConfig": {
       "description": "Export flags controlling which outputs are written to disk\n(`config.json → exports`).\n\nThe struct uses multiple `bool` fields because each flag maps directly to a\nJSON field name in the `exports` section of `config.json`. A state machine\nwould not improve clarity for a flat set of independent output toggles.",
       "properties": {
@@ -137,6 +162,11 @@
           "description": "Export visited states.",
           "type": "boolean"
         },
+        "stochastic": {
+          "default": false,
+          "description": "Export stochastic preprocessing artifacts to `output/stochastic/`.",
+          "type": "boolean"
+        },
         "training": {
           "default": true,
           "description": "Export training summary metrics.",
@@ -168,7 +198,7 @@
       "properties": {
         "method": {
           "default": "penalty",
-          "description": "Method: `\"none\"` or `\"penalty\"`.",
+          "description": "Method: `\"none\"`, `\"penalty\"`, or `\"truncation\"`.",
           "type": "string"
         },
         "penalty_cost": {
@@ -225,6 +255,21 @@
         }
       },
       "type": "object"
+    },
+    "OrderSelectionMethod": {
+      "description": "Order selection criterion for autoregressive model fitting.\n\nControls how the lag order is chosen when fitting a time series model.",
+      "oneOf": [
+        {
+          "const": "fixed",
+          "description": "Use a fixed maximum lag order specified by `max_order`.",
+          "type": "string"
+        },
+        {
+          "const": "aic",
+          "description": "Select the lag order minimising the Akaike Information Criterion.",
+          "type": "string"
+        }
+      ]
     },
     "PolicyConfig": {
       "description": "Policy directory settings (`config.json → policy`).",
@@ -594,6 +639,15 @@
         "null"
       ]
     },
+    "estimation": {
+      "$ref": "#/$defs/EstimationConfig",
+      "default": {
+        "max_order": 6,
+        "min_observations_per_season": 30,
+        "order_selection": "aic"
+      },
+      "description": "Time series estimation settings for automatic model parameter fitting."
+    },
     "exports": {
       "$ref": "#/$defs/ExportsConfig",
       "default": {
@@ -603,6 +657,7 @@
         "forward_detail": false,
         "simulation": true,
         "states": true,
+        "stochastic": false,
         "training": true,
         "vertices": true
       },
@@ -666,13 +721,6 @@
         }
       },
       "description": "Upper-bound evaluation via inner approximation."
-    },
-    "version": {
-      "description": "Config format version (e.g. `\"2.0.0\"`).",
-      "type": [
-        "string",
-        "null"
-      ]
     }
   },
   "required": [

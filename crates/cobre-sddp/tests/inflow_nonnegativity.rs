@@ -617,6 +617,7 @@ fn simulate_fixture(
             zeta_per_stage: &fx.stage_templates.zeta_per_stage,
             block_hours_per_stage: &fx.stage_templates.block_hours_per_stage,
             entity_counts: &fx.entity_counts,
+            generic_constraint_row_entries: &[],
             event_sender: None,
         },
         &comm,

@@ -21,7 +21,9 @@
 
 use crate::{
     config::Config,
+    constraints::{exchange_factors::RawExchangeFactorsFile, generic::RawGenericConstraintsFile},
     penalties::RawPenalties,
+    scenarios::load_factors::RawLoadFactorsFile,
     stages::RawStagesFile,
     system::{
         buses::RawBusFile, energy_contracts::RawContractFile, hydros::RawHydroFile,
@@ -38,18 +40,21 @@ use crate::{
 ///
 /// The returned `Vec` contains one entry per top-level input file:
 ///
-/// | Filename                              | Describes                         |
-/// | ------------------------------------- | ---------------------------------- |
-/// | `config.schema.json`                  | `config.json`                      |
-/// | `buses.schema.json`                   | `system/buses.json`                |
-/// | `hydros.schema.json`                  | `system/hydros.json`               |
-/// | `thermals.schema.json`                | `system/thermals.json`             |
-/// | `lines.schema.json`                   | `system/lines.json`                |
-/// | `energy_contracts.schema.json`        | `system/energy_contracts.json`     |
+/// | Filename                              | Describes                              |
+/// | ------------------------------------- | -------------------------------------- |
+/// | `config.schema.json`                  | `config.json`                          |
+/// | `buses.schema.json`                   | `system/buses.json`                    |
+/// | `hydros.schema.json`                  | `system/hydros.json`                   |
+/// | `thermals.schema.json`                | `system/thermals.json`                 |
+/// | `lines.schema.json`                   | `system/lines.json`                    |
+/// | `energy_contracts.schema.json`        | `system/energy_contracts.json`         |
 /// | `non_controllable_sources.schema.json`| `system/non_controllable_sources.json` |
-/// | `pumping_stations.schema.json`        | `system/pumping_stations.json`     |
-/// | `stages.schema.json`                  | `stages.json`                      |
-/// | `penalties.schema.json`               | `penalties.json`                   |
+/// | `pumping_stations.schema.json`        | `system/pumping_stations.json`         |
+/// | `stages.schema.json`                  | `stages.json`                          |
+/// | `penalties.schema.json`               | `penalties.json`                       |
+/// | `generic_constraints.schema.json`     | `constraints/generic_constraints.json` |
+/// | `exchange_factors.schema.json`        | `constraints/exchange_factors.json`    |
+/// | `load_factors.schema.json`            | `scenarios/load_factors.json`          |
 ///
 /// # Errors
 ///
@@ -64,7 +69,7 @@ use crate::{
 /// use cobre_io::schema::generate_schemas;
 ///
 /// let schemas = generate_schemas().expect("schema generation must not fail");
-/// assert!(schemas.len() >= 10);
+/// assert!(schemas.len() >= 13);
 /// let config_schema = schemas.iter().find(|(name, _)| name == "config.schema.json");
 /// assert!(config_schema.is_some());
 /// ```
@@ -92,6 +97,18 @@ pub fn generate_schemas() -> Result<Vec<(String, serde_json::Value)>, serde_json
         ),
         ("stages.schema.json", schemars::schema_for!(RawStagesFile)),
         ("penalties.schema.json", schemars::schema_for!(RawPenalties)),
+        (
+            "generic_constraints.schema.json",
+            schemars::schema_for!(RawGenericConstraintsFile),
+        ),
+        (
+            "exchange_factors.schema.json",
+            schemars::schema_for!(RawExchangeFactorsFile),
+        ),
+        (
+            "load_factors.schema.json",
+            schemars::schema_for!(RawLoadFactorsFile),
+        ),
     ];
 
     pairs
@@ -110,13 +127,13 @@ pub fn generate_schemas() -> Result<Vec<(String, serde_json::Value)>, serde_json
 mod tests {
     use super::*;
 
-    /// `generate_schemas()` returns at least 10 entries (one per input file).
+    /// `generate_schemas()` returns at least 13 entries (one per input file).
     #[test]
     fn test_generate_schemas_returns_expected_count() {
         let schemas = generate_schemas().unwrap();
         assert!(
-            schemas.len() >= 10,
-            "expected at least 10 schema entries, got {}",
+            schemas.len() >= 13,
+            "expected at least 13 schema entries, got {}",
             schemas.len()
         );
     }
@@ -213,7 +230,7 @@ mod tests {
         );
     }
 
-    /// All 10 expected schema filenames are present in the output.
+    /// All 13 expected schema filenames are present in the output.
     #[test]
     fn test_all_expected_schema_filenames_present() {
         let schemas = generate_schemas().unwrap();
@@ -230,6 +247,9 @@ mod tests {
             "pumping_stations.schema.json",
             "stages.schema.json",
             "penalties.schema.json",
+            "generic_constraints.schema.json",
+            "exchange_factors.schema.json",
+            "load_factors.schema.json",
         ];
 
         for name in &expected {

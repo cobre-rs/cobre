@@ -26,6 +26,13 @@ book/output/
 # Implementation plans (local development only)
 plans/
 
+# Claude Code artifacts (local development only)
+.claude/
+assessment*.md
+
+# Stale vendor directory (real HiGHS submodule is at crates/cobre-solver/vendor/)
+vendor/
+
 # Python virtual environments (test infrastructure)
 .venv-mpi-smoke/
 

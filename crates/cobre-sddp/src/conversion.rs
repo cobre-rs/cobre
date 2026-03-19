@@ -70,6 +70,7 @@ impl From<SimulationHydroResult> for HydroWriteRecord {
             filling_target_violation_hm3: s.filling_target_violation_hm3,
             evaporation_violation_m3s: s.evaporation_violation_m3s,
             inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
+            water_withdrawal_violation_m3s: s.water_withdrawal_violation_m3s,
         }
     }
 }
@@ -270,6 +271,7 @@ mod tests {
             filling_target_violation_hm3: 0.0,
             evaporation_violation_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
+            water_withdrawal_violation_m3s: 0.0,
         }
     }
 

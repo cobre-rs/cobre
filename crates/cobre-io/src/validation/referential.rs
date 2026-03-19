@@ -587,6 +587,196 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+
+    // ── Rule 33: GenericConstraint expression entity ID existence ────────────
+
+    let entity_ids = EntityIdSets {
+        hydro: &hydro_ids,
+        thermal: &thermal_ids,
+        line: &line_ids,
+        bus: &bus_ids,
+        pumping: &pumping_ids,
+        contract: &contract_ids,
+        ncs: &ncs_ids,
+    };
+    for constraint in &data.generic_constraints {
+        let gc_label = format!("GenericConstraint {}", constraint.id.0);
+        for (term_idx, term) in constraint.expression.terms.iter().enumerate() {
+            let label = format!("{gc_label} term[{term_idx}]");
+            validate_variable_ref_entity(&term.variable, &label, &entity_ids, ctx);
+        }
+    }
+
+    // ── Rule 34: GenericConstraintBoundsRow block_id validity ────────────────
+
+    // Build a map from stage_id to block count for study stages.
+    let stage_block_counts: std::collections::HashMap<i32, usize> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| (s.id, s.blocks.len()))
+        .collect();
+
+    for (i, row) in data.generic_constraint_bounds.iter().enumerate() {
+        if let Some(blk) = row.block_id {
+            if let Some(&n_blocks) = stage_block_counts.get(&row.stage_id) {
+                #[allow(clippy::cast_sign_loss)]
+                let blk_usize = blk as usize;
+                if blk < 0 || blk_usize >= n_blocks {
+                    ctx.add_error(
+                        ErrorKind::InvalidValue,
+                        "constraints/generic_constraint_bounds.parquet",
+                        Some(format!("GenericConstraintBoundsRow[{i}]")),
+                        format!(
+                            "GenericConstraintBoundsRow[{i}] has block_id={blk} but Stage {} has only {n_blocks} block(s) (valid range: 0..{n_blocks})",
+                            row.stage_id
+                        ),
+                    );
+                }
+            }
+            // If stage_id is invalid, Rule 26 already catches the constraint_id
+            // and the stage reference is implicitly invalid; skip block validation.
+        }
+    }
+
+    // ── Rule 35: Duplicate (constraint_id, stage_id, block_id) key detection ─
+
+    {
+        let mut seen_keys: HashSet<(i32, i32, Option<i32>)> = HashSet::new();
+        for (i, row) in data.generic_constraint_bounds.iter().enumerate() {
+            let key = (row.constraint_id, row.stage_id, row.block_id);
+            if !seen_keys.insert(key) {
+                ctx.add_error(
+                    ErrorKind::DuplicateId,
+                    "constraints/generic_constraint_bounds.parquet",
+                    Some(format!("GenericConstraintBoundsRow[{i}]")),
+                    format!(
+                        "Duplicate key (constraint_id={}, stage_id={}, block_id={:?}) in generic constraint bounds",
+                        row.constraint_id, row.stage_id, row.block_id
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Entity ID sets used by Rule 33 to check [`cobre_core::VariableRef`] existence.
+struct EntityIdSets<'a> {
+    hydro: &'a HashSet<i32>,
+    thermal: &'a HashSet<i32>,
+    line: &'a HashSet<i32>,
+    bus: &'a HashSet<i32>,
+    pumping: &'a HashSet<i32>,
+    contract: &'a HashSet<i32>,
+    ncs: &'a HashSet<i32>,
+}
+
+/// Helper for Rule 33: validate that a [`VariableRef`] references an existing entity.
+///
+/// Emits an error if the entity ID does not exist in the corresponding registry.
+/// Emits a warning for stub entity types (pumping, contracts, non-controllable)
+/// that have no LP effect.
+fn validate_variable_ref_entity(
+    var: &cobre_core::VariableRef,
+    label: &str,
+    ids: &EntityIdSets<'_>,
+    ctx: &mut ValidationContext,
+) {
+    use cobre_core::VariableRef;
+
+    let file = "system/generic_constraints.json";
+    match var {
+        VariableRef::HydroStorage { hydro_id, .. }
+        | VariableRef::HydroEvaporation { hydro_id, .. }
+        | VariableRef::HydroWithdrawal { hydro_id, .. }
+        | VariableRef::HydroTurbined { hydro_id, .. }
+        | VariableRef::HydroSpillage { hydro_id, .. }
+        | VariableRef::HydroDiversion { hydro_id, .. }
+        | VariableRef::HydroOutflow { hydro_id, .. }
+        | VariableRef::HydroGeneration { hydro_id, .. } => {
+            if !ids.hydro.contains(&hydro_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    file,
+                    Some(label.to_string()),
+                    format!("{label} references non-existent Hydro {}", hydro_id.0),
+                );
+            }
+        }
+        VariableRef::ThermalGeneration { thermal_id, .. } => {
+            if !ids.thermal.contains(&thermal_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    file,
+                    Some(label.to_string()),
+                    format!("{label} references non-existent Thermal {}", thermal_id.0),
+                );
+            }
+        }
+        VariableRef::LineDirect { line_id, .. } | VariableRef::LineReverse { line_id, .. } => {
+            if !ids.line.contains(&line_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    file,
+                    Some(label.to_string()),
+                    format!("{label} references non-existent Line {}", line_id.0),
+                );
+            }
+        }
+        VariableRef::BusDeficit { bus_id, .. } | VariableRef::BusExcess { bus_id, .. } => {
+            if !ids.bus.contains(&bus_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    file,
+                    Some(label.to_string()),
+                    format!("{label} references non-existent Bus {}", bus_id.0),
+                );
+            }
+        }
+        VariableRef::PumpingFlow { station_id, .. }
+        | VariableRef::PumpingPower { station_id, .. } => {
+            if !ids.pumping.contains(&station_id.0) {
+                ctx.add_warning(
+                    ErrorKind::UnusedEntity,
+                    file,
+                    Some(label.to_string()),
+                    format!(
+                        "{label} references PumpingStation {} which is a stub entity with no LP effect",
+                        station_id.0
+                    ),
+                );
+            }
+        }
+        VariableRef::ContractImport { contract_id, .. }
+        | VariableRef::ContractExport { contract_id, .. } => {
+            if !ids.contract.contains(&contract_id.0) {
+                ctx.add_warning(
+                    ErrorKind::UnusedEntity,
+                    file,
+                    Some(label.to_string()),
+                    format!(
+                        "{label} references Contract {} which is a stub entity with no LP effect",
+                        contract_id.0
+                    ),
+                );
+            }
+        }
+        VariableRef::NonControllableGeneration { source_id, .. }
+        | VariableRef::NonControllableCurtailment { source_id, .. } => {
+            if !ids.ncs.contains(&source_id.0) {
+                ctx.add_warning(
+                    ErrorKind::UnusedEntity,
+                    file,
+                    Some(label.to_string()),
+                    format!(
+                        "{label} references NonControllableSource {} which is a stub entity with no LP effect",
+                        source_id.0
+                    ),
+                );
+            }
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

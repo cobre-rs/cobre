@@ -687,6 +687,105 @@ fn d10_inflow_nonnegativity() {
     );
 }
 
+/// Expected total cost for D11 (single hydro with water withdrawal, 2 stages).
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 100 MW at $100/MWh), 1 hydro (H0: constant
+///   productivity 1.0 MW/(m3/s), max 50 m3/s / 50 MW, storage 0–200 hm3)
+/// - Deterministic inflows: 30.0 m3/s per stage
+/// - Water withdrawal: 10 m3/s per stage (via `constraints/hydro_bounds.parquet`)
+/// - Deterministic load: 80.0 MW per stage
+/// - Initial storage: 100.0 hm3
+/// - 2 stages × 730 h, `inflow_non_negativity: {method: "none"}`
+///
+/// ## How withdrawal enters the water balance
+///
+/// The LP water balance for each stage is:
+///   V_out = V_in + κ × (inflow − withdrawal − turbine − spill)
+///         = V_in + κ × (30 − 10 − turbine − spill)
+///         = V_in + κ × (20 − turbine − spill)
+///
+/// This is equivalent to a case with 20 m3/s net inflow and no withdrawal.
+///
+/// ## Expected cost derivation (κ = 730 × 3600 / 10⁶ = 657/250 hm³/(m³/s))
+///
+/// Let q0 = turbined flow in stage 0.
+///
+/// Stage 1 water balance: V_out1 = V_in1 + κ × (20 − q1) ≥ 0
+///   → q1 ≤ V_in1/κ + 20
+///
+/// Stage 0 storage: V_out0 = 100 + κ × (20 − q0)
+///
+/// ### Case A: q0 ≤ 18430/657 (so V_out0 ≥ 30κ, stage 1 can run at full capacity)
+///
+/// When V_out0 ≥ 30κ, q1 = 50 and gen_th1 = 30 MW.
+/// Total thermal = (80 − q0) + 30 = 110 − q0, which decreases with q0.
+/// Optimal at q0 = 18430/657 ≈ 28.054 m3/s (boundary).
+///
+/// ### Case B: q0 > 18430/657 (V_out0 < 30κ, stage 1 is storage-limited)
+///
+/// q1 = V_out0/κ + 20 = (100 + κ×(20−q0))/κ + 20 = 100/κ + 40 − q0
+/// gen_th1 = 80 − q1 = 40 − 100/κ + q0
+///
+/// Total thermal = (80 − q0) + (40 − 100/κ + q0) = 120 − 100/κ
+///   = 120 − 25000/657 = 53840/657 MW (constant — independent of q0)
+///
+/// The objective is constant in Case B, so SDDP converges to:
+///   Total cost = (53840/657) × 100 × 730
+///              = 53840 × 73000 / 657
+///              = **3,930,320,000 / 657 ≈ 5,982,222.22 $**
+///
+/// D11 cost > D02 cost (≈ 2,626,111.11 $) because the withdrawal reduces net
+/// inflow from 30 to 20 m3/s, leaving less water for generation across both
+/// stages and requiring significantly more thermal dispatch.
+pub const D11_WATER_WITHDRAWAL_EXPECTED_COST: f64 = 3_930_320_000.0 / 657.0;
+
+/// Two-stage hydrothermal dispatch with water withdrawal applied via hydro bounds.
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 100 MW at $100/MWh), 1 hydro (H0: constant
+///   productivity 1.0 MW/(m3/s), max 50 m3/s / 50 MW, storage 0–200 hm3)
+/// - Deterministic inflows: 30.0 m3/s per stage
+/// - Water withdrawal: 10 m3/s per stage (from `constraints/hydro_bounds.parquet`)
+/// - Deterministic load: 80.0 MW per stage
+/// - Initial storage: 100.0 hm3
+/// - 2 stages × 730 h
+///
+/// ## Expected cost
+///
+/// See [`D11_WATER_WITHDRAWAL_EXPECTED_COST`] for the full derivation. The 10 m3/s
+/// withdrawal reduces effective net inflow from 30 to 20 m3/s, increasing thermal
+/// dispatch and pushing total cost to 3,930,320,000 / 657 ≈ 5,982,222.22 $.
+#[test]
+fn d11_water_withdrawal() {
+    let case_dir = Path::new("../../examples/deterministic/d11-water-withdrawal");
+    let result = run_deterministic(case_dir);
+    assert_cost(
+        result.final_lb,
+        D11_WATER_WITHDRAWAL_EXPECTED_COST,
+        1e-4,
+        "D11",
+    );
+    assert!(
+        result.iterations <= 10,
+        "D11: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D11: gap={:.2e}",
+        result.final_gap
+    );
+    assert!(
+        result.final_lb > D02_EXPECTED_COST,
+        "D11: cost {:.6} must exceed D02 cost {:.6} (withdrawal increases thermal dispatch)",
+        result.final_lb,
+        D02_EXPECTED_COST
+    );
+}
+
 /// Warm-start verification for the D02 system.
 ///
 /// Validates that basis transfer via `solve_with_basis` works end-to-end: after
@@ -917,4 +1016,78 @@ fn d12_checkpoint_round_trip() {
     );
 
     assert_cost(summary.mean_cost, D02_EXPECTED_COST, 1e-2, "D12-sim");
+}
+
+/// Generic constraint capping thermal dispatch, forcing deficit.
+///
+/// ## Case setup
+///
+/// - 1 bus, 1 thermal T0: capacity 30 MW at $50/MWh, deterministic load 20 MW,
+///   2 stages each with 730 hours, no hydro.
+/// - 1 generic constraint: `thermal_generation(0) <= 10 MW`
+///   with slack penalty $5000/MWh (slack is more expensive than deficit at $1000/MWh).
+/// - Deficit cost: $1000/MWh (from buses.json).
+///
+/// ## Expected cost derivation
+///
+/// The optimizer will dispatch T0 = 10 MW (at the constraint cap) and leave
+/// 10 MW of deficit, since deficit ($1000/MWh) is cheaper than violating
+/// the generic constraint ($5000/MWh).
+///
+/// Cost per stage:
+///   thermal: 10 MW × $50/MWh × 730 h = $365,000
+///   deficit: 10 MW × $1000/MWh × 730 h = $7,300,000
+///   total:   $7,665,000
+///
+/// Total (2 stages) = 2 × $7,665,000 = **$15,330,000**
+#[test]
+fn d13_generic_constraint() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d13-generic-constraint");
+
+    // Create the generic_constraint_bounds.parquet before running the case.
+    let constraints_dir = case_dir.join("constraints");
+    std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("constraint_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("block_id", DataType::Int32, true),
+        Field::new("bound", DataType::Float64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])), // constraint_id
+            Arc::new(Int32Array::from(vec![0, 1])), // stage_id
+            Arc::new(Int32Array::new_null(2)),      // block_id = null (all blocks)
+            Arc::new(Float64Array::from(vec![10.0, 10.0])), // bound = 10 MW
+        ],
+    )
+    .expect("RecordBatch");
+
+    let bounds_path = constraints_dir.join("generic_constraint_bounds.parquet");
+    let file = std::fs::File::create(&bounds_path).expect("create parquet file");
+    let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+    writer.write(&batch).expect("write batch");
+    writer.close().expect("close writer");
+
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, 15_330_000.0, 1e-2, "D13");
+    assert!(
+        result.iterations <= 10,
+        "D13: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-4,
+        "D13: gap={:.2e}",
+        result.final_gap
+    );
 }

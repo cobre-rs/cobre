@@ -22,6 +22,12 @@ documentation, and inline error highlighting while authoring case inputs.
 | [energy_contracts.schema.json](../schemas/energy_contracts.schema.json)                 | `system/energy_contracts.json`         | Bilateral energy contract registry (optional entities)                                                                 |
 | [non_controllable_sources.schema.json](../schemas/non_controllable_sources.schema.json) | `system/non_controllable_sources.json` | Intermittent (non-dispatchable) generation source registry (optional entities)                                         |
 | [pumping_stations.schema.json](../schemas/pumping_stations.schema.json)                 | `system/pumping_stations.json`         | Pumping station registry (optional entities)                                                                           |
+| [production_models.schema.json](../schemas/production_models.schema.json)               | `system/production_models.json`        | FPHA hyperplane configuration and computed-from-geometry settings (optional)                                           |
+| [initial_conditions.schema.json](../schemas/initial_conditions.schema.json)             | `initial_conditions.json`              | Initial reservoir storage, past inflows for PAR lag initialization                                                     |
+| [correlation.schema.json](../schemas/correlation.schema.json)                           | `scenarios/correlation.json`           | Inter-site inflow correlation matrix for scenario generation                                                           |
+| [generic_constraints.schema.json](../schemas/generic_constraints.schema.json)           | `constraints/generic_constraints.json` | User-defined linear constraints over LP variables with optional slack penalties                                        |
+| [exchange_factors.schema.json](../schemas/exchange_factors.schema.json)                 | `constraints/exchange_factors.json`    | Block-level line capacity multipliers for directional exchange limits                                                  |
+| [load_factors.schema.json](../schemas/load_factors.schema.json)                         | `scenarios/load_factors.json`          | Block-level load scaling factors for bus-stage demand profiles                                                         |
 
 ## Using schemas in your editor
 

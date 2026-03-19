@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
     InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
-    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedPenalties, ScenarioSource, Stage, Thermal,
-    ValidationError,
+    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
+    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
 };
 
 /// Top-level system representation.
@@ -99,6 +99,8 @@ pub struct System {
     penalties: ResolvedPenalties,
     /// Pre-resolved bound values for all entities across all stages.
     bounds: ResolvedBounds,
+    /// Pre-resolved RHS bound table for user-defined generic linear constraints.
+    resolved_generic_bounds: ResolvedGenericConstraintBounds,
 
     // Scenario pipeline data (raw parameters loaded by cobre-io)
     /// PAR(p) inflow model parameters, one entry per (hydro, stage) pair.
@@ -308,6 +310,12 @@ impl System {
         &self.bounds
     }
 
+    /// Returns a reference to the pre-resolved generic constraint RHS bound table.
+    #[must_use]
+    pub fn resolved_generic_bounds(&self) -> &ResolvedGenericConstraintBounds {
+        &self.resolved_generic_bounds
+    }
+
     /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).
     #[must_use]
     pub fn inflow_models(&self) -> &[InflowModel] {
@@ -461,6 +469,7 @@ pub struct SystemBuilder {
     policy_graph: PolicyGraph,
     penalties: ResolvedPenalties,
     bounds: ResolvedBounds,
+    resolved_generic_bounds: ResolvedGenericConstraintBounds,
     inflow_models: Vec<InflowModel>,
     load_models: Vec<LoadModel>,
     correlation: CorrelationModel,
@@ -494,6 +503,7 @@ impl SystemBuilder {
             policy_graph: PolicyGraph::default(),
             penalties: ResolvedPenalties::empty(),
             bounds: ResolvedBounds::empty(),
+            resolved_generic_bounds: ResolvedGenericConstraintBounds::empty(),
             inflow_models: Vec::new(),
             load_models: Vec::new(),
             correlation: CorrelationModel::default(),
@@ -586,6 +596,19 @@ impl SystemBuilder {
         self
     }
 
+    /// Set the pre-resolved generic constraint RHS bound table.
+    ///
+    /// Populated by `cobre-io` after converting raw parsed bound rows into
+    /// the indexed lookup structure.
+    #[must_use]
+    pub fn resolved_generic_bounds(
+        mut self,
+        resolved_generic_bounds: ResolvedGenericConstraintBounds,
+    ) -> Self {
+        self.resolved_generic_bounds = resolved_generic_bounds;
+        self
+    }
+
     /// Set the PAR(p) inflow model collection.
     #[must_use]
     pub fn inflow_models(mut self, inflow_models: Vec<InflowModel>) -> Self {
@@ -654,6 +677,7 @@ impl SystemBuilder {
     ///   `entry_stage_id`).
     ///
     /// All errors across all collections are reported together.
+    #[allow(clippy::too_many_lines)]
     pub fn build(mut self) -> Result<System, Vec<ValidationError>> {
         self.buses.sort_by_key(|e| e.id.0);
         self.lines.sort_by_key(|e| e.id.0);
@@ -760,6 +784,7 @@ impl SystemBuilder {
             stage_index,
             penalties: self.penalties,
             bounds: self.bounds,
+            resolved_generic_bounds: self.resolved_generic_bounds,
             inflow_models: self.inflow_models,
             load_models: self.load_models,
             correlation: self.correlation,
@@ -1956,6 +1981,36 @@ mod tests {
         assert!(system.load_models().is_empty());
         assert_eq!(system.penalties().n_stages(), 0);
         assert_eq!(system.bounds().n_stages(), 0);
+        // Generic constraint bounds default to empty.
+        assert!(!system.resolved_generic_bounds().is_active(0, 0));
+        assert!(
+            system
+                .resolved_generic_bounds()
+                .bounds_for_stage(0, 0)
+                .is_empty()
+        );
+    }
+
+    /// Verify `System::resolved_generic_bounds()` accessor with a non-empty table.
+    #[test]
+    fn test_system_resolved_generic_bounds_accessor() {
+        use crate::resolved::ResolvedGenericConstraintBounds;
+        use std::collections::HashMap as StdHashMap;
+
+        let id_map: StdHashMap<i32, usize> = [(0, 0), (1, 1)].into_iter().collect();
+        let rows = vec![(0i32, 0i32, None::<i32>, 100.0f64)];
+        let table = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let system = SystemBuilder::new()
+            .resolved_generic_bounds(table)
+            .build()
+            .expect("valid system");
+
+        assert!(system.resolved_generic_bounds().is_active(0, 0));
+        assert!(!system.resolved_generic_bounds().is_active(1, 0));
+        let slice = system.resolved_generic_bounds().bounds_for_stage(0, 0);
+        assert_eq!(slice.len(), 1);
+        assert_eq!(slice[0], (None, 100.0));
     }
 
     /// Build a System with 2 stages and verify `n_stages()` and `stage(id)` lookup.

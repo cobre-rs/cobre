@@ -33,6 +33,9 @@
 //!   bus deficit:     B*S*K columns  (S = max_deficit_segments across all buses)
 //!   bus excess:      B*K columns
 //!   inflow slack:    N columns (sigma_inf_h, only when penalty method is active)
+//!   FPHA generation: N_fpha*K columns (one per FPHA hydro per block)
+//!   evaporation:     N_evap*3 columns (Q_ev, f_evap_plus, f_evap_minus per evap hydro)
+//!   withdrawal slack: N columns (sigma^r_h, one per hydro when hydro_count > 0)
 //! ```
 //!
 //! ### Row layout (contiguous regions)
@@ -104,9 +107,11 @@ use std::collections::HashMap;
 
 use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_core::{
-    Bus, CascadeTopology, EntityId, Hydro, Line, LoadModel, ResolvedBounds, ResolvedPenalties,
-    Stage, System, Thermal,
+    Bus, CascadeTopology, ConstraintSense, EntityId, GenericConstraint, Hydro, Line, LoadModel,
+    ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedPenalties, Stage, System, Thermal,
 };
+
+use crate::generic_constraints::resolve_variable_ref;
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -595,6 +600,14 @@ pub struct StageTemplates {
     /// `load_bus_indices[i]` to compute the base row index of bus `i` in the
     /// load-balance region: `row = load_balance_row_start + load_bus_indices[i] * n_blks + blk`.
     pub load_bus_indices: Vec<usize>,
+    /// Per-stage metadata for active generic constraint rows.
+    ///
+    /// `generic_constraint_row_entries[s]` contains one
+    /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
+    /// stage `s`.  Used by the simulation extraction pipeline to map LP
+    /// row/column indices back to constraint identity and block.  Empty for
+    /// stages with no active generic constraints.
+    pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -609,6 +622,43 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 // ---------------------------------------------------------------------------
 // Per-stage template builder internals
 // ---------------------------------------------------------------------------
+
+/// Per-row metadata for one active generic constraint row at a single stage.
+///
+/// Stores the information needed by the LP builder to fill CSC matrix entries,
+/// row bounds, and objective coefficients for generic constraint rows and their
+/// associated slack columns.  Also used by the simulation extraction pipeline
+/// to map LP row/column indices back to constraint identity and block.
+///
+/// One entry is created per active `(constraint, block)` pair. A constraint
+/// with `block_id = None` in its bounds generates one entry per block;
+/// a constraint with `block_id = Some(k)` generates exactly one entry.
+#[derive(Debug, Clone)]
+pub struct GenericConstraintRowEntry {
+    /// Index into `System::generic_constraints()` for the parent constraint.
+    pub constraint_idx: usize,
+    /// Entity ID of the parent constraint (copied from `GenericConstraint::id`).
+    ///
+    /// Stored here so that the simulation extraction pipeline can report the
+    /// constraint identity without needing a reference to the full constraint list.
+    pub entity_id: i32,
+    /// Block index within the stage (0-indexed).
+    pub block_idx: usize,
+    /// The right-hand-side bound value for this row.
+    pub bound: f64,
+    /// Comparison sense of the constraint (`>=`, `<=`, or `==`).
+    pub sense: ConstraintSense,
+    /// Whether slack is enabled for this constraint.
+    pub slack_enabled: bool,
+    /// Penalty cost per unit of slack violation (`None` when slack is disabled).
+    pub slack_penalty: f64,
+    /// Column index of the positive-violation slack (`slack_plus`) when
+    /// `slack.enabled = true`.  `None` when slack is disabled.
+    pub slack_plus_col: Option<usize>,
+    /// Column index of the negative-violation slack (`slack_minus`) when
+    /// `slack.enabled = true` and `sense == Equal`.  `None` otherwise.
+    pub slack_minus_col: Option<usize>,
+}
 
 /// System-level context shared across all stages during template construction.
 ///
@@ -625,6 +675,8 @@ struct TemplateBuildCtx<'a> {
     bounds: &'a ResolvedBounds,
     penalties: &'a ResolvedPenalties,
     hydro_pos: HashMap<EntityId, usize>,
+    thermal_pos: HashMap<EntityId, usize>,
+    line_pos: HashMap<EntityId, usize>,
     bus_pos: HashMap<EntityId, usize>,
     inflow_method: &'a InflowNonNegativityMethod,
     par_lp: &'a PrecomputedPar,
@@ -632,6 +684,10 @@ struct TemplateBuildCtx<'a> {
     production_models: &'a ProductionModelSet,
     /// Resolved evaporation models for all hydro plants.
     evaporation_models: &'a EvaporationModelSet,
+    /// Generic constraint definitions (expression, sense, slack config).
+    generic_constraints: &'a [GenericConstraint],
+    /// Pre-resolved table mapping `(constraint_idx, stage_id)` to active bound entries.
+    resolved_generic_bounds: &'a ResolvedGenericConstraintBounds,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
@@ -666,7 +722,6 @@ struct StageLayout {
     ///
     /// Layout within this region: `col_generation_start + local_fpha_idx * n_blks + blk`.
     col_generation_start: usize,
-    num_cols: usize,
     // Row regions
     row_water_balance_start: usize,
     row_load_balance_start: usize,
@@ -684,7 +739,23 @@ struct StageLayout {
     /// 3 stage-level columns per evaporation hydro (`Q_ev`, `f_evap_plus`, `f_evap_minus`).
     /// Layout: `col_evap_start + local_evap_idx * 3 + {0, 1, 2}`.
     col_evap_start: usize,
+    /// Start of withdrawal slack columns (after evaporation columns).
+    ///
+    /// One stage-level column per operating hydro (`sigma^r_h`).
+    /// Layout: `col_withdrawal_slack_start + h`.
+    /// Zero when `n_h == 0`.
+    col_withdrawal_slack_start: usize,
+    num_cols: usize,
+    /// Start of generic constraint rows (after evaporation rows).
+    ///
+    /// One row per active `(constraint, block)` pair.
+    /// Equals `num_rows_before_generic` when no generic constraints are active.
+    row_generic_start: usize,
     num_rows: usize,
+    /// Total number of generic constraint rows for this stage.
+    ///
+    /// Zero when no generic constraints are active.
+    n_generic_rows: usize,
     // Template metadata
     n_state: usize,
     n_dual_relevant: usize,
@@ -698,9 +769,16 @@ struct StageLayout {
     // Evaporation hydro information for this stage
     /// Indices (into `ctx.hydros`) of hydros with linearized evaporation at this stage.
     evap_hydro_indices: Vec<usize>,
+    /// Per-row metadata for active generic constraint rows at this stage.
+    ///
+    /// One entry per active `(constraint, block)` pair, in constraint-index-major
+    /// order within each constraint's bound entries. Consumed by ticket-004 for
+    /// CSC matrix construction, row bound filling, and objective coefficient filling.
+    pub(crate) generic_constraint_rows: Vec<GenericConstraintRowEntry>,
 }
 
 impl StageLayout {
+    #[allow(clippy::too_many_lines)]
     fn new(ctx: &TemplateBuildCtx<'_>, stage: &Stage, stage_idx: usize) -> Self {
         let n_blks = stage.blocks.len();
         let idx = StageIndexer::new(ctx.n_hydros, ctx.max_par_order);
@@ -757,7 +835,10 @@ impl StageLayout {
         // placed after FPHA generation columns.
         let col_evap_start = col_generation_end;
         let n_evap_cols = n_evap_hydros * 3;
-        let num_cols = col_evap_start + n_evap_cols;
+
+        // Withdrawal slack columns: one per operating hydro, placed after evaporation columns.
+        let col_withdrawal_slack_start = col_evap_start + n_evap_cols;
+        let withdrawal_slack_end = col_withdrawal_slack_start + ctx.n_hydros;
 
         let n_state = idx.n_state;
         let n_dual_relevant = n_state;
@@ -771,7 +852,104 @@ impl StageLayout {
 
         // Evaporation rows: 1 per evaporation hydro, placed after FPHA rows.
         let row_evap_start = row_fpha_start + n_fpha_rows;
-        let num_rows = row_evap_start + n_evap_hydros;
+        let evap_rows_end = row_evap_start + n_evap_hydros;
+
+        // ── Generic constraints: identify active rows and slack columns ─────────
+        // Generic constraint rows are placed after evaporation rows (last row region).
+        // Generic constraint slack columns are placed after withdrawal slack (last col region).
+        let row_generic_start = evap_rows_end;
+        let col_generic_slack_start = withdrawal_slack_end;
+
+        let mut n_generic_rows: usize = 0;
+        let mut n_generic_slack_cols: usize = 0;
+        let mut generic_constraint_rows: Vec<GenericConstraintRowEntry> = Vec::new();
+
+        for (constraint_idx, constraint) in ctx.generic_constraints.iter().enumerate() {
+            if !ctx
+                .resolved_generic_bounds
+                .is_active(constraint_idx, stage.id)
+            {
+                continue;
+            }
+
+            let bound_entries = ctx
+                .resolved_generic_bounds
+                .bounds_for_stage(constraint_idx, stage.id);
+
+            for &(block_id, bound) in bound_entries {
+                match block_id {
+                    None => {
+                        // One row per block.
+                        for block_idx in 0..n_blks {
+                            let row_offset = row_generic_start + n_generic_rows;
+                            let (slack_plus_col, slack_minus_col) = if constraint.slack.enabled {
+                                let plus_col = col_generic_slack_start + n_generic_slack_cols;
+                                n_generic_slack_cols += 1;
+                                let minus_col = if constraint.sense == ConstraintSense::Equal {
+                                    let mc = col_generic_slack_start + n_generic_slack_cols;
+                                    n_generic_slack_cols += 1;
+                                    Some(mc)
+                                } else {
+                                    None
+                                };
+                                (Some(plus_col), minus_col)
+                            } else {
+                                (None, None)
+                            };
+                            let _ = row_offset; // used indirectly via n_generic_rows
+                            n_generic_rows += 1;
+                            generic_constraint_rows.push(GenericConstraintRowEntry {
+                                constraint_idx,
+                                entity_id: constraint.id.0,
+                                block_idx,
+                                bound,
+                                sense: constraint.sense,
+                                slack_enabled: constraint.slack.enabled,
+                                slack_penalty: constraint.slack.penalty.unwrap_or(0.0),
+                                slack_plus_col,
+                                slack_minus_col,
+                            });
+                        }
+                    }
+                    Some(blk_id) => {
+                        // One row for the specific block (0-indexed from the block_id value).
+                        // block_id in bounds is a non-negative 0-indexed block position;
+                        // upstream validation ensures it is non-negative.
+                        #[allow(clippy::cast_sign_loss)]
+                        let block_idx = blk_id as usize;
+                        let (slack_plus_col, slack_minus_col) = if constraint.slack.enabled {
+                            let plus_col = col_generic_slack_start + n_generic_slack_cols;
+                            n_generic_slack_cols += 1;
+                            let minus_col = if constraint.sense == ConstraintSense::Equal {
+                                let mc = col_generic_slack_start + n_generic_slack_cols;
+                                n_generic_slack_cols += 1;
+                                Some(mc)
+                            } else {
+                                None
+                            };
+                            (Some(plus_col), minus_col)
+                        } else {
+                            (None, None)
+                        };
+                        n_generic_rows += 1;
+                        generic_constraint_rows.push(GenericConstraintRowEntry {
+                            constraint_idx,
+                            entity_id: constraint.id.0,
+                            block_idx,
+                            bound,
+                            sense: constraint.sense,
+                            slack_enabled: constraint.slack.enabled,
+                            slack_penalty: constraint.slack.penalty.unwrap_or(0.0),
+                            slack_plus_col,
+                            slack_minus_col,
+                        });
+                    }
+                }
+            }
+        }
+
+        let num_cols = col_generic_slack_start + n_generic_slack_cols;
+        let num_rows = row_generic_start + n_generic_rows;
 
         let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let zeta = total_stage_hours * M3S_TO_HM3;
@@ -791,18 +969,22 @@ impl StageLayout {
             col_inflow_slack_start,
             col_generation_start,
             col_evap_start,
+            col_withdrawal_slack_start,
             num_cols,
             row_water_balance_start,
             row_load_balance_start,
             row_fpha_start,
             row_evap_start,
+            row_generic_start,
             num_rows,
+            n_generic_rows,
             n_state,
             n_dual_relevant,
             zeta,
             fpha_hydro_indices,
             fpha_planes_per_hydro,
             evap_hydro_indices,
+            generic_constraint_rows,
         }
     }
 }
@@ -983,6 +1165,24 @@ fn fill_stage_columns(
         objective[col_f_minus] = obj;
     }
 
+    // Withdrawal violation slack columns (sigma^r_h), one per hydro.
+    // Bounds [0, +inf) when water_withdrawal_m3s > 0; pinned to [0, 0] otherwise.
+    // Pinning to zero when there is no scheduled withdrawal ensures the column has
+    // no LP effect (it is presolve-eliminated), preserving identical behaviour to
+    // the pre-withdrawal implementation for cases where withdrawal is absent.
+    // Objective cost: water_withdrawal_violation_cost * total_stage_hours.
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_withdrawal_slack_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.water_withdrawal_m3s > 0.0 {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.water_withdrawal_violation_cost * total_stage_hours;
+    }
+
     (col_lower, col_upper, objective)
 }
 
@@ -998,7 +1198,10 @@ fn fill_stage_rows(
     let mut row_lower = vec![0.0_f64; layout.num_rows];
     let mut row_upper = vec![0.0_f64; layout.num_rows];
 
-    // Water balance rows: static RHS = ζ * deterministic_base_h.
+    // Water balance rows: static RHS = ζ * (deterministic_base_h - water_withdrawal_m3s_h).
+    // The withdrawal is a fixed schedule that reduces the effective inflow available
+    // to the reservoir. Subtracting it from the base keeps the row bound correct for
+    // the stage template; the PAR(p) noise innovation is added at solve time via patches.
     for h_idx in 0..layout.n_h {
         let row = layout.row_water_balance_start + h_idx;
         let base = if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h {
@@ -1006,8 +1209,13 @@ fn fill_stage_rows(
         } else {
             0.0
         };
-        row_lower[row] = layout.zeta * base;
-        row_upper[row] = layout.zeta * base;
+        let withdrawal = ctx
+            .bounds
+            .hydro_bounds(h_idx, stage_idx)
+            .water_withdrawal_m3s;
+        let rhs = layout.zeta * (base - withdrawal);
+        row_lower[row] = rhs;
+        row_upper[row] = rhs;
     }
 
     // Load balance rows: static RHS = mean_mw from load model.
@@ -1164,6 +1372,16 @@ fn fill_state_and_water_entries(
         let col_q_ev = layout.col_evap_start + local_idx * 3;
         let row = row_water + h_idx;
         col_entries[col_q_ev].push((row, zeta));
+    }
+
+    // Withdrawal violation slack: sigma^r_h enters water balance with -ζ.
+    // When the reservoir cannot sustain the full scheduled withdrawal, the slack
+    // absorbs the difference and reduces the effective withdrawal in that stage,
+    // restoring LP feasibility at a penalty cost.
+    for h_idx in 0..n_h {
+        let col = layout.col_withdrawal_slack_start + h_idx;
+        let row = row_water + h_idx;
+        col_entries[col].push((row, -zeta));
     }
 }
 
@@ -1441,10 +1659,148 @@ fn fill_evaporation_entries(
     }
 }
 
-/// Build the CSC matrix entries for one stage.
+/// Fill CSC matrix entries, row bounds, and slack column data for all active
+/// generic constraint rows at this stage.
 ///
-/// Returns one `Vec<(row, value)>` per column. Entries within each column are
-/// sorted by row index before return (CSC invariant).
+/// For each active `(constraint, block)` pair recorded in
+/// `layout.generic_constraint_rows`:
+///
+/// 1. Sets `row_lower` / `row_upper` for the generic constraint row according
+///    to the constraint sense:
+///    - `<=`: `row_lower = -INF`, `row_upper = bound`
+///    - `>=`: `row_lower = bound`, `row_upper = +INF`
+///    - `==`: `row_lower = bound`, `row_upper = bound`
+///
+/// 2. Iterates over the constraint expression terms, calls
+///    [`resolve_variable_ref`] for each [`LinearTerm`], and pushes
+///    `(row_index, coefficient * multiplier)` entries into `col_entries`.
+///
+/// 3. When `slack.enabled = true`, sets slack column bounds to `[0, +INF)` and
+///    objective to `penalty * block_hours`:
+///    - `<=`: one slack column `s_g` with CSC entry `(row, -1.0)`.
+///    - `>=`: one slack column `s_g` with CSC entry `(row, +1.0)`.
+///    - `==`: two slack columns `s_g_plus` and `s_g_minus` with CSC entries
+///      `(row, +1.0)` and `(row, -1.0)` respectively.
+///
+/// Unknown entity IDs in variable refs produce zero contributions (the empty
+/// vec returned by `resolve_variable_ref` is skipped), which is the
+/// defense-in-depth fallback for referential validation gaps.
+#[allow(clippy::too_many_arguments)]
+fn fill_generic_constraint_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+    _col_lower: &mut [f64],
+    col_upper: &mut [f64],
+    objective: &mut [f64],
+    row_lower: &mut [f64],
+    row_upper: &mut [f64],
+) {
+    if layout.n_generic_rows == 0 {
+        return;
+    }
+
+    // Build a full StageIndexer so that resolve_variable_ref can map any
+    // VariableRef to the correct column index for this stage.
+    let indexer = crate::indexer::StageIndexer::with_equipment_and_evaporation(
+        ctx.n_hydros,
+        ctx.max_par_order,
+        ctx.n_thermals,
+        ctx.n_lines,
+        ctx.n_buses,
+        layout.n_blks,
+        ctx.has_penalty,
+        layout.fpha_hydro_indices.clone(),
+        &layout.fpha_planes_per_hydro,
+        layout.evap_hydro_indices.clone(),
+        layout.max_deficit_segments,
+    );
+
+    for (entry_idx, entry) in layout.generic_constraint_rows.iter().enumerate() {
+        let row = layout.row_generic_start + entry_idx;
+        let constraint = &ctx.generic_constraints[entry.constraint_idx];
+        let block_hours = stage.blocks[entry.block_idx].duration_hours;
+
+        // 1. Set row bounds from sense and RHS bound value.
+        match entry.sense {
+            ConstraintSense::LessEqual => {
+                row_lower[row] = f64::NEG_INFINITY;
+                row_upper[row] = entry.bound;
+            }
+            ConstraintSense::GreaterEqual => {
+                row_lower[row] = entry.bound;
+                row_upper[row] = f64::INFINITY;
+            }
+            ConstraintSense::Equal => {
+                row_lower[row] = entry.bound;
+                row_upper[row] = entry.bound;
+            }
+        }
+
+        // 2. Fill CSC matrix entries for each expression term.
+        for term in &constraint.expression.terms {
+            let pairs = resolve_variable_ref(
+                &term.variable,
+                entry.block_idx,
+                layout.n_blks,
+                stage_idx,
+                &indexer,
+                ctx.production_models,
+                &ctx.hydro_pos,
+                &ctx.thermal_pos,
+                &ctx.bus_pos,
+                &ctx.line_pos,
+            );
+            for (col, multiplier) in pairs {
+                col_entries[col].push((row, term.coefficient * multiplier));
+            }
+        }
+
+        // 3. Set slack column bounds and CSC entries when slack is enabled.
+        if let Some(plus_col) = entry.slack_plus_col {
+            let penalty = constraint.slack.penalty.unwrap_or(0.0);
+            let obj_coeff = penalty * block_hours;
+
+            // plus slack: [0, +INF), penalised in objective.
+            // col_lower is already 0.0 from vec initialisation.
+            col_upper[plus_col] = f64::INFINITY;
+            objective[plus_col] = obj_coeff;
+
+            // CSC entry for plus slack depends on sense.
+            match entry.sense {
+                ConstraintSense::LessEqual => {
+                    // LHS - s_g <= bound  →  slack enters with -1.0
+                    col_entries[plus_col].push((row, -1.0));
+                }
+                ConstraintSense::GreaterEqual => {
+                    // LHS + s_g >= bound  →  slack enters with +1.0
+                    col_entries[plus_col].push((row, 1.0));
+                }
+                ConstraintSense::Equal => {
+                    // LHS + s_g_plus - s_g_minus == bound  →  plus slack with +1.0
+                    col_entries[plus_col].push((row, 1.0));
+                }
+            }
+
+            // minus slack: only for equality constraints.
+            if let Some(minus_col) = entry.slack_minus_col {
+                // col_lower is already 0.0 from vec initialisation.
+                col_upper[minus_col] = f64::INFINITY;
+                objective[minus_col] = obj_coeff;
+                // LHS + s_g_plus - s_g_minus == bound  →  minus slack with -1.0
+                col_entries[minus_col].push((row, -1.0));
+            }
+        }
+    }
+}
+
+/// Build the unsorted CSC matrix entries for one stage.
+///
+/// Returns one `Vec<(row, value)>` per column. Entries are in insertion
+/// order; the caller is responsible for sorting by row index before
+/// assembling the final CSC arrays (see [`build_single_stage_template`]).
 fn build_stage_matrix_entries(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -1457,11 +1813,6 @@ fn build_stage_matrix_entries(
     fill_load_balance_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_fpha_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_evaporation_entries(ctx, stage_idx, layout, &mut col_entries);
-
-    // Sort each column's entries by row index (CSC invariant).
-    for entries in &mut col_entries {
-        entries.sort_unstable_by_key(|&(row, _)| row);
-    }
 
     col_entries
 }
@@ -1497,25 +1848,49 @@ fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<i32>, Vec<f
 
 /// Construct a [`StageTemplate`] for a single study stage.
 ///
-/// Returns the template and the row index of the water-balance block
-/// (used as `base_row` by the [`PatchBuffer`] noise injection) and the
-/// row index of the load-balance block (used for load-noise patches).
+/// Returns the template, the row index of the water-balance block
+/// (used as `base_row` by the [`PatchBuffer`] noise injection), the
+/// row index of the load-balance block (used for load-noise patches),
+/// and the generic constraint row entries for this stage.
 fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
     stage_idx: usize,
-) -> (StageTemplate, usize, usize) {
+) -> (StageTemplate, usize, usize, Vec<GenericConstraintRowEntry>) {
     let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
     let load_balance_row_start = layout.row_load_balance_start;
 
-    let (col_lower, col_upper, objective) = fill_stage_columns(ctx, stage, stage_idx, &layout);
-    let (row_lower, row_upper) = fill_stage_rows(ctx, stage, stage_idx, &layout);
-    let col_entries = build_stage_matrix_entries(ctx, stage, stage_idx, &layout);
+    let (mut col_lower, mut col_upper, mut objective) =
+        fill_stage_columns(ctx, stage, stage_idx, &layout);
+    let (mut row_lower, mut row_upper) = fill_stage_rows(ctx, stage, stage_idx, &layout);
+    let mut col_entries = build_stage_matrix_entries(ctx, stage, stage_idx, &layout);
+
+    // Fill generic constraint rows, slack columns, and CSC entries.
+    fill_generic_constraint_entries(
+        ctx,
+        stage,
+        stage_idx,
+        &layout,
+        &mut col_entries,
+        &mut col_lower,
+        &mut col_upper,
+        &mut objective,
+        &mut row_lower,
+        &mut row_upper,
+    );
+
+    // Sort each column's entries by row index (CSC invariant).
+    for entries in &mut col_entries {
+        entries.sort_unstable_by_key(|&(row, _)| row);
+    }
+
     let (col_starts, row_indices, values) = assemble_csc(&col_entries);
 
     let n_transfer = ctx.n_hydros * ctx.max_par_order;
     let total_nz = col_entries.iter().map(Vec::len).sum();
+
+    let gc_row_entries = layout.generic_constraint_rows;
 
     let template = StageTemplate {
         num_cols: layout.num_cols,
@@ -1536,7 +1911,12 @@ fn build_single_stage_template(
         max_par_order: layout.lag_order,
     };
 
-    (template, stage_base_row, load_balance_row_start)
+    (
+        template,
+        stage_base_row,
+        load_balance_row_start,
+        gc_row_entries,
+    )
 }
 
 /// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation.
@@ -1703,6 +2083,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///     .expect("empty system ok");
 /// assert!(result.templates.is_empty());
 /// ```
+#[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
@@ -1727,12 +2108,25 @@ pub fn build_stage_templates(
             load_balance_row_starts: Vec::new(),
             n_load_buses: 0,
             load_bus_indices: Vec::new(),
+            generic_constraint_row_entries: Vec::new(),
         });
     }
 
     let buses = system.buses();
     let hydro_pos: HashMap<EntityId, usize> =
         hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
+    let thermal_pos: HashMap<EntityId, usize> = system
+        .thermals()
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id, i))
+        .collect();
+    let line_pos: HashMap<EntityId, usize> = system
+        .lines()
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.id, i))
+        .collect();
     let bus_pos: HashMap<EntityId, usize> =
         buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
 
@@ -1765,11 +2159,15 @@ pub fn build_stage_templates(
         bounds: system.bounds(),
         penalties: system.penalties(),
         hydro_pos,
+        thermal_pos,
+        line_pos,
         bus_pos,
         inflow_method,
         par_lp,
         production_models,
         evaporation_models,
+        generic_constraints: system.generic_constraints(),
+        resolved_generic_bounds: system.resolved_generic_bounds(),
         n_hydros,
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),
@@ -1782,12 +2180,14 @@ pub fn build_stage_templates(
     let mut templates = Vec::with_capacity(n_study);
     let mut base_rows = Vec::with_capacity(n_study);
     let mut load_balance_row_starts = Vec::with_capacity(n_study);
+    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let (template, stage_base_row, load_balance_row_start) =
+        let (template, stage_base_row, load_balance_row_start, gc_entries) =
             build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
         load_balance_row_starts.push(load_balance_row_start);
+        generic_constraint_row_entries.push(gc_entries);
     }
 
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
@@ -1803,10 +2203,17 @@ pub fn build_stage_templates(
         load_balance_row_starts,
         n_load_buses,
         load_bus_indices,
+        generic_constraint_row_entries,
     })
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::doc_markdown,
+    clippy::too_many_lines,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::{PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
@@ -2692,7 +3099,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        assert_eq!(t.num_cols, 7, "num_cols mismatch for N=1 L=0");
+        // N=1 withdrawal slack adds 1 column: 7 + 1 = 8.
+        assert_eq!(t.num_cols, 8, "num_cols mismatch for N=1 L=0");
     }
 
     #[test]
@@ -2712,7 +3120,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=2");
+        // N=1 withdrawal slack adds 1 column: 9 + 1 = 10.
+        assert_eq!(t.num_cols, 10, "num_cols mismatch for N=1 L=2");
     }
 
     #[test]
@@ -3716,8 +4125,9 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6, slack=7
-        let slack_col = t.num_cols - 1; // last column
+        // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6,
+        // inflow_slack=7, withdrawal_slack=8. Inflow slack is now second-to-last.
+        let slack_col = t.num_cols - 2; // inflow_slack (withdrawal_slack is last)
         let expected_obj = 1000.0 * 744.0;
         assert!(
             (t.objective[slack_col] - expected_obj).abs() < 1e-9,
@@ -3741,8 +4151,9 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4; total = 9
-        assert_eq!(t.num_cols, 9, "method=none must not add extra columns");
+        // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4;
+        // withdrawal slack = 1; total = 10.
+        assert_eq!(t.num_cols, 10, "method=none must not add extra columns");
         // num_rows = N*(1+L)+N+B*K = 3+1+1 = 5
         assert_eq!(t.num_rows, 5, "method=none must not add extra rows");
     }
@@ -3765,8 +4176,9 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        // Locate the slack column (last column, index = num_cols - 1).
-        let slack_col = t.num_cols - 1;
+        // Locate the inflow slack column. For N=1, L=0: it is at num_cols - 2
+        // (withdrawal_slack occupies the last column, num_cols - 1).
+        let slack_col = t.num_cols - 2;
 
         // Iterate the CSC to find the entry for slack_col in the water balance row.
         // Water balance row for hydro 0: row_water_balance_start = n_state = N*(1+L) = 1.
@@ -3801,7 +4213,10 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        let slack_col = t.num_cols - 1;
+        // The inflow slack is the second-to-last column for N=1 (withdrawal_slack is last).
+        // Since water_withdrawal_m3s == 0, the withdrawal slack is pinned at [0,0] and
+        // presolve-eliminated; the inflow slack at num_cols-2 must be [0, +inf).
+        let slack_col = t.num_cols - 2;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
         assert!(
             t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
@@ -3835,7 +4250,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        let slack_col = t.num_cols - 1;
+        // For N=1, L=0: inflow_slack is at num_cols - 2 (withdrawal_slack is last).
+        let slack_col = t.num_cols - 2;
         let water_balance_row = 1_usize; // N*(1+L) = 1
         let zeta = 744.0 * (3_600.0 / 1_000_000.0);
         let expected_coeff = -zeta; // slack enters LHS with -ζ (virtual inflow)
@@ -3916,8 +4332,8 @@ mod tests {
         .expect("constant productivity ok");
         let template = &result.templates[0];
 
-        // The inflow slack is the last column.
-        let col_inflow_slack_start = template.num_cols - 1;
+        // The inflow slack is the second-to-last column for N=1 (withdrawal_slack is last).
+        let col_inflow_slack_start = template.num_cols - 2;
 
         // base_row for stage 0 is n_dual_relevant = n_state = 1 (for N=1, L=0).
         let base_row = result.base_rows[0];
@@ -4900,11 +5316,12 @@ mod tests {
         // 2 generation columns.
         // Base (constant) num_cols = 9 + 4*1*2 + 0 + 0 + 1*1*2 = 9 + 8 + 2 = 19.
         // With FPHA: 19 + 2 = 21.
+        // With withdrawal slack (N=4): 21 + 4 = 25.
         // Base num_rows = n_state + 4 water balance + 1*1 load balance = 4 + 4 + 1 = 9.
         // With FPHA: 9 + 2*1*3 = 9 + 6 = 15.
         assert_eq!(
-            tmpl.num_cols, 21,
-            "4-hydro mixed system: num_cols should be 21"
+            tmpl.num_cols, 25,
+            "4-hydro mixed system: num_cols should be 25 (includes 4 withdrawal slack columns)"
         );
         assert_eq!(
             tmpl.num_rows, 15,
@@ -5554,10 +5971,12 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // The 3 evaporation columns are the last 3 columns.
-        let col_q_ev = t.num_cols - 3;
-        let col_f_plus = t.num_cols - 2;
-        let col_f_minus = t.num_cols - 1;
+        // The 3 evaporation columns are followed by 1 withdrawal slack column (N=1).
+        // Since water_withdrawal_m3s == 0, the withdrawal slack at num_cols-1 is pinned at [0,0].
+        // The evaporation columns are at num_cols-4, num_cols-3, num_cols-2.
+        let col_q_ev = t.num_cols - 4;
+        let col_f_plus = t.num_cols - 3;
+        let col_f_minus = t.num_cols - 2;
 
         for &col in &[col_q_ev, col_f_plus, col_f_minus] {
             assert_eq!(
@@ -5664,9 +6083,12 @@ mod tests {
         //   row 1: water balance (row_water_balance_start = n_state = 1)
         //   row 2: load balance
         //   row 3: evaporation constraint (row_evap_start = 3)
-        let col_q_ev = t.num_cols - 3;
-        let col_f_plus = t.num_cols - 2;
-        let col_f_minus = t.num_cols - 1;
+        // Evaporation columns come before withdrawal slack (N=1 column).
+        // col_q_ev = col_evap_start + 0, col_f_plus = +1, col_f_minus = +2,
+        // followed by 1 withdrawal_slack column.
+        let col_q_ev = t.num_cols - 4;
+        let col_f_plus = t.num_cols - 3;
+        let col_f_minus = t.num_cols - 2;
         let evap_row = t.num_rows - 1;
         let water_balance_row = 1_usize; // row_water_balance_start = n_state = 1
 
@@ -5978,8 +6400,9 @@ mod tests {
         // Hydro 0's water balance row = 1.
         let water_balance_row = 1_usize;
 
-        // Q_ev is the first of the 3 evaporation columns; col_evap_start = num_cols - 3.
-        let col_q_ev = t.num_cols - 3;
+        // Q_ev is the first of the 3 evaporation columns; followed by 1 withdrawal slack (N=1).
+        // col_evap_start = num_cols - 4.
+        let col_q_ev = t.num_cols - 4;
 
         let entries = entries_for_col(t, col_q_ev);
         let entry = entries
@@ -6175,7 +6598,8 @@ mod tests {
         let water_balance_row_h1 = 3_usize;
 
         // Q_ev for hydro 1 (local_idx=0, since only hydro 1 is evap): col_evap_start + 0*3.
-        let col_q_ev_h1 = t.num_cols - 3;
+        // N=2 withdrawal slack columns follow evap, so col_evap_start = num_cols - 2 - 3.
+        let col_q_ev_h1 = t.num_cols - 5;
 
         // Q_ev (h1) must have an entry at water balance row 3.
         let entries_h1 = entries_for_col(t, col_q_ev_h1);
@@ -6458,10 +6882,10 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // Evaporation columns are the last 3: Q_ev, f_plus, f_minus.
-        let col_q_ev = t.num_cols - 3;
-        let col_f_plus = t.num_cols - 2;
-        let col_f_minus = t.num_cols - 1;
+        // Evaporation columns (Q_ev, f_plus, f_minus) are followed by 1 withdrawal slack (N=1).
+        let col_q_ev = t.num_cols - 4;
+        let col_f_plus = t.num_cols - 3;
+        let col_f_minus = t.num_cols - 2;
 
         let expected = 500.0 * 730.0; // 365_000.0
 
@@ -6500,7 +6924,8 @@ mod tests {
         .expect("evap system with zero k_evap builds ok");
 
         let t = &result.templates[0];
-        let col_q_ev = t.num_cols - 3;
+        // N=1 withdrawal slack follows the 3 evap columns, so col_evap_start = num_cols - 4.
+        let col_q_ev = t.num_cols - 4;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7163,5 +7588,2119 @@ mod tests {
             "deficit segment 1 load-balance coefficient must be +1.0, got {}",
             entries_seg1[0].1
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // ticket-002: Water withdrawal LP wiring unit tests
+    // -------------------------------------------------------------------------
+
+    /// Build a `one_hydro_system` variant with a custom `water_withdrawal_m3s` and
+    /// `water_withdrawal_violation_cost` injected into the resolved bounds/penalties.
+    ///
+    /// The stage duration is fixed at 744 hours (one 31-day month) and block count is 1.
+    /// `lag_order` controls whether AR lag state columns are included.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn one_hydro_system_with_withdrawal(
+        n_stages: usize,
+        lag_order: usize,
+        water_withdrawal_m3s: f64,
+        water_withdrawal_violation_cost: f64,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let hydro = Hydro {
+            id: EntityId(2),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost,
+            },
+        };
+
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: lag_order > 0,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let ar_coefficients: Vec<f64> = (0..lag_order).map(|_| 0.5).collect();
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: ar_coefficients.clone(),
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+
+        // Build bounds with the specified withdrawal rate for every (hydro, stage) cell.
+        let mut bounds = ResolvedBounds::new(
+            1,
+            0,
+            0,
+            0,
+            0,
+            n_st,
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s,
+            },
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        // Ensure withdrawal is set on every stage cell.
+        for s in 0..n_st {
+            bounds.hydro_bounds_mut(0, s).water_withdrawal_m3s = water_withdrawal_m3s;
+        }
+
+        // Build penalties with the specified violation cost for every (hydro, stage) cell.
+        let mut penalties = ResolvedPenalties::new(
+            1,
+            1,
+            0,
+            0,
+            n_st,
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost,
+            },
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+        // Ensure violation cost is set on every stage cell.
+        for s in 0..n_st {
+            penalties
+                .hydro_penalties_mut(0, s)
+                .water_withdrawal_violation_cost = water_withdrawal_violation_cost;
+        }
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("one_hydro_system_with_withdrawal: valid")
+    }
+
+    /// AC-1: Water balance RHS = ζ * (`deterministic_base` - `water_withdrawal_m3s`).
+    ///
+    /// With no PAR data the `deterministic_base` is 0.0.  For this test we verify
+    /// the withdrawal subtraction alone: base=0, withdrawal=10.0, `zeta`=744*`M3S_TO_HM3`.
+    /// Expected RHS = `744 * 3600/1_000_000 * (0 - 10)` = -2.6784.
+    #[test]
+    fn withdrawal_rhs_subtracted_from_water_balance() {
+        let withdrawal = 10.0_f64;
+        let system = one_hydro_system_with_withdrawal(1, 0, withdrawal, 0.0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+        // N=1, L=0: row_water_balance_start = n_state = N*(1+L) = 1*(1+0) = 1.
+        let row_water = 1_usize;
+        let total_hours = 744.0_f64;
+        let zeta = total_hours * 3_600.0 / 1_000_000.0;
+        // base = 0 (no PAR data), withdrawal = 10.0
+        let expected_rhs = zeta * (0.0 - withdrawal);
+        assert!(
+            (t.row_lower[row_water] - expected_rhs).abs() < 1e-12,
+            "water balance row_lower: expected {expected_rhs}, got {}",
+            t.row_lower[row_water]
+        );
+        assert!(
+            (t.row_upper[row_water] - expected_rhs).abs() < 1e-12,
+            "water balance row_upper: expected {expected_rhs}, got {}",
+            t.row_upper[row_water]
+        );
+    }
+
+    /// AC-1 (acceptance criterion phrasing): base=50, withdrawal=10, `zeta`=0.36 → RHS=14.4.
+    ///
+    /// Since the system has no PAR data (`PrecomputedPar::default()` has `n_stages`=0),
+    /// we cannot inject a `deterministic_base` of 50 directly here.  Instead, we verify
+    /// the subtraction formula by checking base=0 gives RHS = `-zeta`*withdrawal and
+    /// by unit-testing `fill_stage_rows` indirectly via the template row bounds.
+    /// The exact acceptance criterion arithmetic (0.36 * (50-10) = 14.4) is verified
+    /// in the fixture-free acceptance criterion test below.
+    #[test]
+    fn withdrawal_zero_leaves_rhs_unchanged_from_base() {
+        // With withdrawal=0 the RHS must equal the no-withdrawal case identically.
+        let system_zero = one_hydro_system_with_withdrawal(1, 0, 0.0, 0.0);
+        let system_base = one_hydro_system(1, 0);
+
+        let result_zero = build_stage_templates(
+            &system_zero,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system_zero),
+            &default_evaporation(&system_zero),
+        )
+        .expect("zero-withdrawal build ok");
+
+        let result_base = build_stage_templates(
+            &system_base,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system_base),
+            &default_evaporation(&system_base),
+        )
+        .expect("base build ok");
+
+        let t_zero = &result_zero.templates[0];
+        let t_base = &result_base.templates[0];
+
+        // N=1, L=0: row_water_balance_start = 1.
+        let row_water = 1_usize;
+        assert!(
+            (t_zero.row_lower[row_water] - t_base.row_lower[row_water]).abs() < 1e-15,
+            "zero-withdrawal row_lower must equal base: {} vs {}",
+            t_zero.row_lower[row_water],
+            t_base.row_lower[row_water]
+        );
+        assert!(
+            (t_zero.row_upper[row_water] - t_base.row_upper[row_water]).abs() < 1e-15,
+            "zero-withdrawal row_upper must equal base: {} vs {}",
+            t_zero.row_upper[row_water],
+            t_base.row_upper[row_water]
+        );
+    }
+
+    /// AC-2: Withdrawal slack column has exactly one CSC entry at (`row_water`, -`zeta`).
+    ///
+    /// Column layout for N=1, L=0, no penalty, no FPHA, no evaporation:
+    ///   col 0: `v_out`, col 1: `v_in`, col 2: theta,
+    ///   col 3: turbine, col 4: spillage, col 5: deficit, col 6: excess,
+    ///   col 7: `withdrawal_slack` (= `num_cols` - 1)
+    /// Row layout for N=1, L=0:
+    ///   row 0: storage-fixing, row 1: water-balance, row 2: load-balance
+    #[test]
+    fn withdrawal_slack_matrix_entry_coefficient_is_minus_zeta() {
+        let system = one_hydro_system_with_withdrawal(1, 0, 5.0, 1000.0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+        // Withdrawal slack column is the last column (num_cols - 1) for N=1.
+        let col_w = t.num_cols - 1;
+        // Water balance row for hydro 0: N=1, L=0 → row_water = N*(1+L) = 1.
+        let row_water = 1_usize;
+
+        let total_hours = 744.0_f64;
+        let zeta = total_hours * 3_600.0 / 1_000_000.0;
+
+        let coeff = csc_entry(t, col_w, row_water).unwrap_or_else(|| {
+            panic!("withdrawal slack column {col_w} has no entry at water balance row {row_water}")
+        });
+        assert!(
+            (coeff - (-zeta)).abs() < 1e-12,
+            "withdrawal slack coefficient: expected {}, got {coeff}",
+            -zeta
+        );
+
+        // Must have exactly one entry (water balance only; no load balance).
+        let all_entries = entries_for_col(t, col_w);
+        assert_eq!(
+            all_entries.len(),
+            1,
+            "withdrawal slack column must have exactly 1 CSC entry, got {all_entries:?}"
+        );
+    }
+
+    /// AC-3: Objective coefficient = `water_withdrawal_violation_cost` * `total_stage_hours`.
+    ///
+    /// `violation_cost` = 1000.0, `total_stage_hours` = 744.0 → expected = `744_000.0`.
+    #[test]
+    fn withdrawal_slack_objective_equals_cost_times_hours() {
+        let violation_cost = 1_000.0_f64;
+        let total_hours = 744.0_f64;
+        let system = one_hydro_system_with_withdrawal(1, 0, 5.0, violation_cost);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+        let col_w = t.num_cols - 1;
+        let expected_obj = violation_cost * total_hours;
+        assert!(
+            (t.objective[col_w] - expected_obj).abs() < 1e-9,
+            "withdrawal slack objective: expected {expected_obj}, got {}",
+            t.objective[col_w]
+        );
+    }
+
+    /// AC-3 (zero cost): objective coefficient is 0.0 when violation cost is 0.0.
+    #[test]
+    fn withdrawal_slack_objective_zero_when_cost_is_zero() {
+        let system = one_hydro_system_with_withdrawal(1, 0, 0.0, 0.0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+        let col_w = t.num_cols - 1;
+        assert!(
+            t.objective[col_w].abs() < 1e-15,
+            "withdrawal slack objective must be 0 when cost=0, got {}",
+            t.objective[col_w]
+        );
+    }
+
+    /// AC-4: Withdrawal slack column has bounds [0, +inf).
+    ///
+    /// Lower bound must be 0.0 (from vec initialisation), upper bound must be +inf.
+    #[test]
+    fn withdrawal_slack_bounds_are_zero_to_infinity() {
+        let system = one_hydro_system_with_withdrawal(1, 0, 10.0, 5_000.0);
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+        let col_w = t.num_cols - 1;
+        assert!(
+            (t.col_lower[col_w] - 0.0).abs() < 1e-15,
+            "withdrawal slack lower bound must be 0.0, got {}",
+            t.col_lower[col_w]
+        );
+        assert!(
+            t.col_upper[col_w].is_infinite() && t.col_upper[col_w] > 0.0,
+            "withdrawal slack upper bound must be +inf, got {}",
+            t.col_upper[col_w]
+        );
+    }
+
+    /// AC-5: Two hydros → two withdrawal slack columns, one per hydro.
+    ///
+    /// Verifies that for N=2 hydros each withdrawal slack column has exactly one
+    /// CSC entry at (`row_water` + `h_idx`, -`zeta`) for `h_idx` in [0, 1].
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::too_many_lines
+    )]
+    fn two_hydro_withdrawal_slack_entries_per_hydro() {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        #[allow(clippy::cast_possible_wrap)]
+        let make_hydro = |id: i32| Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 2_000.0,
+            },
+        };
+
+        let stages = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+            InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: 0,
+                mean_m3s: 50.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+        ];
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let hydro_bounds_default = HydroStageBounds {
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            max_diversion_m3s: None,
+            filling_inflow_m3s: 0.0,
+            water_withdrawal_m3s: 0.0,
+        };
+        let mut bounds = ResolvedBounds::new(
+            2,
+            0,
+            0,
+            0,
+            0,
+            1,
+            hydro_bounds_default,
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        bounds.hydro_bounds_mut(0, 0).water_withdrawal_m3s = 8.0;
+        bounds.hydro_bounds_mut(1, 0).water_withdrawal_m3s = 12.0;
+
+        let hydro_penalties_default = HydroStagePenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 2_000.0,
+        };
+        let penalties = ResolvedPenalties::new(
+            2,
+            1,
+            0,
+            0,
+            1,
+            hydro_penalties_default,
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![make_hydro(2), make_hydro(3)])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("two_hydro_with_withdrawal: valid");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=2, L=0: num_state_cols = N*(2+L) = 4; theta=4; decision+slack cols follow.
+        // col_turbine_start = 5, col_spillage_start = 7, col_deficit_start = 9,
+        // col_excess_start = 10, col_inflow_slack_start = 11 (no penalty → 0 inflow slacks),
+        // col_withdrawal_slack_start = 11, num_cols = 13.
+        let col_w0 = t.num_cols - 2;
+        let col_w1 = t.num_cols - 1;
+
+        // N=2, L=0: row_water_balance_start = N*(1+L) = 2.
+        let row_w0 = 2_usize; // water balance for hydro 0
+        let row_w1 = 3_usize; // water balance for hydro 1
+
+        let total_hours = 744.0_f64;
+        let zeta = total_hours * 3_600.0 / 1_000_000.0;
+
+        // Verify coefficient for hydro 0 slack.
+        let coeff_w0 = csc_entry(t, col_w0, row_w0).unwrap_or_else(|| {
+            panic!("withdrawal slack col {col_w0} has no entry at water balance row {row_w0}")
+        });
+        assert!(
+            (coeff_w0 - (-zeta)).abs() < 1e-12,
+            "hydro-0 withdrawal slack coeff: expected {}, got {coeff_w0}",
+            -zeta
+        );
+
+        // Verify coefficient for hydro 1 slack.
+        let coeff_w1 = csc_entry(t, col_w1, row_w1).unwrap_or_else(|| {
+            panic!("withdrawal slack col {col_w1} has no entry at water balance row {row_w1}")
+        });
+        assert!(
+            (coeff_w1 - (-zeta)).abs() < 1e-12,
+            "hydro-1 withdrawal slack coeff: expected {}, got {coeff_w1}",
+            -zeta
+        );
+
+        // Cross-check: hydro 0 slack must NOT have an entry in hydro 1's water balance row.
+        assert!(
+            csc_entry(t, col_w0, row_w1).is_none(),
+            "hydro-0 withdrawal slack must not appear in hydro-1 water balance row"
+        );
+        assert!(
+            csc_entry(t, col_w1, row_w0).is_none(),
+            "hydro-1 withdrawal slack must not appear in hydro-0 water balance row"
+        );
+    }
+
+    /// 3-hydro system: `num_cols` includes exactly 3 withdrawal slack columns.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        #[allow(clippy::cast_possible_wrap)]
+        let make_hydro = |id: i32| Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 1_000.0,
+            },
+        };
+
+        let stages = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let inflow_models: Vec<InflowModel> = [1, 2, 3]
+            .iter()
+            .map(|&hid| InflowModel {
+                hydro_id: EntityId(hid),
+                stage_id: 0,
+                mean_m3s: 50.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            3,
+            0,
+            0,
+            0,
+            0,
+            1,
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 5.0,
+            },
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            3,
+            1,
+            0,
+            0,
+            1,
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 1_000.0,
+            },
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![make_hydro(1), make_hydro(2), make_hydro(3)])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("three_hydro_system: valid");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build ok");
+
+        let t = &result.templates[0];
+
+        // N=3, L=0, 1 block, no thermals/lines/evap/inflow-penalty:
+        // state cols: 3 outgoing + 3 incoming = 6
+        // theta: 1
+        // turbine: 3, spillage: 3
+        // deficit: 1, excess: 1
+        // inflow slack: 0 (no penalty config)
+        // evap: 0
+        // withdrawal slack: 3
+        // Total without withdrawal: 6 + 1 + 3 + 3 + 1 + 1 = 15
+        // Total with withdrawal: 15 + 3 = 18
+        let expected_without_withdrawal = 15_usize;
+        let expected_with_withdrawal = expected_without_withdrawal + 3;
+        assert_eq!(
+            t.num_cols, expected_with_withdrawal,
+            "3-hydro system: num_cols should be {expected_without_withdrawal} + 3 withdrawal slacks = {expected_with_withdrawal}, got {}",
+            t.num_cols
+        );
+
+        // Verify the last 3 columns are the withdrawal slack columns.
+        assert_eq!(
+            t.col_upper[t.num_cols - 3],
+            f64::INFINITY,
+            "withdrawal slack column for hydro 0 should be unbounded above"
+        );
+        assert_eq!(
+            t.col_upper[t.num_cols - 2],
+            f64::INFINITY,
+            "withdrawal slack column for hydro 1 should be unbounded above"
+        );
+        assert_eq!(
+            t.col_upper[t.num_cols - 1],
+            f64::INFINITY,
+            "withdrawal slack column for hydro 2 should be unbounded above"
+        );
+    }
+
+    // ── Generic constraint layout tests (ticket-002) ──────────────────────────
+
+    /// Build a minimal one-bus, one-stage system for generic constraint tests.
+    ///
+    /// `n_blks` controls how many operating blocks the single stage has.
+    #[allow(clippy::cast_possible_wrap)]
+    fn one_bus_system_n_blks(n_blks: usize) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let blocks: Vec<Block> = (0..n_blks)
+            .map(|i| Block {
+                index: i,
+                name: format!("BLK{i}"),
+                duration_hours: 720.0,
+            })
+            .collect();
+
+        let stage = cobre_core::temporal::Stage {
+            index: 0,
+            id: 0_i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks,
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            0,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .stages(vec![stage])
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("one_bus_system_n_blks: valid")
+    }
+
+    /// Make a `GenericConstraint` with a trivial expression (no terms).
+    fn make_constraint(
+        id: i32,
+        sense: cobre_core::ConstraintSense,
+        slack_enabled: bool,
+    ) -> cobre_core::GenericConstraint {
+        use cobre_core::{ConstraintExpression, GenericConstraint, SlackConfig};
+        GenericConstraint {
+            id: EntityId(id),
+            name: format!("gc_{id}"),
+            description: None,
+            expression: ConstraintExpression { terms: vec![] },
+            sense,
+            slack: SlackConfig {
+                enabled: slack_enabled,
+                penalty: if slack_enabled { Some(5000.0) } else { None },
+            },
+        }
+    }
+
+    /// Build templates for `system` using the no-penalty method and default PAR/Normal.
+    fn build_templates_for(system: &cobre_core::System) -> Vec<cobre_solver::StageTemplate> {
+        let production = default_production(system);
+        let evaporation = default_evaporation(system);
+        build_stage_templates(
+            system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &production,
+            &evaporation,
+        )
+        .expect("build_templates_for: valid")
+        .templates
+    }
+
+    /// AC: 0 generic constraints → num_rows and num_cols unchanged from baseline.
+    #[test]
+    fn generic_constraints_zero_does_not_change_layout() {
+        // Baseline: 1-block system with no generic constraints (identical to
+        // an explicit empty list — both paths must produce the same layout).
+        let system = one_bus_system_n_blks(1);
+        let templates = build_templates_for(&system);
+        let t = &templates[0];
+        // Sanity: the layout is valid (positive counts).
+        assert!(t.num_cols > 0);
+        assert!(t.num_rows > 0);
+        // A second call must be bit-for-bit identical.
+        let templates2 = build_templates_for(&system);
+        assert_eq!(
+            templates2[0].num_cols, t.num_cols,
+            "second build must not change num_cols"
+        );
+        assert_eq!(
+            templates2[0].num_rows, t.num_rows,
+            "second build must not change num_rows"
+        );
+    }
+
+    /// AC: 1 active constraint, `block_id = None`, 3 blocks, no slack
+    /// → n_generic_rows == 3, n_generic_slack_cols == 0, num_rows += 3.
+    #[test]
+    fn generic_constraint_no_slack_block_id_none_3_blocks() {
+        use cobre_core::{ConstraintSense, ResolvedGenericConstraintBounds};
+        use std::collections::HashMap;
+
+        let n_blks = 3_usize;
+        let baseline_system = one_bus_system_n_blks(n_blks);
+        let baseline_rows = build_templates_for(&baseline_system)[0].num_rows;
+        let baseline_cols = build_templates_for(&baseline_system)[0].num_cols;
+
+        // Map constraint ID 10 → index 0.
+        let id_map: HashMap<i32, usize> = [(10_i32, 0)].into_iter().collect();
+        // One bound entry: constraint 10, stage 0, block_id = None, bound = 500.0.
+        let rows = vec![(10_i32, 0_i32, None::<i32>, 500.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let constraint = make_constraint(10, ConstraintSense::LessEqual, false);
+        let system = one_bus_system_n_blks_with_generic(n_blks, vec![constraint], generic_bounds);
+        let t_rows = build_templates_for(&system)[0].num_rows;
+        let t_cols = build_templates_for(&system)[0].num_cols;
+
+        assert_eq!(
+            t_rows,
+            baseline_rows + n_blks,
+            "num_rows must increase by n_blks={n_blks} (one row per block, no slack)"
+        );
+        assert_eq!(
+            t_cols, baseline_cols,
+            "num_cols must be unchanged (no slack columns)"
+        );
+    }
+
+    /// AC: 1 active constraint (sense `<=`, slack enabled), `block_id = None`, 2 blocks
+    /// → n_generic_rows == 2, n_generic_slack_cols == 2 (one slack per row).
+    #[test]
+    fn generic_constraint_le_slack_enabled_2_blocks() {
+        use cobre_core::{ConstraintSense, ResolvedGenericConstraintBounds};
+        use std::collections::HashMap;
+
+        let n_blks = 2_usize;
+        let baseline_system = one_bus_system_n_blks(n_blks);
+        let baseline_rows = build_templates_for(&baseline_system)[0].num_rows;
+        let baseline_cols = build_templates_for(&baseline_system)[0].num_cols;
+
+        let id_map: HashMap<i32, usize> = [(20_i32, 0)].into_iter().collect();
+        let rows = vec![(20_i32, 0_i32, None::<i32>, 300.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let constraint = make_constraint(20, ConstraintSense::LessEqual, true);
+        let system = one_bus_system_n_blks_with_generic(n_blks, vec![constraint], generic_bounds);
+        let t_rows = build_templates_for(&system)[0].num_rows;
+        let t_cols = build_templates_for(&system)[0].num_cols;
+
+        // 2 rows (one per block), 2 slack cols (one per row for `<=`).
+        assert_eq!(
+            t_rows,
+            baseline_rows + 2,
+            "num_rows must increase by 2 (one row per block)"
+        );
+        assert_eq!(
+            t_cols,
+            baseline_cols + 2,
+            "num_cols must increase by 2 (one slack per row for `<=`)"
+        );
+    }
+
+    /// AC: 1 active constraint (sense `==`, slack enabled), `block_id = None`, 2 blocks
+    /// → n_generic_slack_cols == 4 (two slacks per row: positive and negative).
+    #[test]
+    fn generic_constraint_equal_sense_two_slacks_per_row() {
+        use cobre_core::{ConstraintSense, ResolvedGenericConstraintBounds};
+        use std::collections::HashMap;
+
+        let n_blks = 2_usize;
+        let baseline_system = one_bus_system_n_blks(n_blks);
+        let baseline_rows = build_templates_for(&baseline_system)[0].num_rows;
+        let baseline_cols = build_templates_for(&baseline_system)[0].num_cols;
+
+        let id_map: HashMap<i32, usize> = [(30_i32, 0)].into_iter().collect();
+        let rows = vec![(30_i32, 0_i32, None::<i32>, 100.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let constraint = make_constraint(30, ConstraintSense::Equal, true);
+        let system = one_bus_system_n_blks_with_generic(n_blks, vec![constraint], generic_bounds);
+        let t_rows = build_templates_for(&system)[0].num_rows;
+        let t_cols = build_templates_for(&system)[0].num_cols;
+
+        // 2 rows (one per block), 4 slack cols (two per row for `==`).
+        assert_eq!(
+            t_rows,
+            baseline_rows + 2,
+            "num_rows must increase by 2 (one row per block)"
+        );
+        assert_eq!(
+            t_cols,
+            baseline_cols + 4,
+            "num_cols must increase by 4 (two slacks per row for `==`)"
+        );
+    }
+
+    /// AC: 1 active constraint with `block_id = Some(1)`, 3 blocks
+    /// → n_generic_rows == 1 (only the specified block generates a row).
+    #[test]
+    fn generic_constraint_specific_block_id_generates_one_row() {
+        use cobre_core::{ConstraintSense, ResolvedGenericConstraintBounds};
+        use std::collections::HashMap;
+
+        let n_blks = 3_usize;
+        let baseline_system = one_bus_system_n_blks(n_blks);
+        let baseline_rows = build_templates_for(&baseline_system)[0].num_rows;
+        let baseline_cols = build_templates_for(&baseline_system)[0].num_cols;
+
+        let id_map: HashMap<i32, usize> = [(40_i32, 0)].into_iter().collect();
+        // block_id = Some(1) → only block 1 gets a row.
+        let rows = vec![(40_i32, 0_i32, Some(1_i32), 200.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let constraint = make_constraint(40, ConstraintSense::LessEqual, false);
+        let system = one_bus_system_n_blks_with_generic(n_blks, vec![constraint], generic_bounds);
+        let t_rows = build_templates_for(&system)[0].num_rows;
+        let t_cols = build_templates_for(&system)[0].num_cols;
+
+        assert_eq!(
+            t_rows,
+            baseline_rows + 1,
+            "num_rows must increase by exactly 1 (only the specified block)"
+        );
+        assert_eq!(
+            t_cols, baseline_cols,
+            "num_cols must be unchanged (no slack columns)"
+        );
+    }
+
+    /// AC: 2 constraints, one active at stage 0 and one inactive (no bounds) — only the
+    /// active one contributes rows.
+    #[test]
+    fn generic_constraint_inactive_does_not_contribute_rows() {
+        use cobre_core::{ConstraintSense, ResolvedGenericConstraintBounds};
+        use std::collections::HashMap;
+
+        let n_blks = 2_usize;
+        let baseline_system = one_bus_system_n_blks(n_blks);
+        let baseline_rows = build_templates_for(&baseline_system)[0].num_rows;
+
+        // Only constraint 50 (index 0) is active at stage 0.
+        // Constraint 51 (index 1) has no bounds → inactive.
+        let id_map: HashMap<i32, usize> = [(50_i32, 0), (51_i32, 1)].into_iter().collect();
+        let rows = vec![(50_i32, 0_i32, None::<i32>, 400.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let c_active = make_constraint(50, ConstraintSense::LessEqual, false);
+        let c_inactive = make_constraint(51, ConstraintSense::LessEqual, false);
+        let system =
+            one_bus_system_n_blks_with_generic(n_blks, vec![c_active, c_inactive], generic_bounds);
+        let t_rows = build_templates_for(&system)[0].num_rows;
+
+        // Only the active constraint (c_active) contributes n_blks=2 rows.
+        assert_eq!(
+            t_rows,
+            baseline_rows + n_blks,
+            "only the active constraint must contribute rows"
+        );
+    }
+
+    /// AC: StageIndexer fields for generic constraints are empty when built via `new`.
+    #[test]
+    fn stage_indexer_generic_fields_empty_from_new() {
+        let idx = crate::indexer::StageIndexer::new(3, 2);
+        assert!(
+            idx.generic_constraint_rows.is_empty(),
+            "generic_constraint_rows must be empty from new()"
+        );
+        assert!(
+            idx.generic_constraint_slack.is_empty(),
+            "generic_constraint_slack must be empty from new()"
+        );
+        assert_eq!(
+            idx.n_generic_constraints_active, 0,
+            "n_generic_constraints_active must be 0 from new()"
+        );
+    }
+
+    /// Helper: build a one-bus system with `n_blks` operating blocks and
+    /// the given generic constraints + resolved bounds.
+    #[allow(clippy::cast_possible_wrap)]
+    fn one_bus_system_n_blks_with_generic(
+        n_blks: usize,
+        constraints: Vec<cobre_core::GenericConstraint>,
+        bounds: cobre_core::ResolvedGenericConstraintBounds,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let blks: Vec<Block> = (0..n_blks)
+            .map(|i| Block {
+                index: i,
+                name: format!("BLK{i}"),
+                duration_hours: 720.0,
+            })
+            .collect();
+
+        let stage = Stage {
+            index: 0,
+            id: 0_i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: blks,
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        let load_models: Vec<LoadModel> = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let resolved_bounds = ResolvedBounds::new(
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            0,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .stages(vec![stage])
+            .load_models(load_models)
+            .bounds(resolved_bounds)
+            .penalties(penalties)
+            .generic_constraints(constraints)
+            .resolved_generic_bounds(bounds)
+            .build()
+            .expect("one_bus_system_n_blks_with_generic: valid")
+    }
+
+    // ── Helper: scan CSC for entries in a specific (column, row) pair ──────────
+
+    /// Return all values stored at `(col, row)` in the CSC template.
+    ///
+    /// A column may have multiple entries for the same row when two fill helpers
+    /// add to the same position; both are returned so tests can check the total
+    /// (or assert uniqueness).
+    fn csc_entries_at(t: &cobre_solver::StageTemplate, col: usize, row: usize) -> Vec<f64> {
+        let start = t.col_starts[col] as usize;
+        let end = t.col_starts[col + 1] as usize;
+        t.row_indices[start..end]
+            .iter()
+            .zip(t.values[start..end].iter())
+            .filter_map(|(&r, &v)| if r as usize == row { Some(v) } else { None })
+            .collect()
+    }
+
+    // ── AC01: thermal <= constraint row bounds ─────────────────────────────────
+
+    /// AC: `thermal_generation(0) <= 50.0`, 1 block, no slack.
+    /// Verify `row_upper = 50.0`, `row_lower = -INF`, CSC entry `+1.0` in the
+    /// thermal generation column at the generic constraint row.
+    #[test]
+    fn generic_constraint_thermal_le_row_bounds_and_csc_entry() {
+        use cobre_core::ResolvedGenericConstraintBounds;
+        use cobre_core::{
+            ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
+            VariableRef,
+        };
+        use std::collections::HashMap;
+
+        let thermal_entity_id = EntityId(2);
+
+        // Build the generic constraint: thermal_generation(0) <= 50.0
+        let constraint = GenericConstraint {
+            id: EntityId(10),
+            name: "gc_thermal_le".to_string(),
+            description: None,
+            expression: ConstraintExpression {
+                terms: vec![LinearTerm {
+                    coefficient: 1.0,
+                    variable: VariableRef::ThermalGeneration {
+                        thermal_id: thermal_entity_id,
+                        block_id: None,
+                    },
+                }],
+            },
+            sense: ConstraintSense::LessEqual,
+            slack: SlackConfig {
+                enabled: false,
+                penalty: None,
+            },
+        };
+
+        let id_map: HashMap<i32, usize> = [(10_i32, 0)].into_iter().collect();
+        let rows = vec![(10_i32, 0_i32, None::<i32>, 50.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        // Build a 1-bus, 1-thermal, 1-block system.
+        let system =
+            one_bus_one_thermal_system(thermal_entity_id, vec![constraint], generic_bounds);
+        let t = &build_templates_for(&system)[0];
+
+        // Layout for N=0, T=1, B=1, K=1:
+        //   theta=0, decision_start=1
+        //   thermal col 0, block 0 → col = 1
+        //   load_balance row 0 → generic row at row 1
+        let thermal_col = 1_usize;
+        let generic_row = 1_usize;
+
+        // Row bounds: <= sense → lower=-INF, upper=50.0
+        assert!(
+            t.row_lower[generic_row].is_infinite() && t.row_lower[generic_row] < 0.0,
+            "row_lower must be -INF for <= constraint, got {}",
+            t.row_lower[generic_row]
+        );
+        assert!(
+            (t.row_upper[generic_row] - 50.0).abs() < f64::EPSILON,
+            "row_upper must be 50.0, got {}",
+            t.row_upper[generic_row]
+        );
+
+        // CSC entry: thermal gen column must have +1.0 at the generic constraint row.
+        let entries = csc_entries_at(t, thermal_col, generic_row);
+        assert!(
+            !entries.is_empty(),
+            "no CSC entry found at (col={thermal_col}, row={generic_row})"
+        );
+        let total: f64 = entries.iter().sum();
+        assert!(
+            (total - 1.0).abs() < f64::EPSILON,
+            "expected +1.0 total at thermal col / generic row, got {total}"
+        );
+    }
+
+    // ── AC02: slack column for <= constraint ───────────────────────────────────
+
+    /// AC: `thermal_generation(0) <= 50.0`, 1 block, slack enabled (penalty=5000).
+    /// Verify slack column `col_lower=0`, `col_upper=+INF`, `objective=5000*744`,
+    /// and CSC entry `-1.0` for the slack column at the generic constraint row.
+    #[test]
+    fn generic_constraint_thermal_le_slack_column_and_csc_entry() {
+        use cobre_core::ResolvedGenericConstraintBounds;
+        use cobre_core::{
+            ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
+            VariableRef,
+        };
+        use std::collections::HashMap;
+
+        let thermal_entity_id = EntityId(2);
+        let block_hours = 744.0_f64;
+        let penalty = 5000.0_f64;
+
+        let constraint = GenericConstraint {
+            id: EntityId(20),
+            name: "gc_thermal_le_slack".to_string(),
+            description: None,
+            expression: ConstraintExpression {
+                terms: vec![LinearTerm {
+                    coefficient: 1.0,
+                    variable: VariableRef::ThermalGeneration {
+                        thermal_id: thermal_entity_id,
+                        block_id: None,
+                    },
+                }],
+            },
+            sense: ConstraintSense::LessEqual,
+            slack: SlackConfig {
+                enabled: true,
+                penalty: Some(penalty),
+            },
+        };
+
+        let id_map: HashMap<i32, usize> = [(20_i32, 0)].into_iter().collect();
+        let rows = vec![(20_i32, 0_i32, None::<i32>, 50.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let system =
+            one_bus_one_thermal_system(thermal_entity_id, vec![constraint], generic_bounds);
+        let t = &build_templates_for(&system)[0];
+
+        // Layout for N=0, T=1, B=1, K=1, 1 slack col:
+        //   withdrawal_slack_start = col_evap_start + 0 evap cols
+        //   = col_generation_start + 0 generation cols = inflow_slack_end
+        //   = excess_end = 1(theta)+1(thermal)+1(deficit)+1(excess) = 4
+        //   col_generic_slack_start = withdrawal_slack_start + n_h(=0) = 4
+        //   slack_plus_col = 4
+        let slack_col = 4_usize;
+        let generic_row = 1_usize;
+
+        // Slack column bounds: [0, +INF)
+        assert!(
+            t.col_lower[slack_col].abs() < f64::EPSILON,
+            "slack col_lower must be 0.0, got {}",
+            t.col_lower[slack_col]
+        );
+        assert!(
+            t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
+            "slack col_upper must be +INF, got {}",
+            t.col_upper[slack_col]
+        );
+
+        // Objective: penalty * block_hours
+        let expected_obj = penalty * block_hours;
+        assert!(
+            (t.objective[slack_col] - expected_obj).abs() < f64::EPSILON,
+            "slack objective must be {expected_obj}, got {}",
+            t.objective[slack_col]
+        );
+
+        // CSC entry: slack column must have -1.0 at the generic constraint row (<=).
+        let entries = csc_entries_at(t, slack_col, generic_row);
+        assert!(
+            !entries.is_empty(),
+            "no CSC entry found at (col={slack_col}, row={generic_row})"
+        );
+        let total: f64 = entries.iter().sum();
+        assert!(
+            (total - (-1.0)).abs() < f64::EPSILON,
+            "expected -1.0 at slack col / generic row for <= sense, got {total}"
+        );
+    }
+
+    // ── AC03: >= row bounds ────────────────────────────────────────────────────
+
+    /// AC: `thermal_generation(0) >= 10.0`, 1 block, no slack.
+    /// Verify `row_lower = 10.0`, `row_upper = +INF`.
+    #[test]
+    fn generic_constraint_thermal_ge_row_bounds() {
+        use cobre_core::ResolvedGenericConstraintBounds;
+        use cobre_core::{
+            ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
+            VariableRef,
+        };
+        use std::collections::HashMap;
+
+        let thermal_entity_id = EntityId(2);
+
+        let constraint = GenericConstraint {
+            id: EntityId(30),
+            name: "gc_thermal_ge".to_string(),
+            description: None,
+            expression: ConstraintExpression {
+                terms: vec![LinearTerm {
+                    coefficient: 1.0,
+                    variable: VariableRef::ThermalGeneration {
+                        thermal_id: thermal_entity_id,
+                        block_id: None,
+                    },
+                }],
+            },
+            sense: ConstraintSense::GreaterEqual,
+            slack: SlackConfig {
+                enabled: false,
+                penalty: None,
+            },
+        };
+
+        let id_map: HashMap<i32, usize> = [(30_i32, 0)].into_iter().collect();
+        let rows = vec![(30_i32, 0_i32, None::<i32>, 10.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let system =
+            one_bus_one_thermal_system(thermal_entity_id, vec![constraint], generic_bounds);
+        let t = &build_templates_for(&system)[0];
+
+        let generic_row = 1_usize;
+        assert!(
+            (t.row_lower[generic_row] - 10.0).abs() < f64::EPSILON,
+            "row_lower must be 10.0 for >= constraint, got {}",
+            t.row_lower[generic_row]
+        );
+        assert!(
+            t.row_upper[generic_row].is_infinite() && t.row_upper[generic_row] > 0.0,
+            "row_upper must be +INF for >= constraint, got {}",
+            t.row_upper[generic_row]
+        );
+    }
+
+    // ── AC04: == row bounds with two slacks ────────────────────────────────────
+
+    /// AC: `thermal_generation(0) == 80.0`, 1 block, slack enabled.
+    /// Verify two slack columns (plus at col 4, minus at col 5).
+    #[test]
+    fn generic_constraint_thermal_equal_two_slacks() {
+        use cobre_core::ResolvedGenericConstraintBounds;
+        use cobre_core::{ConstraintExpression, ConstraintSense, GenericConstraint, SlackConfig};
+        use std::collections::HashMap;
+
+        let thermal_entity_id = EntityId(2);
+        let penalty = 5000.0_f64;
+        let block_hours = 744.0_f64;
+
+        let constraint = GenericConstraint {
+            id: EntityId(40),
+            name: "gc_thermal_eq_slack".to_string(),
+            description: None,
+            expression: ConstraintExpression { terms: vec![] },
+            sense: ConstraintSense::Equal,
+            slack: SlackConfig {
+                enabled: true,
+                penalty: Some(penalty),
+            },
+        };
+
+        let id_map: HashMap<i32, usize> = [(40_i32, 0)].into_iter().collect();
+        let rows = vec![(40_i32, 0_i32, None::<i32>, 80.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let system =
+            one_bus_one_thermal_system(thermal_entity_id, vec![constraint], generic_bounds);
+        let t = &build_templates_for(&system)[0];
+
+        let slack_plus_col = 4_usize;
+        let slack_minus_col = 5_usize;
+        let generic_row = 1_usize;
+
+        // Row bounds: == → lower == upper == bound
+        assert!(
+            (t.row_lower[generic_row] - 80.0).abs() < f64::EPSILON,
+            "row_lower must be 80.0 for == constraint, got {}",
+            t.row_lower[generic_row]
+        );
+        assert!(
+            (t.row_upper[generic_row] - 80.0).abs() < f64::EPSILON,
+            "row_upper must be 80.0 for == constraint, got {}",
+            t.row_upper[generic_row]
+        );
+
+        // Two slack columns: num_cols baseline is 4 (theta=0, thermal=1, deficit=1, excess=1,
+        // withdrawal_slack=0), with 2 slacks → num_cols = 6.
+        assert_eq!(t.num_cols, 6, "num_cols must be 6 with 2 slack columns");
+
+        // Plus slack: col_upper=+INF, objective=penalty*block_hours, CSC +1.0.
+        assert!(
+            t.col_upper[slack_plus_col].is_infinite() && t.col_upper[slack_plus_col] > 0.0,
+            "plus slack col_upper must be +INF"
+        );
+        let expected_obj = penalty * block_hours;
+        assert!(
+            (t.objective[slack_plus_col] - expected_obj).abs() < f64::EPSILON,
+            "plus slack objective must be {expected_obj}, got {}",
+            t.objective[slack_plus_col]
+        );
+        let plus_entries = csc_entries_at(t, slack_plus_col, generic_row);
+        assert!(
+            !plus_entries.is_empty(),
+            "no CSC entry at plus slack col / generic row"
+        );
+        let plus_total: f64 = plus_entries.iter().sum();
+        assert!(
+            (plus_total - 1.0).abs() < f64::EPSILON,
+            "plus slack CSC must be +1.0 for == sense, got {plus_total}"
+        );
+
+        // Minus slack: col_upper=+INF, objective=penalty*block_hours, CSC -1.0.
+        assert!(
+            t.col_upper[slack_minus_col].is_infinite() && t.col_upper[slack_minus_col] > 0.0,
+            "minus slack col_upper must be +INF"
+        );
+        assert!(
+            (t.objective[slack_minus_col] - expected_obj).abs() < f64::EPSILON,
+            "minus slack objective must be {expected_obj}"
+        );
+        let minus_entries = csc_entries_at(t, slack_minus_col, generic_row);
+        assert!(
+            !minus_entries.is_empty(),
+            "no CSC entry at minus slack col / generic row"
+        );
+        let minus_total: f64 = minus_entries.iter().sum();
+        assert!(
+            (minus_total - (-1.0)).abs() < f64::EPSILON,
+            "minus slack CSC must be -1.0 for == sense, got {minus_total}"
+        );
+    }
+
+    // ── AC03: two hydros with constant productivity, sum constraint ────────────
+
+    /// AC: `hydro_generation(H1) + hydro_generation(H2)` with constant
+    /// productivities 2.5 and 3.0. Verify CSC entries at both turbine columns
+    /// with coefficients equal to the respective productivities.
+    #[test]
+    #[allow(clippy::cast_possible_wrap)]
+    fn generic_constraint_two_hydros_sum_csc_entries() {
+        use chrono::NaiveDate;
+        use cobre_core::ResolvedGenericConstraintBounds;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        use cobre_core::{
+            ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
+            VariableRef,
+        };
+        use std::collections::HashMap;
+
+        let h1_id = EntityId(5);
+        let h2_id = EntityId(10);
+        let prod_h1 = 2.5_f64;
+        let prod_h2 = 3.0_f64;
+
+        let make_hydro = |id: EntityId, prod: f64| Hydro {
+            id,
+            name: format!("H{}", id.0),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: prod,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let hydros = vec![make_hydro(h1_id, prod_h1), make_hydro(h2_id, prod_h2)];
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let stage = Stage {
+            index: 0,
+            id: 0_i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "BLK0".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: h1_id,
+                stage_id: 0,
+                mean_m3s: 50.0,
+                std_m3s: 0.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 0.0,
+            },
+            InflowModel {
+                hydro_id: h2_id,
+                stage_id: 0,
+                mean_m3s: 50.0,
+                std_m3s: 0.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 0.0,
+            },
+        ];
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        // Generic constraint: hydro_generation(H1) + hydro_generation(H2) <= 200
+        let constraint = GenericConstraint {
+            id: EntityId(100),
+            name: "gc_sum_gen".to_string(),
+            description: None,
+            expression: ConstraintExpression {
+                terms: vec![
+                    LinearTerm {
+                        coefficient: 1.0,
+                        variable: VariableRef::HydroGeneration {
+                            hydro_id: h1_id,
+                            block_id: None,
+                        },
+                    },
+                    LinearTerm {
+                        coefficient: 1.0,
+                        variable: VariableRef::HydroGeneration {
+                            hydro_id: h2_id,
+                            block_id: None,
+                        },
+                    },
+                ],
+            },
+            sense: ConstraintSense::LessEqual,
+            slack: SlackConfig {
+                enabled: false,
+                penalty: None,
+            },
+        };
+
+        let id_map: HashMap<i32, usize> = [(100_i32, 0)].into_iter().collect();
+        let rows = vec![(100_i32, 0_i32, None::<i32>, 200.0_f64)];
+        let generic_bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
+
+        let resolved_bounds = ResolvedBounds::new(
+            2, // n_hydros
+            0, // n_thermals
+            0,
+            0,
+            0,
+            1, // n_stages
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            2, // n_hydros
+            1, // n_buses
+            0, // n_lines
+            0, // n_ncs
+            1, // n_stages
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(hydros)
+            .stages(vec![stage])
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(resolved_bounds)
+            .penalties(penalties)
+            .generic_constraints(vec![constraint])
+            .resolved_generic_bounds(generic_bounds)
+            .build()
+            .expect("two_hydro_system: valid");
+
+        let t = &build_templates_for(&system)[0];
+
+        // Hydros sorted by ID: H1(5) at pos=0, H2(10) at pos=1
+        // Column layout (N=2, T=0, K=1, 1 block, constant productivity → no FPHA gen cols):
+        //   col 0,1: storage (outgoing) for H1, H2
+        //   col 2,3: storage_in for H1, H2
+        //   col 4: theta
+        //   col 5,6: turbine H1 blk0, H2 blk0
+        //   col 7,8: spillage H1 blk0, H2 blk0
+        //   col 9,10: deficit segments (1 seg * 1 blk), excess (1 blk)
+        //   col 11,12: withdrawal_slack H1, H2
+
+        // For constant-productivity hydros, HydroGeneration maps to the turbine
+        // column with multiplier = productivity.
+        // Find the generic constraint row (last row).
+        let generic_row = t.num_rows - 1;
+
+        // Find turbine columns for H1 and H2. We know storage takes first
+        // 2*n_hydro cols (storage + storage_in), then theta, then turbine.
+        // N=2: storage=[0..2], storage_in=[2..4], theta=4, turbine_start=5
+        let turbine_h1_col = 5_usize;
+        let turbine_h2_col = 6_usize;
+
+        // CSC entry at turbine_h1_col, generic_row should have coefficient = prod_h1 = 2.5
+        let entries_h1 = csc_entries_at(t, turbine_h1_col, generic_row);
+        assert!(
+            !entries_h1.is_empty(),
+            "no CSC entry found for H1 turbine at generic constraint row"
+        );
+        let total_h1: f64 = entries_h1.iter().sum();
+        assert!(
+            (total_h1 - prod_h1).abs() < f64::EPSILON,
+            "expected coefficient {prod_h1} for H1, got {total_h1}"
+        );
+
+        // CSC entry at turbine_h2_col, generic_row should have coefficient = prod_h2 = 3.0
+        let entries_h2 = csc_entries_at(t, turbine_h2_col, generic_row);
+        assert!(
+            !entries_h2.is_empty(),
+            "no CSC entry found for H2 turbine at generic constraint row"
+        );
+        let total_h2: f64 = entries_h2.iter().sum();
+        assert!(
+            (total_h2 - prod_h2).abs() < f64::EPSILON,
+            "expected coefficient {prod_h2} for H2, got {total_h2}"
+        );
+    }
+
+    // ── Helper: build a one-bus, one-thermal system with generic constraints ───
+
+    /// Build a 1-bus, 1-thermal (constant productivity), 1-block, 1-stage system
+    /// with the given generic constraints and resolved bounds.
+    ///
+    /// Column layout (N=0, T=1, B=1, K=1, no penalty, no FPHA, no evap):
+    ///   theta=0, thermal=[1,2), deficit=[2,3), excess=[3,4)
+    ///   withdrawal_slack=[] (n_h=0), col_generic_slack_start=4
+    ///
+    /// Row layout:
+    ///   load_balance=[0,1), generic_start=1
+    #[allow(clippy::cast_possible_wrap)]
+    fn one_bus_one_thermal_system(
+        thermal_entity_id: EntityId,
+        constraints: Vec<cobre_core::GenericConstraint>,
+        bounds: cobre_core::ResolvedGenericConstraintBounds,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::thermal::{Thermal, ThermalCostSegment};
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let thermal = Thermal {
+            id: thermal_entity_id,
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+
+        let stage = Stage {
+            index: 0,
+            id: 0_i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "BLK0".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        // Resolved bounds: 0 hydros, 1 thermal, 0 lines, 0 pumping, 0 contracts, 1 stage.
+        let resolved_bounds = ResolvedBounds::new(
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            default_hydro_bounds(),
+            ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            0,
+            1,
+            0,
+            0,
+            1,
+            default_hydro_penalties(),
+            BusStagePenalties { excess_cost: 0.0 },
+            LineStagePenalties { exchange_cost: 0.0 },
+            NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .stages(vec![stage])
+            .load_models(load_models)
+            .bounds(resolved_bounds)
+            .penalties(penalties)
+            .generic_constraints(constraints)
+            .resolved_generic_bounds(bounds)
+            .build()
+            .expect("one_bus_one_thermal_system: valid")
     }
 }

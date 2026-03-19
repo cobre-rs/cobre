@@ -75,17 +75,18 @@ identifiers in the spec files:
 
 ---
 
-## Current State (v0.1.5)
+## Current State (v0.1.6)
 
 The SDDP solver is fully functional. The pipeline covers case loading, stochastic
 scenario generation, training, simulation, policy checkpointing, and output writing.
-Includes a deterministic regression suite (D01-D12) with hand-computed expected costs.
+Includes a deterministic regression suite (D01-D13) with hand-computed expected costs.
 
 **What's implemented:**
 
 - Training loop with forward/backward pass, Benders cut management, 5 stopping rules
 - Constant-productivity and FPHA hydro production models (precomputed + computed from geometry)
-- Cascade hydro coupling, evaporation linearization, inflow non-negativity penalties
+- Cascade hydro coupling, evaporation linearization, water withdrawal, inflow non-negativity penalties
+- User-defined generic constraints over LP variables with slack penalties and violation output
 - Multi-segment deficit pricing (N deficit columns per bus per block with capacity constraints)
 - PAR(p) fitting (Levinson-Durbin, AIC order selection), stochastic load demand
 - PAR(p) lag initialization from `past_inflows` in `initial_conditions.json` with validation rules

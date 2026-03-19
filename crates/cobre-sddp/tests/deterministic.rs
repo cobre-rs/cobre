@@ -687,6 +687,105 @@ fn d10_inflow_nonnegativity() {
     );
 }
 
+/// Expected total cost for D11 (single hydro with water withdrawal, 2 stages).
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 100 MW at $100/MWh), 1 hydro (H0: constant
+///   productivity 1.0 MW/(m3/s), max 50 m3/s / 50 MW, storage 0–200 hm3)
+/// - Deterministic inflows: 30.0 m3/s per stage
+/// - Water withdrawal: 10 m3/s per stage (via `constraints/hydro_bounds.parquet`)
+/// - Deterministic load: 80.0 MW per stage
+/// - Initial storage: 100.0 hm3
+/// - 2 stages × 730 h, `inflow_non_negativity: {method: "none"}`
+///
+/// ## How withdrawal enters the water balance
+///
+/// The LP water balance for each stage is:
+///   V_out = V_in + κ × (inflow − withdrawal − turbine − spill)
+///         = V_in + κ × (30 − 10 − turbine − spill)
+///         = V_in + κ × (20 − turbine − spill)
+///
+/// This is equivalent to a case with 20 m3/s net inflow and no withdrawal.
+///
+/// ## Expected cost derivation (κ = 730 × 3600 / 10⁶ = 657/250 hm³/(m³/s))
+///
+/// Let q0 = turbined flow in stage 0.
+///
+/// Stage 1 water balance: V_out1 = V_in1 + κ × (20 − q1) ≥ 0
+///   → q1 ≤ V_in1/κ + 20
+///
+/// Stage 0 storage: V_out0 = 100 + κ × (20 − q0)
+///
+/// ### Case A: q0 ≤ 18430/657 (so V_out0 ≥ 30κ, stage 1 can run at full capacity)
+///
+/// When V_out0 ≥ 30κ, q1 = 50 and gen_th1 = 30 MW.
+/// Total thermal = (80 − q0) + 30 = 110 − q0, which decreases with q0.
+/// Optimal at q0 = 18430/657 ≈ 28.054 m3/s (boundary).
+///
+/// ### Case B: q0 > 18430/657 (V_out0 < 30κ, stage 1 is storage-limited)
+///
+/// q1 = V_out0/κ + 20 = (100 + κ×(20−q0))/κ + 20 = 100/κ + 40 − q0
+/// gen_th1 = 80 − q1 = 40 − 100/κ + q0
+///
+/// Total thermal = (80 − q0) + (40 − 100/κ + q0) = 120 − 100/κ
+///   = 120 − 25000/657 = 53840/657 MW (constant — independent of q0)
+///
+/// The objective is constant in Case B, so SDDP converges to:
+///   Total cost = (53840/657) × 100 × 730
+///              = 53840 × 73000 / 657
+///              = **3,930,320,000 / 657 ≈ 5,982,222.22 $**
+///
+/// D11 cost > D02 cost (≈ 2,626,111.11 $) because the withdrawal reduces net
+/// inflow from 30 to 20 m3/s, leaving less water for generation across both
+/// stages and requiring significantly more thermal dispatch.
+pub const D11_WATER_WITHDRAWAL_EXPECTED_COST: f64 = 3_930_320_000.0 / 657.0;
+
+/// Two-stage hydrothermal dispatch with water withdrawal applied via hydro bounds.
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 100 MW at $100/MWh), 1 hydro (H0: constant
+///   productivity 1.0 MW/(m3/s), max 50 m3/s / 50 MW, storage 0–200 hm3)
+/// - Deterministic inflows: 30.0 m3/s per stage
+/// - Water withdrawal: 10 m3/s per stage (from `constraints/hydro_bounds.parquet`)
+/// - Deterministic load: 80.0 MW per stage
+/// - Initial storage: 100.0 hm3
+/// - 2 stages × 730 h
+///
+/// ## Expected cost
+///
+/// See [`D11_WATER_WITHDRAWAL_EXPECTED_COST`] for the full derivation. The 10 m3/s
+/// withdrawal reduces effective net inflow from 30 to 20 m3/s, increasing thermal
+/// dispatch and pushing total cost to 3,930,320,000 / 657 ≈ 5,982,222.22 $.
+#[test]
+fn d11_water_withdrawal() {
+    let case_dir = Path::new("../../examples/deterministic/d11-water-withdrawal");
+    let result = run_deterministic(case_dir);
+    assert_cost(
+        result.final_lb,
+        D11_WATER_WITHDRAWAL_EXPECTED_COST,
+        1e-4,
+        "D11",
+    );
+    assert!(
+        result.iterations <= 10,
+        "D11: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D11: gap={:.2e}",
+        result.final_gap
+    );
+    assert!(
+        result.final_lb > D02_EXPECTED_COST,
+        "D11: cost {:.6} must exceed D02 cost {:.6} (withdrawal increases thermal dispatch)",
+        result.final_lb,
+        D02_EXPECTED_COST
+    );
+}
+
 /// Warm-start verification for the D02 system.
 ///
 /// Validates that basis transfer via `solve_with_basis` works end-to-end: after

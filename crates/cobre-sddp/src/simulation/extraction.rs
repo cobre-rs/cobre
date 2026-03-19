@@ -26,12 +26,15 @@
 
 use std::ops::Range;
 
+use cobre_core::ConstraintSense;
+
 use crate::StageIndexer;
+use crate::lp_builder::GenericConstraintRowEntry;
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
-    SimulationExchangeResult, SimulationHydroResult, SimulationInflowLagResult,
-    SimulationNonControllableResult, SimulationPumpingResult, SimulationStageResult,
-    SimulationThermalResult,
+    SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
+    SimulationInflowLagResult, SimulationNonControllableResult, SimulationPumpingResult,
+    SimulationStageResult, SimulationThermalResult,
 };
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
@@ -163,6 +166,12 @@ pub struct StageExtractionSpec<'a> {
     pub inflow_m3s_per_hydro: &'a [f64],
     /// Block hours per dispatch block, used to convert duals to spot prices.
     pub block_hours: &'a [f64],
+    /// Per-row metadata for active generic constraint rows at this stage.
+    ///
+    /// Empty when no generic constraints are active.  Used by the extraction
+    /// pipeline to map LP row/column indices back to constraint identity and
+    /// block, and to read slack/dual values from the solution vectors.
+    pub generic_constraint_entries: &'a [GenericConstraintRowEntry],
 }
 
 /// Extract hydro results from a raw LP solution view.
@@ -589,7 +598,14 @@ pub fn extract_stage_result(
         indexer.load_balance.end
     );
 
-    let costs = vec![compute_cost_result(view, spec.indexer, stage_id)];
+    let (generic_violations, generic_violation_cost) =
+        extract_generic_violations(view, spec, stage_id);
+    let costs = vec![compute_cost_result(
+        view,
+        spec.indexer,
+        generic_violation_cost,
+        stage_id,
+    )];
     let (inflow_lags, pumping_stations, contracts, non_controllables) =
         extract_stub_collections(view, spec, stage_id);
 
@@ -604,7 +620,7 @@ pub fn extract_stage_result(
         contracts,
         non_controllables,
         inflow_lags,
-        generic_violations: vec![],
+        generic_violations,
     }
 }
 
@@ -612,6 +628,7 @@ pub fn extract_stage_result(
 fn compute_cost_result(
     view: &SolutionView<'_>,
     indexer: &StageIndexer,
+    generic_violation_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
     let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col];
@@ -683,13 +700,89 @@ fn compute_cost_result(
         filling_target_cost: 0.0,
         hydro_violation_cost: 0.0,
         inflow_penalty_cost: 0.0,
-        generic_violation_cost: 0.0,
+        generic_violation_cost,
         spillage_cost,
         fpha_turbined_cost,
         curtailment_cost: 0.0,
         exchange_cost,
         pumping_cost: 0.0,
     }
+}
+
+/// Extract generic constraint violation results from a solved LP.
+///
+/// For each active generic constraint row, reads the slack value from the
+/// primal vector (for constraints with `slack.enabled`) and the dual value
+/// from the dual vector.  Returns the violation records and the total
+/// violation cost (sum of `slack_value * penalty * block_hours` across all
+/// active constraint rows).
+///
+/// For `==` sense constraints with two slack columns (positive and negative),
+/// the reported `slack_value` is the net violation: `s_plus - s_minus`.
+fn extract_generic_violations(
+    view: &SolutionView<'_>,
+    spec: &StageExtractionSpec<'_>,
+    stage_id: u32,
+) -> (Vec<SimulationGenericViolationResult>, f64) {
+    let entries = spec.generic_constraint_entries;
+    if entries.is_empty() {
+        return (Vec::new(), 0.0);
+    }
+
+    let indexer = spec.indexer;
+    let gc_row_start = indexer.generic_constraint_rows.start;
+    let mut results = Vec::with_capacity(entries.len());
+    let mut total_cost = 0.0;
+
+    for (entry_idx, entry) in entries.iter().enumerate() {
+        let row_idx = gc_row_start + entry_idx;
+
+        // Dual value from the LP row (unused for now but kept for future use).
+        let _dual_value = if row_idx < view.dual.len() {
+            view.dual[row_idx]
+        } else {
+            0.0
+        };
+
+        // Slack value from the LP column(s).
+        let block_hours = spec
+            .block_hours
+            .get(entry.block_idx)
+            .copied()
+            .unwrap_or(0.0);
+        let (slack_value, slack_cost) = if entry.slack_enabled {
+            match entry.sense {
+                ConstraintSense::Equal => {
+                    // Two slack columns: s_plus and s_minus.
+                    let s_plus = entry.slack_plus_col.map_or(0.0, |col| view.primal[col]);
+                    let s_minus = entry.slack_minus_col.map_or(0.0, |col| view.primal[col]);
+                    let net = s_plus - s_minus;
+                    // Cost is for both slack variables individually.
+                    let cost = (s_plus + s_minus) * entry.slack_penalty * block_hours;
+                    (net, cost)
+                }
+                ConstraintSense::LessEqual | ConstraintSense::GreaterEqual => {
+                    let s = entry.slack_plus_col.map_or(0.0, |col| view.primal[col]);
+                    let cost = s * entry.slack_penalty * block_hours;
+                    (s, cost)
+                }
+            }
+        } else {
+            (0.0, 0.0)
+        };
+
+        total_cost += slack_cost;
+
+        results.push(SimulationGenericViolationResult {
+            stage_id,
+            block_id: Some(entry.block_idx as u32),
+            constraint_id: entry.entity_id,
+            slack_value,
+            slack_cost,
+        });
+    }
+
+    (results, total_cost)
 }
 
 /// Extract stub (zero-value) result collections for currently-unmodeled entity types.
@@ -982,6 +1075,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             3,
         );
@@ -1013,6 +1107,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1044,6 +1139,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1078,6 +1174,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1124,6 +1221,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             2,
         );
@@ -1152,6 +1250,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             stage_id,
         );
@@ -1186,6 +1285,7 @@ mod tests {
                 entity_counts: &make_entity_counts_2_hydros(),
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1305,6 +1405,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &block_hours,
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1388,6 +1489,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1620,6 +1722,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1682,6 +1785,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1755,6 +1859,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1838,6 +1943,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1896,6 +2002,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -1984,6 +2091,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -2041,6 +2149,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );
@@ -2099,6 +2208,7 @@ mod tests {
                 entity_counts: &counts,
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
+                generic_constraint_entries: &[],
             },
             0,
         );

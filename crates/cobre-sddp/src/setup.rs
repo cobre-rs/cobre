@@ -749,6 +749,7 @@ impl StudySetup {
             zeta_per_stage: &self.stage_templates.zeta_per_stage,
             block_hours_per_stage: &self.stage_templates.block_hours_per_stage,
             entity_counts: &self.entity_counts,
+            generic_constraint_row_entries: &self.stage_templates.generic_constraint_row_entries,
             event_sender,
         };
 

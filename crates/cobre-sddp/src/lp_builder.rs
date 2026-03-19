@@ -600,6 +600,14 @@ pub struct StageTemplates {
     /// `load_bus_indices[i]` to compute the base row index of bus `i` in the
     /// load-balance region: `row = load_balance_row_start + load_bus_indices[i] * n_blks + blk`.
     pub load_bus_indices: Vec<usize>,
+    /// Per-stage metadata for active generic constraint rows.
+    ///
+    /// `generic_constraint_row_entries[s]` contains one
+    /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
+    /// stage `s`.  Used by the simulation extraction pipeline to map LP
+    /// row/column indices back to constraint identity and block.  Empty for
+    /// stages with no active generic constraints.
+    pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -617,23 +625,33 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 
 /// Per-row metadata for one active generic constraint row at a single stage.
 ///
-/// Stores the information needed by the LP builder (ticket-004) to fill CSC
-/// matrix entries, row bounds, and objective coefficients for generic constraint
-/// rows and their associated slack columns.
+/// Stores the information needed by the LP builder to fill CSC matrix entries,
+/// row bounds, and objective coefficients for generic constraint rows and their
+/// associated slack columns.  Also used by the simulation extraction pipeline
+/// to map LP row/column indices back to constraint identity and block.
 ///
 /// One entry is created per active `(constraint, block)` pair. A constraint
 /// with `block_id = None` in its bounds generates one entry per block;
 /// a constraint with `block_id = Some(k)` generates exactly one entry.
 #[derive(Debug, Clone)]
-pub(crate) struct GenericConstraintRowEntry {
+pub struct GenericConstraintRowEntry {
     /// Index into `System::generic_constraints()` for the parent constraint.
     pub constraint_idx: usize,
+    /// Entity ID of the parent constraint (copied from `GenericConstraint::id`).
+    ///
+    /// Stored here so that the simulation extraction pipeline can report the
+    /// constraint identity without needing a reference to the full constraint list.
+    pub entity_id: i32,
     /// Block index within the stage (0-indexed).
     pub block_idx: usize,
     /// The right-hand-side bound value for this row.
     pub bound: f64,
     /// Comparison sense of the constraint (`>=`, `<=`, or `==`).
     pub sense: ConstraintSense,
+    /// Whether slack is enabled for this constraint.
+    pub slack_enabled: bool,
+    /// Penalty cost per unit of slack violation (`None` when slack is disabled).
+    pub slack_penalty: f64,
     /// Column index of the positive-violation slack (`slack_plus`) when
     /// `slack.enabled = true`.  `None` when slack is disabled.
     pub slack_plus_col: Option<usize>,
@@ -882,9 +900,12 @@ impl StageLayout {
                             n_generic_rows += 1;
                             generic_constraint_rows.push(GenericConstraintRowEntry {
                                 constraint_idx,
+                                entity_id: constraint.id.0,
                                 block_idx,
                                 bound,
                                 sense: constraint.sense,
+                                slack_enabled: constraint.slack.enabled,
+                                slack_penalty: constraint.slack.penalty.unwrap_or(0.0),
                                 slack_plus_col,
                                 slack_minus_col,
                             });
@@ -913,9 +934,12 @@ impl StageLayout {
                         n_generic_rows += 1;
                         generic_constraint_rows.push(GenericConstraintRowEntry {
                             constraint_idx,
+                            entity_id: constraint.id.0,
                             block_idx,
                             bound,
                             sense: constraint.sense,
+                            slack_enabled: constraint.slack.enabled,
+                            slack_penalty: constraint.slack.penalty.unwrap_or(0.0),
                             slack_plus_col,
                             slack_minus_col,
                         });
@@ -1824,14 +1848,15 @@ fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<i32>, Vec<f
 
 /// Construct a [`StageTemplate`] for a single study stage.
 ///
-/// Returns the template and the row index of the water-balance block
-/// (used as `base_row` by the [`PatchBuffer`] noise injection) and the
-/// row index of the load-balance block (used for load-noise patches).
+/// Returns the template, the row index of the water-balance block
+/// (used as `base_row` by the [`PatchBuffer`] noise injection), the
+/// row index of the load-balance block (used for load-noise patches),
+/// and the generic constraint row entries for this stage.
 fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
     stage_idx: usize,
-) -> (StageTemplate, usize, usize) {
+) -> (StageTemplate, usize, usize, Vec<GenericConstraintRowEntry>) {
     let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
     let load_balance_row_start = layout.row_load_balance_start;
@@ -1865,6 +1890,8 @@ fn build_single_stage_template(
     let n_transfer = ctx.n_hydros * ctx.max_par_order;
     let total_nz = col_entries.iter().map(Vec::len).sum();
 
+    let gc_row_entries = layout.generic_constraint_rows;
+
     let template = StageTemplate {
         num_cols: layout.num_cols,
         num_rows: layout.num_rows,
@@ -1884,7 +1911,12 @@ fn build_single_stage_template(
         max_par_order: layout.lag_order,
     };
 
-    (template, stage_base_row, load_balance_row_start)
+    (
+        template,
+        stage_base_row,
+        load_balance_row_start,
+        gc_row_entries,
+    )
 }
 
 /// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation.
@@ -2075,6 +2107,7 @@ pub fn build_stage_templates(
             load_balance_row_starts: Vec::new(),
             n_load_buses: 0,
             load_bus_indices: Vec::new(),
+            generic_constraint_row_entries: Vec::new(),
         });
     }
 
@@ -2146,12 +2179,14 @@ pub fn build_stage_templates(
     let mut templates = Vec::with_capacity(n_study);
     let mut base_rows = Vec::with_capacity(n_study);
     let mut load_balance_row_starts = Vec::with_capacity(n_study);
+    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let (template, stage_base_row, load_balance_row_start) =
+        let (template, stage_base_row, load_balance_row_start, gc_entries) =
             build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
         load_balance_row_starts.push(load_balance_row_start);
+        generic_constraint_row_entries.push(gc_entries);
     }
 
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
@@ -2167,6 +2202,7 @@ pub fn build_stage_templates(
         load_balance_row_starts,
         n_load_buses,
         load_bus_indices,
+        generic_constraint_row_entries,
     })
 }
 

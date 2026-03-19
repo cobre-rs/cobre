@@ -757,6 +757,7 @@ fn train_simulate_write_cycle() {
             zeta_per_stage: &[],
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
+            generic_constraint_row_entries: &[],
             event_sender: None,
         },
         &sim_comm,

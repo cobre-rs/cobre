@@ -1,0 +1,15 @@
+{
+  "constraints": [
+    {
+      "id": 1,
+      "name": "cap_T0",
+      "description": "Cap thermal T0 generation at 10 MW",
+      "expression": "thermal_generation(0)",
+      "sense": "<=",
+      "slack": {
+        "enabled": true,
+        "penalty": 5000.0
+      }
+    }
+  ]
+}

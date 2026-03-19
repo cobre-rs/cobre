@@ -1017,3 +1017,77 @@ fn d12_checkpoint_round_trip() {
 
     assert_cost(summary.mean_cost, D02_EXPECTED_COST, 1e-2, "D12-sim");
 }
+
+/// Generic constraint capping thermal dispatch, forcing deficit.
+///
+/// ## Case setup
+///
+/// - 1 bus, 1 thermal T0: capacity 30 MW at $50/MWh, deterministic load 20 MW,
+///   2 stages each with 730 hours, no hydro.
+/// - 1 generic constraint: `thermal_generation(0) <= 10 MW`
+///   with slack penalty $5000/MWh (slack is more expensive than deficit at $1000/MWh).
+/// - Deficit cost: $1000/MWh (from buses.json).
+///
+/// ## Expected cost derivation
+///
+/// The optimizer will dispatch T0 = 10 MW (at the constraint cap) and leave
+/// 10 MW of deficit, since deficit ($1000/MWh) is cheaper than violating
+/// the generic constraint ($5000/MWh).
+///
+/// Cost per stage:
+///   thermal: 10 MW × $50/MWh × 730 h = $365,000
+///   deficit: 10 MW × $1000/MWh × 730 h = $7,300,000
+///   total:   $7,665,000
+///
+/// Total (2 stages) = 2 × $7,665,000 = **$15,330,000**
+#[test]
+fn d13_generic_constraint() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d13-generic-constraint");
+
+    // Create the generic_constraint_bounds.parquet before running the case.
+    let constraints_dir = case_dir.join("constraints");
+    std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("constraint_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("block_id", DataType::Int32, true),
+        Field::new("bound", DataType::Float64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])), // constraint_id
+            Arc::new(Int32Array::from(vec![0, 1])), // stage_id
+            Arc::new(Int32Array::new_null(2)),      // block_id = null (all blocks)
+            Arc::new(Float64Array::from(vec![10.0, 10.0])), // bound = 10 MW
+        ],
+    )
+    .expect("RecordBatch");
+
+    let bounds_path = constraints_dir.join("generic_constraint_bounds.parquet");
+    let file = std::fs::File::create(&bounds_path).expect("create parquet file");
+    let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+    writer.write(&batch).expect("write batch");
+    writer.close().expect("close writer");
+
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, 15_330_000.0, 1e-2, "D13");
+    assert!(
+        result.iterations <= 10,
+        "D13: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-4,
+        "D13: gap={:.2e}",
+        result.final_gap
+    );
+}

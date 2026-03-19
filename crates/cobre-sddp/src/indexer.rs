@@ -349,6 +349,32 @@ pub struct StageIndexer {
     /// `hydro_count > 0`.  `false` otherwise (including when built via
     /// [`StageIndexer::new`]).
     pub has_withdrawal: bool,
+
+    // ── Generic constraint row and column ranges ────────────────────────────
+    // Populated only by `StageLayout::new` in lp_builder via the full build
+    // path; empty (`0..0`, 0) when built via [`StageIndexer::new`].
+    /// Row range for generic constraint rows (one per active `(constraint, block)` pair).
+    ///
+    /// Rows are placed after evaporation rows (the last row region before
+    /// generic constraints).  Empty (`0..0`) when no generic constraints are
+    /// active at this stage or when built via [`StageIndexer::new`].
+    pub generic_constraint_rows: Range<usize>,
+
+    /// Column range for generic constraint slack variables.
+    ///
+    /// Columns are placed after withdrawal slack columns (the last column region
+    /// before generic constraint slacks).  The number of columns equals the number
+    /// of active rows when `slack.enabled = true` and sense is `<=` or `>=`, or
+    /// twice the number of active rows when sense is `==` (positive and negative
+    /// violation slacks).  Empty (`0..0`) when no slack is needed or when built
+    /// via [`StageIndexer::new`].
+    pub generic_constraint_slack: Range<usize>,
+
+    /// Number of active generic constraint rows contributed at this stage.
+    ///
+    /// Zero when no generic constraints are active or when built via
+    /// [`StageIndexer::new`].
+    pub n_generic_constraints_active: usize,
 }
 
 impl StageIndexer {
@@ -432,6 +458,9 @@ impl StageIndexer {
             evap_indices: Vec::new(),
             withdrawal_slack: 0..0,
             has_withdrawal: false,
+            generic_constraint_rows: 0..0,
+            generic_constraint_slack: 0..0,
+            n_generic_constraints_active: 0,
         }
     }
 

@@ -11,7 +11,7 @@ use cobre_core::{SystemBuilder, scenario::CorrelationModel};
 
 use crate::{
     LoadError,
-    resolution::{resolve_bounds, resolve_penalties},
+    resolution::{resolve_bounds, resolve_generic_constraint_bounds, resolve_penalties},
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
         ValidationContext,
@@ -109,6 +109,11 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         &data.contract_bounds,
     );
 
+    let resolved_generic_bounds = resolve_generic_constraint_bounds(
+        &data.generic_constraints,
+        &data.generic_constraint_bounds,
+    );
+
     // ── Scenario assembly ─────────────────────────────────────────────────────
 
     let inflow_models =
@@ -129,6 +134,7 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .policy_graph(data.stages.policy_graph)
         .penalties(penalties)
         .bounds(bounds)
+        .resolved_generic_bounds(resolved_generic_bounds)
         .inflow_models(inflow_models)
         .load_models(load_models)
         .correlation(data.correlation.unwrap_or_else(CorrelationModel::default))

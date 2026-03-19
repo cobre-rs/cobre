@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "RawBlockFactor": {
+      "description": "Intermediate type for a single block factor.",
+      "properties": {
+        "block_id": {
+          "description": "Block identifier.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "factor": {
+          "description": "Scaling factor. Must be strictly positive (> 0.0) and finite.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "block_id",
+        "factor"
+      ],
+      "type": "object"
+    },
+    "RawLoadFactorEntry": {
+      "description": "Intermediate type for a single load factor entry (one bus-stage pair).",
+      "properties": {
+        "block_factors": {
+          "description": "Per-block scaling factors for this bus-stage pair.",
+          "items": {
+            "$ref": "#/$defs/RawBlockFactor"
+          },
+          "type": "array"
+        },
+        "bus_id": {
+          "description": "Bus identifier.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "stage_id": {
+          "description": "Stage identifier.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bus_id",
+        "stage_id",
+        "block_factors"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level intermediate type for `load_factors.json`.\n\nPrivate — only used during deserialization. Not re-exported.",
+  "properties": {
+    "$schema": {
+      "description": "`$schema` field — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "load_factors": {
+      "description": "Array of load factor entries.",
+      "items": {
+        "$ref": "#/$defs/RawLoadFactorEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "load_factors"
+  ],
+  "title": "RawLoadFactorsFile",
+  "type": "object"
+}

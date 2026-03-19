@@ -154,13 +154,15 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.5 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Multi-segment deficit pricing, Arrow zero-copy Python results, and inflow history lag initialization are included. Includes a deterministic regression suite (D01-D12) with hand-computed expected costs.
+Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D13) with hand-computed expected costs.
 
 **What works today:**
 
 - Training loop with forward/backward pass, Benders cut management, and 5 stopping rules
 - Constant-productivity and FPHA hydroelectric production models (precomputed and computed from reservoir geometry)
-- Cascade hydro coupling, evaporation, inflow non-negativity penalties
+- Cascade hydro coupling, evaporation, water withdrawal, inflow non-negativity penalties
+- User-defined generic constraints over LP variables (thermal generation, hydro storage, line flows, etc.) with slack penalties
+- Multi-segment deficit pricing (N cost tiers per bus)
 - PAR(p) fitting from inflow history (Levinson-Durbin, AIC order selection)
 - Stochastic load demand and correlated multi-site scenario generation
 - Simulation pipeline with policy checkpoint (FlatBuffers) and Parquet output
@@ -175,7 +177,6 @@ See the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/over
 
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
-- [ ] Multi-segment deficit pricing in the LP builder
 - [ ] GNL thermal plants and battery energy storage
 - [ ] Multi-cut formulation and CVaR risk measure
 - [ ] Benchmark suite with published results

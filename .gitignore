@@ -26,6 +26,10 @@ book/output/
 # Implementation plans (local development only)
 plans/
 
+# Claude Code artifacts (local development only)
+.claude/
+assessment*.md
+
 # Python virtual environments (test infrastructure)
 .venv-mpi-smoke/
 

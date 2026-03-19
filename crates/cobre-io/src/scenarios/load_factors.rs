@@ -55,7 +55,8 @@ use crate::LoadError;
 ///
 /// Private — only used during deserialization. Not re-exported.
 #[derive(Deserialize)]
-struct RawLoadFactorsFile {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RawLoadFactorsFile {
     /// `$schema` field — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
@@ -66,6 +67,7 @@ struct RawLoadFactorsFile {
 
 /// Intermediate type for a single load factor entry (one bus-stage pair).
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct RawLoadFactorEntry {
     /// Bus identifier.
     bus_id: i32,
@@ -77,6 +79,7 @@ struct RawLoadFactorEntry {
 
 /// Intermediate type for a single block factor.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct RawBlockFactor {
     /// Block identifier.
     block_id: i32,

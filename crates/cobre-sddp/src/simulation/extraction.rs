@@ -187,6 +187,11 @@ fn extract_hydro_no_turbine(
     } else {
         0.0
     };
+    let withdrawal_violation = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack.start + h]
+    } else {
+        0.0
+    };
     let water_value = view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0);
 
     // Determine if hydro `h` is FPHA. FPHA identification comes from
@@ -236,6 +241,7 @@ fn extract_hydro_no_turbine(
         filling_target_violation_hm3: 0.0,
         evaporation_violation_m3s,
         inflow_nonnegativity_slack_m3s: inflow_slack,
+        water_withdrawal_violation_m3s: withdrawal_violation,
     }
 }
 
@@ -260,6 +266,11 @@ fn extract_hydro_per_block<'a>(
     };
     let inflow_slack = if indexer.has_inflow_penalty {
         view.primal[indexer.inflow_slack.start + h]
+    } else {
+        0.0
+    };
+    let withdrawal_violation = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack.start + h]
     } else {
         0.0
     };
@@ -329,6 +340,7 @@ fn extract_hydro_per_block<'a>(
             filling_target_violation_hm3: 0.0,
             evaporation_violation_m3s,
             inflow_nonnegativity_slack_m3s: inflow_slack,
+            water_withdrawal_violation_m3s: withdrawal_violation,
         }
     })
 }
@@ -1225,12 +1237,13 @@ mod tests {
         assert_eq!(indexer.deficit, 14..15);
         assert_eq!(indexer.excess, 15..16);
 
-        // Build a primal vector of 16 elements.
+        // Build a primal vector sized to include withdrawal_slack columns.
         // storage[0..2]=100,200  inflow_lags[2..4]=50,60  storage_in[4..6]=90,180  theta[6]=500
         // turbine[7..9]=30.0,40.0   spillage[9..11]=5.0,0.0
         // thermal[11]=80.0   line_fwd[12]=15.0   line_rev[13]=0.0
-        // deficit[14]=10.0   excess[15]=2.0
-        let mut primal = vec![0.0_f64; 16];
+        // deficit[14]=10.0   excess[15]=2.0   withdrawal_slack[16..18]=0.0,0.0
+        let n_cols = indexer.withdrawal_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 100.0; // storage h0
         primal[1] = 200.0; // storage h1
         primal[2] = 50.0; // lag h0
@@ -1249,7 +1262,7 @@ mod tests {
         primal[15] = 2.0; // excess b0 b0
 
         // Objective coefficients: thermal cost=50/MWh, spillage cost=0.1, deficit=1000, excess=50
-        let mut obj = vec![0.0_f64; 16];
+        let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta (objective = 1)
         obj[9] = 0.1; // spillage h0 penalty
         obj[11] = 50.0; // thermal cost per MW
@@ -1562,8 +1575,8 @@ mod tests {
             "inflow_slack must be non-empty"
         );
 
-        // Primal vector: 16 base columns + 2 slack columns = 18 total
-        let n_cols = indexer.inflow_slack.end;
+        // Primal vector: base columns + inflow slack + withdrawal slack columns
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
 
         // Fill base values
@@ -1639,8 +1652,8 @@ mod tests {
             "has_inflow_penalty must be false"
         );
 
-        let n_cols = indexer.excess.end; // 16 columns, no slack
-        let primal = vec![1.0_f64; n_cols]; // all ones (no slack columns present)
+        let n_cols = indexer.withdrawal_slack.end; // includes withdrawal_slack columns
+        let primal = vec![1.0_f64; n_cols]; // all ones
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 4];
         let row_lower = vec![0.0_f64; indexer.load_balance.end.max(1)];
@@ -1701,8 +1714,8 @@ mod tests {
         );
 
         // Layout: storage[0..2], lags[2..4], storage_in[4..6], theta=6,
-        //         inflow_slack=[7..9)
-        let n_cols = indexer.inflow_slack.end;
+        //         inflow_slack=[7..9), withdrawal_slack=[9..11)
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 150.0; // storage h0
         primal[1] = 250.0; // storage h1
@@ -1784,7 +1797,7 @@ mod tests {
         assert_eq!(indexer.generation.start, 9, "generation starts at 9");
         assert_eq!(indexer.fpha_hydro_indices, vec![0]);
 
-        let n_cols = indexer.generation.end;
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 50.0; // storage h0
         primal[1] = 80.0; // storage h1
@@ -1853,7 +1866,7 @@ mod tests {
     #[test]
     fn fpha_productivity_is_none() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.generation.end;
+        let n_cols = indexer.withdrawal_slack.end;
         let primal = vec![0.0_f64; n_cols];
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 2];
@@ -1934,7 +1947,7 @@ mod tests {
         assert_eq!(ei.f_evap_plus_col, 6);
         assert_eq!(ei.f_evap_minus_col, 7);
 
-        let n_cols = 8;
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0; // storage h0
         primal[1] = 190.0; // storage_in h0
@@ -1991,7 +2004,7 @@ mod tests {
     #[test]
     fn evaporation_violation_is_sum_of_slacks() {
         let indexer = make_indexer_1h_evap_1blk();
-        let n_cols = 8;
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0;
         primal[1] = 190.0;
@@ -2048,7 +2061,7 @@ mod tests {
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
         // generation.start = 9 (fpha h0 b0)
-        let n_cols = indexer.generation.end;
+        let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[4] = 500.0; // theta
 

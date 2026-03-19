@@ -156,6 +156,8 @@ pub struct HydroWriteRecord {
     pub evaporation_violation_m3s: f64,
     /// Inflow non-negativity slack in m³/s.
     pub inflow_nonnegativity_slack_m3s: f64,
+    /// Water withdrawal constraint violation in m³/s.
+    pub water_withdrawal_violation_m3s: f64,
 }
 
 /// Thermal unit result for one (stage, block, thermal) tuple.
@@ -819,6 +821,7 @@ fn build_hydros_batch(
     let mut filling_target_violation_hm3 = Float64Builder::with_capacity(n);
     let mut evaporation_violation_m3s = Float64Builder::with_capacity(n);
     let mut inflow_nonnegativity_slack_m3s = Float64Builder::with_capacity(n);
+    let mut water_withdrawal_violation_m3s = Float64Builder::with_capacity(n);
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -852,6 +855,7 @@ fn build_hydros_batch(
         filling_target_violation_hm3.append_value(r.filling_target_violation_hm3);
         evaporation_violation_m3s.append_value(r.evaporation_violation_m3s);
         inflow_nonnegativity_slack_m3s.append_value(r.inflow_nonnegativity_slack_m3s);
+        water_withdrawal_violation_m3s.append_value(r.water_withdrawal_violation_m3s);
     }
 
     RecordBatch::try_new(
@@ -885,6 +889,7 @@ fn build_hydros_batch(
             Arc::new(filling_target_violation_hm3.finish()),
             Arc::new(evaporation_violation_m3s.finish()),
             Arc::new(inflow_nonnegativity_slack_m3s.finish()),
+            Arc::new(water_withdrawal_violation_m3s.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("hydros", e.to_string()))
@@ -1565,6 +1570,7 @@ mod tests {
             filling_target_violation_hm3: 0.0,
             evaporation_violation_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
+            water_withdrawal_violation_m3s: 0.0,
         }
     }
 
@@ -1620,14 +1626,15 @@ mod tests {
         // Stage 0 has block 0 with duration 720h; stage 1 has block 0 with 744h.
         let block_durations = vec![vec![720.0_f64], vec![744.0_f64]];
 
-        let r0 = make_hydro_record(0, Some(0), 1); // generation_mw = 50.0
+        let mut r0 = make_hydro_record(0, Some(0), 1); // generation_mw = 50.0
+        r0.water_withdrawal_violation_m3s = 2.5; // nonzero for round-trip test
         let r1 = make_hydro_record(1, Some(0), 2); // generation_mw = 50.0
         let records = vec![&r0, &r1];
 
         let batch =
             build_hydros_batch(&records, &block_durations).expect("hydros batch must build");
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 28, "hydros schema has 28 columns");
+        assert_eq!(batch.num_columns(), 29, "hydros schema has 29 columns");
 
         let gen_mwh_col = batch
             .column_by_name("generation_mwh")
@@ -1664,6 +1671,24 @@ mod tests {
             "outflow_m3s must equal turbined + spillage"
         );
         assert_eq!(outflow_arr.value(1), 90.0);
+
+        let ww_col = batch
+            .column_by_name("water_withdrawal_violation_m3s")
+            .expect("water_withdrawal_violation_m3s column must exist");
+        let ww_arr = ww_col
+            .as_any()
+            .downcast_ref::<arrow::array::Float64Array>()
+            .expect("water_withdrawal_violation_m3s must be Float64Array");
+        assert_eq!(
+            ww_arr.value(0),
+            2.5,
+            "row 0 withdrawal violation must be 2.5"
+        );
+        assert_eq!(
+            ww_arr.value(1),
+            0.0,
+            "row 1 withdrawal violation must be 0.0"
+        );
     }
 
     #[test]

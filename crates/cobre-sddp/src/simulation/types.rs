@@ -134,6 +134,9 @@ pub struct SimulationHydroResult {
     pub evaporation_violation_m3s: f64,
     /// Inflow non-negativity constraint slack in m³/s.
     pub inflow_nonnegativity_slack_m3s: f64,
+    /// Water withdrawal violation slack in m³/s.
+    /// Zero when no withdrawal is modeled or withdrawal is fully sustained.
+    pub water_withdrawal_violation_m3s: f64,
 }
 
 /// Thermal unit result for one (stage, block, thermal) tuple.
@@ -594,6 +597,7 @@ mod tests {
             filling_target_violation_hm3: 0.0,
             evaporation_violation_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
+            water_withdrawal_violation_m3s: 0.0,
         };
 
         assert_eq!(r.hydro_id, 5);

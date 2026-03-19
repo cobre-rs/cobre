@@ -66,6 +66,7 @@ pub(crate) fn hydros_schema() -> Schema {
         Field::new("filling_target_violation_hm3", DataType::Float64, false),
         Field::new("evaporation_violation_m3s", DataType::Float64, false),
         Field::new("inflow_nonnegativity_slack_m3s", DataType::Float64, false),
+        Field::new("water_withdrawal_violation_m3s", DataType::Float64, false),
     ])
 }
 
@@ -371,13 +372,13 @@ mod tests {
     #[test]
     fn hydros_schema_field_count_and_names() {
         let schema = hydros_schema();
-        // The spec (output-schemas.md SS5.2) defines 28 data columns.
+        // The spec (output-schemas.md SS5.2) defines 29 data columns.
         // The ticket's acceptance criterion listed 26, which is a stale count;
         // the spec is the authoritative source.
         assert_eq!(
             schema.fields().len(),
-            28,
-            "hydros schema must have 28 fields"
+            29,
+            "hydros schema must have 29 fields"
         );
         let names = field_names(&schema);
         assert_eq!(
@@ -411,6 +412,7 @@ mod tests {
                 "filling_target_violation_hm3",
                 "evaporation_violation_m3s",
                 "inflow_nonnegativity_slack_m3s",
+                "water_withdrawal_violation_m3s",
             ]
         );
     }
@@ -454,6 +456,7 @@ mod tests {
             "filling_target_violation_hm3",
             "evaporation_violation_m3s",
             "inflow_nonnegativity_slack_m3s",
+            "water_withdrawal_violation_m3s",
         ] {
             assert!(
                 !is_nullable(&schema, col),
@@ -686,7 +689,7 @@ mod tests {
             .collect();
         let expected: &[(&str, usize)] = &[
             ("costs", 20),
-            ("hydros", 28),
+            ("hydros", 29),
             ("thermals", 10),
             ("exchanges", 11),
             ("buses", 10),

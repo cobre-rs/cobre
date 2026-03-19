@@ -371,6 +371,7 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "outflow_slack_above_m3s"
         | "evaporation_violation_m3s"
         | "inflow_nonnegativity_slack_m3s"
+        | "water_withdrawal_violation_m3s"
         | "pumped_volume_hm3" => return "m3/s",
         "storage_initial_hm3"
         | "storage_final_hm3"
@@ -482,6 +483,7 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("hydros", "filling_target_violation_hm3") => "Filling target violation",
         ("hydros", "evaporation_violation_m3s") => "Evaporation constraint violation",
         ("hydros", "inflow_nonnegativity_slack_m3s") => "Inflow non-negativity slack",
+        ("hydros", "water_withdrawal_violation_m3s") => "Water withdrawal constraint violation",
         // ── thermals ───────────────────────────────────────────────────────
         ("thermals", "stage_id") => "Stage index",
         ("thermals", "block_id") => "Block index within stage (nullable)",
@@ -1329,8 +1331,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 146,
-            "variables.csv must have exactly 146 data rows (one per column across all 13 schemas)"
+            row_count, 147,
+            "variables.csv must have exactly 147 data rows (one per column across all 13 schemas)"
         );
     }
 

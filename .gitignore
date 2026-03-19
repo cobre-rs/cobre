@@ -30,6 +30,9 @@ plans/
 .claude/
 assessment*.md
 
+# Stale vendor directory (real HiGHS submodule is at crates/cobre-solver/vendor/)
+vendor/
+
 # Python virtual environments (test infrastructure)
 .venv-mpi-smoke/
 

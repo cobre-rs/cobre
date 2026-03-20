@@ -13,7 +13,7 @@ use crate::{
     LoadError,
     resolution::{
         resolve_bounds, resolve_exchange_factors, resolve_generic_constraint_bounds,
-        resolve_load_factors, resolve_penalties,
+        resolve_load_factors, resolve_ncs_bounds, resolve_ncs_factors, resolve_penalties,
     },
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
@@ -122,6 +122,19 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
     let resolved_exchange_factors =
         resolve_exchange_factors(&data.exchange_factors, &data.lines, &data.stages.stages);
 
+    let resolved_ncs_bounds = resolve_ncs_bounds(
+        &data.ncs_bounds,
+        &data.non_controllable_sources,
+        n_stages,
+        &stage_index,
+    );
+
+    let resolved_ncs_factors = resolve_ncs_factors(
+        &data.non_controllable_factors,
+        &data.non_controllable_sources,
+        &data.stages.stages,
+    );
+
     // ── Scenario assembly ─────────────────────────────────────────────────────
 
     let inflow_models =
@@ -145,6 +158,8 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .resolved_generic_bounds(resolved_generic_bounds)
         .resolved_load_factors(resolved_load_factors)
         .resolved_exchange_factors(resolved_exchange_factors)
+        .resolved_ncs_bounds(resolved_ncs_bounds)
+        .resolved_ncs_factors(resolved_ncs_factors)
         .inflow_models(inflow_models)
         .load_models(load_models)
         .correlation(data.correlation.unwrap_or_else(CorrelationModel::default))

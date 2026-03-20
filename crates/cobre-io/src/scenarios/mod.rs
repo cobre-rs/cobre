@@ -37,6 +37,7 @@ pub mod inflow_stats;
 pub mod load_factors;
 pub mod load_stats;
 pub mod noise_openings;
+pub mod non_controllable_factors;
 
 pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
@@ -49,6 +50,7 @@ pub use load_stats::{LoadSeasonalStatsRow, parse_load_seasonal_stats};
 pub use noise_openings::{
     NoiseOpeningRow, assemble_opening_tree, parse_noise_openings, validate_noise_openings,
 };
+pub use non_controllable_factors::{NcsFactorEntry, parse_non_controllable_factors};
 
 use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel};
 
@@ -119,6 +121,20 @@ pub fn load_load_factors(path: Option<&Path>) -> Result<Vec<LoadFactorEntry>, Lo
     match path {
         None => Ok(Vec::new()),
         Some(p) => parse_load_factors(p),
+    }
+}
+
+/// Load `scenarios/non_controllable_factors.json`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_non_controllable_factors(
+    path: Option<&Path>,
+) -> Result<Vec<NcsFactorEntry>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_non_controllable_factors(p),
     }
 }
 

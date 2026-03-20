@@ -108,7 +108,8 @@ use std::collections::HashMap;
 use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_core::{
     Bus, CascadeTopology, ConstraintSense, EntityId, GenericConstraint, Hydro, Line, LoadModel,
-    ResolvedBounds, ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
+    NonControllableSource, ResolvedBounds, ResolvedExchangeFactors,
+    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
     ResolvedPenalties, Stage, System, Thermal,
 };
 
@@ -609,6 +610,20 @@ pub struct StageTemplates {
     /// row/column indices back to constraint identity and block.  Empty for
     /// stages with no active generic constraints.
     pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
+    /// Per-stage NCS column start indices.
+    ///
+    /// `ncs_col_starts[stage_idx]` is the column index of the first NCS generation
+    /// variable for that stage.
+    pub ncs_col_starts: Vec<usize>,
+    /// Per-stage active NCS counts.
+    ///
+    /// `n_ncs_per_stage[stage_idx]` is the number of active NCS entities at that stage.
+    pub n_ncs_per_stage: Vec<usize>,
+    /// Per-stage active NCS system indices.
+    ///
+    /// `active_ncs_indices[stage_idx]` lists the system-level NCS indices active at
+    /// that stage, in entity-ID order.
+    pub active_ncs_indices: Vec<Vec<usize>>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -693,10 +708,17 @@ struct TemplateBuildCtx<'a> {
     resolved_load_factors: &'a ResolvedLoadFactors,
     /// Pre-resolved per-block exchange capacity factors.
     resolved_exchange_factors: &'a ResolvedExchangeFactors,
+    /// Non-controllable source entities sorted by ID.
+    non_controllable_sources: &'a [NonControllableSource],
+    /// Pre-resolved per-stage NCS available generation bounds.
+    resolved_ncs_bounds: &'a ResolvedNcsBounds,
+    /// Pre-resolved per-block NCS generation scaling factors.
+    resolved_ncs_factors: &'a ResolvedNcsFactors,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
     n_buses: usize,
+    n_ncs: usize,
     max_par_order: usize,
     has_penalty: bool,
 }
@@ -750,6 +772,15 @@ struct StageLayout {
     /// Layout: `col_withdrawal_slack_start + h`.
     /// Zero when `n_h == 0`.
     col_withdrawal_slack_start: usize,
+    /// Start of NCS generation columns (after withdrawal slack columns).
+    ///
+    /// One column per active NCS per block.
+    /// Layout: `col_ncs_start + ncs_local_idx * n_blks + blk`.
+    col_ncs_start: usize,
+    /// Number of active NCS entities at this stage.
+    n_ncs: usize,
+    /// Indices (into `ctx.non_controllable_sources`) of NCS active at this stage.
+    active_ncs_indices: Vec<usize>,
     num_cols: usize,
     /// Start of generic constraint rows (after evaporation rows).
     ///
@@ -859,11 +890,28 @@ impl StageLayout {
         let row_evap_start = row_fpha_start + n_fpha_rows;
         let evap_rows_end = row_evap_start + n_evap_hydros;
 
+        // ── NCS: identify active NCS entities at this stage ─────────────────────
+        let mut active_ncs_indices: Vec<usize> = Vec::new();
+        for (ncs_idx, ncs) in ctx.non_controllable_sources.iter().enumerate() {
+            let entered = ncs.entry_stage_id.map_or(true, |entry| entry <= stage.id);
+            let not_exited = ncs.exit_stage_id.map_or(true, |exit| stage.id < exit);
+            if entered && not_exited {
+                active_ncs_indices.push(ncs_idx);
+            }
+        }
+        let n_active_ncs = active_ncs_indices.len();
+
+        // NCS generation columns: one per active NCS per block, placed after
+        // withdrawal slack columns (before generic constraint slack).
+        let col_ncs_start = withdrawal_slack_end;
+        let n_ncs_cols = n_active_ncs * n_blks;
+        let col_ncs_end = col_ncs_start + n_ncs_cols;
+
         // ── Generic constraints: identify active rows and slack columns ─────────
         // Generic constraint rows are placed after evaporation rows (last row region).
-        // Generic constraint slack columns are placed after withdrawal slack (last col region).
+        // Generic constraint slack columns are placed after NCS columns (last col region).
         let row_generic_start = evap_rows_end;
-        let col_generic_slack_start = withdrawal_slack_end;
+        let col_generic_slack_start = col_ncs_end;
 
         let mut n_generic_rows: usize = 0;
         let mut n_generic_slack_cols: usize = 0;
@@ -975,6 +1023,9 @@ impl StageLayout {
             col_generation_start,
             col_evap_start,
             col_withdrawal_slack_start,
+            col_ncs_start,
+            n_ncs: n_active_ncs,
+            active_ncs_indices,
             num_cols,
             row_water_balance_start,
             row_load_balance_start,
@@ -1189,6 +1240,24 @@ fn fill_stage_columns(
         }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         objective[col] = hp.water_withdrawal_violation_cost * total_stage_hours;
+    }
+
+    // NCS generation columns: one per active NCS per block.
+    // col_lower[col] = 0.0 (from vec initialisation).
+    // col_upper[col] = available_gen * ncs_factor.
+    // objective[col] = -curtailment_cost * block_hours (negative incentivises generation).
+    for (ncs_local, &ncs_sys_idx) in layout.active_ncs_indices.iter().enumerate() {
+        let ncs = &ctx.non_controllable_sources[ncs_sys_idx];
+        let avail_gen = ctx
+            .resolved_ncs_bounds
+            .available_generation(ncs_sys_idx, stage_idx);
+        for blk in 0..layout.n_blks {
+            let col = layout.col_ncs_start + ncs_local * layout.n_blks + blk;
+            let factor = ctx.resolved_ncs_factors.factor(ncs_sys_idx, stage_idx, blk);
+            col_upper[col] = avail_gen * factor;
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = -ncs.curtailment_cost * block_hours;
+        }
     }
 
     (col_lower, col_upper, objective)
@@ -1808,6 +1877,29 @@ fn fill_generic_constraint_entries(
     }
 }
 
+/// Fill NCS generation entries into the load balance constraint rows.
+///
+/// For each active NCS `r` at block `k`, injects `+1.0` at the load balance
+/// row of the connected bus, identical to thermal generation injection.
+fn fill_ncs_load_balance_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    for (ncs_local, &ncs_sys_idx) in layout.active_ncs_indices.iter().enumerate() {
+        let ncs = &ctx.non_controllable_sources[ncs_sys_idx];
+        let Some(&bus_idx) = ctx.bus_pos.get(&ncs.bus_id) else {
+            // Unknown bus — should not happen with valid data, but defensive skip.
+            continue;
+        };
+        for blk in 0..layout.n_blks {
+            let col = layout.col_ncs_start + ncs_local * layout.n_blks + blk;
+            let row = layout.row_load_balance_start + bus_idx * layout.n_blks + blk;
+            col_entries[col].push((row, 1.0));
+        }
+    }
+}
+
 /// Build the unsorted CSC matrix entries for one stage.
 ///
 /// Returns one `Vec<(row, value)>` per column. Entries are in insertion
@@ -1823,6 +1915,7 @@ fn build_stage_matrix_entries(
 
     fill_state_and_water_entries(ctx, stage, stage_idx, layout, &mut col_entries);
     fill_load_balance_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_ncs_load_balance_entries(ctx, layout, &mut col_entries);
     fill_fpha_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_evaporation_entries(ctx, stage_idx, layout, &mut col_entries);
 
@@ -1863,12 +1956,22 @@ fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<i32>, Vec<f
 /// Returns the template, the row index of the water-balance block
 /// (used as `base_row` by the [`PatchBuffer`] noise injection), the
 /// row index of the load-balance block (used for load-noise patches),
-/// and the generic constraint row entries for this stage.
+/// the generic constraint row entries for this stage, and NCS metadata
+/// (column start, count, and active system indices).
+#[allow(clippy::type_complexity)]
 fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
     stage_idx: usize,
-) -> (StageTemplate, usize, usize, Vec<GenericConstraintRowEntry>) {
+) -> (
+    StageTemplate,
+    usize,
+    usize,
+    Vec<GenericConstraintRowEntry>,
+    usize,
+    usize,
+    Vec<usize>,
+) {
     let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
     let load_balance_row_start = layout.row_load_balance_start;
@@ -1903,6 +2006,9 @@ fn build_single_stage_template(
     let total_nz = col_entries.iter().map(Vec::len).sum();
 
     let gc_row_entries = layout.generic_constraint_rows;
+    let ncs_col_start = layout.col_ncs_start;
+    let n_ncs = layout.n_ncs;
+    let ncs_active = layout.active_ncs_indices;
 
     let template = StageTemplate {
         num_cols: layout.num_cols,
@@ -1928,6 +2034,9 @@ fn build_single_stage_template(
         stage_base_row,
         load_balance_row_start,
         gc_row_entries,
+        ncs_col_start,
+        n_ncs,
+        ncs_active,
     )
 }
 
@@ -2121,6 +2230,9 @@ pub fn build_stage_templates(
             n_load_buses: 0,
             load_bus_indices: Vec::new(),
             generic_constraint_row_entries: Vec::new(),
+            ncs_col_starts: Vec::new(),
+            n_ncs_per_stage: Vec::new(),
+            active_ncs_indices: Vec::new(),
         });
     }
 
@@ -2182,10 +2294,14 @@ pub fn build_stage_templates(
         resolved_generic_bounds: system.resolved_generic_bounds(),
         resolved_load_factors: system.resolved_load_factors(),
         resolved_exchange_factors: system.resolved_exchange_factors(),
+        non_controllable_sources: system.non_controllable_sources(),
+        resolved_ncs_bounds: system.resolved_ncs_bounds(),
+        resolved_ncs_factors: system.resolved_ncs_factors(),
         n_hydros,
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),
         n_buses: buses.len(),
+        n_ncs: system.non_controllable_sources().len(),
         max_par_order,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
     };
@@ -2195,13 +2311,26 @@ pub fn build_stage_templates(
     let mut base_rows = Vec::with_capacity(n_study);
     let mut load_balance_row_starts = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
+    let mut ncs_col_starts = Vec::with_capacity(n_study);
+    let mut n_ncs_per_stage = Vec::with_capacity(n_study);
+    let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let (template, stage_base_row, load_balance_row_start, gc_entries) =
-            build_single_stage_template(&ctx, stage, stage_idx);
+        let (
+            template,
+            stage_base_row,
+            load_balance_row_start,
+            gc_entries,
+            ncs_col_start,
+            ncs_count,
+            ncs_active,
+        ) = build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
         load_balance_row_starts.push(load_balance_row_start);
         generic_constraint_row_entries.push(gc_entries);
+        ncs_col_starts.push(ncs_col_start);
+        n_ncs_per_stage.push(ncs_count);
+        active_ncs_indices_per_stage.push(ncs_active);
     }
 
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
@@ -2218,6 +2347,9 @@ pub fn build_stage_templates(
         n_load_buses,
         load_bus_indices,
         generic_constraint_row_entries,
+        ncs_col_starts,
+        n_ncs_per_stage,
+        active_ncs_indices: active_ncs_indices_per_stage,
     })
 }
 

@@ -25,11 +25,11 @@ use crate::{
     constraints::{
         BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry, GenericConstraintBoundsRow,
         HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow, LinePenaltyOverrideRow,
-        NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow, load_contract_bounds,
-        load_exchange_factors, load_generic_constraint_bounds, load_generic_constraints,
-        load_hydro_bounds, load_line_bounds, load_penalty_overrides_bus,
-        load_penalty_overrides_hydro, load_penalty_overrides_line, load_penalty_overrides_ncs,
-        load_pumping_bounds, load_thermal_bounds,
+        NcsBoundsRow, NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow,
+        load_contract_bounds, load_exchange_factors, load_generic_constraint_bounds,
+        load_generic_constraints, load_hydro_bounds, load_line_bounds, load_ncs_bounds,
+        load_penalty_overrides_bus, load_penalty_overrides_hydro, load_penalty_overrides_line,
+        load_penalty_overrides_ncs, load_pumping_bounds, load_thermal_bounds,
     },
     extensions::{
         FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, load_fpha_hyperplanes,
@@ -39,9 +39,10 @@ use crate::{
     penalties::parse_penalties,
     scenarios::{
         ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow,
-        LoadFactorEntry, LoadSeasonalStatsRow, load_correlation, load_external_scenarios,
-        load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
-        load_load_factors, load_load_seasonal_stats,
+        LoadFactorEntry, LoadSeasonalStatsRow, NcsFactorEntry, load_correlation,
+        load_external_scenarios, load_inflow_ar_coefficients, load_inflow_history,
+        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats,
+        load_non_controllable_factors,
     },
     stages::StagesData,
     system::{
@@ -121,6 +122,8 @@ pub(crate) struct ParsedData {
     pub(crate) load_factors: Vec<LoadFactorEntry>,
     /// Parsed `scenarios/correlation.json`. `None` when absent.
     pub(crate) correlation: Option<CorrelationModel>,
+    /// Parsed `scenarios/non_controllable_factors.json`. Empty when absent.
+    pub(crate) non_controllable_factors: Vec<NcsFactorEntry>,
 
     // ── Optional constraints/ files ───────────────────────────────────────────
     /// Parsed `constraints/thermal_bounds.parquet`. Empty when absent.
@@ -150,6 +153,8 @@ pub(crate) struct ParsedData {
     pub(crate) penalty_overrides_hydro: Vec<HydroPenaltyOverrideRow>,
     /// Parsed `constraints/penalty_overrides_ncs.parquet`. Empty when absent.
     pub(crate) penalty_overrides_ncs: Vec<NcsPenaltyOverrideRow>,
+    /// Parsed `constraints/ncs_bounds.parquet`. Empty when absent.
+    pub(crate) ncs_bounds: Vec<NcsBoundsRow>,
 }
 
 // ── Error mapping helper ──────────────────────────────────────────────────────
@@ -432,6 +437,18 @@ pub(crate) fn validate_schema(
         None
     };
 
+    let non_controllable_factors = optional_or_error(
+        manifest.scenarios_non_controllable_factors_json,
+        || {
+            load_non_controllable_factors(Some(
+                &case_root.join("scenarios/non_controllable_factors.json"),
+            ))
+        },
+        Vec::new,
+        "scenarios/non_controllable_factors.json",
+        ctx,
+    );
+
     // ── Optional constraints/ files ───────────────────────────────────────────
 
     let thermal_bounds = optional_or_error(
@@ -554,6 +571,14 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
+    let ncs_bounds = optional_or_error(
+        manifest.constraints_ncs_bounds_parquet,
+        || load_ncs_bounds(Some(&case_root.join("constraints/ncs_bounds.parquet"))),
+        Vec::new,
+        "constraints/ncs_bounds.parquet",
+        ctx,
+    );
+
     // ── Assemble result ───────────────────────────────────────────────────────
 
     // Only return Some(ParsedData) when no new errors were added during this call.
@@ -608,6 +633,7 @@ pub(crate) fn validate_schema(
         load_seasonal_stats,
         load_factors,
         correlation,
+        non_controllable_factors,
         thermal_bounds,
         hydro_bounds,
         line_bounds,
@@ -620,6 +646,7 @@ pub(crate) fn validate_schema(
         penalty_overrides_line,
         penalty_overrides_hydro,
         penalty_overrides_ncs,
+        ncs_bounds,
     })
 }
 

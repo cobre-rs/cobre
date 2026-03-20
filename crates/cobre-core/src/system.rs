@@ -14,8 +14,8 @@ use crate::{
     Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
     InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
     PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedPenalties, ScenarioSource, Stage,
-    Thermal, ValidationError,
+    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
+    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
 };
 
 /// Top-level system representation.
@@ -106,6 +106,10 @@ pub struct System {
     resolved_load_factors: ResolvedLoadFactors,
     /// Pre-resolved per-block exchange capacity factors.
     resolved_exchange_factors: ResolvedExchangeFactors,
+    /// Pre-resolved per-stage NCS available generation bounds.
+    resolved_ncs_bounds: ResolvedNcsBounds,
+    /// Pre-resolved per-block NCS generation scaling factors.
+    resolved_ncs_factors: ResolvedNcsFactors,
 
     // Scenario pipeline data (raw parameters loaded by cobre-io)
     /// PAR(p) inflow model parameters, one entry per (hydro, stage) pair.
@@ -333,6 +337,18 @@ impl System {
         &self.resolved_exchange_factors
     }
 
+    /// Returns a reference to the pre-resolved per-stage NCS available generation bounds.
+    #[must_use]
+    pub fn resolved_ncs_bounds(&self) -> &ResolvedNcsBounds {
+        &self.resolved_ncs_bounds
+    }
+
+    /// Returns a reference to the pre-resolved per-block NCS generation scaling factors.
+    #[must_use]
+    pub fn resolved_ncs_factors(&self) -> &ResolvedNcsFactors {
+        &self.resolved_ncs_factors
+    }
+
     /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).
     #[must_use]
     pub fn inflow_models(&self) -> &[InflowModel] {
@@ -489,6 +505,8 @@ pub struct SystemBuilder {
     resolved_generic_bounds: ResolvedGenericConstraintBounds,
     resolved_load_factors: ResolvedLoadFactors,
     resolved_exchange_factors: ResolvedExchangeFactors,
+    resolved_ncs_bounds: ResolvedNcsBounds,
+    resolved_ncs_factors: ResolvedNcsFactors,
     inflow_models: Vec<InflowModel>,
     load_models: Vec<LoadModel>,
     correlation: CorrelationModel,
@@ -525,6 +543,8 @@ impl SystemBuilder {
             resolved_generic_bounds: ResolvedGenericConstraintBounds::empty(),
             resolved_load_factors: ResolvedLoadFactors::empty(),
             resolved_exchange_factors: ResolvedExchangeFactors::empty(),
+            resolved_ncs_bounds: ResolvedNcsBounds::empty(),
+            resolved_ncs_factors: ResolvedNcsFactors::empty(),
             inflow_models: Vec::new(),
             load_models: Vec::new(),
             correlation: CorrelationModel::default(),
@@ -648,6 +668,24 @@ impl SystemBuilder {
         resolved_exchange_factors: ResolvedExchangeFactors,
     ) -> Self {
         self.resolved_exchange_factors = resolved_exchange_factors;
+        self
+    }
+
+    /// Set the pre-resolved per-stage NCS available generation bounds.
+    ///
+    /// Populated by `cobre-io` after resolving `ncs_bounds.parquet` entries.
+    #[must_use]
+    pub fn resolved_ncs_bounds(mut self, resolved_ncs_bounds: ResolvedNcsBounds) -> Self {
+        self.resolved_ncs_bounds = resolved_ncs_bounds;
+        self
+    }
+
+    /// Set the pre-resolved per-block NCS generation scaling factors.
+    ///
+    /// Populated by `cobre-io` after resolving `non_controllable_factors.json` entries.
+    #[must_use]
+    pub fn resolved_ncs_factors(mut self, resolved_ncs_factors: ResolvedNcsFactors) -> Self {
+        self.resolved_ncs_factors = resolved_ncs_factors;
         self
     }
 
@@ -829,6 +867,8 @@ impl SystemBuilder {
             resolved_generic_bounds: self.resolved_generic_bounds,
             resolved_load_factors: self.resolved_load_factors,
             resolved_exchange_factors: self.resolved_exchange_factors,
+            resolved_ncs_bounds: self.resolved_ncs_bounds,
+            resolved_ncs_factors: self.resolved_ncs_factors,
             inflow_models: self.inflow_models,
             load_models: self.load_models,
             correlation: self.correlation,

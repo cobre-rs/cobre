@@ -33,7 +33,7 @@ use super::{ErrorKind, ValidationContext};
 /// All fields default to `false`.  After calling [`validate_structure`], each field
 /// is `true` if the corresponding file was found on disk.
 ///
-/// The 34 files are organised by subdirectory following the input directory structure spec.
+/// The 36 files are organised by subdirectory following the input directory structure spec.
 /// Each bool is an independent "present/absent" flag for a distinct file.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
@@ -87,6 +87,8 @@ pub struct FileManifest {
     pub scenarios_correlation_json: bool,
     /// `scenarios/noise_openings.parquet` — optional
     pub scenarios_noise_openings_parquet: bool,
+    /// `scenarios/non_controllable_factors.json` — optional
+    pub scenarios_non_controllable_factors_json: bool,
 
     // ── constraints/ (12 files) ──────────────────────────────────────────────
     /// `constraints/thermal_bounds.parquet` — optional
@@ -113,6 +115,8 @@ pub struct FileManifest {
     pub constraints_penalty_overrides_hydro_parquet: bool,
     /// `constraints/penalty_overrides_ncs.parquet` — optional
     pub constraints_penalty_overrides_ncs_parquet: bool,
+    /// `constraints/ncs_bounds.parquet` — optional
+    pub constraints_ncs_bounds_parquet: bool,
 }
 
 // ── validate_structure ────────────────────────────────────────────────────────
@@ -219,6 +223,10 @@ const FILE_ENTRIES: &[FileEntry] = &[
         relative: "scenarios/noise_openings.parquet",
         required: false,
     },
+    FileEntry {
+        relative: "scenarios/non_controllable_factors.json",
+        required: false,
+    },
     // constraints/ — optional
     FileEntry {
         relative: "constraints/thermal_bounds.parquet",
@@ -268,6 +276,10 @@ const FILE_ENTRIES: &[FileEntry] = &[
         relative: "constraints/penalty_overrides_ncs.parquet",
         required: false,
     },
+    FileEntry {
+        relative: "constraints/ncs_bounds.parquet",
+        required: false,
+    },
 ];
 
 /// Performs Layer 1 structural validation on the case directory at `case_root`.
@@ -289,7 +301,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 ///
 /// # Returns
 ///
-/// A [`FileManifest`] recording presence/absence of all 34 files.
+/// A [`FileManifest`] recording presence/absence of all 36 files.
 #[must_use]
 pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> FileManifest {
     let mut manifest = FileManifest::default();
@@ -319,7 +331,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 ///
 /// This keeps the mapping between entries and manifest fields explicit and avoids
 /// fragile positional indexing elsewhere.
-fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 34] {
+fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 36] {
     [
         // Root (4)
         &mut m.config_json,
@@ -347,7 +359,8 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 34] {
         &mut m.scenarios_load_factors_json,
         &mut m.scenarios_correlation_json,
         &mut m.scenarios_noise_openings_parquet,
-        // constraints/ (12)
+        &mut m.scenarios_non_controllable_factors_json,
+        // constraints/ (13)
         &mut m.constraints_thermal_bounds_parquet,
         &mut m.constraints_hydro_bounds_parquet,
         &mut m.constraints_line_bounds_parquet,
@@ -360,6 +373,7 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 34] {
         &mut m.constraints_penalty_overrides_line_parquet,
         &mut m.constraints_penalty_overrides_hydro_parquet,
         &mut m.constraints_penalty_overrides_ncs_parquet,
+        &mut m.constraints_ncs_bounds_parquet,
     ]
 }
 
@@ -534,19 +548,19 @@ mod tests {
 
     #[test]
     fn test_structural_manifest_fields_count() {
-        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (34 entries)
+        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (35 entries)
         assert_eq!(
             FILE_ENTRIES.len(),
-            34,
-            "FILE_ENTRIES should have exactly 34 entries"
+            36,
+            "FILE_ENTRIES should have exactly 36 entries"
         );
 
         let mut manifest = FileManifest::default();
         let fields = manifest_fields_mut(&mut manifest);
         assert_eq!(
             fields.len(),
-            34,
-            "manifest_fields_mut should return exactly 34 fields"
+            36,
+            "manifest_fields_mut should return exactly 36 fields"
         );
     }
 

@@ -394,6 +394,22 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
+    // ── Rule 19b: NcsModel.ncs_id -> NonControllableSource reference ───────────
+
+    for (i, model) in data.ncs_models.iter().enumerate() {
+        if !ncs_ids.contains(&model.ncs_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/non_controllable_models.parquet",
+                Some(format!("NcsModel[{i}]")),
+                format!(
+                    "NcsModel[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
+                    model.ncs_id.0
+                ),
+            );
+        }
+    }
+
     // ── Rule 20: ExternalScenarioRow -> hydro reference ───────────────────────
 
     for (i, row) in data.external_scenarios.iter().enumerate() {

@@ -230,6 +230,8 @@ pub struct StudySetup {
 
     // ── NCS per-stage entity IDs (for simulation extraction) ────────────────
     ncs_entity_ids_per_stage: Vec<Vec<i32>>,
+    /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
+    ncs_max_gen: Vec<f64>,
 
     // ── Derived layout values ─────────────────────────────────────────────────
     block_counts_per_stage: Vec<usize>,
@@ -430,6 +432,22 @@ impl StudySetup {
             })
             .collect();
 
+        // ── NCS max generation for stochastic entities ───────────────────────
+        let ncs_max_gen: Vec<f64> = {
+            let stoch_ncs_ids = stochastic.ncs_entity_ids();
+            stoch_ncs_ids
+                .iter()
+                .map(|ncs_id| {
+                    system
+                        .non_controllable_sources()
+                        .iter()
+                        .find(|n| n.id == *ncs_id)
+                        .map(|n| n.max_generation_mw)
+                        .unwrap_or(0.0)
+                })
+                .collect()
+        };
+
         // ── Block layout ──────────────────────────────────────────────────────
         let block_counts_per_stage: Vec<usize> = stage_templates
             .block_hours_per_stage
@@ -448,6 +466,7 @@ impl StudySetup {
             risk_measures,
             entity_counts,
             ncs_entity_ids_per_stage,
+            ncs_max_gen,
             hydro_models,
             block_counts_per_stage,
             max_blocks,
@@ -638,6 +657,7 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+            ncs_max_gen: &self.ncs_max_gen,
         }
     }
 
@@ -697,6 +717,7 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+            ncs_max_gen: &self.ncs_max_gen,
         };
 
         let training_ctx = TrainingContext {

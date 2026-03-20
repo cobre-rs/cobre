@@ -545,6 +545,7 @@ fn run_training(
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize; 5],
+        ncs_max_gen: &[],
     };
     let result = pool
         .install(|| {
@@ -649,6 +650,7 @@ fn run_simulation(
                     load_balance_row_starts: &[],
                     load_bus_indices: &[],
                     block_counts_per_stage: &[],
+                    ncs_max_gen: &[],
                 },
                 fcf,
                 &TrainingContext {

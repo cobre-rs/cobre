@@ -1037,6 +1037,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,
@@ -1106,6 +1107,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,
@@ -1184,6 +1186,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         train(
             &mut solver,
@@ -1307,6 +1310,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,
@@ -1375,6 +1379,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,
@@ -1441,6 +1446,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,
@@ -1514,6 +1520,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         train(
             &mut solver,
@@ -1600,6 +1607,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         train(
             &mut solver,
@@ -1705,6 +1713,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         train(
             &mut solver,
@@ -1799,6 +1808,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,

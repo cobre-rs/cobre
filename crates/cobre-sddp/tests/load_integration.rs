@@ -465,6 +465,7 @@ fn test_stochastic_load_training_completes() {
         load_balance_row_starts: &load_balance_row_starts,
         load_bus_indices: &load_bus_indices,
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -557,6 +558,7 @@ fn test_deterministic_load_training_matches_baseline() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -640,6 +642,7 @@ fn test_stochastic_load_seed_determinism() {
             load_balance_row_starts: &load_balance_row_starts,
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,

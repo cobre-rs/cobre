@@ -26,6 +26,15 @@ pub(crate) struct ScratchBuffers {
     pub(crate) eta_floor_buf: Vec<f64>,
     /// Zero-filled scratch buffer for `solve_par_noises` targets (inflow truncation).
     pub(crate) zero_targets_buf: Vec<f64>,
+    /// Scratch buffer for NCS column upper bounds (forward/backward pass).
+    ///
+    /// Sized to `n_stochastic_ncs * max_blocks`. Built per stage by
+    /// `transform_ncs_noise` before calling `solver.set_col_bounds`.
+    pub(crate) ncs_col_upper_buf: Vec<f64>,
+    /// Scratch buffer for NCS column lower bounds (all zeros).
+    pub(crate) ncs_col_lower_buf: Vec<f64>,
+    /// Pre-computed NCS column indices for `set_col_bounds`.
+    pub(crate) ncs_col_indices_buf: Vec<usize>,
     /// Scratch buffer for stochastic load RHS values (forward pass).
     ///
     /// Sized to `n_load_buses * max_blocks`. Built per stage by the forward pass
@@ -83,6 +92,9 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 par_inflow_buf: Vec::with_capacity(hydro_count),
                 eta_floor_buf: Vec::with_capacity(hydro_count),
                 zero_targets_buf: vec![0.0_f64; hydro_count],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                 row_lower_buf: Vec::new(),
             },
@@ -133,6 +145,9 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     par_inflow_buf: Vec::with_capacity(hydro_count),
                     eta_floor_buf: Vec::with_capacity(hydro_count),
                     zero_targets_buf: vec![0.0_f64; hydro_count],
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                 },
@@ -185,6 +200,9 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     par_inflow_buf: Vec::with_capacity(hydro_count),
                     eta_floor_buf: Vec::with_capacity(hydro_count),
                     zero_targets_buf: vec![0.0_f64; hydro_count],
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                 },

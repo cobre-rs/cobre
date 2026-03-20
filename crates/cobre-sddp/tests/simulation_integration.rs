@@ -588,6 +588,7 @@ fn train_simulate_write_cycle() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -742,6 +743,7 @@ fn train_simulate_write_cycle() {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[],
+            ncs_max_gen: &[],
         },
         &fcf,
         &TrainingContext {

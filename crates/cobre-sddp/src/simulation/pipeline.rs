@@ -958,6 +958,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -1005,6 +1008,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1090,6 +1094,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1169,6 +1174,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1246,6 +1252,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1324,6 +1331,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1400,6 +1408,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1472,6 +1481,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1544,6 +1554,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1583,6 +1594,9 @@ mod tests {
                     par_inflow_buf: Vec::new(),
                     eta_floor_buf: Vec::new(),
                     zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                 },
@@ -1599,6 +1613,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1699,6 +1714,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1796,6 +1812,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1878,6 +1895,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1971,6 +1989,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2063,6 +2082,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2170,6 +2190,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2404,6 +2425,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2427,6 +2451,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2554,6 +2579,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[1],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2655,6 +2681,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2676,6 +2705,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2898,6 +2928,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: vec![0.0_f64; hydro_count],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -2962,6 +2995,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3053,6 +3087,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {

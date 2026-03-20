@@ -307,16 +307,22 @@ pub struct NcsModel {
 
 /// A single entity reference within a correlation group.
 ///
-/// `entity_type` is a string tag (currently always `"inflow"`) that
-/// identifies the kind of stochastic variable. Using `String` rather than
-/// an enum preserves forward compatibility when additional entity types
-/// (e.g., load, wind) are added without a breaking schema change.
+/// `entity_type` is a string tag that identifies the kind of stochastic
+/// variable. Valid values are:
+///
+/// - `"inflow"` — hydro inflow series (entity ID matches `Hydro.id`)
+/// - `"load"` — stochastic load demand (entity ID matches `Bus.id`)
+/// - `"ncs"` — non-controllable source availability (entity ID matches
+///   `NonControllableSource.id`)
+///
+/// Using `String` rather than an enum preserves forward compatibility when
+/// additional entity types are added without a breaking schema change.
 ///
 /// See [Input Scenarios §5](input-scenarios.md).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CorrelationEntity {
-    /// Entity type tag. Currently `"inflow"` for hydro inflow series.
+    /// Entity type tag: `"inflow"`, `"load"`, or `"ncs"`.
     pub entity_type: String,
 
     /// Entity identifier matching the corresponding entity's `id` field.

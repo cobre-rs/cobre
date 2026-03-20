@@ -351,20 +351,40 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 19: CorrelationEntity with entity_type == "inflow" -> hydro ──────
+    // ── Rule 19: CorrelationEntity entity_type -> entity registry ──────────────
+    //
+    // Validates that each correlation entity references an existing entity of the
+    // correct type:
+    //   - "inflow" -> Hydro (hydro_ids)
+    //   - "load"   -> Bus (bus_ids)
+    //   - "ncs"    -> NonControllableSource (ncs_ids)
 
     if let Some(ref correlation) = data.correlation {
         for profile in correlation.profiles.values() {
             for group in &profile.groups {
                 for entity in &group.entities {
-                    if entity.entity_type == "inflow" && !hydro_ids.contains(&entity.id.0) {
-                        let entity_str = format!("CorrelationEntity(inflow, {})", entity.id.0);
+                    let (valid, type_label, registry_label) = match entity.entity_type.as_str() {
+                        "inflow" => (hydro_ids.contains(&entity.id.0), "inflow", "Hydro"),
+                        "load" => (bus_ids.contains(&entity.id.0), "load", "Bus"),
+                        "ncs" => (
+                            ncs_ids.contains(&entity.id.0),
+                            "ncs",
+                            "NonControllableSource",
+                        ),
+                        _ => {
+                            // Unknown entity type — skip validation (forward compat)
+                            continue;
+                        }
+                    };
+                    if !valid {
+                        let entity_str =
+                            format!("CorrelationEntity({type_label}, {})", entity.id.0);
                         ctx.add_error(
                             ErrorKind::InvalidReference,
                             "scenarios/correlation.json",
                             Some(&entity_str),
                             format!(
-                                "{entity_str} references non-existent Hydro {} via field 'id'",
+                                "{entity_str} references non-existent {registry_label} {} via field 'id'",
                                 entity.id.0
                             ),
                         );
@@ -1454,8 +1474,8 @@ mod tests {
 
     // ── Rule 19: CorrelationEntity entity_type == "inflow" ────────────────────
 
-    /// `CorrelationEntity` with `entity_type == "inflow"` and a non-existent hydro
-    /// produces 1 `InvalidReference` error. Non-inflow entity_type is not checked.
+    /// `CorrelationEntity` with invalid inflow, load, and ncs entity references
+    /// produces one `InvalidReference` error per invalid reference.
     #[test]
     fn test_correlation_entity_inflow_invalid_hydro() {
         let dir = TempDir::new().unwrap();
@@ -1473,7 +1493,7 @@ mod tests {
                             id: EntityId::from(999), // does not exist
                         },
                         CorrelationEntity {
-                            entity_type: "load".to_string(), // non-inflow: not checked
+                            entity_type: "unknown".to_string(), // unknown type: not checked
                             id: EntityId::from(9999),
                         },
                     ],
@@ -1495,8 +1515,8 @@ mod tests {
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
             .collect();
-        // Only the "inflow" entity is checked
-        assert_eq!(inv.len(), 1, "only inflow entity_type should be checked");
+        // Only the "inflow" entity is checked; unknown types are skipped
+        assert_eq!(inv.len(), 1, "only inflow entity_type should produce error");
         assert!(inv[0].message.contains("999"));
     }
 

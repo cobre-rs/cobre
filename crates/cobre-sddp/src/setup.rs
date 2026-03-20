@@ -228,6 +228,9 @@ pub struct StudySetup {
     // ── Hydro models ──────────────────────────────────────────────────────────
     hydro_models: PrepareHydroModelsResult,
 
+    // ── NCS per-stage entity IDs (for simulation extraction) ────────────────
+    ncs_entity_ids_per_stage: Vec<Vec<i32>>,
+
     // ── Derived layout values ─────────────────────────────────────────────────
     block_counts_per_stage: Vec<usize>,
     max_blocks: usize,
@@ -415,6 +418,18 @@ impl StudySetup {
         // ── Entity counts ─────────────────────────────────────────────────────
         let entity_counts = build_entity_counts(system);
 
+        // ── NCS per-stage entity IDs ──────────────────────────────────────────
+        let ncs_entity_ids_per_stage: Vec<Vec<i32>> = stage_templates
+            .active_ncs_indices
+            .iter()
+            .map(|stage_indices| {
+                stage_indices
+                    .iter()
+                    .map(|&sys_idx| entity_counts.non_controllable_ids[sys_idx])
+                    .collect()
+            })
+            .collect();
+
         // ── Block layout ──────────────────────────────────────────────────────
         let block_counts_per_stage: Vec<usize> = stage_templates
             .block_hours_per_stage
@@ -432,6 +447,7 @@ impl StudySetup {
             horizon,
             risk_measures,
             entity_counts,
+            ncs_entity_ids_per_stage,
             hydro_models,
             block_counts_per_stage,
             max_blocks,
@@ -750,6 +766,9 @@ impl StudySetup {
             block_hours_per_stage: &self.stage_templates.block_hours_per_stage,
             entity_counts: &self.entity_counts,
             generic_constraint_row_entries: &self.stage_templates.generic_constraint_row_entries,
+            ncs_col_starts: &self.stage_templates.ncs_col_starts,
+            n_ncs_per_stage: &self.stage_templates.n_ncs_per_stage,
+            ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
             event_sender,
         };
 

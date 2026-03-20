@@ -659,6 +659,104 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             }
         }
     }
+
+    // ── Rule 36: NcsBoundsRow -> NCS source reference ─────────────────────
+
+    for (i, row) in data.ncs_bounds.iter().enumerate() {
+        if !ncs_ids.contains(&row.ncs_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "constraints/ncs_bounds.parquet",
+                Some(format!("NcsBoundsRow[{i}]")),
+                format!(
+                    "NcsBoundsRow[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
+                    row.ncs_id.0
+                ),
+            );
+        }
+    }
+
+    // ── Rule 37: NcsBoundsRow stage_id validity ───────────────────────────
+
+    for (i, row) in data.ncs_bounds.iter().enumerate() {
+        if !study_stage_ids.contains(&row.stage_id) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "constraints/ncs_bounds.parquet",
+                Some(format!("NcsBoundsRow[{i}]")),
+                format!(
+                    "NcsBoundsRow[{i}] has invalid stage_id {} (not a valid study stage)",
+                    row.stage_id
+                ),
+            );
+        }
+    }
+
+    // ── Rule 38: NcsBoundsRow available_generation_mw >= 0 ────────────────
+
+    for (i, row) in data.ncs_bounds.iter().enumerate() {
+        if row.available_generation_mw < 0.0 {
+            ctx.add_error(
+                ErrorKind::InvalidValue,
+                "constraints/ncs_bounds.parquet",
+                Some(format!("NcsBoundsRow[{i}]")),
+                format!(
+                    "NcsBoundsRow[{i}] has negative available_generation_mw: {}",
+                    row.available_generation_mw
+                ),
+            );
+        }
+    }
+
+    // ── Rule 39: NcsFactorEntry -> NCS source reference ──────────────────
+
+    for (i, entry) in data.non_controllable_factors.iter().enumerate() {
+        if !ncs_ids.contains(&entry.ncs_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/non_controllable_factors.json",
+                Some(format!("NcsFactorEntry[{i}]")),
+                format!(
+                    "NcsFactorEntry[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
+                    entry.ncs_id.0
+                ),
+            );
+        }
+    }
+
+    // ── Rule 40: NcsFactorEntry stage_id validity ────────────────────────
+
+    for (i, entry) in data.non_controllable_factors.iter().enumerate() {
+        if !study_stage_ids.contains(&entry.stage_id) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/non_controllable_factors.json",
+                Some(format!("NcsFactorEntry[{i}]")),
+                format!(
+                    "NcsFactorEntry[{i}] has invalid stage_id {} (not a valid study stage)",
+                    entry.stage_id
+                ),
+            );
+        }
+    }
+
+    // ── Rule 41: NcsFactorEntry block factor >= 0 ────────────────────────
+
+    for (i, entry) in data.non_controllable_factors.iter().enumerate() {
+        for (j, bf) in entry.block_factors.iter().enumerate() {
+            if bf.factor < 0.0 {
+                ctx.add_error(
+                    ErrorKind::InvalidValue,
+                    "scenarios/non_controllable_factors.json",
+                    Some(format!("NcsFactorEntry[{i}].block_factors[{j}]")),
+                    format!(
+                        "NcsFactorEntry[{i}] block_factors[{j}] has negative factor: {}",
+                        bf.factor
+                    ),
+                );
+            }
+        }
+    }
 }
 
 /// Entity ID sets used by Rule 33 to check [`cobre_core::VariableRef`] existence.
@@ -806,10 +904,13 @@ mod tests {
     use crate::{
         constraints::{
             BusPenaltyOverrideRow, GenericConstraintBoundsRow, HydroBoundsRow, LineBoundsRow,
-            NcsPenaltyOverrideRow, ThermalBoundsRow,
+            NcsBoundsRow, NcsPenaltyOverrideRow, ThermalBoundsRow,
         },
         extensions::HydroGeometryRow,
-        scenarios::{BlockFactor, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow},
+        scenarios::{
+            BlockFactor, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
+            NcsFactorEntry,
+        },
         validation::{
             schema::{ParsedData, validate_schema},
             structural::validate_structure,
@@ -1735,5 +1836,190 @@ mod tests {
             !ctx.has_errors(),
             "valid load_factors refs should produce no errors"
         );
+    }
+
+    // ── Rules 36-41: NCS bounds and NCS factors referential checks ────────
+
+    /// Valid `NcsBoundsRow` with an existing NCS ID and valid stage produces no errors.
+    #[test]
+    fn test_ncs_bounds_valid_refs_no_error() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_sources = vec![make_ncs(1, 1)];
+        data.ncs_bounds = vec![NcsBoundsRow {
+            ncs_id: EntityId::from(1),
+            stage_id: 0,
+            available_generation_mw: 50.0,
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid NCS bounds should produce no errors"
+        );
+    }
+
+    /// `NcsBoundsRow` with a non-existent NCS ID produces `InvalidReference`.
+    #[test]
+    fn test_ncs_bounds_invalid_ncs_ref() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.ncs_bounds = vec![NcsBoundsRow {
+            ncs_id: EntityId::from(999),
+            stage_id: 0,
+            available_generation_mw: 50.0,
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidReference)
+            .filter(|e| e.file.to_str().unwrap_or("").contains("ncs_bounds"))
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("999"));
+    }
+
+    /// `NcsBoundsRow` with negative `available_generation_mw` produces `InvalidValue`.
+    #[test]
+    fn test_ncs_bounds_negative_available_generation() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_sources = vec![make_ncs(1, 1)];
+        data.ncs_bounds = vec![NcsBoundsRow {
+            ncs_id: EntityId::from(1),
+            stage_id: 0,
+            available_generation_mw: -10.0,
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("negative"));
+    }
+
+    /// Valid `NcsFactorEntry` with an existing NCS ID and valid stage produces no errors.
+    #[test]
+    fn test_ncs_factors_valid_refs_no_error() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_sources = vec![make_ncs(1, 1)];
+        data.non_controllable_factors = vec![NcsFactorEntry {
+            ncs_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(
+            !ctx.has_errors(),
+            "valid NCS factors should produce no errors"
+        );
+    }
+
+    /// `NcsFactorEntry` with a non-existent NCS ID produces `InvalidReference`.
+    #[test]
+    fn test_ncs_factors_invalid_ncs_ref() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_factors = vec![NcsFactorEntry {
+            ncs_id: EntityId::from(999),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidReference)
+            .filter(|e| {
+                e.file
+                    .to_str()
+                    .unwrap_or("")
+                    .contains("non_controllable_factors")
+            })
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("999"));
+    }
+
+    /// `NcsFactorEntry` with an invalid `stage_id` produces `InvalidReference`.
+    #[test]
+    fn test_ncs_factors_invalid_stage_ref() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_sources = vec![make_ncs(1, 1)];
+        data.non_controllable_factors = vec![NcsFactorEntry {
+            ncs_id: EntityId::from(1),
+            stage_id: 999,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: 1.0,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidReference)
+            .filter(|e| {
+                e.file
+                    .to_str()
+                    .unwrap_or("")
+                    .contains("non_controllable_factors")
+            })
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("999"));
+    }
+
+    /// `NcsFactorEntry` with a negative block factor produces `InvalidValue`.
+    #[test]
+    fn test_ncs_factors_negative_factor() {
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+        data.non_controllable_sources = vec![make_ncs(1, 1)];
+        data.non_controllable_factors = vec![NcsFactorEntry {
+            ncs_id: EntityId::from(1),
+            stage_id: 0,
+            block_factors: vec![BlockFactor {
+                block_id: 0,
+                factor: -0.5,
+            }],
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+        assert!(ctx.has_errors());
+        let inv: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.kind == ErrorKind::InvalidValue)
+            .collect();
+        assert_eq!(inv.len(), 1);
+        assert!(inv[0].message.contains("negative"));
     }
 }

@@ -838,11 +838,12 @@ fn extract_non_controllables(
             let generation_mw = view.primal[col];
             // Column upper bound encodes available_gen * block_factor.
             let col_upper_offset = local_idx * n_blks + blk;
-            let available_mw = if col_upper_offset < spec.ncs_col_upper.len() {
-                spec.ncs_col_upper[col_upper_offset]
-            } else {
-                0.0
-            };
+            debug_assert!(
+                col_upper_offset < spec.ncs_col_upper.len(),
+                "NCS col_upper out of bounds: offset {col_upper_offset}, len {}",
+                spec.ncs_col_upper.len()
+            );
+            let available_mw = spec.ncs_col_upper[col_upper_offset];
             let curtailment_mw = available_mw - generation_mw;
             // NCS objective coefficient is negative (-curtailment_cost * block_hours),
             // so primal * obj_coeff is negative when generating.  The cost breakdown

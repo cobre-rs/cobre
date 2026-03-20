@@ -568,6 +568,7 @@ mod tests {
             load_factors: vec![],
             correlation: None,
             non_controllable_factors: vec![],
+            ncs_models: vec![],
             thermal_bounds: vec![],
             hydro_bounds: vec![],
             line_bounds: vec![],

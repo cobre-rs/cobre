@@ -937,7 +937,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -2344,7 +2344,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// When a simulation has 1 stochastic load bus (mean=300, std=30),
@@ -2850,7 +2850,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.

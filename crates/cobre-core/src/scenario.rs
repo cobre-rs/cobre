@@ -257,6 +257,51 @@ pub struct LoadModel {
 }
 
 // ---------------------------------------------------------------------------
+// NcsModel (per NCS entity, per stage)
+// ---------------------------------------------------------------------------
+
+/// Per-stage normal noise model parameters for a non-controllable source.
+///
+/// Loaded from `scenarios/non_controllable_models.parquet`. Each row provides
+/// the mean and standard deviation of available generation for one NCS entity
+/// at one stage. The scenario pipeline uses these parameters to generate
+/// per-scenario availability realisations.
+///
+/// The noise model is: `A_r = mean_mw + std_mw * epsilon`, where `epsilon ~ N(0,1)`.
+/// The result is clamped to `[0, max_generation_mw]`.
+///
+/// The `System` holds a `Vec<NcsModel>` sorted by `(ncs_id, stage_id)`.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::NcsModel};
+///
+/// let model = NcsModel {
+///     ncs_id: EntityId(3),
+///     stage_id: 0,
+///     mean_mw: 50.0,
+///     std_mw: 10.0,
+/// };
+/// assert_eq!(model.mean_mw, 50.0);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct NcsModel {
+    /// NCS entity identifier matching `NonControllableSource.id`.
+    pub ncs_id: EntityId,
+
+    /// Stage (0-based index within `System::stages`) this model applies to.
+    pub stage_id: i32,
+
+    /// Mean available generation [MW].
+    pub mean_mw: f64,
+
+    /// Standard deviation of available generation [MW].
+    pub std_mw: f64,
+}
+
+// ---------------------------------------------------------------------------
 // CorrelationEntity
 // ---------------------------------------------------------------------------
 
@@ -485,7 +530,7 @@ mod tests {
 
     use super::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-        CorrelationScheduleEntry, InflowModel, SamplingScheme,
+        CorrelationScheduleEntry, InflowModel, NcsModel, SamplingScheme,
     };
     #[cfg(feature = "serde")]
     use super::{ExternalSelectionMode, ScenarioSource};
@@ -668,6 +713,35 @@ mod tests {
         let deserialized: InflowModel = serde_json::from_str(&json).unwrap();
         assert_eq!(model, deserialized);
         assert!((deserialized.residual_std_ratio - 0.85).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_ncs_model_construction() {
+        let model = NcsModel {
+            ncs_id: EntityId(3),
+            stage_id: 0,
+            mean_mw: 50.0,
+            std_mw: 10.0,
+        };
+
+        assert_eq!(model.ncs_id, EntityId(3));
+        assert_eq!(model.stage_id, 0);
+        assert_eq!(model.mean_mw, 50.0);
+        assert_eq!(model.std_mw, 10.0);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_ncs_model_serde_roundtrip() {
+        let model = NcsModel {
+            ncs_id: EntityId(5),
+            stage_id: 2,
+            mean_mw: 75.0,
+            std_mw: 15.0,
+        };
+        let json = serde_json::to_string(&model).unwrap();
+        let deserialized: NcsModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(model, deserialized);
     }
 
     #[test]

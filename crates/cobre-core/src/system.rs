@@ -12,8 +12,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
-    InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
-    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
+    InflowModel, InitialConditions, Line, LoadModel, NcsModel, NetworkTopology,
+    NonControllableSource, PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
     ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
     ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
 };
@@ -116,6 +116,8 @@ pub struct System {
     inflow_models: Vec<InflowModel>,
     /// Seasonal load statistics, one entry per (bus, stage) pair.
     load_models: Vec<LoadModel>,
+    /// NCS availability noise model parameters, one entry per (ncs, stage) pair.
+    ncs_models: Vec<NcsModel>,
     /// Correlation model for stochastic inflow/load generation.
     correlation: CorrelationModel,
 
@@ -361,6 +363,12 @@ impl System {
         &self.load_models
     }
 
+    /// Returns all NCS availability noise models in canonical order (by NCS ID, then stage ID).
+    #[must_use]
+    pub fn ncs_models(&self) -> &[NcsModel] {
+        &self.ncs_models
+    }
+
     /// Returns a reference to the correlation model.
     #[must_use]
     pub fn correlation(&self) -> &CorrelationModel {
@@ -509,6 +517,7 @@ pub struct SystemBuilder {
     resolved_ncs_factors: ResolvedNcsFactors,
     inflow_models: Vec<InflowModel>,
     load_models: Vec<LoadModel>,
+    ncs_models: Vec<NcsModel>,
     correlation: CorrelationModel,
     initial_conditions: InitialConditions,
     generic_constraints: Vec<GenericConstraint>,
@@ -547,6 +556,7 @@ impl SystemBuilder {
             resolved_ncs_factors: ResolvedNcsFactors::empty(),
             inflow_models: Vec::new(),
             load_models: Vec::new(),
+            ncs_models: Vec::new(),
             correlation: CorrelationModel::default(),
             initial_conditions: InitialConditions::default(),
             generic_constraints: Vec::new(),
@@ -700,6 +710,13 @@ impl SystemBuilder {
     #[must_use]
     pub fn load_models(mut self, load_models: Vec<LoadModel>) -> Self {
         self.load_models = load_models;
+        self
+    }
+
+    /// Set the NCS availability noise model collection.
+    #[must_use]
+    pub fn ncs_models(mut self, ncs_models: Vec<NcsModel>) -> Self {
+        self.ncs_models = ncs_models;
         self
     }
 
@@ -871,6 +888,7 @@ impl SystemBuilder {
             resolved_ncs_factors: self.resolved_ncs_factors,
             inflow_models: self.inflow_models,
             load_models: self.load_models,
+            ncs_models: self.ncs_models,
             correlation: self.correlation,
             initial_conditions: self.initial_conditions,
             generic_constraints: self.generic_constraints,

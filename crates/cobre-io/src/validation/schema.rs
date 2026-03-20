@@ -16,7 +16,7 @@ use cobre_core::{
     entities::{Bus, EnergyContract, Hydro, Line, NonControllableSource, PumpingStation, Thermal},
     initial_conditions::InitialConditions,
     penalty::GlobalPenaltyDefaults,
-    scenario::CorrelationModel,
+    scenario::{CorrelationModel, NcsModel},
 };
 
 use crate::{
@@ -41,7 +41,7 @@ use crate::{
         ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow,
         LoadFactorEntry, LoadSeasonalStatsRow, NcsFactorEntry, load_correlation,
         load_external_scenarios, load_inflow_ar_coefficients, load_inflow_history,
-        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats,
+        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats, load_ncs_models,
         load_non_controllable_factors,
     },
     stages::StagesData,
@@ -124,6 +124,8 @@ pub(crate) struct ParsedData {
     pub(crate) correlation: Option<CorrelationModel>,
     /// Parsed `scenarios/non_controllable_factors.json`. Empty when absent.
     pub(crate) non_controllable_factors: Vec<NcsFactorEntry>,
+    /// Parsed `scenarios/non_controllable_models.parquet`. Empty when absent.
+    pub(crate) ncs_models: Vec<NcsModel>,
 
     // ── Optional constraints/ files ───────────────────────────────────────────
     /// Parsed `constraints/thermal_bounds.parquet`. Empty when absent.
@@ -449,6 +451,18 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
+    let ncs_models = optional_or_error(
+        manifest.scenarios_non_controllable_models_parquet,
+        || {
+            load_ncs_models(Some(
+                &case_root.join("scenarios/non_controllable_models.parquet"),
+            ))
+        },
+        Vec::new,
+        "scenarios/non_controllable_models.parquet",
+        ctx,
+    );
+
     // ── Optional constraints/ files ───────────────────────────────────────────
 
     let thermal_bounds = optional_or_error(
@@ -634,6 +648,7 @@ pub(crate) fn validate_schema(
         load_factors,
         correlation,
         non_controllable_factors,
+        ncs_models,
         thermal_bounds,
         hydro_bounds,
         line_bounds,

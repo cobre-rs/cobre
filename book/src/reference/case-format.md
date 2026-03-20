@@ -37,6 +37,7 @@ my_case/
 │   ├── external_scenarios.parquet           # Pre-generated external scenarios (optional)
 │   ├── load_seasonal_stats.parquet          # Load model seasonal statistics (optional)
 │   ├── load_factors.json                    # Load scaling factors (optional)
+│   ├── non_controllable_factors.json        # NCS block scaling factors (optional)
 │   ├── correlation.json                     # Cross-series correlation model (optional)
 │   └── noise_openings.parquet              # User-supplied backward-pass opening tree (optional)
 └── constraints/
@@ -45,6 +46,7 @@ my_case/
     ├── line_bounds.parquet                  # Stage-varying line bounds (optional)
     ├── pumping_bounds.parquet               # Stage-varying pumping bounds (optional)
     ├── contract_bounds.parquet              # Stage-varying contract bounds (optional)
+    ├── ncs_bounds.parquet                   # Stage-varying NCS available generation bounds (optional)
     ├── exchange_factors.json                # Block exchange factors (optional)
     ├── generic_constraints.json             # User-defined LP constraints (optional)
     ├── generic_constraint_bounds.parquet    # Bounds for generic constraints (optional)
@@ -78,6 +80,7 @@ my_case/
 | `scenarios/external_scenarios.parquet`          | Parquet | No       | Pre-generated scenario inflows          |
 | `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics          |
 | `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage      |
+| `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage      |
 | `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model          |
 | `scenarios/noise_openings.parquet`             | Parquet | No       | User-supplied backward-pass opening tree |
 | `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds |
@@ -85,6 +88,7 @@ my_case/
 | `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity        |
 | `constraints/pumping_bounds.parquet`            | Parquet | No       | Stage-varying pumping flow bounds       |
 | `constraints/contract_bounds.parquet`           | Parquet | No       | Stage-varying contract power bounds     |
+| `constraints/ncs_bounds.parquet`                | Parquet | No       | Stage-varying NCS available generation bounds   |
 | `constraints/exchange_factors.json`             | JSON    | No       | Block exchange factors                  |
 | `constraints/generic_constraints.json`          | JSON    | No       | User-defined LP constraints             |
 | `constraints/generic_constraint_bounds.parquet` | Parquet | No       | Generic constraint RHS bounds           |
@@ -670,6 +674,107 @@ in the Stochastic Modeling guide for usage instructions.
 
 ---
 
+## `scenarios/` files (JSON)
+
+### `scenarios/load_factors.json`
+
+Per-bus, per-stage, per-block load scaling factors. When present, each factor
+multiplies the stochastic load demand realization at the specified bus for the
+specified block. This allows you to model time-of-day or seasonal patterns in
+load shape without changing the underlying statistical model.
+
+When this file is absent, all load factors default to 1.0. When a
+`(bus_id, stage_id)` pair is absent from the file, its factors also default
+to 1.0 for every block.
+
+**JSON structure:**
+
+```json
+{
+  "load_factors": [
+    {
+      "bus_id": 0,
+      "stage_id": 0,
+      "block_factors": [
+        { "block_id": 0, "factor": 0.8 },
+        { "block_id": 1, "factor": 1.2 }
+      ]
+    }
+  ]
+}
+```
+
+**Fields per entry:**
+
+| Field           | Type    | Description                                                         |
+| --------------- | ------- | ------------------------------------------------------------------- |
+| `bus_id`        | integer | Bus entity ID. Must refer to a bus defined in `system/buses.json`.  |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.     |
+| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.          |
+
+**`block_factors` entry fields:**
+
+| Field      | Type    | Constraints                     | Description                                                   |
+| ---------- | ------- | ------------------------------- | ------------------------------------------------------------- |
+| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                      |
+| `factor`   | number  | > 0, finite                     | Multiplier applied to the stochastic load realization (MW) at this bus and block. |
+
+**Effect:** `load_rhs = mean_mw * stochastic_noise_factor * block_factor`.
+A factor of 1.0 leaves the load unchanged. Values less than 1.0 reduce load;
+values greater than 1.0 increase it.
+
+---
+
+### `scenarios/non_controllable_factors.json`
+
+Per-NCS, per-stage, per-block scaling factors for non-controllable source (NCS)
+available generation. When present, each factor multiplies the available
+generation bound from `constraints/ncs_bounds.parquet` for the specified block.
+This allows modeling of intra-stage availability patterns such as diurnal solar
+irradiance profiles or wind speed variations across load blocks.
+
+When this file is absent, all NCS block factors default to 1.0. When a
+`(ncs_id, stage_id)` pair is absent from the file, its factors default to 1.0
+for every block.
+
+**JSON structure:**
+
+```json
+{
+  "non_controllable_factors": [
+    {
+      "ncs_id": 0,
+      "stage_id": 0,
+      "block_factors": [
+        { "block_id": 0, "factor": 0.3 },
+        { "block_id": 1, "factor": 0.8 }
+      ]
+    }
+  ]
+}
+```
+
+**Fields per entry:**
+
+| Field           | Type    | Description                                                                     |
+| --------------- | ------- | ------------------------------------------------------------------------------- |
+| `ncs_id`        | integer | NCS entity ID. Must refer to a source in `system/non_controllable_sources.json`. |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.                 |
+| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.                      |
+
+**`block_factors` entry fields:**
+
+| Field      | Type    | Constraints                     | Description                                                              |
+| ---------- | ------- | ------------------------------- | ------------------------------------------------------------------------ |
+| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                                 |
+| `factor`   | number  | >= 0, finite                    | Multiplier applied to the stage available generation bound for this block. |
+
+**Effect:** `available_mw_block = available_generation_mw * block_factor`.
+A factor of 1.0 leaves the bound unchanged. A factor of 0.0 sets availability
+to zero for that block (complete generation unavailability).
+
+---
+
 ## `constraints/` files (Parquet)
 
 All bounds Parquet files use sparse storage: only `(entity_id, stage_id)` pairs
@@ -748,6 +853,77 @@ Stage-varying power and price overrides for energy contracts.
 | `min_mw`        | DOUBLE | No       | Minimum power (MW)       |
 | `max_mw`        | DOUBLE | No       | Maximum power (MW)       |
 | `price_per_mwh` | DOUBLE | No       | Price override (USD/MWh) |
+
+---
+
+### `constraints/ncs_bounds.parquet`
+
+Stage-varying available generation bounds for non-controllable sources. Uses
+sparse storage: only `(ncs_id, stage_id)` pairs that differ from the base
+entity-level value need rows. Absent rows keep the entity's declared
+`available_generation_mw` unchanged.
+
+| Column                    | Type   | Required | Description                                      |
+| ------------------------- | ------ | -------- | ------------------------------------------------ |
+| `ncs_id`                  | INT32  | Yes      | Non-controllable source ID                       |
+| `stage_id`                | INT32  | Yes      | Stage ID                                         |
+| `available_generation_mw` | DOUBLE | Yes      | Maximum available generation for this stage (MW). Must be >= 0. |
+
+The per-block available generation bound in the LP is:
+`available_mw_block = available_generation_mw * block_factor`, where
+`block_factor` comes from `scenarios/non_controllable_factors.json`
+(default 1.0 when absent).
+
+---
+
+### `constraints/exchange_factors.json`
+
+Per-line, per-stage, per-block scaling factors for transmission line capacity
+bounds. When present, each factor multiplies the line's direct or reverse
+capacity for the specified block. This allows modeling of planned outages,
+seasonal de-rating, or time-of-day capacity constraints without replacing the
+base entity bounds.
+
+When this file is absent, all exchange factors default to (1.0, 1.0). When a
+`(line_id, stage_id)` pair is absent, its factors default to (1.0, 1.0) for
+every block.
+
+**JSON structure:**
+
+```json
+{
+  "exchange_factors": [
+    {
+      "line_id": 0,
+      "stage_id": 0,
+      "block_factors": [
+        { "block_id": 0, "direct_factor": 0.9, "reverse_factor": 1.0 }
+      ]
+    }
+  ]
+}
+```
+
+**Fields per entry:**
+
+| Field           | Type    | Description                                                             |
+| --------------- | ------- | ----------------------------------------------------------------------- |
+| `line_id`       | integer | Line entity ID. Must refer to a line defined in `system/lines.json`.    |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.         |
+| `block_factors` | array   | Array of `{ block_id, direct_factor, reverse_factor }` pairs.           |
+
+**`block_factors` entry fields:**
+
+| Field            | Type    | Constraints                     | Description                                                               |
+| ---------------- | ------- | ------------------------------- | ------------------------------------------------------------------------- |
+| `block_id`       | integer | Must be a valid block for stage | Zero-based block index within the stage.                                  |
+| `direct_factor`  | number  | >= 0, finite                    | Multiplier for the direct-direction flow capacity (`direct_mw`).          |
+| `reverse_factor` | number  | >= 0, finite                    | Multiplier for the reverse-direction flow capacity (`reverse_mw`).        |
+
+**Effect:** `col_upper_fwd = direct_mw * direct_factor`,
+`col_upper_rev = reverse_mw * reverse_factor`. A factor of 1.0 leaves the
+capacity unchanged. A factor of 0.0 fully blocks flow in that direction for
+the block.
 
 ---
 

@@ -660,7 +660,7 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 36: NcsBoundsRow -> NCS source reference ─────────────────────
+    // ── Rules 36-38: NcsBoundsRow reference, stage, and value checks ─────
 
     for (i, row) in data.ncs_bounds.iter().enumerate() {
         if !ncs_ids.contains(&row.ncs_id.0) {
@@ -674,11 +674,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
-    }
-
-    // ── Rule 37: NcsBoundsRow stage_id validity ───────────────────────────
-
-    for (i, row) in data.ncs_bounds.iter().enumerate() {
         if !study_stage_ids.contains(&row.stage_id) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
@@ -690,11 +685,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
-    }
-
-    // ── Rule 38: NcsBoundsRow available_generation_mw >= 0 ────────────────
-
-    for (i, row) in data.ncs_bounds.iter().enumerate() {
         if row.available_generation_mw < 0.0 {
             ctx.add_error(
                 ErrorKind::InvalidValue,
@@ -708,7 +698,7 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 39: NcsFactorEntry -> NCS source reference ──────────────────
+    // ── Rules 39-41: NcsFactorEntry reference, stage, and value checks ───
 
     for (i, entry) in data.non_controllable_factors.iter().enumerate() {
         if !ncs_ids.contains(&entry.ncs_id.0) {
@@ -722,11 +712,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
-    }
-
-    // ── Rule 40: NcsFactorEntry stage_id validity ────────────────────────
-
-    for (i, entry) in data.non_controllable_factors.iter().enumerate() {
         if !study_stage_ids.contains(&entry.stage_id) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
@@ -738,11 +723,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
-    }
-
-    // ── Rule 41: NcsFactorEntry block factor >= 0 ────────────────────────
-
-    for (i, entry) in data.non_controllable_factors.iter().enumerate() {
         for (j, bf) in entry.block_factors.iter().enumerate() {
             if bf.factor < 0.0 {
                 ctx.add_error(

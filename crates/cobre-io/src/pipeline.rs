@@ -162,6 +162,7 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .resolved_ncs_factors(resolved_ncs_factors)
         .inflow_models(inflow_models)
         .load_models(load_models)
+        .ncs_models(data.ncs_models)
         .correlation(data.correlation.unwrap_or_else(CorrelationModel::default))
         .initial_conditions(data.initial_conditions)
         .generic_constraints(data.generic_constraints)

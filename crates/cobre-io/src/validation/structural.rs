@@ -89,6 +89,8 @@ pub struct FileManifest {
     pub scenarios_noise_openings_parquet: bool,
     /// `scenarios/non_controllable_factors.json` — optional
     pub scenarios_non_controllable_factors_json: bool,
+    /// `scenarios/non_controllable_models.parquet` — optional
+    pub scenarios_non_controllable_models_parquet: bool,
 
     // ── constraints/ (12 files) ──────────────────────────────────────────────
     /// `constraints/thermal_bounds.parquet` — optional
@@ -227,6 +229,10 @@ const FILE_ENTRIES: &[FileEntry] = &[
         relative: "scenarios/non_controllable_factors.json",
         required: false,
     },
+    FileEntry {
+        relative: "scenarios/non_controllable_models.parquet",
+        required: false,
+    },
     // constraints/ — optional
     FileEntry {
         relative: "constraints/thermal_bounds.parquet",
@@ -331,7 +337,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 ///
 /// This keeps the mapping between entries and manifest fields explicit and avoids
 /// fragile positional indexing elsewhere.
-fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 36] {
+fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 37] {
     [
         // Root (4)
         &mut m.config_json,
@@ -360,6 +366,7 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 36] {
         &mut m.scenarios_correlation_json,
         &mut m.scenarios_noise_openings_parquet,
         &mut m.scenarios_non_controllable_factors_json,
+        &mut m.scenarios_non_controllable_models_parquet,
         // constraints/ (13)
         &mut m.constraints_thermal_bounds_parquet,
         &mut m.constraints_hydro_bounds_parquet,
@@ -548,19 +555,19 @@ mod tests {
 
     #[test]
     fn test_structural_manifest_fields_count() {
-        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (35 entries)
+        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (37 entries)
         assert_eq!(
             FILE_ENTRIES.len(),
-            36,
-            "FILE_ENTRIES should have exactly 36 entries"
+            37,
+            "FILE_ENTRIES should have exactly 37 entries"
         );
 
         let mut manifest = FileManifest::default();
         let fields = manifest_fields_mut(&mut manifest);
         assert_eq!(
             fields.len(),
-            36,
-            "manifest_fields_mut should return exactly 36 fields"
+            37,
+            "manifest_fields_mut should return exactly 37 fields"
         );
     }
 

@@ -38,6 +38,7 @@ pub mod load_factors;
 pub mod load_stats;
 pub mod noise_openings;
 pub mod non_controllable_factors;
+pub mod non_controllable_models;
 
 pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
@@ -51,8 +52,9 @@ pub use noise_openings::{
     NoiseOpeningRow, assemble_opening_tree, parse_noise_openings, validate_noise_openings,
 };
 pub use non_controllable_factors::{NcsFactorEntry, parse_non_controllable_factors};
+pub use non_controllable_models::parse_ncs_models;
 
-use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel};
+use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel, NcsModel};
 
 use crate::LoadError;
 use crate::validation::structural::FileManifest;
@@ -138,6 +140,18 @@ pub fn load_non_controllable_factors(
     }
 }
 
+/// Load `scenarios/non_controllable_models.parquet`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_ncs_models(path: Option<&Path>) -> Result<Vec<NcsModel>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_ncs_models(p),
+    }
+}
+
 /// Load `scenarios/correlation.json`, returning a default model when absent.
 ///
 /// Unlike the Parquet loaders, this returns `Ok(CorrelationModel::default())` for
@@ -199,6 +213,7 @@ pub fn load_noise_openings(path: Option<&Path>) -> Result<Vec<NoiseOpeningRow>, 
 /// let data = ScenarioData {
 ///     inflow_models: vec![],
 ///     load_models: vec![],
+///     ncs_models: vec![],
 ///     correlation: CorrelationModel::default(),
 ///     inflow_history: vec![],
 ///     external_scenarios: vec![],
@@ -215,6 +230,8 @@ pub struct ScenarioData {
     pub inflow_models: Vec<InflowModel>,
     /// Load seasonal statistics, sorted by `(bus_id, stage_id)`.
     pub load_models: Vec<LoadModel>,
+    /// NCS availability noise models, sorted by `(ncs_id, stage_id)`. Empty when absent.
+    pub ncs_models: Vec<NcsModel>,
     /// Correlation model (profiles + schedule).
     pub correlation: CorrelationModel,
     /// Inflow history rows, sorted by `(hydro_id, date)`. Empty when absent.
@@ -313,6 +330,12 @@ pub fn load_scenarios(
             .then(|| scenarios_dir.join("noise_openings.parquet"))
             .as_deref(),
     )?;
+    let ncs_models = load_ncs_models(
+        manifest
+            .scenarios_non_controllable_models_parquet
+            .then(|| scenarios_dir.join("non_controllable_models.parquet"))
+            .as_deref(),
+    )?;
 
     let inflow_models = assemble_inflow_models(raw_stats, raw_coefficients)?;
     let load_models = assemble_load_models(raw_load_stats);
@@ -320,6 +343,7 @@ pub fn load_scenarios(
     Ok(ScenarioData {
         inflow_models,
         load_models,
+        ncs_models,
         correlation,
         inflow_history,
         external_scenarios,

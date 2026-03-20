@@ -1041,7 +1041,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -2188,7 +2188,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2551,7 +2551,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────

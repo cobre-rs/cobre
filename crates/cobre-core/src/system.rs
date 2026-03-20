@@ -13,8 +13,9 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
     InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
-    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
-    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
+    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
+    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedPenalties, ScenarioSource, Stage,
+    Thermal, ValidationError,
 };
 
 /// Top-level system representation.
@@ -101,6 +102,10 @@ pub struct System {
     bounds: ResolvedBounds,
     /// Pre-resolved RHS bound table for user-defined generic linear constraints.
     resolved_generic_bounds: ResolvedGenericConstraintBounds,
+    /// Pre-resolved per-block load scaling factors.
+    resolved_load_factors: ResolvedLoadFactors,
+    /// Pre-resolved per-block exchange capacity factors.
+    resolved_exchange_factors: ResolvedExchangeFactors,
 
     // Scenario pipeline data (raw parameters loaded by cobre-io)
     /// PAR(p) inflow model parameters, one entry per (hydro, stage) pair.
@@ -316,6 +321,18 @@ impl System {
         &self.resolved_generic_bounds
     }
 
+    /// Returns a reference to the pre-resolved per-block load scaling factors.
+    #[must_use]
+    pub fn resolved_load_factors(&self) -> &ResolvedLoadFactors {
+        &self.resolved_load_factors
+    }
+
+    /// Returns a reference to the pre-resolved per-block exchange capacity factors.
+    #[must_use]
+    pub fn resolved_exchange_factors(&self) -> &ResolvedExchangeFactors {
+        &self.resolved_exchange_factors
+    }
+
     /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).
     #[must_use]
     pub fn inflow_models(&self) -> &[InflowModel] {
@@ -470,6 +487,8 @@ pub struct SystemBuilder {
     penalties: ResolvedPenalties,
     bounds: ResolvedBounds,
     resolved_generic_bounds: ResolvedGenericConstraintBounds,
+    resolved_load_factors: ResolvedLoadFactors,
+    resolved_exchange_factors: ResolvedExchangeFactors,
     inflow_models: Vec<InflowModel>,
     load_models: Vec<LoadModel>,
     correlation: CorrelationModel,
@@ -504,6 +523,8 @@ impl SystemBuilder {
             penalties: ResolvedPenalties::empty(),
             bounds: ResolvedBounds::empty(),
             resolved_generic_bounds: ResolvedGenericConstraintBounds::empty(),
+            resolved_load_factors: ResolvedLoadFactors::empty(),
+            resolved_exchange_factors: ResolvedExchangeFactors::empty(),
             inflow_models: Vec::new(),
             load_models: Vec::new(),
             correlation: CorrelationModel::default(),
@@ -606,6 +627,27 @@ impl SystemBuilder {
         resolved_generic_bounds: ResolvedGenericConstraintBounds,
     ) -> Self {
         self.resolved_generic_bounds = resolved_generic_bounds;
+        self
+    }
+
+    /// Set the pre-resolved per-block load scaling factors.
+    ///
+    /// Populated by `cobre-io` after resolving `load_factors.json` entries.
+    #[must_use]
+    pub fn resolved_load_factors(mut self, resolved_load_factors: ResolvedLoadFactors) -> Self {
+        self.resolved_load_factors = resolved_load_factors;
+        self
+    }
+
+    /// Set the pre-resolved per-block exchange capacity factors.
+    ///
+    /// Populated by `cobre-io` after resolving `exchange_factors.json` entries.
+    #[must_use]
+    pub fn resolved_exchange_factors(
+        mut self,
+        resolved_exchange_factors: ResolvedExchangeFactors,
+    ) -> Self {
+        self.resolved_exchange_factors = resolved_exchange_factors;
         self
     }
 
@@ -785,6 +827,8 @@ impl SystemBuilder {
             penalties: self.penalties,
             bounds: self.bounds,
             resolved_generic_bounds: self.resolved_generic_bounds,
+            resolved_load_factors: self.resolved_load_factors,
+            resolved_exchange_factors: self.resolved_exchange_factors,
             inflow_models: self.inflow_models,
             load_models: self.load_models,
             correlation: self.correlation,

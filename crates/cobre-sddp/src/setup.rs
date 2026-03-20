@@ -1028,6 +1028,19 @@ fn load_user_opening_tree_inner(
 ///
 /// ## MPI note
 ///
+/// Load `scenarios/load_factors.json` from the case directory, returning an
+/// empty vec when the file is absent. This is consumed by the stochastic
+/// context builder for per-block noise scaling.
+fn load_load_factors_for_stochastic(
+    case_dir: &Path,
+) -> Result<Vec<cobre_io::scenarios::LoadFactorEntry>, SddpError> {
+    let path = case_dir.join("scenarios").join("load_factors.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    cobre_io::scenarios::parse_load_factors(&path).map_err(SddpError::from)
+}
+
 /// Under MPI, this function must only be called on rank 0. Non-root ranks
 /// should receive the opening tree via broadcast and call
 /// [`cobre_stochastic::build_stochastic_context`] directly.
@@ -1049,8 +1062,37 @@ pub fn prepare_stochastic(
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
 
-    let stochastic =
-        cobre_stochastic::build_stochastic_context(&system, seed, &[], user_opening_tree)?;
+    // Load block-level load factors (optional). When present, these scale the
+    // stochastic noise realization per block, mirroring how the LP builder
+    // scales the deterministic load balance RHS.
+    let load_factor_entries = load_load_factors_for_stochastic(case_dir)?;
+
+    // Convert LoadFactorEntry -> Vec<BlockFactorPair> per entry. The pairs
+    // vec must outlive the entity_factor_entries references.
+    let block_pairs: Vec<Vec<cobre_stochastic::normal::precompute::BlockFactorPair>> =
+        load_factor_entries
+            .iter()
+            .map(|e| {
+                e.block_factors
+                    .iter()
+                    .map(|bf| (bf.block_id, bf.factor))
+                    .collect()
+            })
+            .collect();
+
+    let entity_factor_entries: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
+        load_factor_entries
+            .iter()
+            .zip(block_pairs.iter())
+            .map(|(e, pairs)| (e.bus_id, e.stage_id, pairs.as_slice()))
+            .collect();
+
+    let stochastic = cobre_stochastic::build_stochastic_context(
+        &system,
+        seed,
+        &entity_factor_entries,
+        user_opening_tree,
+    )?;
 
     Ok(PrepareStochasticResult {
         system,

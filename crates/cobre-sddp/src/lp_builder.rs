@@ -108,7 +108,8 @@ use std::collections::HashMap;
 use cobre_core::entities::hydro::HydroGenerationModel;
 use cobre_core::{
     Bus, CascadeTopology, ConstraintSense, EntityId, GenericConstraint, Hydro, Line, LoadModel,
-    ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedPenalties, Stage, System, Thermal,
+    ResolvedBounds, ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
+    ResolvedPenalties, Stage, System, Thermal,
 };
 
 use crate::generic_constraints::resolve_variable_ref;
@@ -688,6 +689,10 @@ struct TemplateBuildCtx<'a> {
     generic_constraints: &'a [GenericConstraint],
     /// Pre-resolved table mapping `(constraint_idx, stage_id)` to active bound entries.
     resolved_generic_bounds: &'a ResolvedGenericConstraintBounds,
+    /// Pre-resolved per-block load scaling factors.
+    resolved_load_factors: &'a ResolvedLoadFactors,
+    /// Pre-resolved per-block exchange capacity factors.
+    resolved_exchange_factors: &'a ResolvedExchangeFactors,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
@@ -1072,14 +1077,17 @@ fn fill_stage_columns(
     }
 
     // Line columns per line per block (forward and reverse).
+    // Exchange factors from `exchange_factors.json` scale the stage-level
+    // capacity bounds per block. Default factor is (1.0, 1.0) (no scaling).
     for (l_idx, line) in ctx.lines.iter().enumerate() {
         let lb = ctx.bounds.line_bounds(l_idx, stage_idx);
         let lp = ctx.penalties.line_penalties(l_idx, stage_idx);
         for blk in 0..layout.n_blks {
+            let (df, rf) = ctx.resolved_exchange_factors.factors(l_idx, stage_idx, blk);
             let col_fwd = layout.col_line_fwd_start + l_idx * layout.n_blks + blk;
             let col_rev = layout.col_line_rev_start + l_idx * layout.n_blks + blk;
-            col_upper[col_fwd] = lb.direct_mw;
-            col_upper[col_rev] = lb.reverse_mw;
+            col_upper[col_fwd] = lb.direct_mw * df;
+            col_upper[col_rev] = lb.reverse_mw * rf;
             let block_hours = stage.blocks[blk].duration_hours;
             objective[col_fwd] = lp.exchange_cost * block_hours;
             objective[col_rev] = lp.exchange_cost * block_hours;
@@ -1218,7 +1226,9 @@ fn fill_stage_rows(
         row_upper[row] = rhs;
     }
 
-    // Load balance rows: static RHS = mean_mw from load model.
+    // Load balance rows: static RHS = mean_mw * block_factor.
+    // Block factors from `load_factors.json` scale the mean load per block
+    // (e.g., heavy/medium/light blocks). Default factor is 1.0 (no scaling).
     for (b_idx, bus) in ctx.buses.iter().enumerate() {
         let mean_mw = ctx
             .load_models
@@ -1226,9 +1236,11 @@ fn fill_stage_rows(
             .find(|lm| lm.bus_id == bus.id && lm.stage_id == stage.id)
             .map_or(0.0, |lm| lm.mean_mw);
         for blk in 0..layout.n_blks {
+            let factor = ctx.resolved_load_factors.factor(b_idx, stage_idx, blk);
             let row = layout.row_load_balance_start + b_idx * layout.n_blks + blk;
-            row_lower[row] = mean_mw;
-            row_upper[row] = mean_mw;
+            let rhs = mean_mw * factor;
+            row_lower[row] = rhs;
+            row_upper[row] = rhs;
         }
     }
 
@@ -2168,6 +2180,8 @@ pub fn build_stage_templates(
         evaporation_models,
         generic_constraints: system.generic_constraints(),
         resolved_generic_bounds: system.resolved_generic_bounds(),
+        resolved_load_factors: system.resolved_load_factors(),
+        resolved_exchange_factors: system.resolved_exchange_factors(),
         n_hydros,
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),

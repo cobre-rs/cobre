@@ -10,7 +10,7 @@
 //!
 //! # Variable Reference Catalog
 //!
-//! [`VariableRef`] covers all 19 LP variable types defined in the spec (SS15).
+//! [`VariableRef`] covers all 20 LP variable types defined in the spec (SS15).
 //! Each variant carries the entity ID and, for block-specific variables, an
 //! optional block ID (`None` = sum over all blocks, `Some(i)` = block `i`).
 //!
@@ -64,7 +64,7 @@ use crate::EntityId;
 /// block-specific variables, `block_id` is `None` to sum over all blocks or
 /// `Some(i)` to reference block `i` specifically.
 ///
-/// The 19 variants cover the full variable catalog defined in
+/// The 20 variants cover the full variable catalog defined in
 /// `internal-structures.md §15` (table in the "Variable References" section).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -138,6 +138,17 @@ pub enum VariableRef {
     },
     /// Reverse power flow on a transmission line (MW).
     LineReverse {
+        /// Transmission line identifier.
+        line_id: EntityId,
+        /// Block index. `None` = sum over all blocks; `Some(i)` = block `i`.
+        block_id: Option<usize>,
+    },
+    /// Net exchange flow on a transmission line (direct - reverse) (MW).
+    ///
+    /// This is a derived variable: the resolver maps it to two LP columns
+    /// (forward flow with +1.0 and reverse flow with -1.0), representing
+    /// net flow in the source-to-target direction.
+    LineExchange {
         /// Transmission line identifier.
         line_id: EntityId,
         /// Block index. `None` = sum over all blocks; `Some(i)` = block `i`.
@@ -366,6 +377,13 @@ mod tests {
                 },
             ),
             (
+                "LineExchange",
+                VariableRef::LineExchange {
+                    line_id: EntityId(0),
+                    block_id: None,
+                },
+            ),
+            (
                 "BusDeficit",
                 VariableRef::BusDeficit {
                     bus_id: EntityId(0),
@@ -425,8 +443,8 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            19,
-            "VariableRef must have exactly 19 variants"
+            20,
+            "VariableRef must have exactly 20 variants"
         );
 
         for (name, variant) in variants {

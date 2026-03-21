@@ -233,6 +233,18 @@ pub fn resolve_variable_ref<S: BuildHasher>(
             1.0,
         ),
 
+        VariableRef::LineExchange { line_id, block_id } => {
+            // Net exchange = forward - reverse: return two entries with opposite signs.
+            if let Some(&pos) = line_pos.get(line_id) {
+                let effective_blk = block_id.unwrap_or(block_idx);
+                let fwd_col = indexer.line_fwd.start + pos * n_blks + effective_blk;
+                let rev_col = indexer.line_rev.start + pos * n_blks + effective_blk;
+                vec![(fwd_col, 1.0), (rev_col, -1.0)]
+            } else {
+                vec![]
+            }
+        }
+
         // ── Bus deficit / excess ───────────────────────────────────────────
         VariableRef::BusDeficit { bus_id, block_id } => {
             // Deficit expands over all S segments for the bus.
@@ -1167,6 +1179,96 @@ mod tests {
         );
 
         assert_eq!(result, vec![(42, 1.0)]);
+    }
+
+    // ── LineExchange tests ──────────────────────────────────────────────────────
+
+    /// LineExchange maps to both line_fwd and line_rev columns with opposite signs.
+    ///
+    /// line_pos[EntityId(50)] = 0, line_fwd.start = 39, line_rev.start = 42,
+    /// n_blks = 3, block = 1
+    /// Expected: [(39 + 0*3 + 1, 1.0), (42 + 0*3 + 1, -1.0)] = [(40, 1.0), (43, -1.0)]
+    #[test]
+    fn line_exchange_maps_to_fwd_and_rev_columns() {
+        let indexer = make_indexer();
+        let prod = make_production_models();
+        let hpos = make_hydro_pos();
+        let tpos = make_thermal_pos();
+        let bpos = make_bus_pos();
+        let lpos = make_line_pos();
+
+        let result = call(
+            VariableRef::LineExchange {
+                line_id: EntityId(50),
+                block_id: None,
+            },
+            1,
+            &indexer,
+            &prod,
+            &hpos,
+            &tpos,
+            &bpos,
+            &lpos,
+        );
+
+        assert_eq!(result, vec![(40, 1.0), (43, -1.0)]);
+    }
+
+    /// LineExchange with explicit block_id overrides current block_idx.
+    ///
+    /// block_idx = 2 but block_id = Some(0)
+    /// Expected: [(39, 1.0), (42, -1.0)]
+    #[test]
+    fn line_exchange_with_explicit_block() {
+        let indexer = make_indexer();
+        let prod = make_production_models();
+        let hpos = make_hydro_pos();
+        let tpos = make_thermal_pos();
+        let bpos = make_bus_pos();
+        let lpos = make_line_pos();
+
+        let result = call(
+            VariableRef::LineExchange {
+                line_id: EntityId(50),
+                block_id: Some(0),
+            },
+            2,
+            &indexer,
+            &prod,
+            &hpos,
+            &tpos,
+            &bpos,
+            &lpos,
+        );
+
+        assert_eq!(result, vec![(39, 1.0), (42, -1.0)]);
+    }
+
+    /// LineExchange with unknown line ID returns empty vec.
+    #[test]
+    fn line_exchange_unknown_id_returns_empty() {
+        let indexer = make_indexer();
+        let prod = make_production_models();
+        let hpos = make_hydro_pos();
+        let tpos = make_thermal_pos();
+        let bpos = make_bus_pos();
+        let lpos = make_line_pos();
+
+        let result = call(
+            VariableRef::LineExchange {
+                line_id: EntityId(999),
+                block_id: None,
+            },
+            0,
+            &indexer,
+            &prod,
+            &hpos,
+            &tpos,
+            &bpos,
+            &lpos,
+        );
+
+        assert!(result.is_empty());
     }
 
     // ── HydroTurbined / HydroSpillage tests ───────────────────────────────────

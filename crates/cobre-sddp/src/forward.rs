@@ -269,6 +269,7 @@ pub fn build_cut_row_batch(
     fcf: &FutureCostFunction,
     stage: usize,
     indexer: &StageIndexer,
+    col_scale: &[f64],
 ) -> RowBatch {
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
@@ -316,7 +317,15 @@ pub fn build_cut_row_batch(
             );
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             col_indices.push(j as i32);
-            values.push(-c);
+            // When column scaling is active, cut row entries must be in the
+            // scaled LP's coordinate system: multiply by d_j so that the
+            // constraint reads -c_j * d_j * x_tilde_j = -c_j * x_j.
+            let d = if col_scale.is_empty() {
+                1.0
+            } else {
+                col_scale[j]
+            };
+            values.push(-c * d);
         }
 
         debug_assert!(
@@ -325,7 +334,13 @@ pub fn build_cut_row_batch(
         );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         col_indices.push(theta_col as i32);
-        values.push(1.0_f64);
+        // Theta column also needs scaling.
+        let d_theta = if col_scale.is_empty() {
+            1.0
+        } else {
+            col_scale[theta_col]
+        };
+        values.push(d_theta);
 
         row_lower.push(intercept);
         row_upper.push(f64::INFINITY);
@@ -536,18 +551,34 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     })?;
 
-    let stage_cost = view.objective - view.primal[indexer.theta];
+    // Unscale primal values from the solver's scaled coordinate system back
+    // to the original physical units. When col_scale is empty (no scaling
+    // applied), this loop is skipped.
+    let col_scale = &ctx.templates[t].col_scale;
+    let unscaled_primal = &mut ws.scratch.unscaled_primal;
+    if col_scale.is_empty() {
+        unscaled_primal.clear();
+        unscaled_primal.extend_from_slice(view.primal);
+    } else {
+        unscaled_primal.resize(view.primal.len(), 0.0);
+        for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
+            unscaled_primal[j] = d * xp;
+        }
+    }
+
+    let stage_cost = view.objective - unscaled_primal[indexer.theta];
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
-    rec.primal.extend_from_slice(view.primal);
+    rec.primal.extend_from_slice(unscaled_primal);
     rec.dual.clear();
     rec.dual.extend_from_slice(view.dual);
     rec.stage_cost = stage_cost;
     rec.state.clear();
-    rec.state.extend_from_slice(&view.primal[..indexer.n_state]);
+    rec.state
+        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&view.primal[..indexer.n_state]);
+        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {
@@ -649,7 +680,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
     let start = Instant::now();
     let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer))
+        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
         .collect();
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
@@ -928,6 +959,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -1117,7 +1150,7 @@ mod tests {
     fn build_cut_row_batch_empty_cuts_returns_empty_batch() {
         let fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
         let indexer = StageIndexer::new(1, 0);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 0);
         assert_eq!(batch.row_starts, vec![0]);
@@ -1132,7 +1165,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
         fcf.add_cut(0, 0, 0, 5.0, &[2.0]);
         let indexer = StageIndexer::new(1, 0);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
         assert_eq!(batch.row_starts, vec![0, 2]);
@@ -1148,7 +1181,7 @@ mod tests {
         fcf.add_cut(1, 0, 0, 10.0, &[1.0, 3.0]);
         fcf.add_cut(1, 1, 0, 20.0, &[2.0, 4.0]);
         let indexer = StageIndexer::new(1, 1);
-        let batch = build_cut_row_batch(&fcf, 1, &indexer);
+        let batch = build_cut_row_batch(&fcf, 1, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
@@ -1174,7 +1207,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(1, 2, 1, 5, 0);
         fcf.add_cut(0, 0, 0, 3.0, &[0.0, 7.0]);
         let indexer = StageIndexer::new(1, 1);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
         assert_eq!(batch.col_indices, vec![0, 1, 3]);
@@ -1205,6 +1238,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }
     }
@@ -2265,6 +2299,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -2738,6 +2774,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         };
 
@@ -2837,6 +2874,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         };
 

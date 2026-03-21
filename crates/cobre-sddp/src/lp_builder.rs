@@ -2026,6 +2026,8 @@ fn build_single_stage_template(
         n_dual_relevant: layout.n_dual_relevant,
         n_hydro: layout.n_h,
         max_par_order: layout.lag_order,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     (
@@ -2037,6 +2039,81 @@ fn build_single_stage_template(
         n_ncs,
         ncs_active,
     )
+}
+
+/// Compute per-column geometric-mean scaling factors from a CSC constraint matrix.
+///
+/// For each column `j`, the scale factor is `1 / sqrt(max|A_ij| * min|A_ij|)` over
+/// nonzero entries. Columns with no nonzero entries receive a scale factor of 1.0.
+///
+/// The returned vector has length `num_cols`. Applying column scaling transforms the
+/// LP: multiply each column's matrix entries, objective coefficient, and column bounds
+/// by the corresponding scale factor.
+#[must_use]
+pub(crate) fn compute_col_scale(num_cols: usize, col_starts: &[i32], values: &[f64]) -> Vec<f64> {
+    let mut scale = vec![1.0_f64; num_cols];
+    for j in 0..num_cols {
+        let start = col_starts[j] as usize;
+        let end = col_starts[j + 1] as usize;
+        if start == end {
+            // No nonzero entries in this column.
+            continue;
+        }
+        let mut max_abs = 0.0_f64;
+        let mut min_abs = f64::INFINITY;
+        for &v in &values[start..end] {
+            let abs_val = v.abs();
+            if abs_val > 0.0 {
+                max_abs = max_abs.max(abs_val);
+                min_abs = min_abs.min(abs_val);
+            }
+        }
+        if max_abs > 0.0 && min_abs < f64::INFINITY {
+            let d = 1.0 / (max_abs * min_abs).sqrt();
+            scale[j] = d;
+        }
+        // Otherwise keep 1.0 (all structural zeros or defensive fallback).
+    }
+    scale
+}
+
+/// Apply column scaling to a stage template's matrix, objective, and bounds.
+///
+/// Modifies the template in-place. After this call:
+/// - `values[k]` has been multiplied by `col_scale[col_of(k)]`
+/// - `objective[j]` has been multiplied by `col_scale[j]`
+/// - `col_lower[j]` has been divided by `col_scale[j]`
+/// - `col_upper[j]` has been divided by `col_scale[j]`
+///
+/// Infinite bounds remain infinite (dividing infinity by a finite positive
+/// scale factor yields infinity).
+pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
+    let num_cols = template.num_cols;
+    debug_assert_eq!(col_scale.len(), num_cols);
+
+    // Scale matrix values (CSC: iterate columns).
+    for j in 0..num_cols {
+        let start = template.col_starts[j] as usize;
+        let end = template.col_starts[j + 1] as usize;
+        let d = col_scale[j];
+        for v in &mut template.values[start..end] {
+            *v *= d;
+        }
+    }
+
+    // Scale objective coefficients.
+    for j in 0..num_cols {
+        template.objective[j] *= col_scale[j];
+    }
+
+    // Inverse-scale column bounds.
+    // The scaled variable is x_tilde = x / d_j, so bounds become [lo/d, hi/d].
+    // For d > 0 this preserves bound ordering.
+    for j in 0..num_cols {
+        let d = col_scale[j];
+        template.col_lower[j] /= d;
+        template.col_upper[j] /= d;
+    }
 }
 
 /// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation.

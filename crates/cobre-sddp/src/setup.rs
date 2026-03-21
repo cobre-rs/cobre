@@ -58,6 +58,7 @@ use crate::{
     build_stage_templates,
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
+    lp_builder,
     simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
@@ -327,7 +328,7 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         // ── Stage templates ───────────────────────────────────────────────────
-        let stage_templates = build_stage_templates(
+        let mut stage_templates = build_stage_templates(
             system,
             &inflow_method,
             stochastic.par(),
@@ -335,6 +336,16 @@ impl StudySetup {
             &hydro_models.production,
             &hydro_models.evaporation,
         )?;
+
+        // Compute and apply column scaling for numerical conditioning.
+        // Scale factors are stored in the template for unscaling primal/dual
+        // solutions in the forward and backward passes.
+        for tmpl in &mut stage_templates.templates {
+            let col_scale =
+                lp_builder::compute_col_scale(tmpl.num_cols, &tmpl.col_starts, &tmpl.values);
+            lp_builder::apply_col_scale(tmpl, &col_scale);
+            tmpl.col_scale = col_scale;
+        }
 
         if stage_templates.templates.is_empty() {
             return Err(SddpError::Validation(

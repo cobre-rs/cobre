@@ -284,18 +284,50 @@ fn solve_simulation_stage<S: SolverInterface>(
         },
     })?;
 
+    // Unscale primal values when column scaling is active.
+    let col_scale = &ctx.templates[ids.t].col_scale;
+    {
+        let buf = &mut ws.scratch.unscaled_primal;
+        if col_scale.is_empty() {
+            buf.clear();
+            buf.extend_from_slice(view.primal);
+        } else {
+            buf.resize(view.primal.len(), 0.0);
+            for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
+                buf[j] = d * xp;
+            }
+        }
+    }
+    // The mutable borrow of unscaled_primal is released; now borrow
+    // scratch mutably for extract_sim_stage_result while reading
+    // unscaled_primal immutably through the SolutionView.
+    //
+    // Unfortunately extract_sim_stage_result takes &mut ScratchBuffers,
+    // which conflicts with an immutable borrow of unscaled_primal.
+    // Work around by splitting: extract_sim_stage_result only uses
+    // inflow_m3s_buf and row_lower_buf from scratch.  We clone the
+    // unscaled primal into a local before calling extract.
+    let unscaled_primal_local: Vec<f64> = ws.scratch.unscaled_primal.clone();
+    let unscaled_view = cobre_solver::SolutionView {
+        objective: view.objective,
+        primal: &unscaled_primal_local,
+        dual: view.dual,
+        reduced_costs: view.reduced_costs,
+        iterations: view.iterations,
+        solve_time_seconds: view.solve_time_seconds,
+    };
     let (immediate_cost, result) = extract_sim_stage_result(
         &mut ws.scratch,
         ctx,
         output,
         indexer,
         ids,
-        &view,
+        &unscaled_view,
         n_stochastic_ncs,
     );
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&view.primal[..indexer.n_state]);
+        .extend_from_slice(&unscaled_primal_local[..indexer.n_state]);
     Ok((immediate_cost, result))
 }
 
@@ -626,7 +658,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     );
 
     let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer))
+        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
         .collect();
     let scenario_range = assign_scenarios(config.n_scenarios, rank, comm.size());
     #[allow(clippy::cast_possible_truncation)]
@@ -873,6 +905,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -1060,6 +1094,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }]
     }
@@ -1696,6 +1731,7 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
                 },
             })
             .collect();
@@ -2487,6 +2523,8 @@ mod tests {
             n_dual_relevant: 3,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template];
         let base_rows = vec![1usize]; // water-balance rows start at row 1
@@ -2527,6 +2565,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }];
 
@@ -2743,6 +2782,8 @@ mod tests {
             n_dual_relevant: 3,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template];
         let base_rows = vec![1usize];
@@ -2783,6 +2824,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }];
 
@@ -3001,6 +3043,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -3030,6 +3074,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }]
     }

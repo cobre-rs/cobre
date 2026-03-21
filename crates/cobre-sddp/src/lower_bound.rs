@@ -137,7 +137,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        let cut_batch = build_cut_row_batch(fcf, 0, indexer);
+        let cut_batch = build_cut_row_batch(fcf, 0, indexer, &template.col_scale);
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
         let mut ncs_col_upper_buf: Vec<f64> = Vec::new();
@@ -264,6 +264,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

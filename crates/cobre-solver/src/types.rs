@@ -235,6 +235,28 @@ pub struct StageTemplate {
     /// lag values regardless of their individual PAR order, enabling SIMD
     /// vectorization with a single contiguous state stride.
     pub max_par_order: usize,
+
+    /// Per-column scaling factors for numerical conditioning.
+    ///
+    /// When non-empty (length `num_cols`), the constraint matrix, objective
+    /// coefficients, and column bounds have been pre-scaled by these factors.
+    /// The calling algorithm is responsible for unscaling primal values after
+    /// each solve: `x_original[j] = col_scale[j] * x_scaled[j]`.
+    ///
+    /// When empty, no column scaling has been applied and solver results are
+    /// used directly.
+    pub col_scale: Vec<f64>,
+
+    /// Per-row scaling factors for numerical conditioning.
+    ///
+    /// When non-empty (length `num_rows`), the constraint matrix and row bounds
+    /// have been pre-scaled by these factors. The calling algorithm is responsible
+    /// for unscaling dual values after each solve:
+    /// `dual_original[i] = row_scale[i] * dual_scaled[i]`.
+    ///
+    /// When empty, no row scaling has been applied and solver results are
+    /// used directly.
+    pub row_scale: Vec<f64>,
 }
 
 /// Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
@@ -472,6 +494,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

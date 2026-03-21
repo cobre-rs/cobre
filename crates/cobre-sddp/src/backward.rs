@@ -513,7 +513,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
-        let cut_batch = build_cut_row_batch(fcf, successor, indexer);
+        let cut_batch =
+            build_cut_row_batch(fcf, successor, indexer, &ctx.templates[successor].col_scale);
         let num_cuts_at_successor = cut_batch.num_rows;
         let template_num_rows = ctx.templates[successor].num_rows;
         let successor_active_slots: Vec<usize> = fcf
@@ -760,6 +761,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -797,6 +800,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }]
     }
@@ -2206,6 +2210,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2263,6 +2268,7 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
                 },
             })
             .collect();
@@ -2524,6 +2530,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2558,6 +2566,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2649,6 +2658,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2681,6 +2692,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2768,6 +2780,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2800,6 +2814,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];

@@ -444,6 +444,8 @@ fn template_3h() -> StageTemplate {
         n_dual_relevant: 3,
         n_hydro: 3,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     }
 }
 

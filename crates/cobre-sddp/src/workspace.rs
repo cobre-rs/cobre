@@ -47,6 +47,13 @@ pub(crate) struct ScratchBuffers {
     /// buffer and overwrites load balance rows with stochastic realizations
     /// before passing to [`extract_stage_result`].
     pub(crate) row_lower_buf: Vec<f64>,
+    /// Scratch buffer for unscaled primal values.
+    ///
+    /// When column scaling is active, solver primal values are in scaled
+    /// coordinates. This buffer holds the unscaled values after applying
+    /// `x_original[j] = col_scale[j] * x_scaled[j]`. Reused across solves
+    /// to avoid per-solve allocation.
+    pub(crate) unscaled_primal: Vec<f64>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -97,6 +104,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
             },
         }
     }
@@ -150,6 +158,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
                 },
             })
             .collect();
@@ -205,6 +214,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
                 },
             });
         }

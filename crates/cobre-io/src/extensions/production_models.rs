@@ -113,6 +113,11 @@ pub struct StageRange {
     pub model: String,
     /// FPHA configuration, required when `model == "fpha"`.
     pub fpha_config: Option<FphaConfig>,
+    /// Optional productivity override (MW per m3/s). When `Some`, this value
+    /// replaces the entity's base `productivity_mw_per_m3s` for this stage range.
+    /// Only valid for `"constant_productivity"` and `"linearized_head"` models.
+    /// Must be positive when present.
+    pub productivity_override: Option<f64>,
 }
 
 /// A season-specific model descriptor for the `seasonal` selection mode.
@@ -124,6 +129,11 @@ pub struct SeasonConfig {
     pub model: String,
     /// FPHA configuration, required when `model == "fpha"`.
     pub fpha_config: Option<FphaConfig>,
+    /// Optional productivity override (MW per m3/s). When `Some`, this value
+    /// replaces the entity's base `productivity_mw_per_m3s` for this season.
+    /// Only valid for `"constant_productivity"` and `"linearized_head"` models.
+    /// Must be positive when present.
+    pub productivity_override: Option<f64>,
 }
 
 /// Configuration for the FPHA production function model.
@@ -213,6 +223,7 @@ struct RawStageRange {
     end_stage_id: Option<i32>,
     model: String,
     fpha_config: Option<RawFphaConfig>,
+    productivity_override: Option<f64>,
 }
 
 /// Intermediate type for one season config descriptor.
@@ -221,6 +232,7 @@ struct RawSeasonConfig {
     season_id: i32,
     model: String,
     fpha_config: Option<RawFphaConfig>,
+    productivity_override: Option<f64>,
 }
 
 /// Intermediate type for FPHA configuration.
@@ -333,6 +345,33 @@ fn validate_production_models(models: &[RawProductionModel], path: &Path) -> Res
             }
             RawSelectionMode::Seasonal { seasons, .. } => {
                 for (season_idx, season) in seasons.iter().enumerate() {
+                    // Reject productivity_override on FPHA seasons.
+                    if season.model == "fpha" && season.productivity_override.is_some() {
+                        return Err(LoadError::SchemaError {
+                            path: path.to_path_buf(),
+                            field: format!(
+                                "production_models[{entry_idx}].seasons[{season_idx}].productivity_override"
+                            ),
+                            message: "productivity_override is not valid for model \"fpha\""
+                                .to_string(),
+                        });
+                    }
+
+                    // Reject non-positive productivity_override.
+                    if let Some(val) = season.productivity_override {
+                        if val <= 0.0 {
+                            return Err(LoadError::SchemaError {
+                                path: path.to_path_buf(),
+                                field: format!(
+                                    "production_models[{entry_idx}].seasons[{season_idx}].productivity_override"
+                                ),
+                                message: format!(
+                                    "productivity_override must be positive, got {val}"
+                                ),
+                            });
+                        }
+                    }
+
                     if let Some(cfg) = &season.fpha_config {
                         validate_fitting_window(
                             cfg,
@@ -370,6 +409,30 @@ fn validate_stage_range(
                      start_stage_id must be <= end_stage_id",
                     range.start_stage_id, end
                 ),
+            });
+        }
+    }
+
+    // Reject productivity_override on FPHA stages.
+    if range.model == "fpha" && range.productivity_override.is_some() {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: format!(
+                "production_models[{entry_idx}].stage_ranges[{range_idx}].productivity_override"
+            ),
+            message: "productivity_override is not valid for model \"fpha\"".to_string(),
+        });
+    }
+
+    // Reject non-positive productivity_override.
+    if let Some(val) = range.productivity_override {
+        if val <= 0.0 {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: format!(
+                    "production_models[{entry_idx}].stage_ranges[{range_idx}].productivity_override"
+                ),
+                message: format!("productivity_override must be positive, got {val}"),
             });
         }
     }
@@ -453,6 +516,7 @@ fn convert_stage_range(raw: RawStageRange) -> StageRange {
         end_stage_id: raw.end_stage_id,
         model: raw.model,
         fpha_config: raw.fpha_config.map(convert_fpha_config),
+        productivity_override: raw.productivity_override,
     }
 }
 
@@ -461,6 +525,7 @@ fn convert_season_config(raw: RawSeasonConfig) -> SeasonConfig {
         season_id: raw.season_id,
         model: raw.model,
         fpha_config: raw.fpha_config.map(convert_fpha_config),
+        productivity_override: raw.productivity_override,
     }
 }
 
@@ -961,6 +1026,159 @@ mod tests {
                 assert!(fpha.fitting_window.is_none());
             }
             other => panic!("expected StageRanges, got: {other:?}"),
+        }
+    }
+
+    // ── productivity_override tests ───────────────────────────────────────────
+
+    /// Parse stage range with `productivity_override` present.
+    #[test]
+    fn test_productivity_override_present() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "stage_ranges",
+            "stage_ranges": [
+              {
+                "start_stage_id": 0, "end_stage_id": 24,
+                "model": "constant_productivity",
+                "productivity_override": 0.85
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let models = parse_production_models(f.path()).unwrap();
+        match &models[0].selection_mode {
+            SelectionMode::StageRanges { ranges } => {
+                assert_eq!(ranges[0].productivity_override, Some(0.85));
+            }
+            other => panic!("expected StageRanges, got: {other:?}"),
+        }
+    }
+
+    /// Backward compatibility: missing `productivity_override` defaults to None.
+    #[test]
+    fn test_productivity_override_absent_defaults_to_none() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "stage_ranges",
+            "stage_ranges": [
+              {
+                "start_stage_id": 0, "end_stage_id": 24,
+                "model": "constant_productivity"
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let models = parse_production_models(f.path()).unwrap();
+        match &models[0].selection_mode {
+            SelectionMode::StageRanges { ranges } => {
+                assert!(ranges[0].productivity_override.is_none());
+            }
+            other => panic!("expected StageRanges, got: {other:?}"),
+        }
+    }
+
+    /// Validation rejects negative `productivity_override`.
+    #[test]
+    fn test_productivity_override_negative_rejected() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "stage_ranges",
+            "stage_ranges": [
+              {
+                "start_stage_id": 0, "end_stage_id": 24,
+                "model": "constant_productivity",
+                "productivity_override": -1.0
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let err = parse_production_models(f.path()).unwrap_err();
+        assert!(
+            matches!(err, LoadError::SchemaError { .. }),
+            "expected SchemaError, got: {err:?}"
+        );
+    }
+
+    /// Validation rejects zero `productivity_override`.
+    #[test]
+    fn test_productivity_override_zero_rejected() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "stage_ranges",
+            "stage_ranges": [
+              {
+                "start_stage_id": 0, "end_stage_id": 24,
+                "model": "constant_productivity",
+                "productivity_override": 0.0
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let err = parse_production_models(f.path()).unwrap_err();
+        assert!(
+            matches!(err, LoadError::SchemaError { .. }),
+            "expected SchemaError, got: {err:?}"
+        );
+    }
+
+    /// Validation rejects `productivity_override` on FPHA stages.
+    #[test]
+    fn test_productivity_override_rejected_on_fpha() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "stage_ranges",
+            "stage_ranges": [
+              {
+                "start_stage_id": 0, "end_stage_id": 24,
+                "model": "fpha",
+                "fpha_config": { "source": "computed" },
+                "productivity_override": 0.5
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let err = parse_production_models(f.path()).unwrap_err();
+        assert!(
+            matches!(err, LoadError::SchemaError { .. }),
+            "expected SchemaError, got: {err:?}"
+        );
+    }
+
+    /// Seasonal mode with `productivity_override` parses correctly.
+    #[test]
+    fn test_seasonal_productivity_override() {
+        let json = r#"{
+          "production_models": [{
+            "hydro_id": 0,
+            "selection_mode": "seasonal",
+            "default_model": "constant_productivity",
+            "seasons": [
+              {
+                "season_id": 0,
+                "model": "constant_productivity",
+                "productivity_override": 0.75
+              }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let models = parse_production_models(f.path()).unwrap();
+        match &models[0].selection_mode {
+            SelectionMode::Seasonal { seasons, .. } => {
+                assert_eq!(seasons[0].productivity_override, Some(0.75));
+            }
+            other => panic!("expected Seasonal, got: {other:?}"),
         }
     }
 }

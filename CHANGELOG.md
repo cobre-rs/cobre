@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-03-21
+
 ### Added
 
 - **Block factors** -- Per-block scaling multipliers for load demand

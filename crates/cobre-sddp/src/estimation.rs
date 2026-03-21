@@ -10,7 +10,8 @@
 //! |---|---|---|---|
 //! | absent | any | any | Return `system` unchanged. |
 //! | present | present | present | Return `system` unchanged (explicit stats take priority). |
-//! | present | absent | any | Run estimation; update `inflow_models` and optionally `correlation`. |
+//! | present | present | absent | Partial estimation: load existing stats, estimate only AR coefficients. |
+//! | present | absent | any | Full estimation; update `inflow_models` and optionally `correlation`. |
 //!
 //! `correlation.json` is handled independently: if present, the existing
 //! `system.correlation()` is kept; if absent, the correlation is estimated from residuals.
@@ -38,8 +39,9 @@ use cobre_io::{
 use cobre_stochastic::{
     StochasticError,
     par::fitting::{
-        AicSelectionResult, ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients,
-        estimate_correlation, estimate_seasonal_stats, find_season_for_date, levinson_durbin,
+        AicSelectionResult, ArCoefficientEstimate, SeasonalStats,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_seasonal_stats_with_season_map, find_season_for_date, levinson_durbin,
         select_order_aic,
     },
 };
@@ -173,8 +175,12 @@ fn run_estimation(
     // ── Use stages already present in the system (avoids re-parsing stages.json) ──
     let stages = system.stages();
 
+    // ── Extract season map for calendar-based date-to-season fallback ────────
+    let season_map = system.policy_graph().season_map.as_ref();
+
     // ── Step 4: estimate seasonal stats ─────────────────────────────────────
-    let seasonal_stats = estimate_seasonal_stats(&observations, stages, &hydro_ids)?;
+    let seasonal_stats =
+        estimate_seasonal_stats_with_season_map(&observations, stages, &hydro_ids, season_map)?;
 
     // ── Step 5: estimate AR coefficients ────────────────────────────────────
     let max_order = config.estimation.max_order as usize;
@@ -185,6 +191,7 @@ fn run_estimation(
         &hydro_ids,
         max_order,
         &config.estimation.order_selection,
+        season_map,
     )?;
 
     // ── Step 6: estimate or preserve correlation ─────────────────────────────
@@ -192,12 +199,13 @@ fn run_estimation(
         // Explicit correlation.json is present — keep whatever was loaded by load_case.
         system.correlation().clone()
     } else {
-        estimate_correlation(
+        estimate_correlation_with_season_map(
             &observations,
             &ar_estimates,
             &seasonal_stats,
             stages,
             &hydro_ids,
+            season_map,
         )?
     };
 
@@ -227,24 +235,31 @@ fn estimate_ar_coefficients_with_selection(
     hydro_ids: &[EntityId],
     max_order: usize,
     method: &OrderSelectionMethod,
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     match method {
         OrderSelectionMethod::Fixed => {
-            let estimates = estimate_ar_coefficients(
+            let estimates = estimate_ar_coefficients_with_season_map(
                 observations,
                 seasonal_stats,
                 stages,
                 hydro_ids,
                 max_order,
+                season_map,
             )?;
             let report = EstimationReport {
                 entries: BTreeMap::new(),
             };
             Ok((estimates, report))
         }
-        OrderSelectionMethod::Aic => {
-            estimate_ar_with_aic(observations, seasonal_stats, stages, hydro_ids, max_order)
-        }
+        OrderSelectionMethod::Aic => estimate_ar_with_aic(
+            observations,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            max_order,
+            season_map,
+        ),
     }
 }
 
@@ -257,16 +272,24 @@ fn estimate_ar_coefficients_with_selection(
 ///
 /// Truncation recomputes `residual_std_ratio` from the selected order's
 /// `sigma2` (the square root of the normalised prediction error variance).
+#[allow(clippy::too_many_lines)]
 fn estimate_ar_with_aic(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
     stages: &[cobre_core::temporal::Stage],
     hydro_ids: &[EntityId],
     max_order: usize,
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     // Get full-order estimates first.
-    let mut estimates =
-        estimate_ar_coefficients(observations, seasonal_stats, stages, hydro_ids, max_order)?;
+    let mut estimates = estimate_ar_coefficients_with_season_map(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        max_order,
+        season_map,
+    )?;
 
     if max_order == 0 {
         let report = EstimationReport {
@@ -304,7 +327,9 @@ fn estimate_ar_with_aic(
         if !entity_set.contains(&entity_id) {
             continue;
         }
-        let Some(season_id) = find_season_for_date(&stage_index, date) else {
+        let Some(season_id) = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+        else {
             continue;
         };
         group_obs
@@ -926,6 +951,7 @@ mod tests {
             &hydro_ids,
             max_order,
             &method,
+            None,
         )
         .unwrap();
 

@@ -671,14 +671,20 @@ impl SolverInterface for HighsSolver {
         }
 
         // Check for a definitive terminal status (not a retry-able error).
-        if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
-            self.stats.failure_count += 1;
-            return Err(terminal_err);
+        // UNBOUNDED is retried: HiGHS dual simplex can report spurious UNBOUNDED
+        // on numerically difficult LPs with wide coefficient ranges. The retry
+        // escalation (especially presolve at level 1) often resolves these.
+        let is_unbounded = model_status == ffi::HIGHS_MODEL_STATUS_UNBOUNDED;
+        if !is_unbounded {
+            if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
+                self.stats.failure_count += 1;
+                return Err(terminal_err);
+            }
         }
 
         // 5-level retry escalation (HiGHS Implementation SS3). Apply progressively
-        // more permissive strategies on SOLVE_ERROR/UNKNOWN; break on OPTIMAL or
-        // definitive terminal status.
+        // more permissive strategies on SOLVE_ERROR/UNKNOWN/UNBOUNDED; break on
+        // OPTIMAL or definitive terminal status.
         let mut retry_attempts: u64 = 0;
         // None = retry loop exhausted without success; Some(Err) = terminal failure.
         // We accumulate the error, then after restoring settings we either return
@@ -745,11 +751,15 @@ impl SolverInterface for HighsSolver {
                 break;
             }
 
-            if let Some(e) = self.interpret_terminal_status(retry_status, retry_time) {
-                terminal_err = Some(e);
-                break;
+            // UNBOUNDED during retry continues to the next level (presolve or
+            // alternative strategies may resolve it). Other terminal statuses stop.
+            if retry_status != ffi::HIGHS_MODEL_STATUS_UNBOUNDED {
+                if let Some(e) = self.interpret_terminal_status(retry_status, retry_time) {
+                    terminal_err = Some(e);
+                    break;
+                }
             }
-            // Still SOLVE_ERROR or UNKNOWN -- continue to next level.
+            // Still SOLVE_ERROR, UNKNOWN, or UNBOUNDED -- continue to next level.
         }
 
         // Restore default settings unconditionally (regardless of retry outcome).
@@ -768,9 +778,13 @@ impl SolverInterface for HighsSolver {
         self.stats.failure_count += 1;
         Err(terminal_err.unwrap_or_else(|| {
             // All 5 retry levels exhausted without a definitive result.
-            SolverError::NumericalDifficulty {
-                message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
-                    .to_string(),
+            if is_unbounded {
+                SolverError::Unbounded
+            } else {
+                SolverError::NumericalDifficulty {
+                    message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
+                        .to_string(),
+                }
             }
         }))
     }

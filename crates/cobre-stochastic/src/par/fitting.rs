@@ -36,7 +36,7 @@ use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
-    temporal::Stage,
+    temporal::{SeasonMap, Stage},
 };
 
 use crate::StochasticError;
@@ -135,6 +135,27 @@ pub fn estimate_seasonal_stats(
     stages: &[Stage],
     entity_ids: &[EntityId],
 ) -> Result<Vec<SeasonalStats>, StochasticError> {
+    estimate_seasonal_stats_with_season_map(observations, stages, entity_ids, None)
+}
+
+/// Estimate seasonal statistics with an optional [`SeasonMap`] fallback.
+///
+/// When `season_map` is `Some`, historical observation dates that fall outside
+/// the study horizon are resolved to a season using the calendar-based cycle
+/// definition. This allows PAR estimation from inflow history that predates
+/// the study period.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when an observation date
+/// cannot be mapped to any season, or when fewer than 2 observations exist
+/// for any `(entity, season)` group.
+pub fn estimate_seasonal_stats_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    stages: &[Stage],
+    entity_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<SeasonalStats>, StochasticError> {
     if observations.is_empty() {
         return Ok(Vec::new());
     }
@@ -170,18 +191,17 @@ pub fn estimate_seasonal_stats(
             continue;
         }
 
-        // Binary search for the stage that contains `date`.
-        // A stage contains `date` when start_date <= date < end_date.
-        // We search for the last stage whose start_date <= date, then check
-        // that date < end_date.
-        let season_id = find_season_for_date(&stage_index, date).ok_or_else(|| {
-            StochasticError::InsufficientData {
+        // Try exact stage date containment first (for in-range observations),
+        // then fall back to the SeasonMap calendar-based mapping (for historical
+        // observations that predate the study horizon).
+        let season_id = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+            .ok_or_else(|| StochasticError::InsufficientData {
                 context: format!(
                     "observation date {date} for entity {entity_id} \
-                     does not fall within any stage's date range"
+                     does not match any stage date range or season definition"
                 ),
-            }
-        })?;
+            })?;
 
         let first_stage_id = season_first_stage[&season_id];
         let entry = group_map
@@ -505,6 +525,32 @@ pub fn estimate_ar_coefficients(
     hydro_ids: &[EntityId],
     max_order: usize,
 ) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
+    estimate_ar_coefficients_with_season_map(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        max_order,
+        None,
+    )
+}
+
+/// Estimate AR coefficients with an optional [`SeasonMap`] fallback for
+/// historical observations that predate the study horizon.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when insufficient
+/// observations exist for any `(entity, season)` group.
+#[allow(clippy::too_many_lines)]
+pub fn estimate_ar_coefficients_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    max_order: usize,
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
     // -----------------------------------------------------------------------
     // Step 1: Build date-to-season mapping (same as estimate_seasonal_stats).
     // -----------------------------------------------------------------------
@@ -591,7 +637,9 @@ pub fn estimate_ar_coefficients(
         if !entity_set.contains(&entity_id) {
             continue;
         }
-        let Some(season_id) = find_season_for_date(&stage_index, date) else {
+        let Some(season_id) = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+        else {
             continue;
         };
         group_obs
@@ -855,6 +903,31 @@ pub fn estimate_correlation(
     stages: &[Stage],
     hydro_ids: &[EntityId],
 ) -> Result<CorrelationModel, StochasticError> {
+    estimate_correlation_with_season_map(
+        observations,
+        ar_estimates,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        None,
+    )
+}
+
+/// Estimate correlation with an optional [`SeasonMap`] fallback.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when seasonal stats are
+/// empty but hydros are present, or when residual computation fails.
+#[allow(clippy::too_many_lines)]
+pub fn estimate_correlation_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    ar_estimates: &[ArCoefficientEstimate],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<CorrelationModel, StochasticError> {
     // Trivial case: no hydros.
     if hydro_ids.is_empty() {
         let mut profiles = BTreeMap::new();
@@ -969,7 +1042,9 @@ pub fn estimate_correlation(
 
         for &(date, value) in all_obs {
             // Determine the season for this observation.
-            let Some(season_id) = find_season_for_date(&stage_index, date) else {
+            let Some(season_id) = find_season_for_date(&stage_index, date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+            else {
                 continue;
             };
 

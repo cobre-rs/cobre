@@ -183,8 +183,9 @@ pub(crate) fn transform_load_noise(
 /// Transform raw NCS noise into per-block column upper bound values.
 ///
 /// For each stochastic NCS entity, computes the stage-level availability
-/// `A_r = clamp(mean + std * epsilon, 0, max_gen)` and then scales by the
-/// per-block factor: `col_upper = A_r * block_factor`.
+/// `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)` where `mean` and `std`
+/// are dimensionless availability factors, and then scales by the per-block
+/// factor: `col_upper = A_r * block_factor`.
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
     n_hydros: usize,
@@ -207,7 +208,7 @@ pub(crate) fn transform_ncs_noise(
         let mean = ncs_lp.mean(stage, ncs_idx);
         let std = ncs_lp.std(stage, ncs_idx);
         let max_gen = ncs_max_gen[ncs_idx];
-        let realization = (mean + std * eta).clamp(0.0, max_gen);
+        let realization = max_gen * (mean + std * eta).clamp(0.0, 1.0);
         for blk in 0..block_count {
             let factor = ncs_lp.block_factor(stage, ncs_idx, blk);
             ncs_col_upper_buf.push(realization * factor);

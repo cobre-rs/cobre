@@ -263,12 +263,13 @@ pub struct LoadModel {
 /// Per-stage normal noise model parameters for a non-controllable source.
 ///
 /// Loaded from `scenarios/non_controllable_models.parquet`. Each row provides
-/// the mean and standard deviation of available generation for one NCS entity
-/// at one stage. The scenario pipeline uses these parameters to generate
-/// per-scenario availability realisations.
+/// the mean and standard deviation of the stochastic availability factor for
+/// one NCS entity at one stage. The scenario pipeline uses these parameters
+/// to generate per-scenario availability realisations.
 ///
-/// The noise model is: `A_r = mean_mw + std_mw * epsilon`, where `epsilon ~ N(0,1)`.
-/// The result is clamped to `[0, max_generation_mw]`.
+/// The noise model is: `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)`,
+/// where `epsilon ~ N(0,1)` and `mean`, `std` are dimensionless availability
+/// factors in `[0, 1]`.
 ///
 /// The `System` holds a `Vec<NcsModel>` sorted by `(ncs_id, stage_id)`.
 ///
@@ -280,10 +281,10 @@ pub struct LoadModel {
 /// let model = NcsModel {
 ///     ncs_id: EntityId(3),
 ///     stage_id: 0,
-///     mean_mw: 50.0,
-///     std_mw: 10.0,
+///     mean: 0.5,
+///     std: 0.1,
 /// };
-/// assert_eq!(model.mean_mw, 50.0);
+/// assert_eq!(model.mean, 0.5);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -294,11 +295,11 @@ pub struct NcsModel {
     /// Stage (0-based index within `System::stages`) this model applies to.
     pub stage_id: i32,
 
-    /// Mean available generation [MW].
-    pub mean_mw: f64,
+    /// Mean availability factor [dimensionless, in `[0, 1]`].
+    pub mean: f64,
 
-    /// Standard deviation of available generation [MW].
-    pub std_mw: f64,
+    /// Standard deviation of the availability factor [dimensionless, >= 0].
+    pub std: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -726,14 +727,14 @@ mod tests {
         let model = NcsModel {
             ncs_id: EntityId(3),
             stage_id: 0,
-            mean_mw: 50.0,
-            std_mw: 10.0,
+            mean: 0.5,
+            std: 0.1,
         };
 
         assert_eq!(model.ncs_id, EntityId(3));
         assert_eq!(model.stage_id, 0);
-        assert_eq!(model.mean_mw, 50.0);
-        assert_eq!(model.std_mw, 10.0);
+        assert_eq!(model.mean, 0.5);
+        assert_eq!(model.std, 0.1);
     }
 
     #[cfg(feature = "serde")]
@@ -742,8 +743,8 @@ mod tests {
         let model = NcsModel {
             ncs_id: EntityId(5),
             stage_id: 2,
-            mean_mw: 75.0,
-            std_mw: 15.0,
+            mean: 0.75,
+            std: 0.15,
         };
         let json = serde_json::to_string(&model).unwrap();
         let deserialized: NcsModel = serde_json::from_str(&json).unwrap();

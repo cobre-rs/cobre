@@ -478,6 +478,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             n_hydros: stage_ctx.n_hydros,
             opening_tree,
             risk_measure: &risk_measures[0],
+            stochastic: Some(training_ctx.stochastic),
+            n_load_buses: stage_ctx.n_load_buses,
+            ncs_max_gen: stage_ctx.ncs_max_gen,
+            block_count: stage_ctx.block_counts_per_stage[0],
+            ncs_generation: indexer.ncs_generation.clone(),
         };
         let lb = evaluate_lower_bound(
             solver,

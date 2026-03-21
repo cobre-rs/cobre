@@ -1181,7 +1181,9 @@ fn d14_block_factors() {
 /// - 1 bus, 1 thermal (T0 at $10/MWh, cap 100 MW), 1 NCS (curtailment_cost
 ///   $0.001/MWh, bus 0, max_generation_mw 100 MW), deterministic load 80 MW,
 ///   2 stages each with 1 block of 730 hours.
-/// - NCS available generation = 50 MW per stage (from ncs_bounds.parquet).
+/// - NCS available generation = 50 MW per stage (from non_controllable_models.parquet,
+///   mean=0.5, std=0.0 — availability factor 0.5 * 100 MW = 50 MW, deterministic,
+///   exercises the stochastic NCS pipeline).
 ///
 /// ## Expected cost derivation
 ///
@@ -1245,14 +1247,14 @@ fn d15_non_controllable_source() {
     writer.write(&inflow_batch).expect("write inflow batch");
     writer.close().expect("close inflow writer");
 
-    // Create ncs_bounds.parquet: NCS 0 available at 50 MW for stages 0-1.
-    let constraints_dir = case_dir.join("constraints");
-    std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
-
+    // Create non_controllable_models.parquet: NCS 0 with availability factor 0.5
+    // (= 50 MW out of max 100 MW), std 0 (deterministic), for stages 0-1.
+    // Uses the stochastic NCS pipeline with zero noise.
     let ncs_schema = Arc::new(Schema::new(vec![
         Field::new("ncs_id", DataType::Int32, false),
         Field::new("stage_id", DataType::Int32, false),
-        Field::new("available_generation_mw", DataType::Float64, false),
+        Field::new("mean", DataType::Float64, false),
+        Field::new("std", DataType::Float64, false),
     ]));
 
     let ncs_batch = RecordBatch::try_new(
@@ -1260,16 +1262,21 @@ fn d15_non_controllable_source() {
         vec![
             Arc::new(Int32Array::from(vec![0, 0])),
             Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![50.0, 50.0])),
+            Arc::new(Float64Array::from(vec![0.5, 0.5])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
         ],
     )
-    .expect("ncs_bounds RecordBatch");
+    .expect("non_controllable_models RecordBatch");
 
-    let ncs_path = constraints_dir.join("ncs_bounds.parquet");
-    let file = std::fs::File::create(&ncs_path).expect("create ncs_bounds parquet");
+    let ncs_path = scenarios_dir.join("non_controllable_models.parquet");
+    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_models parquet");
     let mut writer = ArrowWriter::try_new(file, ncs_schema, None).expect("ArrowWriter");
-    writer.write(&ncs_batch).expect("write ncs_bounds batch");
-    writer.close().expect("close ncs_bounds writer");
+    writer
+        .write(&ncs_batch)
+        .expect("write non_controllable_models batch");
+    writer
+        .close()
+        .expect("close non_controllable_models writer");
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 437_927.0, 1e-2, "D15");

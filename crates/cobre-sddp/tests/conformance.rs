@@ -799,6 +799,11 @@ mod lb_conformance {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
 
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75.

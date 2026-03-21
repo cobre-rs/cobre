@@ -241,17 +241,19 @@ impl StochasticContext {
     /// Returns the precomputed normal noise LP parameters for NCS entities.
     ///
     /// Contains stage-major mean, standard deviation, and block factor arrays
-    /// for all stochastic NCS entities (those with at least one `NcsModel` entry
-    /// where `std_mw > 0`). Returns `PrecomputedNormal::default()` (zero entities)
-    /// when no NCS models are present.
+    /// for all NCS entities that have at least one `NcsModel` entry in
+    /// `non_controllable_models.parquet`. Entities with `std = 0` produce
+    /// deterministic availability at `mean * max_gen`.
+    /// Returns `PrecomputedNormal::default()` (zero entities) when no NCS
+    /// models are present.
     pub fn ncs_normal(&self) -> &PrecomputedNormal {
         &self.ncs_normal
     }
 
-    /// Returns the sorted entity IDs of stochastic NCS entities.
+    /// Returns the sorted entity IDs of NCS entities in the stochastic pipeline.
     ///
-    /// These are the NCS entities that have at least one `NcsModel` entry with
-    /// `std_mw > 0`. Empty when no NCS models are present.
+    /// These are the NCS entities that have at least one `NcsModel` entry in
+    /// `non_controllable_models.parquet`. Empty when no NCS models are present.
     #[must_use]
     pub fn ncs_entity_ids(&self) -> &[EntityId] {
         &self.ncs_entity_ids
@@ -355,14 +357,11 @@ pub fn build_stochastic_context(
     };
     let n_load_buses = load_bus_ids.len();
 
-    // Collect stochastic NCS entity IDs (those with std_mw > 0).
+    // Collect NCS entity IDs that have model entries. Entities with `std = 0`
+    // produce deterministic availability at `mean * max_gen`; the noise dimension
+    // still exists but contributes zero noise after the transform.
     let ncs_entity_ids: Vec<EntityId> = {
-        let mut ids: Vec<EntityId> = system
-            .ncs_models()
-            .iter()
-            .filter(|m| m.std_mw > 0.0)
-            .map(|m| m.ncs_id)
-            .collect();
+        let mut ids: Vec<EntityId> = system.ncs_models().iter().map(|m| m.ncs_id).collect();
         ids.sort_unstable_by_key(|id| id.0);
         ids.dedup();
         ids
@@ -441,8 +440,10 @@ pub fn build_stochastic_context(
         max_blocks,
     )?;
 
-    // Build NCS PrecomputedNormal by mapping NcsModel -> LoadModel
-    // (PrecomputedNormal::build uses bus_id as entity ID).
+    // Build NCS PrecomputedNormal by mapping NcsModel -> LoadModel.
+    // The dimensionless availability factors (mean, std) are stored in the
+    // LoadModel's mean_mw/std_mw fields; the noise transform in noise.rs
+    // applies the max_gen scaling: A_r = max_gen * clamp(mean + std * eta, 0, 1).
     let ncs_normal = if ncs_entity_ids.is_empty() {
         PrecomputedNormal::default()
     } else {
@@ -452,8 +453,8 @@ pub fn build_stochastic_context(
             .map(|m| LoadModel {
                 bus_id: m.ncs_id,
                 stage_id: m.stage_id,
-                mean_mw: m.mean_mw,
-                std_mw: m.std_mw,
+                mean_mw: m.mean,
+                std_mw: m.std,
             })
             .collect();
         PrecomputedNormal::build(

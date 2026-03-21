@@ -1,17 +1,17 @@
 //! Parsing for `scenarios/non_controllable_models.parquet` — per-NCS-per-stage
-//! mean and standard deviation of available generation.
+//! mean and standard deviation of the stochastic availability factor.
 //!
 //! [`parse_ncs_models`] reads `scenarios/non_controllable_models.parquet`
 //! and returns a sorted `Vec<NcsModel>`.
 //!
 //! ## Parquet schema
 //!
-//! | Column     | Type   | Required | Description                                 |
-//! | ---------- | ------ | -------- | ------------------------------------------- |
-//! | `ncs_id`   | INT32  | Yes      | Non-controllable source entity ID           |
-//! | `stage_id` | INT32  | Yes      | Stage ID                                    |
-//! | `mean_mw`  | DOUBLE | Yes      | Mean available generation (MW)              |
-//! | `std_mw`   | DOUBLE | Yes      | Standard deviation (MW), 0 = deterministic  |
+//! | Column     | Type   | Required | Description                                            |
+//! | ---------- | ------ | -------- | ------------------------------------------------------ |
+//! | `ncs_id`   | INT32  | Yes      | Non-controllable source entity ID                      |
+//! | `stage_id` | INT32  | Yes      | Stage ID                                               |
+//! | `mean`     | DOUBLE | Yes      | Mean availability factor [0, 1]                        |
+//! | `std`      | DOUBLE | Yes      | Std dev of availability factor (>= 0), 0 = deterministic |
 //!
 //! ## Output ordering
 //!
@@ -22,8 +22,8 @@
 //! Per-row constraints enforced by this parser:
 //!
 //! - All four columns must be present with the correct types.
-//! - `mean_mw` must be finite (NaN and +/-inf are rejected).
-//! - `std_mw` must be non-negative and finite.
+//! - `mean` must be finite and in `[0, 1]` (NaN, +/-inf, and out-of-range are rejected).
+//! - `std` must be non-negative and finite.
 //!
 //! Deferred validations (not performed here):
 //!
@@ -51,8 +51,8 @@ use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 /// | File not found or permission denied           | [`LoadError::IoError`]     |
 /// | Malformed Parquet (corrupt header, etc.)      | [`LoadError::ParseError`]  |
 /// | Required column missing or wrong type         | [`LoadError::SchemaError`] |
-/// | `mean_mw` is NaN or infinite                 | [`LoadError::SchemaError`] |
-/// | `std_mw` is negative or not finite            | [`LoadError::SchemaError`] |
+/// | `mean` is NaN, infinite, or outside `[0, 1]` | [`LoadError::SchemaError`] |
+/// | `std` is negative or not finite              | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -82,8 +82,8 @@ pub fn parse_ncs_models(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
         // ── Required columns ──────────────────────────────────────────────────
         let ncs_id_col = extract_required_int32(&batch, "ncs_id", path)?;
         let stage_id_col = extract_required_int32(&batch, "stage_id", path)?;
-        let mean_mw_col = extract_required_float64(&batch, "mean_mw", path)?;
-        let std_mw_col = extract_required_float64(&batch, "std_mw", path)?;
+        let mean_col = extract_required_float64(&batch, "mean", path)?;
+        let std_col = extract_required_float64(&batch, "std", path)?;
 
         // ── Build rows with per-row validation ────────────────────────────────
         let n = batch.num_rows();
@@ -95,32 +95,32 @@ pub fn parse_ncs_models(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
 
             let ncs_id = EntityId::from(ncs_id_col.value(i));
             let stage_id = stage_id_col.value(i);
-            let mean_mw = mean_mw_col.value(i);
-            let std_mw = std_mw_col.value(i);
+            let mean = mean_col.value(i);
+            let std = std_col.value(i);
 
-            // Validate mean_mw: must be finite (NaN and +/-inf rejected).
-            if !mean_mw.is_finite() {
+            // Validate mean: must be finite and in [0, 1].
+            if !mean.is_finite() || !(0.0..=1.0).contains(&mean) {
                 return Err(LoadError::SchemaError {
                     path: path.to_path_buf(),
-                    field: format!("non_controllable_models[{row_idx}].mean_mw"),
-                    message: format!("value must be finite, got {mean_mw}"),
+                    field: format!("non_controllable_models[{row_idx}].mean"),
+                    message: format!("value must be finite and in [0, 1], got {mean}"),
                 });
             }
 
-            // Validate std_mw: must be non-negative and finite.
-            if !std_mw.is_finite() || std_mw < 0.0 {
+            // Validate std: must be non-negative and finite.
+            if !std.is_finite() || std < 0.0 {
                 return Err(LoadError::SchemaError {
                     path: path.to_path_buf(),
-                    field: format!("non_controllable_models[{row_idx}].std_mw"),
-                    message: format!("value must be non-negative and finite, got {std_mw}"),
+                    field: format!("non_controllable_models[{row_idx}].std"),
+                    message: format!("value must be non-negative and finite, got {std}"),
                 });
             }
 
             rows.push(NcsModel {
                 ncs_id,
                 stage_id,
-                mean_mw,
-                std_mw,
+                mean,
+                std,
             });
         }
     }
@@ -161,8 +161,8 @@ mod tests {
         Arc::new(Schema::new(vec![
             Field::new("ncs_id", DataType::Int32, false),
             Field::new("stage_id", DataType::Int32, false),
-            Field::new("mean_mw", DataType::Float64, false),
-            Field::new("std_mw", DataType::Float64, false),
+            Field::new("mean", DataType::Float64, false),
+            Field::new("std", DataType::Float64, false),
         ]))
     }
 
@@ -196,8 +196,8 @@ mod tests {
         let batch = make_batch(
             &[3, 1, 3, 1],
             &[1, 0, 0, 1],
-            &[50.0, 30.0, 45.0, 35.0],
-            &[5.0, 3.0, 4.5, 3.5],
+            &[0.5, 0.3, 0.45, 0.35],
+            &[0.05, 0.03, 0.045, 0.035],
         );
         let tmp = write_parquet(&batch);
         let rows = parse_ncs_models(tmp.path()).unwrap();
@@ -205,8 +205,8 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].ncs_id, EntityId::from(1));
         assert_eq!(rows[0].stage_id, 0);
-        assert!((rows[0].mean_mw - 30.0).abs() < 1e-10);
-        assert!((rows[0].std_mw - 3.0).abs() < 1e-10);
+        assert!((rows[0].mean - 0.3).abs() < 1e-10);
+        assert!((rows[0].std - 0.03).abs() < 1e-10);
         assert_eq!(rows[1].ncs_id, EntityId::from(1));
         assert_eq!(rows[1].stage_id, 1);
         assert_eq!(rows[2].ncs_id, EntityId::from(3));
@@ -215,50 +215,73 @@ mod tests {
         assert_eq!(rows[3].stage_id, 1);
     }
 
-    // ── AC: std_mw = 0.0 (deterministic) is accepted ────────────────────────
+    // ── AC: std = 0.0 (deterministic) is accepted ───────────────────────────
 
     #[test]
-    fn test_zero_std_mw_is_accepted() {
-        let batch = make_batch(&[1], &[0], &[50.0], &[0.0]);
+    fn test_zero_std_is_accepted() {
+        let batch = make_batch(&[1], &[0], &[0.5], &[0.0]);
         let tmp = write_parquet(&batch);
         let rows = parse_ncs_models(tmp.path()).unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].std_mw.abs() < f64::EPSILON);
+        assert!(rows[0].std.abs() < f64::EPSILON);
     }
 
-    // ── AC: std_mw negative -> SchemaError ──────────────────────────────────
+    // ── AC: std negative -> SchemaError ─────────────────────────────────────
 
     #[test]
-    fn test_negative_std_mw() {
-        let batch = make_batch(&[1], &[0], &[50.0], &[-5.0]);
+    fn test_negative_std() {
+        let batch = make_batch(&[1], &[0], &[0.5], &[-0.05]);
         let tmp = write_parquet(&batch);
         let err = parse_ncs_models(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, .. } => {
                 assert!(
-                    field.contains("std_mw"),
-                    "field should contain 'std_mw', got: {field}"
+                    field.contains("std"),
+                    "field should contain 'std', got: {field}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }
     }
 
-    // ── AC: mean_mw NaN -> SchemaError ──────────────────────────────────────
+    // ── AC: mean NaN -> SchemaError ──────────────────────────────────────────
 
     #[test]
-    fn test_nan_mean_mw() {
-        let batch = make_batch(&[1], &[0], &[f64::NAN], &[5.0]);
+    fn test_nan_mean() {
+        let batch = make_batch(&[1], &[0], &[f64::NAN], &[0.05]);
         let tmp = write_parquet(&batch);
         let err = parse_ncs_models(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, .. } => {
                 assert!(
-                    field.contains("mean_mw"),
-                    "field should contain 'mean_mw', got: {field}"
+                    field.contains("mean"),
+                    "field should contain 'mean', got: {field}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    // ── AC: mean > 1.0 -> SchemaError ───────────────────────────────────────
+
+    #[test]
+    fn test_mean_out_of_range() {
+        let batch = make_batch(&[1], &[0], &[1.5], &[0.0]);
+        let tmp = write_parquet(&batch);
+        let err = parse_ncs_models(tmp.path()).unwrap_err();
+
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("mean"),
+                    "field should contain 'mean', got: {field}"
+                );
+                assert!(
+                    message.contains("[0, 1]"),
+                    "message should mention [0, 1] range, got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),
@@ -268,18 +291,18 @@ mod tests {
     // ── AC: missing required column -> SchemaError ──────────────────────────
 
     #[test]
-    fn test_missing_mean_mw_column() {
+    fn test_missing_mean_column() {
         let schema_no_mean = Arc::new(Schema::new(vec![
             Field::new("ncs_id", DataType::Int32, false),
             Field::new("stage_id", DataType::Int32, false),
-            Field::new("std_mw", DataType::Float64, false),
+            Field::new("std", DataType::Float64, false),
         ]));
         let batch = RecordBatch::try_new(
             schema_no_mean,
             vec![
                 Arc::new(Int32Array::from(vec![1_i32])),
                 Arc::new(Int32Array::from(vec![0_i32])),
-                Arc::new(Float64Array::from(vec![5.0])),
+                Arc::new(Float64Array::from(vec![0.05])),
             ],
         )
         .unwrap();
@@ -289,8 +312,8 @@ mod tests {
         match &err {
             LoadError::SchemaError { field, message, .. } => {
                 assert!(
-                    field.contains("mean_mw"),
-                    "field should contain 'mean_mw', got: {field}"
+                    field.contains("mean"),
+                    "field should contain 'mean', got: {field}"
                 );
                 assert!(
                     message.contains("missing required column"),
@@ -318,14 +341,14 @@ mod tests {
         let batch_asc = make_batch(
             &[1, 1, 5, 5],
             &[0, 1, 0, 1],
-            &[30.0, 35.0, 50.0, 55.0],
-            &[3.0, 3.5, 5.0, 5.5],
+            &[0.30, 0.35, 0.50, 0.55],
+            &[0.03, 0.035, 0.05, 0.055],
         );
         let batch_desc = make_batch(
             &[5, 5, 1, 1],
             &[1, 0, 1, 0],
-            &[55.0, 50.0, 35.0, 30.0],
-            &[5.5, 5.0, 3.5, 3.0],
+            &[0.55, 0.50, 0.35, 0.30],
+            &[0.055, 0.05, 0.035, 0.03],
         );
         let tmp_asc = write_parquet(&batch_asc);
         let tmp_desc = write_parquet(&batch_desc);

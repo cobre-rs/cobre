@@ -376,7 +376,7 @@ impl StudySetup {
             .max()
             .unwrap_or(0);
 
-        let indexer = StageIndexer::with_equipment_and_evaporation(
+        let mut indexer = StageIndexer::with_equipment_and_evaporation(
             stage_templates_ref[0].n_hydro,
             stage_templates_ref[0].max_par_order,
             system.thermals().len(),
@@ -389,6 +389,22 @@ impl StudySetup {
             evap_hydro_indices,
             max_deficit_segments,
         );
+
+        // Wire NCS column range from the LP builder's stage-0 layout.
+        if !stage_templates.ncs_col_starts.is_empty() {
+            let ncs_start = stage_templates.ncs_col_starts[0];
+            let n_ncs_stage0 = stage_templates.n_ncs_per_stage[0];
+            indexer.ncs_generation = ncs_start..(ncs_start + n_ncs_stage0 * n_blks_stage0);
+            indexer.n_ncs = n_ncs_stage0;
+
+            // Debug: verify NCS column starts are consistent across stages.
+            for (s, &start) in stage_templates.ncs_col_starts.iter().enumerate() {
+                debug_assert_eq!(
+                    start, ncs_start,
+                    "NCS column start differs at stage {s}: expected {ncs_start}, got {start}"
+                );
+            }
+        }
 
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
@@ -1071,8 +1087,9 @@ fn load_user_opening_tree_inner(
 /// Build NCS entity factor entries from the `ResolvedNcsFactors` stored in `System`.
 ///
 /// Converts the dense 3D factor table into the `(entity_id, stage_id, block_pairs)`
-/// tuple format expected by `PrecomputedNormal::build`. Only includes NCS entities
-/// that have stochastic models (entries in `system.ncs_models()` with `std_mw > 0`).
+/// tuple format expected by `PrecomputedNormal::build`. Includes all NCS entities
+/// that have model entries in `non_controllable_models.parquet`. Entities with
+/// `std_mw = 0` produce deterministic availability at their `mean_mw` value.
 fn build_ncs_factor_entries(
     system: &System,
 ) -> Vec<(
@@ -1083,13 +1100,9 @@ fn build_ncs_factor_entries(
     use cobre_stochastic::normal::precompute::BlockFactorPair;
     use std::collections::BTreeSet;
 
-    // Collect NCS entity IDs that have stochastic models.
-    let stochastic_ncs: BTreeSet<cobre_core::EntityId> = system
-        .ncs_models()
-        .iter()
-        .filter(|m| m.std_mw > 0.0)
-        .map(|m| m.ncs_id)
-        .collect();
+    // Collect NCS entity IDs that have model entries.
+    let stochastic_ncs: BTreeSet<cobre_core::EntityId> =
+        system.ncs_models().iter().map(|m| m.ncs_id).collect();
 
     if stochastic_ncs.is_empty() {
         return Vec::new();

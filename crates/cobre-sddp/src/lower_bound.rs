@@ -63,7 +63,7 @@ pub struct LbEvalSpec<'a> {
     /// Number of buses with stochastic load noise (needed as offset into the
     /// raw noise vector to locate the NCS noise dimensions).
     pub n_load_buses: usize,
-    /// Maximum generation [MW] per stochastic NCS entity, sorted by entity ID.
+    /// Maximum generation (MW) per stochastic NCS entity, sorted by entity ID.
     /// Length equals the number of stochastic NCS entities. Empty when none exist.
     pub ncs_max_gen: &'a [f64],
     /// Number of blocks at stage 0.
@@ -144,6 +144,22 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         let mut ncs_col_indices_buf: Vec<usize> = Vec::new();
         let mut ncs_col_lower_buf: Vec<f64> = Vec::new();
 
+        // Pre-populate index/lower buffers for NCS column bound patching.
+        // These are constant across openings (same stage, same block count),
+        // so we build them once before the opening loop.
+        if let Some(stoch) = stochastic {
+            let n_stochastic_ncs = stoch.n_stochastic_ncs();
+            if n_stochastic_ncs > 0 && !ncs_generation.is_empty() {
+                for ncs_idx in 0..n_stochastic_ncs {
+                    for blk in 0..block_count {
+                        ncs_col_indices_buf
+                            .push(ncs_generation.start + ncs_idx * block_count + blk);
+                        ncs_col_lower_buf.push(0.0);
+                    }
+                }
+            }
+        }
+
         for opening_idx in 0..n_openings {
             solver.load_model(template);
             if cut_batch.num_rows > 0 {
@@ -178,15 +194,8 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                         ncs_max_gen,
                         &mut ncs_col_upper_buf,
                     );
-                    ncs_col_indices_buf.clear();
-                    ncs_col_lower_buf.clear();
-                    for ncs_idx in 0..n_stochastic_ncs {
-                        for blk in 0..block_count {
-                            ncs_col_indices_buf
-                                .push(ncs_generation.start + ncs_idx * block_count + blk);
-                            ncs_col_lower_buf.push(0.0);
-                        }
-                    }
+                    // ncs_col_indices_buf and ncs_col_lower_buf were pre-populated
+                    // before the opening loop — no rebuild needed here.
                     solver.set_col_bounds(
                         &ncs_col_indices_buf,
                         &ncs_col_lower_buf,

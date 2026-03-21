@@ -42,6 +42,7 @@ use std::path::Path;
 /// - [`LoadError::ConstraintError`] — one or more validation errors collected by
 ///   Layers 1-5, or `SystemBuilder::build` rejection.
 /// - [`LoadError::SchemaError`] — AR coefficient count mismatch in scenario assembly.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
     let mut ctx = ValidationContext::new();
 

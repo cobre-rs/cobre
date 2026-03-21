@@ -51,7 +51,7 @@ use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
-    noise::{transform_inflow_noise, transform_load_noise},
+    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
@@ -181,6 +181,39 @@ struct SimStageIds {
     scenario_id: u32,
 }
 
+/// Patch NCS column upper bounds in the LP solver with per-scenario availability.
+///
+/// Called after `set_row_bounds` and before `solve`. The `ncs_col_upper_buf`
+/// in the workspace scratch must already be populated by `transform_ncs_noise`.
+/// The index and lower buffers are rebuilt lazily: only when the expected size
+/// changes (i.e., on a stage transition), avoiding redundant work within a stage.
+fn apply_ncs_col_bounds<S: SolverInterface>(
+    solver: &mut S,
+    scratch: &mut crate::workspace::ScratchBuffers,
+    ncs_generation_start: usize,
+    n_stochastic_ncs: usize,
+    n_blks: usize,
+) {
+    let expected_len = n_stochastic_ncs * n_blks;
+    if scratch.ncs_col_indices_buf.len() != expected_len {
+        scratch.ncs_col_indices_buf.clear();
+        scratch.ncs_col_lower_buf.clear();
+        for ncs_idx in 0..n_stochastic_ncs {
+            for blk in 0..n_blks {
+                scratch
+                    .ncs_col_indices_buf
+                    .push(ncs_generation_start + ncs_idx * n_blks + blk);
+                scratch.ncs_col_lower_buf.push(0.0);
+            }
+        }
+    }
+    solver.set_col_bounds(
+        &scratch.ncs_col_indices_buf,
+        &scratch.ncs_col_lower_buf,
+        &scratch.ncs_col_upper_buf,
+    );
+}
+
 /// Solve one stage for one simulation scenario, updating workspace in-place.
 ///
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
@@ -194,9 +227,14 @@ fn solve_simulation_stage<S: SolverInterface>(
     output: &SimulationOutputSpec<'_>,
     ids: &SimStageIds,
 ) -> Result<(f64, SimulationStageResult), SimulationError> {
-    // Precondition: ws.scratch.noise_buf and ws.scratch.load_rhs_buf are populated
-    // by the caller (process_scenario_stages) via transform_inflow_noise / transform_load_noise.
-    let TrainingContext { indexer, .. } = training_ctx;
+    // Precondition: ws.scratch.noise_buf, ws.scratch.load_rhs_buf, and
+    // ws.scratch.ncs_col_upper_buf are populated by the caller
+    // (process_scenario_stages) via the transform_* functions.
+    let TrainingContext {
+        indexer,
+        stochastic,
+        ..
+    } = training_ctx;
     let t = ids.t;
     ws.solver.load_model(&ctx.templates[t]);
     ws.solver.add_rows(cut_batch);
@@ -220,6 +258,18 @@ fn solve_simulation_stage<S: SolverInterface>(
         &ws.patch_buf.lower[..pc],
         &ws.patch_buf.upper[..pc],
     );
+    // Patch NCS column upper bounds with per-scenario stochastic availability.
+    // ncs_col_upper_buf was populated by transform_ncs_noise in the caller.
+    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    if n_stochastic_ncs > 0 && !indexer.ncs_generation.is_empty() {
+        apply_ncs_col_bounds(
+            &mut ws.solver,
+            &mut ws.scratch,
+            indexer.ncs_generation.start,
+            n_stochastic_ncs,
+            ctx.block_counts_per_stage[t],
+        );
+    }
 
     let view = ws.solver.solve().map_err(|e| match e {
         SolverError::Infeasible => SimulationError::LpInfeasible {
@@ -234,12 +284,41 @@ fn solve_simulation_stage<S: SolverInterface>(
         },
     })?;
 
+    let (immediate_cost, result) = extract_sim_stage_result(
+        &mut ws.scratch,
+        ctx,
+        output,
+        indexer,
+        ids,
+        &view,
+        n_stochastic_ncs,
+    );
+    ws.current_state.clear();
+    ws.current_state
+        .extend_from_slice(&view.primal[..indexer.n_state]);
+    Ok((immediate_cost, result))
+}
+
+/// Extract the cost and result record from a solved simulation stage LP.
+///
+/// Separated from [`solve_simulation_stage`] to keep that function under the
+/// line-count lint limit.
+fn extract_sim_stage_result(
+    scratch: &mut crate::workspace::ScratchBuffers,
+    ctx: &StageContext<'_>,
+    output: &SimulationOutputSpec<'_>,
+    indexer: &crate::StageIndexer,
+    ids: &SimStageIds,
+    view: &cobre_solver::SolutionView<'_>,
+    n_stochastic_ncs: usize,
+) -> (f64, SimulationStageResult) {
+    let t = ids.t;
     let immediate_cost = view.objective - view.primal[indexer.theta];
-    ws.scratch.inflow_m3s_buf.clear();
+    scratch.inflow_m3s_buf.clear();
     if let Some(&zeta) = output.zeta_per_stage.get(t) {
         if zeta > 0.0 {
-            for &rhs_hm3 in &ws.scratch.noise_buf {
-                ws.scratch.inflow_m3s_buf.push(rhs_hm3 / zeta);
+            for &rhs_hm3 in &scratch.noise_buf {
+                scratch.inflow_m3s_buf.push(rhs_hm3 / zeta);
             }
         }
     }
@@ -248,7 +327,7 @@ fn solve_simulation_stage<S: SolverInterface>(
         .get(t)
         .map_or(&[][..], |v| v.as_slice());
     // Guard index accesses when there are no load buses (slices may be empty).
-    let (load_row_start, n_blks) = if ctx.n_load_buses > 0 {
+    let (load_row_start, load_n_blks) = if ctx.n_load_buses > 0 {
         (
             ctx.load_balance_row_starts[t],
             ctx.block_counts_per_stage[t],
@@ -258,19 +337,28 @@ fn solve_simulation_stage<S: SolverInterface>(
     };
     let row_lower_ref = build_row_lower_ref(
         &ctx.templates[t].row_lower,
-        &ws.scratch.load_rhs_buf,
-        &mut ws.scratch.row_lower_buf,
+        &scratch.load_rhs_buf,
+        &mut scratch.row_lower_buf,
         ctx.n_load_buses,
         load_row_start,
-        n_blks,
+        load_n_blks,
         ctx.load_bus_indices,
     );
-    // NCS column upper bounds from the template for extraction.
+    // NCS column upper bounds for extraction. Use the per-scenario scratch buffer
+    // when stochastic NCS patching is active and covers all active NCS entities;
+    // fall back to the template values otherwise.
     let ncs_n = output.n_ncs_per_stage.get(t).copied().unwrap_or(0);
     let ncs_col_start = output.ncs_col_starts.get(t).copied().unwrap_or(0);
-    let ncs_col_upper = if ncs_n > 0 && n_blks > 0 {
+    let stage_n_blks = ctx.block_counts_per_stage.get(t).copied().unwrap_or(0);
+    let ncs_col_upper: &[f64] = if n_stochastic_ncs > 0
+        && n_stochastic_ncs == ncs_n
+        && !scratch.ncs_col_upper_buf.is_empty()
+    {
+        // All active NCS entities at this stage are stochastic — use the patched values.
+        &scratch.ncs_col_upper_buf
+    } else if ncs_n > 0 && stage_n_blks > 0 {
         let start = ncs_col_start;
-        let end = start + ncs_n * n_blks;
+        let end = start + ncs_n * stage_n_blks;
         if end <= ctx.templates[t].col_upper.len() {
             &ctx.templates[t].col_upper[start..end]
         } else {
@@ -290,7 +378,7 @@ fn solve_simulation_stage<S: SolverInterface>(
         &StageExtractionSpec {
             indexer,
             entity_counts: output.entity_counts,
-            inflow_m3s_per_hydro: &ws.scratch.inflow_m3s_buf,
+            inflow_m3s_per_hydro: &scratch.inflow_m3s_buf,
             block_hours: blk_hrs,
             generic_constraint_entries: output
                 .generic_constraint_row_entries
@@ -306,11 +394,7 @@ fn solve_simulation_stage<S: SolverInterface>(
         },
         ids.stage_id_u32,
     );
-
-    ws.current_state.clear();
-    ws.current_state
-        .extend_from_slice(&view.primal[..indexer.n_state]);
-    Ok((immediate_cost, result))
+    (immediate_cost, result)
 }
 
 fn process_scenario_stages<S: SolverInterface>(
@@ -368,6 +452,19 @@ fn process_scenario_stages<S: SolverInterface>(
             },
             &mut ws.scratch.load_rhs_buf,
         );
+        let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+        if n_stochastic_ncs > 0 {
+            transform_ncs_noise(
+                raw_noise,
+                ctx.n_hydros,
+                ctx.n_load_buses,
+                stochastic,
+                t,
+                ctx.block_counts_per_stage[t],
+                ctx.ncs_max_gen,
+                &mut ws.scratch.ncs_col_upper_buf,
+            );
+        }
         let (cost, result) = solve_simulation_stage(
             ws,
             ctx,

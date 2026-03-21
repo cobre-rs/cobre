@@ -395,7 +395,6 @@ impl StudySetup {
             let ncs_start = stage_templates.ncs_col_starts[0];
             let n_ncs_stage0 = stage_templates.n_ncs_per_stage[0];
             indexer.ncs_generation = ncs_start..(ncs_start + n_ncs_stage0 * n_blks_stage0);
-            indexer.n_ncs = n_ncs_stage0;
 
             // Debug: verify NCS column starts are consistent across stages.
             for (s, &start) in stage_templates.ncs_col_starts.iter().enumerate() {
@@ -451,17 +450,21 @@ impl StudySetup {
         // ── NCS max generation for stochastic entities ───────────────────────
         let ncs_max_gen: Vec<f64> = {
             let stoch_ncs_ids = stochastic.ncs_entity_ids();
-            stoch_ncs_ids
-                .iter()
-                .map(|ncs_id| {
-                    system
-                        .non_controllable_sources()
-                        .iter()
-                        .find(|n| n.id == *ncs_id)
-                        .map(|n| n.max_generation_mw)
-                        .unwrap_or(0.0)
-                })
-                .collect()
+            let mut result = Vec::with_capacity(stoch_ncs_ids.len());
+            for ncs_id in stoch_ncs_ids {
+                let max_gen = system
+                    .non_controllable_sources()
+                    .iter()
+                    .find(|n| n.id == *ncs_id)
+                    .map(|n| n.max_generation_mw)
+                    .ok_or_else(|| {
+                        SddpError::Validation(format!(
+                            "stochastic NCS entity {ncs_id:?} not found in system non_controllable_sources"
+                        ))
+                    })?;
+                result.push(max_gen);
+            }
+            result
         };
 
         // ── Block layout ──────────────────────────────────────────────────────
@@ -481,9 +484,9 @@ impl StudySetup {
             horizon,
             risk_measures,
             entity_counts,
+            hydro_models,
             ncs_entity_ids_per_stage,
             ncs_max_gen,
-            hydro_models,
             block_counts_per_stage,
             max_blocks,
             seed,
@@ -1063,27 +1066,6 @@ fn load_user_opening_tree_inner(
     Ok(Some(tree))
 }
 
-/// Prepare the stochastic pipeline: estimate PAR from history (if applicable),
-/// load a user-supplied opening tree (if present), and build the
-/// [`StochasticContext`].
-///
-/// This function encapsulates the pre-setup orchestration that would otherwise
-/// be duplicated across entry points (CLI, Python bindings). It is intended to
-/// be called once per entry point before constructing [`StudySetup`].
-///
-/// ## Input path matrix
-///
-/// | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | Behaviour |
-/// |---|---|---|
-/// | absent | any | System unchanged; `estimation_report = None`. |
-/// | present | present | System unchanged; estimation skipped. |
-/// | present | absent | PAR estimation runs; system updated. |
-///
-/// If `scenarios/noise_openings.parquet` is present, it is loaded, validated,
-/// and passed as the user opening tree to [`cobre_stochastic::build_stochastic_context`].
-///
-/// ## MPI note
-///
 /// Build NCS entity factor entries from the `ResolvedNcsFactors` stored in `System`.
 ///
 /// Converts the dense 3D factor table into the `(entity_id, stage_id, block_pairs)`
@@ -1121,6 +1103,7 @@ fn build_ncs_factor_entries(
             continue;
         }
         for (stage_idx, stage) in study_stages.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let block_pairs: Vec<BlockFactorPair> = stage
                 .blocks
                 .iter()
@@ -1129,6 +1112,7 @@ fn build_ncs_factor_entries(
                     let factor = system
                         .resolved_ncs_factors()
                         .factor(ncs_idx, stage_idx, block_idx);
+                    // block_idx is a small count (< 1000 in practice); fits in i32.
                     (block_idx as i32, factor)
                 })
                 .collect();
@@ -1151,6 +1135,27 @@ fn load_load_factors_for_stochastic(
     cobre_io::scenarios::parse_load_factors(&path).map_err(SddpError::from)
 }
 
+/// Prepare the stochastic pipeline: estimate PAR from history (if applicable),
+/// load a user-supplied opening tree (if present), and build the
+/// [`StochasticContext`].
+///
+/// This function encapsulates the pre-setup orchestration that would otherwise
+/// be duplicated across entry points (CLI, Python bindings). It is intended to
+/// be called once per entry point before constructing [`StudySetup`].
+///
+/// ## Input path matrix
+///
+/// | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | Behaviour |
+/// |---|---|---|
+/// | absent | any | System unchanged; `estimation_report = None`. |
+/// | present | present | System unchanged; estimation skipped. |
+/// | present | absent | PAR estimation runs; system updated. |
+///
+/// If `scenarios/noise_openings.parquet` is present, it is loaded, validated,
+/// and passed as the user opening tree to [`cobre_stochastic::build_stochastic_context`].
+///
+/// ## MPI note
+///
 /// Under MPI, this function must only be called on rank 0. Non-root ranks
 /// should receive the opening tree via broadcast and call
 /// [`cobre_stochastic::build_stochastic_context`] directly.

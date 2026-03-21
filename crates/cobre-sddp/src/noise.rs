@@ -186,6 +186,7 @@ pub(crate) fn transform_load_noise(
 /// `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)` where `mean` and `std`
 /// are dimensionless availability factors, and then scales by the per-block
 /// factor: `col_upper = A_r * block_factor`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
     n_hydros: usize,

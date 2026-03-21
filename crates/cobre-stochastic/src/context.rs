@@ -326,6 +326,7 @@ impl StochasticContext {
 ///   is not positive-definite.
 ///
 /// [`LoadModel`]: cobre_core::scenario::LoadModel
+#[allow(clippy::too_many_lines)]
 pub fn build_stochastic_context(
     system: &System,
     base_seed: u64,

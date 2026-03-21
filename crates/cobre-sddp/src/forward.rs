@@ -414,6 +414,7 @@ struct StageKey<'a> {
 ///
 /// Returns `Err(SddpError::Infeasible)` when the stage LP is infeasible, or
 /// `Err(SddpError::Solver)` for any other terminal solver failure.
+#[allow(clippy::too_many_lines)]
 fn run_forward_stage<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     basis_slice: &mut BasisStoreSliceMut<'_>,
@@ -493,18 +494,22 @@ fn run_forward_stage<S: SolverInterface + Send>(
     // Patch NCS column upper bounds with per-scenario availability.
     if n_stochastic_ncs > 0 && !indexer.ncs_generation.is_empty() {
         let n_blks = ctx.block_counts_per_stage[t];
-        ws.scratch.ncs_col_indices_buf.clear();
-        ws.scratch.ncs_col_lower_buf.clear();
-        // Build column index and lower bound arrays for stochastic NCS entities.
-        // ncs_col_upper_buf was populated by transform_ncs_noise above.
-        for ncs_idx in 0..n_stochastic_ncs {
-            for blk in 0..n_blks {
-                ws.scratch
-                    .ncs_col_indices_buf
-                    .push(indexer.ncs_generation.start + ncs_idx * n_blks + blk);
-                ws.scratch.ncs_col_lower_buf.push(0.0);
+        let expected_len = n_stochastic_ncs * n_blks;
+        // Only rebuild index/lower buffers when the size changes (i.e., on a stage
+        // transition). Within a single stage the indices are constant across scenarios.
+        if ws.scratch.ncs_col_indices_buf.len() != expected_len {
+            ws.scratch.ncs_col_indices_buf.clear();
+            ws.scratch.ncs_col_lower_buf.clear();
+            for ncs_idx in 0..n_stochastic_ncs {
+                for blk in 0..n_blks {
+                    ws.scratch
+                        .ncs_col_indices_buf
+                        .push(indexer.ncs_generation.start + ncs_idx * n_blks + blk);
+                    ws.scratch.ncs_col_lower_buf.push(0.0);
+                }
             }
         }
+        // ncs_col_upper_buf was populated by transform_ncs_noise above.
         ws.solver.set_col_bounds(
             &ws.scratch.ncs_col_indices_buf,
             &ws.scratch.ncs_col_lower_buf,

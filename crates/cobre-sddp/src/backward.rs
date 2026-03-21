@@ -269,14 +269,19 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
     // Patch NCS column upper bounds with per-opening availability.
     if n_stochastic_ncs > 0 && !training_ctx.indexer.ncs_generation.is_empty() {
         let n_blks_stage = ctx.block_counts_per_stage[s];
-        ws.scratch.ncs_col_indices_buf.clear();
-        ws.scratch.ncs_col_lower_buf.clear();
-        for ncs_idx in 0..n_stochastic_ncs {
-            for blk in 0..n_blks_stage {
-                ws.scratch
-                    .ncs_col_indices_buf
-                    .push(training_ctx.indexer.ncs_generation.start + ncs_idx * n_blks_stage + blk);
-                ws.scratch.ncs_col_lower_buf.push(0.0);
+        let expected_len = n_stochastic_ncs * n_blks_stage;
+        // Only rebuild index/lower buffers when the size changes (i.e., on a stage
+        // transition). Within a single stage the indices are constant across openings.
+        if ws.scratch.ncs_col_indices_buf.len() != expected_len {
+            ws.scratch.ncs_col_indices_buf.clear();
+            ws.scratch.ncs_col_lower_buf.clear();
+            for ncs_idx in 0..n_stochastic_ncs {
+                for blk in 0..n_blks_stage {
+                    ws.scratch.ncs_col_indices_buf.push(
+                        training_ctx.indexer.ncs_generation.start + ncs_idx * n_blks_stage + blk,
+                    );
+                    ws.scratch.ncs_col_lower_buf.push(0.0);
+                }
             }
         }
         ws.solver.set_col_bounds(
@@ -2486,6 +2491,7 @@ mod tests {
     /// must be non-empty and must contain a positive value (with mean=300, std=30
     /// any reasonable eta produces a positive realization).
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn backward_pass_load_patches_applied() {
         // 2-stage system: backward pass solves at successor=1 for each opening.
         // n_hydros=1, n_load_buses=1, 1 block per stage.
@@ -2736,6 +2742,7 @@ mod tests {
     /// Setup: N=1 hydro, L=0 PAR lags → `n_state=1`. After the backward pass with
     /// 1 load bus, each generated cut must have exactly 1 coefficient.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn backward_pass_cut_coefficients_unaffected() {
         let n_stages = 2_usize;
         let n_openings = 2_usize;

@@ -145,7 +145,7 @@ pub fn parse_ncs_bounds(path: &Path) -> Result<Vec<NcsBoundsRow>, LoadError> {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp)]
+#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 mod tests {
     use super::*;
     use arrow::array::{Float64Array, Int32Array};

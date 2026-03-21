@@ -718,7 +718,6 @@ struct TemplateBuildCtx<'a> {
     n_thermals: usize,
     n_lines: usize,
     n_buses: usize,
-    n_ncs: usize,
     max_par_order: usize,
     has_penalty: bool,
 }
@@ -893,8 +892,8 @@ impl StageLayout {
         // ── NCS: identify active NCS entities at this stage ─────────────────────
         let mut active_ncs_indices: Vec<usize> = Vec::new();
         for (ncs_idx, ncs) in ctx.non_controllable_sources.iter().enumerate() {
-            let entered = ncs.entry_stage_id.map_or(true, |entry| entry <= stage.id);
-            let not_exited = ncs.exit_stage_id.map_or(true, |exit| stage.id < exit);
+            let entered = ncs.entry_stage_id.is_none_or(|entry| entry <= stage.id);
+            let not_exited = ncs.exit_stage_id.is_none_or(|exit| stage.id < exit);
             if entered && not_exited {
                 active_ncs_indices.push(ncs_idx);
             }
@@ -2301,7 +2300,6 @@ pub fn build_stage_templates(
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),
         n_buses: buses.len(),
-        n_ncs: system.non_controllable_sources().len(),
         max_par_order,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
     };

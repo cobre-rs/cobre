@@ -384,11 +384,6 @@ pub struct StageIndexer {
     /// Index for NCS `r`, block `b`: `ncs_generation.start + r * n_blks + b`.
     /// Empty when built via [`StageIndexer::new`] or when no NCS entities are active.
     pub ncs_generation: Range<usize>,
-
-    /// Number of active NCS entities at this stage.
-    ///
-    /// Zero when built via [`StageIndexer::new`].
-    pub n_ncs: usize,
 }
 
 impl StageIndexer {
@@ -476,7 +471,6 @@ impl StageIndexer {
             generic_constraint_slack: 0..0,
             n_generic_constraints_active: 0,
             ncs_generation: 0..0,
-            n_ncs: 0,
         }
     }
 

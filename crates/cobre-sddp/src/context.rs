@@ -27,7 +27,7 @@ pub struct StageContext<'a> {
     pub load_bus_indices: &'a [usize],
     /// Number of blocks per stage.
     pub block_counts_per_stage: &'a [usize],
-    /// Maximum generation [MW] per stochastic NCS entity, sorted by entity ID.
+    /// Maximum generation (MW) per stochastic NCS entity, sorted by entity ID.
     /// Length equals the number of stochastic NCS entities. Empty when none exist.
     pub ncs_max_gen: &'a [f64],
 }

@@ -345,7 +345,7 @@ fn build_context_with_load(
     load_std_mw: f64,
 ) -> StochasticContext {
     let system = build_system_with_load(n_stages, 1, load_mean_mw, load_std_mw);
-    build_stochastic_context(&system, 42, &[], None).unwrap()
+    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -465,6 +465,7 @@ fn test_stochastic_load_training_completes() {
         load_balance_row_starts: &load_balance_row_starts,
         load_bus_indices: &load_bus_indices,
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -557,6 +558,7 @@ fn test_deterministic_load_training_matches_baseline() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -640,6 +642,7 @@ fn test_stochastic_load_seed_determinism() {
             load_balance_row_starts: &load_balance_row_starts,
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
+            ncs_max_gen: &[],
         };
         let result = train(
             &mut solver,

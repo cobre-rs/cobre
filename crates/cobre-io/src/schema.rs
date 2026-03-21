@@ -23,7 +23,7 @@ use crate::{
     config::Config,
     constraints::{exchange_factors::RawExchangeFactorsFile, generic::RawGenericConstraintsFile},
     penalties::RawPenalties,
-    scenarios::load_factors::RawLoadFactorsFile,
+    scenarios::{load_factors::RawLoadFactorsFile, non_controllable_factors::RawNcsFactorsFile},
     stages::RawStagesFile,
     system::{
         buses::RawBusFile, energy_contracts::RawContractFile, hydros::RawHydroFile,
@@ -108,6 +108,10 @@ pub fn generate_schemas() -> Result<Vec<(String, serde_json::Value)>, serde_json
         (
             "load_factors.schema.json",
             schemars::schema_for!(RawLoadFactorsFile),
+        ),
+        (
+            "non_controllable_factors.schema.json",
+            schemars::schema_for!(RawNcsFactorsFile),
         ),
     ];
 
@@ -230,7 +234,7 @@ mod tests {
         );
     }
 
-    /// All 13 expected schema filenames are present in the output.
+    /// All 14 expected schema filenames are present in the output.
     #[test]
     fn test_all_expected_schema_filenames_present() {
         let schemas = generate_schemas().unwrap();
@@ -250,6 +254,7 @@ mod tests {
             "generic_constraints.schema.json",
             "exchange_factors.schema.json",
             "load_factors.schema.json",
+            "non_controllable_factors.schema.json",
         ];
 
         for name in &expected {

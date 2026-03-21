@@ -1091,3 +1091,201 @@ fn d13_generic_constraint() {
         result.final_gap
     );
 }
+
+/// Two-stage thermal dispatch with per-block load factors.
+///
+/// ## Case setup
+///
+/// - 1 bus, 2 thermal plants (merit order: T0 at $5/MWh cap 15 MW, T1 at
+///   $10/MWh cap 15 MW), deterministic load 20 MW mean, 2 stages each with
+///   2 blocks (block 0: 400 hours, block 1: 330 hours), load factors [0.8, 1.2]
+///
+/// ## Expected cost derivation
+///
+/// - Block 0: load = 20 * 0.8 = 16 MW.  T0=15 MW, T1=1 MW.
+///   cost = (15*5 + 1*10) * 400 = 85 * 400 = 34,000
+/// - Block 1: load = 20 * 1.2 = 24 MW.  T0=15 MW, T1=9 MW.
+///   cost = (15*5 + 9*10) * 330 = 165 * 330 = 54,450
+/// - Cost per stage = 34,000 + 54,450 = 88,450
+/// - Total (2 stages) = 2 * 88,450 = **176,900**
+#[test]
+fn d14_block_factors() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d14-block-factors");
+
+    // Create load_seasonal_stats.parquet: bus 0, stages 0 and 1, mean 20 MW, std 0.
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![20.0, 20.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+
+    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
+    let file = std::fs::File::create(&load_path).expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    // Create empty inflow_seasonal_stats.parquet (no hydros).
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
+    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
+    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, 176_900.0, 1e-4, "D14");
+    assert!(
+        result.iterations <= 10,
+        "D14: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D14: gap={:.2e}",
+        result.final_gap
+    );
+}
+
+/// Two-stage thermal + NCS dispatch.
+///
+/// ## Case setup
+///
+/// - 1 bus, 1 thermal (T0 at $10/MWh, cap 100 MW), 1 NCS (curtailment_cost
+///   $0.001/MWh, bus 0, max_generation_mw 100 MW), deterministic load 80 MW,
+///   2 stages each with 1 block of 730 hours.
+/// - NCS available generation = 50 MW per stage (from non_controllable_stats.parquet,
+///   mean=0.5, std=0.0 — availability factor 0.5 * 100 MW = 50 MW, deterministic,
+///   exercises the stochastic NCS pipeline).
+///
+/// ## Expected cost derivation
+///
+/// - NCS generates at full 50 MW (incentivized by negative objective coeff).
+/// - Thermal covers remaining 30 MW.
+/// - Thermal cost per stage: 30 * 10 * 730 = 219,000
+/// - NCS curtailment cost per stage: 0.001 * 50 * 730 = 36.5 (regularization,
+///   the LP objective adds -0.001 * block_hours * g_ncs).
+///   The NCS contribution to objective = -0.001 * 730 * 50 = -36.5
+/// - Total objective per stage = 219,000 + (-36.5) = 218,963.5
+/// - Total (2 stages) = 2 * 218,963.5 = **437,927.0**
+#[test]
+fn d15_non_controllable_source() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d15-non-controllable-source");
+
+    // Create load_seasonal_stats.parquet: bus 0, stages 0-1, mean 80 MW, std 0.
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![80.0, 80.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+
+    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
+    let file = std::fs::File::create(&load_path).expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    // Create empty inflow_seasonal_stats.parquet (no hydros).
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
+    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
+    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    // Create non_controllable_stats.parquet: NCS 0 with availability factor 0.5
+    // (= 50 MW out of max 100 MW), std 0 (deterministic), for stages 0-1.
+    // Uses the stochastic NCS pipeline with zero noise.
+    let ncs_schema = Arc::new(Schema::new(vec![
+        Field::new("ncs_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean", DataType::Float64, false),
+        Field::new("std", DataType::Float64, false),
+    ]));
+
+    let ncs_batch = RecordBatch::try_new(
+        Arc::clone(&ncs_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![0.5, 0.5])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("non_controllable_stats RecordBatch");
+
+    let ncs_path = scenarios_dir.join("non_controllable_stats.parquet");
+    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_stats parquet");
+    let mut writer = ArrowWriter::try_new(file, ncs_schema, None).expect("ArrowWriter");
+    writer
+        .write(&ncs_batch)
+        .expect("write non_controllable_stats batch");
+    writer.close().expect("close non_controllable_stats writer");
+
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, 437_927.0, 1e-2, "D15");
+    assert!(
+        result.iterations <= 10,
+        "D15: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-4,
+        "D15: gap={:.2e}",
+        result.final_gap
+    );
+}

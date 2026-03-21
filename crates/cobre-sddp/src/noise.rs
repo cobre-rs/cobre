@@ -180,6 +180,43 @@ pub(crate) fn transform_load_noise(
     }
 }
 
+/// Transform raw NCS noise into per-block column upper bound values.
+///
+/// For each stochastic NCS entity, computes the stage-level availability
+/// `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)` where `mean` and `std`
+/// are dimensionless availability factors, and then scales by the per-block
+/// factor: `col_upper = A_r * block_factor`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transform_ncs_noise(
+    raw_noise: &[f64],
+    n_hydros: usize,
+    n_load_buses: usize,
+    stochastic: &StochasticContext,
+    stage: usize,
+    block_count: usize,
+    ncs_max_gen: &[f64],
+    ncs_col_upper_buf: &mut Vec<f64>,
+) {
+    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    ncs_col_upper_buf.clear();
+    if n_stochastic_ncs == 0 {
+        return;
+    }
+    let ncs_lp = stochastic.ncs_normal();
+    let ncs_noise_start = n_hydros + n_load_buses;
+    for ncs_idx in 0..n_stochastic_ncs {
+        let eta = raw_noise[ncs_noise_start + ncs_idx];
+        let mean = ncs_lp.mean(stage, ncs_idx);
+        let std = ncs_lp.std(stage, ncs_idx);
+        let max_gen = ncs_max_gen[ncs_idx];
+        let realization = max_gen * (mean + std * eta).clamp(0.0, 1.0);
+        for blk in 0..block_count {
+            let factor = ncs_lp.block_factor(stage, ncs_idx, blk);
+            ncs_col_upper_buf.push(realization * factor);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -247,6 +284,9 @@ mod tests {
             par_inflow_buf: Vec::new(),
             eta_floor_buf: Vec::new(),
             zero_targets_buf: vec![0.0_f64; n_hydros],
+            ncs_col_upper_buf: Vec::new(),
+            ncs_col_lower_buf: Vec::new(),
+            ncs_col_indices_buf: Vec::new(),
             load_rhs_buf: Vec::new(),
             row_lower_buf: Vec::new(),
         }
@@ -374,7 +414,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// One-hydro, one-load-bus, n-stage `StochasticContext`.
@@ -504,7 +544,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── transform_inflow_noise: None method ──────────────────────────────────
@@ -536,6 +576,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
+            ncs_max_gen: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -590,6 +631,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
+            ncs_max_gen: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -644,6 +686,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
+            ncs_max_gen: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,

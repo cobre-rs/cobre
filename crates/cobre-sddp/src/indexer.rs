@@ -375,6 +375,15 @@ pub struct StageIndexer {
     /// Zero when no generic constraints are active or when built via
     /// [`StageIndexer::new`].
     pub n_generic_constraints_active: usize,
+
+    // ── NCS column range ──────────────────────────────────────────────────
+    // Populated only by `StageLayout::new` in lp_builder; empty when built
+    // via `new`, `with_equipment`, or `from_stage_template`.
+    /// Column range for NCS generation variables, one per (ncs, block) pair.
+    ///
+    /// Index for NCS `r`, block `b`: `ncs_generation.start + r * n_blks + b`.
+    /// Empty when built via [`StageIndexer::new`] or when no NCS entities are active.
+    pub ncs_generation: Range<usize>,
 }
 
 impl StageIndexer {
@@ -461,6 +470,7 @@ impl StageIndexer {
             generic_constraint_rows: 0..0,
             generic_constraint_slack: 0..0,
             n_generic_constraints_active: 0,
+            ncs_generation: 0..0,
         }
     }
 

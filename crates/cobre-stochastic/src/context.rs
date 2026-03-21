@@ -20,7 +20,7 @@
 //! the `None` case with OS entropy — is an application-level concern that
 //! belongs in the calling crate.
 
-use cobre_core::{EntityId, System};
+use cobre_core::{EntityId, LoadModel, System};
 
 use crate::{
     StochasticError,
@@ -152,7 +152,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     .build()
 ///     .unwrap();
 ///
-/// let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+/// let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 /// assert_eq!(ctx.dim(), 2);
 /// assert_eq!(ctx.n_stages(), 3);
 /// assert_eq!(ctx.base_seed(), 42);
@@ -164,9 +164,12 @@ pub struct StochasticContext {
     correlation: DecomposedCorrelation,
     opening_tree: OpeningTree,
     normal_lp: PrecomputedNormal,
+    ncs_normal: PrecomputedNormal,
+    ncs_entity_ids: Vec<EntityId>,
     base_seed: u64,
     dim: usize,
     n_load_buses: usize,
+    n_stochastic_ncs: usize,
     provenance: StochasticProvenance,
 }
 
@@ -235,6 +238,36 @@ impl StochasticContext {
         &self.normal_lp
     }
 
+    /// Returns the precomputed normal noise LP parameters for NCS entities.
+    ///
+    /// Contains stage-major mean, standard deviation, and block factor arrays
+    /// for all NCS entities that have at least one `NcsModel` entry in
+    /// `non_controllable_stats.parquet`. Entities with `std = 0` produce
+    /// deterministic availability at `mean * max_gen`.
+    /// Returns `PrecomputedNormal::default()` (zero entities) when no NCS
+    /// models are present.
+    pub fn ncs_normal(&self) -> &PrecomputedNormal {
+        &self.ncs_normal
+    }
+
+    /// Returns the sorted entity IDs of NCS entities in the stochastic pipeline.
+    ///
+    /// These are the NCS entities that have at least one `NcsModel` entry in
+    /// `non_controllable_stats.parquet`. Empty when no NCS models are present.
+    #[must_use]
+    pub fn ncs_entity_ids(&self) -> &[EntityId] {
+        &self.ncs_entity_ids
+    }
+
+    /// Returns the number of stochastic NCS entities in the noise dimension.
+    ///
+    /// NCS noise occupies indices `[n_hydros + n_load_buses, dim)` in each
+    /// opening tree noise vector. Returns `0` when no NCS models are present.
+    #[must_use]
+    pub fn n_stochastic_ncs(&self) -> usize {
+        self.n_stochastic_ncs
+    }
+
     /// Returns the number of study stages in the opening tree.
     #[must_use]
     pub fn n_stages(&self) -> usize {
@@ -279,6 +312,10 @@ impl StochasticContext {
 /// caller is responsible for converting any external load factor representation
 /// into [`EntityFactorEntry`] slices before calling this function.
 ///
+/// The `ncs_factors` parameter provides per-`(entity_id, stage_id, block_factors)`
+/// scaling entries for NCS entities consumed by the NCS [`PrecomputedNormal`].
+/// Pass an empty slice when no NCS factor file was loaded.
+///
 /// # Errors
 ///
 /// - [`StochasticError::InvalidParParameters`]: a PAR model has AR order > 0
@@ -289,10 +326,12 @@ impl StochasticContext {
 ///   is not positive-definite.
 ///
 /// [`LoadModel`]: cobre_core::scenario::LoadModel
+#[allow(clippy::too_many_lines)]
 pub fn build_stochastic_context(
     system: &System,
     base_seed: u64,
     load_factors: &[EntityFactorEntry<'_>],
+    ncs_factors: &[EntityFactorEntry<'_>],
     user_opening_tree: Option<OpeningTree>,
 ) -> Result<StochasticContext, StochasticError> {
     let _report = validate_par_parameters(system.inflow_models())?;
@@ -319,7 +358,18 @@ pub fn build_stochastic_context(
     };
     let n_load_buses = load_bus_ids.len();
 
-    let dim = hydro_ids.len() + n_load_buses;
+    // Collect NCS entity IDs that have model entries. Entities with `std = 0`
+    // produce deterministic availability at `mean * max_gen`; the noise dimension
+    // still exists but contributes zero noise after the transform.
+    let ncs_entity_ids: Vec<EntityId> = {
+        let mut ids: Vec<EntityId> = system.ncs_models().iter().map(|m| m.ncs_id).collect();
+        ids.sort_unstable_by_key(|id| id.0);
+        ids.dedup();
+        ids
+    };
+    let n_stochastic_ncs = ncs_entity_ids.len();
+
+    let dim = hydro_ids.len() + n_load_buses + n_stochastic_ncs;
 
     // Compute provenance BEFORE consuming `user_opening_tree` by pattern match.
     let provenance = {
@@ -365,6 +415,7 @@ pub fn build_stochastic_context(
             .iter()
             .copied()
             .chain(load_bus_ids.iter().copied())
+            .chain(ncs_entity_ids.iter().copied())
             .collect();
 
         generate_opening_tree(
@@ -390,14 +441,43 @@ pub fn build_stochastic_context(
         max_blocks,
     )?;
 
+    // Build NCS PrecomputedNormal by mapping NcsModel -> LoadModel.
+    // The dimensionless availability factors (mean, std) are stored in the
+    // LoadModel's mean_mw/std_mw fields; the noise transform in noise.rs
+    // applies the max_gen scaling: A_r = max_gen * clamp(mean + std * eta, 0, 1).
+    let ncs_normal = if ncs_entity_ids.is_empty() {
+        PrecomputedNormal::default()
+    } else {
+        let ncs_as_load: Vec<LoadModel> = system
+            .ncs_models()
+            .iter()
+            .map(|m| LoadModel {
+                bus_id: m.ncs_id,
+                stage_id: m.stage_id,
+                mean_mw: m.mean,
+                std_mw: m.std,
+            })
+            .collect();
+        PrecomputedNormal::build(
+            &ncs_as_load,
+            ncs_factors,
+            &study_stages,
+            &ncs_entity_ids,
+            max_blocks,
+        )?
+    };
+
     Ok(StochasticContext {
         par_lp,
         correlation,
         opening_tree,
         normal_lp,
+        ncs_normal,
+        ncs_entity_ids,
         base_seed,
         dim,
         n_load_buses,
+        n_stochastic_ncs,
         provenance,
     })
 }
@@ -575,7 +655,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 2);
         assert_eq!(ctx.n_stages(), 3);
@@ -609,7 +689,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.par().n_hydros(), 2);
         assert_eq!(ctx.par().n_stages(), 3);
@@ -642,7 +722,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.opening_tree().n_stages(), 3);
         assert_eq!(ctx.opening_tree().dim(), 2);
@@ -669,7 +749,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 7, &[], &[], None).unwrap();
         let view = ctx.tree_view();
 
         assert_eq!(view.n_stages(), ctx.opening_tree().n_stages());
@@ -695,7 +775,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, &[], None);
+        let result = build_stochastic_context(&system, 42, &[], &[], None);
 
         assert!(
             matches!(result, Err(StochasticError::InvalidParParameters { .. })),
@@ -754,7 +834,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, &[], None);
+        let result = build_stochastic_context(&system, 42, &[], &[], None);
 
         assert!(
             matches!(
@@ -790,7 +870,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 1);
         assert_eq!(ctx.n_stages(), 2);
@@ -821,7 +901,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 0, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 0, &[], &[], None).unwrap();
 
         // The opening tree must contain only the 2 study stages.
         assert_eq!(
@@ -873,7 +953,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.dim(),
@@ -910,7 +990,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 2, "dim must equal n_hydros when no load buses");
         assert_eq!(
@@ -945,7 +1025,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.n_load_buses(),
@@ -985,7 +1065,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 7, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 3, "expanded dim must be 2 hydros + 1 load bus");
         // Each opening noise vector must have length = dim.
@@ -1028,7 +1108,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(ctx.n_load_buses(), 1);
         let nlp = ctx.normal();
@@ -1083,7 +1163,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         // Dimensions must match expectations for a 2-hydro, 3-stage, BF=3 system.
         assert_eq!(ctx.dim(), 2, "dim should be 2 (2 hydros, no load buses)");
@@ -1141,7 +1221,7 @@ mod tests {
         let openings_per_stage = vec![n_openings; n_stages];
         let user_tree = OpeningTree::from_parts(data, openings_per_stage, dim);
 
-        let ctx = build_stochastic_context(&system, 42, &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], Some(user_tree)).unwrap();
 
         // Tree dimensions must match the user-supplied tree, not the system's
         // branching factors.

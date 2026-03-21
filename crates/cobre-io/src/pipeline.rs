@@ -11,7 +11,10 @@ use cobre_core::{SystemBuilder, scenario::CorrelationModel};
 
 use crate::{
     LoadError,
-    resolution::{resolve_bounds, resolve_generic_constraint_bounds, resolve_penalties},
+    resolution::{
+        resolve_bounds, resolve_exchange_factors, resolve_generic_constraint_bounds,
+        resolve_load_factors, resolve_ncs_bounds, resolve_ncs_factors, resolve_penalties,
+    },
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
         ValidationContext,
@@ -39,6 +42,7 @@ use std::path::Path;
 /// - [`LoadError::ConstraintError`] — one or more validation errors collected by
 ///   Layers 1-5, or `SystemBuilder::build` rejection.
 /// - [`LoadError::SchemaError`] — AR coefficient count mismatch in scenario assembly.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
     let mut ctx = ValidationContext::new();
 
@@ -114,6 +118,24 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         &data.generic_constraint_bounds,
     );
 
+    let resolved_load_factors =
+        resolve_load_factors(&data.load_factors, &data.buses, &data.stages.stages);
+    let resolved_exchange_factors =
+        resolve_exchange_factors(&data.exchange_factors, &data.lines, &data.stages.stages);
+
+    let resolved_ncs_bounds = resolve_ncs_bounds(
+        &data.ncs_bounds,
+        &data.non_controllable_sources,
+        n_stages,
+        &stage_index,
+    );
+
+    let resolved_ncs_factors = resolve_ncs_factors(
+        &data.non_controllable_factors,
+        &data.non_controllable_sources,
+        &data.stages.stages,
+    );
+
     // ── Scenario assembly ─────────────────────────────────────────────────────
 
     let inflow_models =
@@ -135,8 +157,13 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .penalties(penalties)
         .bounds(bounds)
         .resolved_generic_bounds(resolved_generic_bounds)
+        .resolved_load_factors(resolved_load_factors)
+        .resolved_exchange_factors(resolved_exchange_factors)
+        .resolved_ncs_bounds(resolved_ncs_bounds)
+        .resolved_ncs_factors(resolved_ncs_factors)
         .inflow_models(inflow_models)
         .load_models(load_models)
+        .ncs_models(data.ncs_models)
         .correlation(data.correlation.unwrap_or_else(CorrelationModel::default))
         .initial_conditions(data.initial_conditions)
         .generic_constraints(data.generic_constraints)

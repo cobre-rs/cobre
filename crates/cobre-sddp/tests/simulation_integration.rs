@@ -314,7 +314,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], None).unwrap()
+    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
 }
 
 fn minimal_template() -> StageTemplate {
@@ -588,6 +588,7 @@ fn train_simulate_write_cycle() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts_per_stage,
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -742,6 +743,7 @@ fn train_simulate_write_cycle() {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[],
+            ncs_max_gen: &[],
         },
         &fcf,
         &TrainingContext {
@@ -758,6 +760,9 @@ fn train_simulate_write_cycle() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
+            ncs_col_starts: &[],
+            n_ncs_per_stage: &[],
+            ncs_entity_ids_per_stage: &[],
             event_sender: None,
         },
         &sim_comm,

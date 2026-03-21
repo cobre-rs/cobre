@@ -392,7 +392,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], None).unwrap()
+    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
@@ -545,6 +545,7 @@ fn run_training(
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize; 5],
+        ncs_max_gen: &[],
     };
     let result = pool
         .install(|| {
@@ -649,6 +650,7 @@ fn run_simulation(
                     load_balance_row_starts: &[],
                     load_bus_indices: &[],
                     block_counts_per_stage: &[],
+                    ncs_max_gen: &[],
                 },
                 fcf,
                 &TrainingContext {
@@ -665,6 +667,9 @@ fn run_simulation(
                     block_hours_per_stage: &[],
                     entity_counts: &entity_counts,
                     generic_constraint_row_entries: &[],
+                    ncs_col_starts: &[],
+                    n_ncs_per_stage: &[],
+                    ncs_entity_ids_per_stage: &[],
                     event_sender: None,
                 },
                 &comm,

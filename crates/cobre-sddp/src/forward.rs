@@ -71,7 +71,7 @@ use rayon::iter::{
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
-    noise::{transform_inflow_noise, transform_load_noise},
+    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
@@ -414,6 +414,7 @@ struct StageKey<'a> {
 ///
 /// Returns `Err(SddpError::Infeasible)` when the stage LP is infeasible, or
 /// `Err(SddpError::Solver)` for any other terminal solver failure.
+#[allow(clippy::too_many_lines)]
 fn run_forward_stage<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     basis_slice: &mut BasisStoreSliceMut<'_>,
@@ -454,6 +455,19 @@ fn run_forward_stage<S: SolverInterface + Send>(
         blk,
         &mut ws.scratch.load_rhs_buf,
     );
+    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    if n_stochastic_ncs > 0 {
+        transform_ncs_noise(
+            raw_noise,
+            n_hydros,
+            n_load_buses,
+            stochastic,
+            t,
+            ctx.block_counts_per_stage[t],
+            ctx.ncs_max_gen,
+            &mut ws.scratch.ncs_col_upper_buf,
+        );
+    }
 
     ws.solver.load_model(&ctx.templates[t]);
     ws.solver.add_rows(&cut_batches[t]);
@@ -477,6 +491,31 @@ fn run_forward_stage<S: SolverInterface + Send>(
         &ws.patch_buf.lower[..pc],
         &ws.patch_buf.upper[..pc],
     );
+    // Patch NCS column upper bounds with per-scenario availability.
+    if n_stochastic_ncs > 0 && !indexer.ncs_generation.is_empty() {
+        let n_blks = ctx.block_counts_per_stage[t];
+        let expected_len = n_stochastic_ncs * n_blks;
+        // Only rebuild index/lower buffers when the size changes (i.e., on a stage
+        // transition). Within a single stage the indices are constant across scenarios.
+        if ws.scratch.ncs_col_indices_buf.len() != expected_len {
+            ws.scratch.ncs_col_indices_buf.clear();
+            ws.scratch.ncs_col_lower_buf.clear();
+            for ncs_idx in 0..n_stochastic_ncs {
+                for blk in 0..n_blks {
+                    ws.scratch
+                        .ncs_col_indices_buf
+                        .push(indexer.ncs_generation.start + ncs_idx * n_blks + blk);
+                    ws.scratch.ncs_col_lower_buf.push(0.0);
+                }
+            }
+        }
+        // ncs_col_upper_buf was populated by transform_ncs_noise above.
+        ws.solver.set_col_bounds(
+            &ws.scratch.ncs_col_indices_buf,
+            &ws.scratch.ncs_col_lower_buf,
+            &ws.scratch.ncs_col_upper_buf,
+        );
+    }
     if horizon.is_terminal(t + 1) {
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
@@ -1041,7 +1080,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1161,6 +1200,9 @@ mod tests {
                 par_inflow_buf: Vec::with_capacity(indexer.hydro_count),
                 eta_floor_buf: Vec::with_capacity(indexer.hydro_count),
                 zero_targets_buf: vec![0.0_f64; indexer.hydro_count],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -1208,6 +1250,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1286,6 +1329,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1372,6 +1416,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1741,6 +1786,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -1883,6 +1929,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
 
         // Run with 1 workspace.
@@ -2001,6 +2048,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -2188,7 +2236,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2252,6 +2300,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize],
+            ncs_max_gen: &[],
         };
         let _ = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2401,6 +2450,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2551,7 +2601,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -2607,6 +2657,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
+            ncs_max_gen: &[],
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -2682,6 +2733,9 @@ mod tests {
                 par_inflow_buf: Vec::with_capacity(1),
                 eta_floor_buf: Vec::with_capacity(1),
                 zero_targets_buf: vec![0.0_f64; 1],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2707,6 +2761,7 @@ mod tests {
             load_balance_row_starts: &load_balance_row_starts,
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
+            ncs_max_gen: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2777,6 +2832,9 @@ mod tests {
                 par_inflow_buf: Vec::with_capacity(1),
                 eta_floor_buf: Vec::with_capacity(1),
                 zero_targets_buf: vec![0.0_f64; 1],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2802,6 +2860,7 @@ mod tests {
             load_balance_row_starts: &load_balance_row_starts,
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
+            ncs_max_gen: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2880,6 +2939,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[1, 1, 1],
+            ncs_max_gen: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

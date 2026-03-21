@@ -26,6 +26,7 @@ pub mod bounds;
 pub mod exchange_factors;
 pub mod generic;
 pub mod generic_bounds;
+pub mod ncs_bounds;
 pub mod penalty_overrides;
 
 pub use bounds::{
@@ -36,6 +37,7 @@ pub use bounds::{
 pub use exchange_factors::{BlockExchangeFactor, ExchangeFactorEntry, parse_exchange_factors};
 pub use generic::parse_generic_constraints;
 pub use generic_bounds::{GenericConstraintBoundsRow, parse_generic_constraint_bounds};
+pub use ncs_bounds::{NcsBoundsRow, parse_ncs_bounds};
 pub use penalty_overrides::{
     BusPenaltyOverrideRow, HydroPenaltyOverrideRow, LinePenaltyOverrideRow, NcsPenaltyOverrideRow,
     parse_penalty_overrides_bus, parse_penalty_overrides_hydro, parse_penalty_overrides_line,
@@ -354,5 +356,30 @@ pub fn load_exchange_factors(path: Option<&Path>) -> Result<Vec<ExchangeFactorEn
     match path {
         None => Ok(Vec::new()),
         Some(p) => parse_exchange_factors(p),
+    }
+}
+
+/// Load `constraints/ncs_bounds.parquet` when the path is known, or
+/// return an empty `Vec` when the file is absent (optional file).
+///
+/// When `path` is `None`, returns `Ok(Vec::new())` without touching the filesystem.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from [`parse_ncs_bounds`] when `path` is `Some`.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_io::constraints::load_ncs_bounds;
+///
+/// // No file present — returns empty vec.
+/// let rows = load_ncs_bounds(None).expect("no file is fine");
+/// assert!(rows.is_empty());
+/// ```
+pub fn load_ncs_bounds(path: Option<&Path>) -> Result<Vec<NcsBoundsRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_ncs_bounds(p),
     }
 }

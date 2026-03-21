@@ -38,6 +38,7 @@ my_case/
 │   ├── load_seasonal_stats.parquet          # Load model seasonal statistics (optional)
 │   ├── load_factors.json                    # Load scaling factors (optional)
 │   ├── non_controllable_factors.json        # NCS block scaling factors (optional)
+│   ├── non_controllable_models.parquet      # NCS stochastic availability (optional)
 │   ├── correlation.json                     # Cross-series correlation model (optional)
 │   └── noise_openings.parquet              # User-supplied backward-pass opening tree (optional)
 └── constraints/
@@ -81,6 +82,7 @@ my_case/
 | `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics          |
 | `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage      |
 | `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage      |
+| `scenarios/non_controllable_models.parquet`     | Parquet | No       | NCS stochastic availability factors             |
 | `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model          |
 | `scenarios/noise_openings.parquet`             | Parquet | No       | User-supplied backward-pass opening tree |
 | `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds |
@@ -772,6 +774,24 @@ for every block.
 **Effect:** `available_mw_block = available_generation_mw * block_factor`.
 A factor of 1.0 leaves the bound unchanged. A factor of 0.0 sets availability
 to zero for that block (complete generation unavailability).
+
+---
+
+### `scenarios/non_controllable_models.parquet`
+
+Per-NCS, per-stage stochastic availability model. Each row provides the mean
+and standard deviation of the availability factor for one NCS entity at one
+stage. The noise transform produces: `A_r = max_gen × clamp(mean + std × η, 0, 1)`.
+
+| Column     | Type   | Required | Description                                                     |
+| ---------- | ------ | -------- | --------------------------------------------------------------- |
+| `ncs_id`   | INT32  | Yes      | Non-controllable source ID                                      |
+| `stage_id` | INT32  | Yes      | Stage ID (0-based)                                              |
+| `mean`     | DOUBLE | Yes      | Mean availability factor in [0, 1]                              |
+| `std`      | DOUBLE | Yes      | Standard deviation of availability factor (>= 0)               |
+
+When absent, NCS availability is deterministic from `constraints/ncs_bounds.parquet`
+or the entity's `max_generation_mw`.
 
 ---
 

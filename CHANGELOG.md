@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Block factors** -- Per-block scaling multipliers for load demand
+  (`scenarios/load_factors.json`), transmission line capacity
+  (`constraints/exchange_factors.json`), and non-controllable source
+  availability (`scenarios/non_controllable_factors.json`). Factors default
+  to 1.0 when absent. Includes validation rules 36--41 and deterministic
+  test D14.
+- **NCS stochastic availability** -- Non-controllable sources (wind, solar,
+  run-of-river) now support stochastic availability modeling via
+  `scenarios/non_controllable_models.parquet`. Each source has a per-stage
+  mean and standard deviation availability factor (0--1), drawn from a
+  normal distribution and clamped to [0, 1]. Availability is multiplied by
+  `max_generation_mw` and per-block factors. The SDDP policy learns to
+  hedge against NCS variability. Includes NCS noise dimension in the opening
+  tree, per-scenario LP column bound patching in forward, backward, and
+  lower bound evaluation passes, and deterministic test D15.
+- **NCS JSON schema** -- `non_controllable_factors.schema.json` added to the
+  schema reference. The schema generator now produces 17 schemas (up from 16).
+- **Deterministic tests D14--D15** -- Two new regression test cases: D14
+  (block factor load scaling) and D15 (non-controllable source with
+  stochastic pipeline, mean factor 0.5, std 0).
+
+### Changed
+
+- **NCS entity promoted to Full** -- Non-controllable sources are no longer
+  stub entities. They now contribute LP generation variables, stochastic
+  availability, simulation output, and full validation rules.
+
 ## [0.1.6] - 2026-03-19
 
 ### Added

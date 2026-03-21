@@ -79,7 +79,7 @@ identifiers in the spec files:
 
 The SDDP solver is fully functional. The pipeline covers case loading, stochastic
 scenario generation, training, simulation, policy checkpointing, and output writing.
-Includes a deterministic regression suite (D01-D13) with hand-computed expected costs.
+Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
 
 **What's implemented:**
 
@@ -94,12 +94,14 @@ Includes a deterministic regression suite (D01-D13) with hand-computed expected 
 - Multi-bus transmission with line flow limits
 - MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
 - CLI: `init`, `run`, `validate`, `report`, `summary`, `version`
+- Block factors for load demand (`scenarios/load_factors.json`), transmission line capacity (`constraints/exchange_factors.json`), and NCS availability (`scenarios/non_controllable_factors.json`) with per-bus/line/source, per-stage, per-block scaling
+- NCS stochastic availability via `scenarios/non_controllable_models.parquet` (mean + std availability factor per source per stage, normal draw clamped to [0,1], patched per scenario in forward/backward pass and lower bound evaluation)
 - Python bindings (PyO3, tested on 3.12/3.13/3.14) with Arrow zero-copy result loading
 
 **Known gaps:**
 
 - CVaR risk measure (enum variant exists, LP modification not implemented)
-- GNL thermals, batteries, non-controllable sources (entity stubs exist, no LP contribution)
+- GNL thermals, batteries (entity stubs exist, no LP contribution)
 
 ---
 
@@ -123,7 +125,7 @@ Deferred variants are documented in `implementation-ordering.md` section 6.
 
 ## System Element Scope
 
-Four element types are fully modeled. Three are NO-OP stubs (type exists in registry
+Five element types are fully modeled. Two are NO-OP stubs (type exists in registry
 but contributes zero LP variables/constraints):
 
 | Element          | Status | Notes                                                                                                                       |
@@ -134,7 +136,7 @@ but contributes zero LP variables/constraints):
 | Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity, FPHA (precomputed + computed from geometry), evaporation linearization |
 | Contract         | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
 | Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
-| Non-Controllable | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
+| Non-Controllable | Full   | Generation variable bounded by stochastic availability × block factor, with curtailment penalty. Stochastic availability via `non_controllable_models.parquet`. |
 
 Stubs exist in the registry so LP construction code iterates over all element
 types uniformly. Implementing an element means adding LP variables/constraints.

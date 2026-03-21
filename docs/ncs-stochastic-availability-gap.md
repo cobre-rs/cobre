@@ -1,5 +1,11 @@
 # NCS Stochastic Availability Gap
 
+> **Status: RESOLVED** (2026-03-20). The stochastic NCS availability gap
+> described in this document has been closed. All six divergences (D1--D6) are
+> resolved. See the implementation on branch `feat/block-factors-and-ncs`.
+> The noise model uses availability factors `α_r ∈ [0,1]` per the specification,
+> with `A_r = max_gen × clamp(mean + std × η, 0, 1)`.
+
 ## 1. Summary
 
 The specification defines non-controllable source (NCS) availability as a

@@ -63,6 +63,12 @@ where `available_generation_mw` comes from `constraints/ncs_bounds.parquet`
 (with `system/non_controllable_sources.json` providing the base value) and
 `block_factor` from `scenarios/non_controllable_factors.json` (default 1.0).
 
+When `scenarios/non_controllable_models.parquet` is present, NCS availability
+becomes stochastic: each forward and backward pass scenario draws a random
+availability factor and the LP column upper bound varies per scenario. See
+[Stochastic Modeling](./stochastic-modeling.md#stochastic-ncs-availability)
+for details.
+
 The objective coefficient is `-curtailment_cost * block_hours`, making it
 cheaper to generate than to curtail. The NCS generation variable injects +1.0 MW
 at its connected bus in the power balance constraint, identical to a thermal plant.

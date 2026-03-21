@@ -39,9 +39,9 @@ Power system computation today is split between closed-source commercial tools a
 
 | Crate                                          | Status                                                                                     | Description                                                                                                            |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, pumping stations, contracts                                |
+| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, non-controllable sources, pumping stations, contracts      |
 | [`cobre-io`](crates/cobre-io/)                 | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline                        |
-| [`cobre-stochastic`](crates/cobre-stochastic/) | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | PAR(p) inflow models, PAR(p) fitting, stochastic load noise, correlated scenario generation, opening tree construction |
+| [`cobre-stochastic`](crates/cobre-stochastic/) | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | PAR(p) inflow models, PAR(p) fitting, stochastic load noise, NCS availability noise, correlated scenario generation, opening tree construction |
 | [`cobre-solver`](crates/cobre-solver/)         | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management                        |
 | [`cobre-comm`](crates/cobre-comm/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends                                      |
 | [`cobre-sddp`](crates/cobre-sddp/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management, estimation pipeline        |
@@ -86,7 +86,7 @@ The ecosystem is organized in five layers. `cobre-core` is the shared foundation
 │                       Foundation Layer                           │
 │  ┌──────────────────────────────────────────────────────────┐    │
 │  │                       cobre-core                         │    │
-│  │  Buses · Hydros · Thermals · Lines · Pumping · Contracts │    │
+│  │  Buses · Hydros · Thermals · Lines · NCS · Pumping · Contracts │    │
 │  └──────────────────────────────────────────────────────────┘    │
 ├──────────────────────────────────────────────────────────────────┤
 │            Optional: ferrompi (MPI 4.x Rust bindings)            │
@@ -154,7 +154,7 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D13) with hand-computed expected costs.
+Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
 
 **What works today:**
 
@@ -169,6 +169,8 @@ Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The
 - Multi-bus transmission networks with line flow limits
 - Distributed execution via MPI (`ferrompi`) and intra-rank thread parallelism (rayon)
 - CLI: `init`, `run`, `validate`, `report`, `summary`
+- Block factors for load demand, line capacity, and NCS availability (per-bus/line/source, per-stage, per-block scaling)
+- NCS stochastic availability via `non_controllable_models.parquet` (mean + std per source per stage, clamped normal draw patched per scenario)
 - Python bindings (PyO3, tested on 3.12/3.13/3.14)
 
 ## Roadmap

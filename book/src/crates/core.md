@@ -833,7 +833,7 @@ variables, loaded from `generic_constraints.json` and stored in
 
 ### VariableRef
 
-`VariableRef` is an enum with 19 variants covering all LP variable types
+`VariableRef` is an enum with 20 variants covering all LP variable types
 defined in the data model. Each variant names the variable type and carries the
 entity ID. For block-specific variables, `block_id` is `None` to sum over all
 blocks or `Some(i)` to reference block `i` specifically.
@@ -842,7 +842,7 @@ blocks or `Some(i)` to reference block `i` specifically.
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hydro    | `HydroStorage`, `HydroTurbined`, `HydroSpillage`, `HydroDiversion`, `HydroOutflow`, `HydroGeneration`, `HydroEvaporation`, `HydroWithdrawal` |
 | Thermal  | `ThermalGeneration`                                                                                                                          |
-| Line     | `LineDirect`, `LineReverse`                                                                                                                  |
+| Line     | `LineDirect`, `LineReverse`, `LineExchange`                                                                                                  |
 | Bus      | `BusDeficit`, `BusExcess`                                                                                                                    |
 | Pumping  | `PumpingFlow`, `PumpingPower`                                                                                                                |
 | Contract | `ContractImport`, `ContractExport`                                                                                                           |
@@ -851,6 +851,10 @@ blocks or `Some(i)` to reference block `i` specifically.
 `HydroStorage`, `HydroEvaporation`, and `HydroWithdrawal` are stage-level
 variables (no `block_id`). All other hydro variables and all thermal, line, bus,
 pumping, contract, and NCS variables are block-specific (`block_id` field present).
+
+`LineExchange` represents the net flow on a line (direct - reverse). Its resolver
+returns two LP column entries: `(fwd_col, +1.0)` and `(rev_col, -1.0)`. This
+simplifies generic constraints that reference net exchange between buses.
 
 ### SlackConfig
 

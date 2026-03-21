@@ -156,6 +156,12 @@
           "description": "Model name: `\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
           "type": "string"
         },
+        "productivity_override": {
+          "default": null,
+          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the entity's base `productivity_mw_per_m3s` for this season. Only valid for `\"constant_productivity\"` and `\"linearized_head\"` models. Must be positive when present.",
+          "format": "double",
+          "type": ["number", "null"]
+        },
         "season_id": {
           "description": "Season index (0-based, matching the `stages.json` season map).",
           "format": "int32",
@@ -188,6 +194,12 @@
         "model": {
           "description": "Model name: `\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
           "type": "string"
+        },
+        "productivity_override": {
+          "default": null,
+          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the entity's base `productivity_mw_per_m3s` for this stage range. Only valid for `\"constant_productivity\"` and `\"linearized_head\"` models. Must be positive when present.",
+          "format": "double",
+          "type": ["number", "null"]
         },
         "start_stage_id": {
           "description": "First stage (inclusive) to which this entry applies. Must be <= `end_stage_id` when `end_stage_id` is set.",

@@ -28,7 +28,7 @@
 //! variable   ::= var_name '(' entity_id (',' block_id)? ')'
 //! ```
 //!
-//! All 19 variable names from the variable catalog are recognised. Block-specific
+//! All 20 variable names from the variable catalog are recognised. Block-specific
 //! variables accept an optional second argument; stage-only variables (`hydro_storage`,
 //! `hydro_evaporation`, `hydro_withdrawal`) must not have a block argument.
 //!
@@ -660,8 +660,9 @@ fn parse_variable_ref(tokens: &[Token], pos: usize) -> Result<(VariableRef, usiz
 
 /// Build a [`VariableRef`] from the parsed variable name, entity ID, and optional block ID.
 ///
-/// Returns `Err(String)` if the variable name is not one of the 19 known names, or
+/// Returns `Err(String)` if the variable name is not one of the 20 known names, or
 /// if a block argument is provided for a stage-only variable (no block argument expected).
+#[allow(clippy::too_many_lines)]
 fn build_variable_ref(
     name: &str,
     entity_id: EntityId,
@@ -732,6 +733,10 @@ fn build_variable_ref(
             line_id: entity_id,
             block_id,
         }),
+        "line_exchange" => Ok(VariableRef::LineExchange {
+            line_id: entity_id,
+            block_id,
+        }),
         "bus_deficit" => Ok(VariableRef::BusDeficit {
             bus_id: entity_id,
             block_id,
@@ -765,7 +770,7 @@ fn build_variable_ref(
             block_id,
         }),
         other => Err(format!(
-            "unknown variable name \"{other}\": not one of the 19 supported LP variable types"
+            "unknown variable name \"{other}\": not one of the 20 supported LP variable types"
         )),
     }
 }
@@ -894,6 +899,20 @@ mod tests {
             VariableRef::HydroTurbined {
                 hydro_id: EntityId(5),
                 block_id: Some(0),
+            }
+        );
+    }
+
+    /// Block-specific line_exchange: `line_exchange(0, 1)` → `block_id: Some(1)`.
+    #[test]
+    fn test_expr_line_exchange_with_block() {
+        let expr = parse_expression("line_exchange(0, 1)").unwrap();
+        assert_eq!(expr.terms.len(), 1);
+        assert_eq!(
+            expr.terms[0].variable,
+            VariableRef::LineExchange {
+                line_id: EntityId(0),
+                block_id: Some(1),
             }
         );
     }
@@ -1030,6 +1049,13 @@ mod tests {
                 },
             ),
             (
+                "line_exchange(0)",
+                VariableRef::LineExchange {
+                    line_id: EntityId(0),
+                    block_id: None,
+                },
+            ),
+            (
                 "bus_deficit(0)",
                 VariableRef::BusDeficit {
                     bus_id: EntityId(0),
@@ -1087,7 +1113,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(cases.len(), 19, "must have exactly 19 variable types");
+        assert_eq!(cases.len(), 20, "must have exactly 20 variable types");
 
         for (input, expected) in cases {
             let expr = parse_expression(input)
@@ -1335,6 +1361,34 @@ mod tests {
         assert_eq!(result[0].id, EntityId(0));
         assert_eq!(result[1].id, EntityId(2));
         assert_eq!(result[2].id, EntityId(5));
+    }
+
+    /// Full JSON constraint with `line_exchange` parses correctly.
+    #[test]
+    fn test_parse_line_exchange_json_constraint() {
+        let json = r#"{
+  "constraints": [
+    {
+      "id": 0,
+      "name": "net_exchange",
+      "expression": "line_exchange(0)",
+      "sense": "==",
+      "slack": { "enabled": false }
+    }
+  ]
+}"#;
+        let f = write_json(json);
+        let result = parse_generic_constraints(f.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "net_exchange");
+        assert_eq!(result[0].expression.terms.len(), 1);
+        assert_eq!(
+            result[0].expression.terms[0].variable,
+            VariableRef::LineExchange {
+                line_id: EntityId(0),
+                block_id: None,
+            }
+        );
     }
 
     /// Slack with zero penalty → SchemaError.

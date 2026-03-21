@@ -86,7 +86,8 @@ The ecosystem is organized in five layers. `cobre-core` is the shared foundation
 │                       Foundation Layer                           │
 │  ┌──────────────────────────────────────────────────────────┐    │
 │  │                       cobre-core                         │    │
-│  │  Buses · Hydros · Thermals · Lines · NCS · Pumping · Contracts │    │
+│  │  Buses · Hydros · Thermals · Lines · NCS · Pumping       │    │
+│  │  Contracts                                               │    │
 │  └──────────────────────────────────────────────────────────┘    │
 ├──────────────────────────────────────────────────────────────────┤
 │            Optional: ferrompi (MPI 4.x Rust bindings)            │
@@ -154,7 +155,7 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
+Cobre v0.1.8 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
 
 **What works today:**
 
@@ -179,8 +180,10 @@ See the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/over
 
 - [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
 - [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
+- [ ] Wire pumping stations and energy contracts
 - [ ] GNL thermal plants and battery energy storage
-- [ ] Multi-cut formulation and CVaR risk measure
+- [ ] Multi-cut formulation
+- [ ] Markovian policy graphs
 - [ ] Benchmark suite with published results
 
 ## Contributing

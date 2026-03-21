@@ -1088,9 +1088,9 @@ fn resolve_stage_model(
     cached_computed_planes: Option<&[FphaPlane]>,
 ) -> Result<ResolvedProductionModel, SddpError> {
     if let Some(config) = config_entry {
-        let model_name = find_model_for_stage(config, stage);
+        let model_info = find_model_for_stage(config, stage);
 
-        if model_name.as_deref() == Some("fpha") {
+        if model_info.as_ref().map(|(name, _)| name.as_str()) == Some("fpha") {
             if source == ProductionModelSource::ComputedFromGeometry {
                 // Use the pre-fitted planes from the outer loop cache.
                 let planes = cached_computed_planes
@@ -1112,8 +1112,10 @@ fn resolve_stage_model(
             }
         } else {
             // "constant_productivity" or "linearized_head" from config:
-            // use entity productivity.
-            let productivity = entity_productivity(hydro);
+            // use override if provided, otherwise entity productivity.
+            let productivity = model_info
+                .and_then(|(_, ovr)| ovr)
+                .unwrap_or_else(|| entity_productivity(hydro));
             Ok(ResolvedProductionModel::ConstantProductivity { productivity })
         }
     } else {
@@ -1135,7 +1137,7 @@ fn resolve_stage_model(
     }
 }
 
-/// Find the model name that applies to a given stage from a `ProductionModelConfig`.
+/// Find the model name and optional productivity override for a given stage.
 ///
 /// Returns `None` when the config has no entry covering the given stage (gap in coverage).
 /// For `StageRanges`, the match is `start_stage_id <= stage.id <= end_stage_id`.
@@ -1143,14 +1145,14 @@ fn resolve_stage_model(
 fn find_model_for_stage(
     config: &ProductionModelConfig,
     stage: &cobre_core::temporal::Stage,
-) -> Option<String> {
+) -> Option<(String, Option<f64>)> {
     match &config.selection_mode {
         SelectionMode::StageRanges { ranges } => {
             for range in ranges {
                 let after_start = stage.id >= range.start_stage_id;
                 let before_end = range.end_stage_id.is_none_or(|end| stage.id <= end);
                 if after_start && before_end {
-                    return Some(range.model.clone());
+                    return Some((range.model.clone(), range.productivity_override));
                 }
             }
             None
@@ -1164,12 +1166,13 @@ fn find_model_for_stage(
                     // season.season_id is i32; stage.season_id is usize.
                     // Convert usize to i32 for comparison to avoid cast_sign_loss.
                     if i32::try_from(season_id).is_ok_and(|sid| sid == season.season_id) {
-                        return Some(season.model.clone());
+                        return Some((season.model.clone(), season.productivity_override));
                     }
                 }
             }
             // Fall back to default model when no season matches (or no season_id on stage).
-            Some(default_model.clone())
+            // Default model has no override.
+            Some((default_model.clone(), None))
         }
     }
 }
@@ -1714,8 +1717,8 @@ mod tests {
         },
     };
     use cobre_io::extensions::{
-        FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
-        StageRange,
+        FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig,
+        SelectionMode, StageRange,
     };
 
     use super::{
@@ -1830,6 +1833,7 @@ mod tests {
                         max_planes_per_hydro: None,
                         fitting_window: None,
                     }),
+                    productivity_override: None,
                 }],
             },
         }
@@ -1851,6 +1855,7 @@ mod tests {
                         max_planes_per_hydro: None,
                         fitting_window: None,
                     }),
+                    productivity_override: None,
                 }],
             },
         }
@@ -2067,6 +2072,7 @@ mod tests {
                         max_planes_per_hydro: None,
                         fitting_window: None,
                     }),
+                    productivity_override: None,
                 }],
             },
         };
@@ -2430,8 +2436,8 @@ mod tests {
     fn find_model_for_stage_returns_correct_model_name_in_range() {
         let config = precomputed_fpha_config(0);
         let stage = make_stage(3);
-        let name = find_model_for_stage(&config, &stage);
-        assert_eq!(name.as_deref(), Some("fpha"));
+        let result = find_model_for_stage(&config, &stage);
+        assert_eq!(result.as_ref().map(|(name, _)| name.as_str()), Some("fpha"));
     }
 
     /// find_model_for_stage: stage_id before start of range returns None.
@@ -2445,13 +2451,14 @@ mod tests {
                     end_stage_id: Some(10),
                     model: "fpha".to_string(),
                     fpha_config: None,
+                    productivity_override: None,
                 }],
             },
         };
         let stage = make_stage(3); // id 3, before start_stage_id 5
-        let name = find_model_for_stage(&config, &stage);
+        let result = find_model_for_stage(&config, &stage);
         assert!(
-            name.is_none(),
+            result.is_none(),
             "stage 3 is before range [5, 10], expected None"
         );
     }
@@ -2467,18 +2474,154 @@ mod tests {
                     end_stage_id: None,
                     model: "constant_productivity".to_string(),
                     fpha_config: None,
+                    productivity_override: None,
                 }],
             },
         };
         for stage_id in [0, 5, 11, 100] {
             let stage = make_stage(stage_id);
-            let name = find_model_for_stage(&config, &stage);
+            let result = find_model_for_stage(&config, &stage);
             assert_eq!(
-                name.as_deref(),
+                result.as_ref().map(|(name, _)| name.as_str()),
                 Some("constant_productivity"),
                 "open-ended range must cover stage {stage_id}"
             );
         }
+    }
+
+    // ── Productivity override tests ─────────────────────────────────────────
+
+    /// resolve_stage_model uses productivity_override when present.
+    #[test]
+    fn resolve_stage_model_uses_productivity_override() {
+        let hydro = make_hydro(
+            0,
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+        );
+        let stage = make_stage(0);
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "constant_productivity".to_string(),
+                    fpha_config: None,
+                    productivity_override: Some(0.55),
+                }],
+            },
+        };
+        let empty_map = std::collections::HashMap::new();
+        let model = super::resolve_stage_model(
+            &hydro,
+            &stage,
+            Some(&config),
+            ProductionModelSource::DefaultConstant,
+            &empty_map,
+            None,
+        )
+        .expect("should succeed");
+        assert!(
+            matches!(model, ResolvedProductionModel::ConstantProductivity { productivity }
+                if (productivity - 0.55).abs() < f64::EPSILON),
+            "expected ConstantProductivity 0.55 (override), got {model:?}"
+        );
+    }
+
+    /// resolve_stage_model falls back to entity productivity when override is None.
+    #[test]
+    fn resolve_stage_model_uses_entity_productivity_when_no_override() {
+        let hydro = make_hydro(
+            0,
+            HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+        );
+        let stage = make_stage(0);
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "constant_productivity".to_string(),
+                    fpha_config: None,
+                    productivity_override: None,
+                }],
+            },
+        };
+        let empty_map = std::collections::HashMap::new();
+        let model = super::resolve_stage_model(
+            &hydro,
+            &stage,
+            Some(&config),
+            ProductionModelSource::DefaultConstant,
+            &empty_map,
+            None,
+        )
+        .expect("should succeed");
+        assert!(
+            matches!(model, ResolvedProductionModel::ConstantProductivity { productivity }
+                if (productivity - 0.9).abs() < f64::EPSILON),
+            "expected ConstantProductivity 0.9 (entity), got {model:?}"
+        );
+    }
+
+    /// find_model_for_stage returns override in tuple.
+    #[test]
+    fn find_model_for_stage_returns_override_in_tuple() {
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::StageRanges {
+                ranges: vec![StageRange {
+                    start_stage_id: 0,
+                    end_stage_id: None,
+                    model: "constant_productivity".to_string(),
+                    fpha_config: None,
+                    productivity_override: Some(0.75),
+                }],
+            },
+        };
+        let stage = make_stage(0);
+        let result = find_model_for_stage(&config, &stage);
+        assert_eq!(
+            result,
+            Some(("constant_productivity".to_string(), Some(0.75)))
+        );
+    }
+
+    /// Seasonal mode: find_model_for_stage returns override for matching season
+    /// and None for default model.
+    #[test]
+    fn find_model_for_stage_seasonal_with_override() {
+        let config = ProductionModelConfig {
+            hydro_id: EntityId::from(0),
+            selection_mode: SelectionMode::Seasonal {
+                default_model: "constant_productivity".to_string(),
+                seasons: vec![SeasonConfig {
+                    season_id: 1,
+                    model: "constant_productivity".to_string(),
+                    fpha_config: None,
+                    productivity_override: Some(0.60),
+                }],
+            },
+        };
+        // Stage with matching season_id = 1
+        let mut stage_match = make_stage(0);
+        stage_match.season_id = Some(1);
+        let result = find_model_for_stage(&config, &stage_match);
+        assert_eq!(
+            result,
+            Some(("constant_productivity".to_string(), Some(0.60)))
+        );
+
+        // Stage with non-matching season_id → default model, no override
+        let mut stage_default = make_stage(0);
+        stage_default.season_id = Some(99);
+        let result = find_model_for_stage(&config, &stage_default);
+        assert_eq!(result, Some(("constant_productivity".to_string(), None)));
     }
 
     /// precomputed config returns PrecomputedHyperplanes source.

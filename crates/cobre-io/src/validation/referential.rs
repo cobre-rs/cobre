@@ -828,7 +828,9 @@ fn validate_variable_ref_entity(
                 );
             }
         }
-        VariableRef::LineDirect { line_id, .. } | VariableRef::LineReverse { line_id, .. } => {
+        VariableRef::LineDirect { line_id, .. }
+        | VariableRef::LineReverse { line_id, .. }
+        | VariableRef::LineExchange { line_id, .. } => {
             if !ids.line.contains(&line_id.0) {
                 ctx.add_error(
                     ErrorKind::InvalidReference,

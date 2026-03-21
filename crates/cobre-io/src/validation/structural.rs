@@ -89,8 +89,8 @@ pub struct FileManifest {
     pub scenarios_noise_openings_parquet: bool,
     /// `scenarios/non_controllable_factors.json` — optional
     pub scenarios_non_controllable_factors_json: bool,
-    /// `scenarios/non_controllable_models.parquet` — optional
-    pub scenarios_non_controllable_models_parquet: bool,
+    /// `scenarios/non_controllable_stats.parquet` — optional
+    pub scenarios_non_controllable_stats_parquet: bool,
 
     // ── constraints/ (12 files) ──────────────────────────────────────────────
     /// `constraints/thermal_bounds.parquet` — optional
@@ -230,7 +230,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
         required: false,
     },
     FileEntry {
-        relative: "scenarios/non_controllable_models.parquet",
+        relative: "scenarios/non_controllable_stats.parquet",
         required: false,
     },
     // constraints/ — optional
@@ -366,7 +366,7 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 37] {
         &mut m.scenarios_correlation_json,
         &mut m.scenarios_noise_openings_parquet,
         &mut m.scenarios_non_controllable_factors_json,
-        &mut m.scenarios_non_controllable_models_parquet,
+        &mut m.scenarios_non_controllable_stats_parquet,
         // constraints/ (13)
         &mut m.constraints_thermal_bounds_parquet,
         &mut m.constraints_hydro_bounds_parquet,

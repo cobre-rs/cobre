@@ -38,7 +38,7 @@ pub mod load_factors;
 pub mod load_stats;
 pub mod noise_openings;
 pub mod non_controllable_factors;
-pub mod non_controllable_models;
+pub mod non_controllable_stats;
 
 pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
@@ -52,7 +52,7 @@ pub use noise_openings::{
     NoiseOpeningRow, assemble_opening_tree, parse_noise_openings, validate_noise_openings,
 };
 pub use non_controllable_factors::{NcsFactorEntry, parse_non_controllable_factors};
-pub use non_controllable_models::parse_ncs_models;
+pub use non_controllable_stats::parse_ncs_stats;
 
 use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel, NcsModel};
 
@@ -140,15 +140,15 @@ pub fn load_non_controllable_factors(
     }
 }
 
-/// Load `scenarios/non_controllable_models.parquet`, returning an empty `Vec` when absent.
+/// Load `scenarios/non_controllable_stats.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
 /// Propagates [`LoadError`] from the parser when `path` is `Some`.
-pub fn load_ncs_models(path: Option<&Path>) -> Result<Vec<NcsModel>, LoadError> {
+pub fn load_ncs_stats(path: Option<&Path>) -> Result<Vec<NcsModel>, LoadError> {
     match path {
         None => Ok(Vec::new()),
-        Some(p) => parse_ncs_models(p),
+        Some(p) => parse_ncs_stats(p),
     }
 }
 
@@ -330,10 +330,10 @@ pub fn load_scenarios(
             .then(|| scenarios_dir.join("noise_openings.parquet"))
             .as_deref(),
     )?;
-    let ncs_models = load_ncs_models(
+    let ncs_models = load_ncs_stats(
         manifest
-            .scenarios_non_controllable_models_parquet
-            .then(|| scenarios_dir.join("non_controllable_models.parquet"))
+            .scenarios_non_controllable_stats_parquet
+            .then(|| scenarios_dir.join("non_controllable_stats.parquet"))
             .as_deref(),
     )?;
 

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test D14.
 - **NCS stochastic availability** -- Non-controllable sources (wind, solar,
   run-of-river) now support stochastic availability modeling via
-  `scenarios/non_controllable_models.parquet`. Each source has a per-stage
+  `scenarios/non_controllable_stats.parquet`. Each source has a per-stage
   mean and standard deviation availability factor (0--1), drawn from a
   normal distribution and clamped to [0, 1]. Availability is multiplied by
   `max_generation_mw` and per-block factors. The SDDP policy learns to

@@ -262,7 +262,7 @@ pub struct LoadModel {
 
 /// Per-stage normal noise model parameters for a non-controllable source.
 ///
-/// Loaded from `scenarios/non_controllable_models.parquet`. Each row provides
+/// Loaded from `scenarios/non_controllable_stats.parquet`. Each row provides
 /// the mean and standard deviation of the stochastic availability factor for
 /// one NCS entity at one stage. The scenario pipeline uses these parameters
 /// to generate per-scenario availability realisations.

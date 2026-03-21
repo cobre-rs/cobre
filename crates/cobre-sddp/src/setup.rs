@@ -1088,7 +1088,7 @@ fn load_user_opening_tree_inner(
 ///
 /// Converts the dense 3D factor table into the `(entity_id, stage_id, block_pairs)`
 /// tuple format expected by `PrecomputedNormal::build`. Includes all NCS entities
-/// that have model entries in `non_controllable_models.parquet`. Entities with
+/// that have model entries in `non_controllable_stats.parquet`. Entities with
 /// `std_mw = 0` produce deterministic availability at their `mean_mw` value.
 fn build_ncs_factor_entries(
     system: &System,

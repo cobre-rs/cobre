@@ -1181,7 +1181,7 @@ fn d14_block_factors() {
 /// - 1 bus, 1 thermal (T0 at $10/MWh, cap 100 MW), 1 NCS (curtailment_cost
 ///   $0.001/MWh, bus 0, max_generation_mw 100 MW), deterministic load 80 MW,
 ///   2 stages each with 1 block of 730 hours.
-/// - NCS available generation = 50 MW per stage (from non_controllable_models.parquet,
+/// - NCS available generation = 50 MW per stage (from non_controllable_stats.parquet,
 ///   mean=0.5, std=0.0 — availability factor 0.5 * 100 MW = 50 MW, deterministic,
 ///   exercises the stochastic NCS pipeline).
 ///
@@ -1247,7 +1247,7 @@ fn d15_non_controllable_source() {
     writer.write(&inflow_batch).expect("write inflow batch");
     writer.close().expect("close inflow writer");
 
-    // Create non_controllable_models.parquet: NCS 0 with availability factor 0.5
+    // Create non_controllable_stats.parquet: NCS 0 with availability factor 0.5
     // (= 50 MW out of max 100 MW), std 0 (deterministic), for stages 0-1.
     // Uses the stochastic NCS pipeline with zero noise.
     let ncs_schema = Arc::new(Schema::new(vec![
@@ -1266,17 +1266,15 @@ fn d15_non_controllable_source() {
             Arc::new(Float64Array::from(vec![0.0, 0.0])),
         ],
     )
-    .expect("non_controllable_models RecordBatch");
+    .expect("non_controllable_stats RecordBatch");
 
-    let ncs_path = scenarios_dir.join("non_controllable_models.parquet");
-    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_models parquet");
+    let ncs_path = scenarios_dir.join("non_controllable_stats.parquet");
+    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_stats parquet");
     let mut writer = ArrowWriter::try_new(file, ncs_schema, None).expect("ArrowWriter");
     writer
         .write(&ncs_batch)
-        .expect("write non_controllable_models batch");
-    writer
-        .close()
-        .expect("close non_controllable_models writer");
+        .expect("write non_controllable_stats batch");
+    writer.close().expect("close non_controllable_stats writer");
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 437_927.0, 1e-2, "D15");

@@ -95,7 +95,7 @@ Includes a deterministic regression suite (D01-D15) with hand-computed expected 
 - MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
 - CLI: `init`, `run`, `validate`, `report`, `summary`, `version`
 - Block factors for load demand (`scenarios/load_factors.json`), transmission line capacity (`constraints/exchange_factors.json`), and NCS availability (`scenarios/non_controllable_factors.json`) with per-bus/line/source, per-stage, per-block scaling
-- NCS stochastic availability via `scenarios/non_controllable_models.parquet` (mean + std availability factor per source per stage, normal draw clamped to [0,1], patched per scenario in forward/backward pass and lower bound evaluation)
+- NCS stochastic availability via `scenarios/non_controllable_stats.parquet` (mean + std availability factor per source per stage, normal draw clamped to [0,1], patched per scenario in forward/backward pass and lower bound evaluation)
 - Python bindings (PyO3, tested on 3.12/3.13/3.14) with Arrow zero-copy result loading
 
 **Known gaps:**
@@ -128,15 +128,15 @@ Deferred variants are documented in `implementation-ordering.md` section 6.
 Five element types are fully modeled. Two are NO-OP stubs (type exists in registry
 but contributes zero LP variables/constraints):
 
-| Element          | Status | Notes                                                                                                                       |
-| ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| Bus              | Full   | Power balance constraint per bus per block                                                                                  |
-| Line             | Full   | Flow variable with MW capacity bounds                                                                                       |
-| Thermal          | Full   | Generation variable with MW bounds and cost                                                                                 |
-| Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity, FPHA (precomputed + computed from geometry), evaporation linearization |
-| Contract         | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
-| Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                  |
-| Non-Controllable | Full   | Generation variable bounded by stochastic availability × block factor, with curtailment penalty. Stochastic availability via `non_controllable_models.parquet`. |
+| Element          | Status | Notes                                                                                                                                                          |
+| ---------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bus              | Full   | Power balance constraint per bus per block                                                                                                                     |
+| Line             | Full   | Flow variable with MW capacity bounds                                                                                                                          |
+| Thermal          | Full   | Generation variable with MW bounds and cost                                                                                                                    |
+| Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity, FPHA (precomputed + computed from geometry), evaporation linearization                                    |
+| Contract         | Stub   | NO-OP -- entity exists, no LP contribution                                                                                                                     |
+| Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                                                     |
+| Non-Controllable | Full   | Generation variable bounded by stochastic availability × block factor, with curtailment penalty. Stochastic availability via `non_controllable_stats.parquet`. |
 
 Stubs exist in the registry so LP construction code iterates over all element
 types uniformly. Implementing an element means adding LP variables/constraints.

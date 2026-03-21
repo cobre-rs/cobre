@@ -27,15 +27,15 @@ Cobre models seven entity types. Five are fully implemented and contribute LP
 variables and constraints. Two are registered stubs that appear in the entity
 model but do not yet contribute LP variables in the current release.
 
-| Entity Type      | Status | JSON File                      | Description                                                                                                                |
-| ---------------- | ------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Bus              | Full   | `system/buses.json`            | Electrical node. Power balance constraint per stage per block. See [Network Topology](./network-topology.md).              |
-| Line             | Full   | `system/lines.json`            | Transmission interconnection between two buses with flow limits and losses. See [Network Topology](./network-topology.md). |
-| Hydro            | Full   | `system/hydros.json`           | Reservoir-turbine-spillway system with cascade linkage. See [Hydro Plants](./hydro-plants.md).                             |
-| Thermal          | Full   | `system/thermals.json`         | Dispatchable generator with piecewise-linear cost curve. See [Thermal Units](./thermal-units.md).                          |
-| Contract         | Stub   | `system/contracts.json`        | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                            |
-| Pumping Station  | Stub   | `system/pumping_stations.json` | Pumped-storage or water-transfer station. Entity exists in registry; no LP variables in this release.                      |
-| Non-Controllable | Full   | `system/non_controllable_sources.json` | Variable renewable source (wind, solar, run-of-river). Generation variable bounded by available capacity × block factor, with curtailment penalty.         |
+| Entity Type      | Status | JSON File                              | Description                                                                                                                                        |
+| ---------------- | ------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bus              | Full   | `system/buses.json`                    | Electrical node. Power balance constraint per stage per block. See [Network Topology](./network-topology.md).                                      |
+| Line             | Full   | `system/lines.json`                    | Transmission interconnection between two buses with flow limits and losses. See [Network Topology](./network-topology.md).                         |
+| Hydro            | Full   | `system/hydros.json`                   | Reservoir-turbine-spillway system with cascade linkage. See [Hydro Plants](./hydro-plants.md).                                                     |
+| Thermal          | Full   | `system/thermals.json`                 | Dispatchable generator with piecewise-linear cost curve. See [Thermal Units](./thermal-units.md).                                                  |
+| Contract         | Stub   | `system/contracts.json`                | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                                                    |
+| Pumping Station  | Stub   | `system/pumping_stations.json`         | Pumped-storage or water-transfer station. Entity exists in registry; no LP variables in this release.                                              |
+| Non-Controllable | Full   | `system/non_controllable_sources.json` | Variable renewable source (wind, solar, run-of-river). Generation variable bounded by available capacity × block factor, with curtailment penalty. |
 
 The two remaining stub types (Contract and Pumping Station) are registered in
 the entity model so that LP construction code can iterate over all seven types
@@ -63,7 +63,7 @@ where `available_generation_mw` comes from `constraints/ncs_bounds.parquet`
 (with `system/non_controllable_sources.json` providing the base value) and
 `block_factor` from `scenarios/non_controllable_factors.json` (default 1.0).
 
-When `scenarios/non_controllable_models.parquet` is present, NCS availability
+When `scenarios/non_controllable_stats.parquet` is present, NCS availability
 becomes stochastic: each forward and backward pass scenario draws a random
 availability factor and the LP column upper bound varies per scenario. See
 [Stochastic Modeling](./stochastic-modeling.md#stochastic-ncs-availability)

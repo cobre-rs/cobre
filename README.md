@@ -37,16 +37,16 @@ Power system computation today is split between closed-source commercial tools a
 
 ## Crates
 
-| Crate                                          | Status                                                                                     | Description                                                                                                            |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, non-controllable sources, pumping stations, contracts      |
-| [`cobre-io`](crates/cobre-io/)                 | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline                        |
+| Crate                                          | Status                                                                                     | Description                                                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, non-controllable sources, pumping stations, contracts                              |
+| [`cobre-io`](crates/cobre-io/)                 | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline                                                |
 | [`cobre-stochastic`](crates/cobre-stochastic/) | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | PAR(p) inflow models, PAR(p) fitting, stochastic load noise, NCS availability noise, correlated scenario generation, opening tree construction |
-| [`cobre-solver`](crates/cobre-solver/)         | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management                        |
-| [`cobre-comm`](crates/cobre-comm/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends                                      |
-| [`cobre-sddp`](crates/cobre-sddp/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management, estimation pipeline        |
-| [`cobre-cli`](crates/cobre-cli/)               | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Command-line interface: `init`, `run`, `validate`, `report`, `summary`, `version`                                      |
-| [`cobre-python`](crates/cobre-python/)         | ![experimental](https://img.shields.io/badge/status-experimental-E74C3C?style=flat-square) | PyO3 bindings — case loading, validation, training, simulation, result inspection                                      |
+| [`cobre-solver`](crates/cobre-solver/)         | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management                                                |
+| [`cobre-comm`](crates/cobre-comm/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends                                                              |
+| [`cobre-sddp`](crates/cobre-sddp/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management, estimation pipeline                                |
+| [`cobre-cli`](crates/cobre-cli/)               | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Command-line interface: `init`, `run`, `validate`, `report`, `summary`, `version`                                                              |
+| [`cobre-python`](crates/cobre-python/)         | ![experimental](https://img.shields.io/badge/status-experimental-E74C3C?style=flat-square) | PyO3 bindings — case loading, validation, training, simulation, result inspection                                                              |
 
 **Related:**
 
@@ -170,7 +170,7 @@ Cobre v0.1.6 ships a fully functional SDDP solver for hydrothermal dispatch. The
 - Distributed execution via MPI (`ferrompi`) and intra-rank thread parallelism (rayon)
 - CLI: `init`, `run`, `validate`, `report`, `summary`
 - Block factors for load demand, line capacity, and NCS availability (per-bus/line/source, per-stage, per-block scaling)
-- NCS stochastic availability via `non_controllable_models.parquet` (mean + std per source per stage, clamped normal draw patched per scenario)
+- NCS stochastic availability via `non_controllable_stats.parquet` (mean + std per source per stage, clamped normal draw patched per scenario)
 - Python bindings (PyO3, tested on 3.12/3.13/3.14)
 
 ## Roadmap

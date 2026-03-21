@@ -41,7 +41,7 @@ use crate::{
         ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow,
         LoadFactorEntry, LoadSeasonalStatsRow, NcsFactorEntry, load_correlation,
         load_external_scenarios, load_inflow_ar_coefficients, load_inflow_history,
-        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats, load_ncs_models,
+        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats, load_ncs_stats,
         load_non_controllable_factors,
     },
     stages::StagesData,
@@ -124,7 +124,7 @@ pub(crate) struct ParsedData {
     pub(crate) correlation: Option<CorrelationModel>,
     /// Parsed `scenarios/non_controllable_factors.json`. Empty when absent.
     pub(crate) non_controllable_factors: Vec<NcsFactorEntry>,
-    /// Parsed `scenarios/non_controllable_models.parquet`. Empty when absent.
+    /// Parsed `scenarios/non_controllable_stats.parquet`. Empty when absent.
     pub(crate) ncs_models: Vec<NcsModel>,
 
     // ── Optional constraints/ files ───────────────────────────────────────────
@@ -452,14 +452,14 @@ pub(crate) fn validate_schema(
     );
 
     let ncs_models = optional_or_error(
-        manifest.scenarios_non_controllable_models_parquet,
+        manifest.scenarios_non_controllable_stats_parquet,
         || {
-            load_ncs_models(Some(
-                &case_root.join("scenarios/non_controllable_models.parquet"),
+            load_ncs_stats(Some(
+                &case_root.join("scenarios/non_controllable_stats.parquet"),
             ))
         },
         Vec::new,
-        "scenarios/non_controllable_models.parquet",
+        "scenarios/non_controllable_stats.parquet",
         ctx,
     );
 

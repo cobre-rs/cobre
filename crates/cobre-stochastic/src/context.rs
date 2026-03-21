@@ -242,7 +242,7 @@ impl StochasticContext {
     ///
     /// Contains stage-major mean, standard deviation, and block factor arrays
     /// for all NCS entities that have at least one `NcsModel` entry in
-    /// `non_controllable_models.parquet`. Entities with `std = 0` produce
+    /// `non_controllable_stats.parquet`. Entities with `std = 0` produce
     /// deterministic availability at `mean * max_gen`.
     /// Returns `PrecomputedNormal::default()` (zero entities) when no NCS
     /// models are present.
@@ -253,7 +253,7 @@ impl StochasticContext {
     /// Returns the sorted entity IDs of NCS entities in the stochastic pipeline.
     ///
     /// These are the NCS entities that have at least one `NcsModel` entry in
-    /// `non_controllable_models.parquet`. Empty when no NCS models are present.
+    /// `non_controllable_stats.parquet`. Empty when no NCS models are present.
     #[must_use]
     pub fn ncs_entity_ids(&self) -> &[EntityId] {
         &self.ncs_entity_ids

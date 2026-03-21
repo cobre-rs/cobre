@@ -24,19 +24,19 @@ assesses their modeling impact, and outlines the work required to close the gap.
 
 The following spec sections define the intended NCS behavior:
 
-| Spec File                             | Section       | Key Statement                                                                                                                                                                                     |
-| ------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `math/system-elements.md`             | 6             | "$A_r$ = available generation for current (stage, scenario) from scenario pipeline, bounded by $[0, \bar{G}_r]$"                                                                                  |
-| `math/equipment-formulations.md`      | 6             | "Bounds: $0 \leq g^{nc}_{r,k} \leq A_r$ where $A_r$ is stochastic available generation for current (stage, scenario)"                                                                             |
-| `data-model/input-system-entities.md` | 7             | "Generation variable bounded by $[0, \text{available\_generation}]$, where available_generation is stochastic value from scenario pipeline for current (stage, scenario)"                         |
-| `data-model/internal-structures.md`   | 9             | "Availability: stochastic generation available per (stage, scenario), provided by the scenario pipeline"                                                                                          |
-| `data-model/input-scenarios.md`       | (correlation) | "Defines spatial correlation between stochastic processes (inflows, loads, non-controllable generation)"                                                                                          |
-| `deferred.md`                         | C.5           | "Generation models in `scenarios/non_controllable_models.parquet` provide mean and standard deviation per source per stage. Correlation with inflows is supported via `correlation.json` blocks." |
+| Spec File                             | Section       | Key Statement                                                                                                                                                                                    |
+| ------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `math/system-elements.md`             | 6             | "$A_r$ = available generation for current (stage, scenario) from scenario pipeline, bounded by $[0, \bar{G}_r]$"                                                                                 |
+| `math/equipment-formulations.md`      | 6             | "Bounds: $0 \leq g^{nc}_{r,k} \leq A_r$ where $A_r$ is stochastic available generation for current (stage, scenario)"                                                                            |
+| `data-model/input-system-entities.md` | 7             | "Generation variable bounded by $[0, \text{available\_generation}]$, where available_generation is stochastic value from scenario pipeline for current (stage, scenario)"                        |
+| `data-model/internal-structures.md`   | 9             | "Availability: stochastic generation available per (stage, scenario), provided by the scenario pipeline"                                                                                         |
+| `data-model/input-scenarios.md`       | (correlation) | "Defines spatial correlation between stochastic processes (inflows, loads, non-controllable generation)"                                                                                         |
+| `deferred.md`                         | C.5           | "Generation models in `scenarios/non_controllable_stats.parquet` provide mean and standard deviation per source per stage. Correlation with inflows is supported via `correlation.json` blocks." |
 
 ### 2.1. Expected Data Flow (per spec)
 
 ```
-non_controllable_models.parquet     correlation.json
+non_controllable_stats.parquet     correlation.json
   (mean, std per source/stage)       (NCS ↔ inflow correlation)
            │                                  │
            ▼                                  ▼
@@ -83,7 +83,7 @@ non_controllable_models.parquet     correlation.json
 
 | Component                                      | Spec Reference                | Status                                                                                   |
 | ---------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------- |
-| `scenarios/non_controllable_models.parquet`    | `deferred.md` C.5             | Not implemented. No mean/std statistical model for NCS availability.                     |
+| `scenarios/non_controllable_stats.parquet`     | `deferred.md` C.5             | Not implemented. No mean/std statistical model for NCS availability.                     |
 | Stochastic NCS generation in scenario pipeline | `system-elements.md` §6       | Not implemented. `cobre-stochastic` does not generate NCS noise.                         |
 | NCS dimension in opening tree                  | `scenario-generation.md` §2.3 | Not implemented. Opening tree covers hydro inflows and loads only.                       |
 | NCS entries in `correlation.json`              | `input-scenarios.md`          | Not implemented. Correlation model supports inflow and load entities only.               |
@@ -146,7 +146,7 @@ become scenario-dependent.
 | #   | Spec Expectation                                      | Implementation                                                  | Gap Type                    |
 | --- | ----------------------------------------------------- | --------------------------------------------------------------- | --------------------------- |
 | D1  | `A_r` varies per (stage, scenario)                    | `A_r` is fixed per stage                                        | Missing stochastic model    |
-| D2  | `non_controllable_models.parquet` provides mean/std   | File does not exist; `ncs_bounds.parquet` provides fixed values | Missing input file          |
+| D2  | `non_controllable_stats.parquet` provides mean/std    | File does not exist; `ncs_bounds.parquet` provides fixed values | Missing input file          |
 | D3  | NCS is a dimension in the opening tree                | Opening tree has hydro + load dimensions only                   | Missing dimension           |
 | D4  | `correlation.json` supports NCS entities              | Correlation supports inflow + load only                         | Missing correlation support |
 | D5  | Forward/backward pass patches NCS bounds per scenario | NCS bounds baked into template (no per-scenario patching)       | Missing LP patching         |
@@ -166,7 +166,7 @@ implementation tickets with spec references and acceptance criteria.
 1. **Define NCS generation model input** — decide whether to reuse the PAR
    framework (mean, std, AR coefficients per source per stage) or use a
    simpler model (e.g., Beta distribution for capacity factors, log-normal).
-   The spec references `non_controllable_models.parquet` with mean/std,
+   The spec references `non_controllable_stats.parquet` with mean/std,
    suggesting a normal or log-normal approach.
 
 2. **Extend `cobre-stochastic`** — add NCS availability generation alongside
@@ -217,7 +217,7 @@ implementation tickets with spec references and acceptance criteria.
 ## 7. Compatibility Considerations
 
 - **No breaking changes to existing cases.** Cases without
-  `non_controllable_models.parquet` should continue to work with
+  `non_controllable_stats.parquet` should continue to work with
   deterministic availability from `ncs_bounds.parquet` (or entity defaults).
   The stochastic model activates only when the model file is present.
 

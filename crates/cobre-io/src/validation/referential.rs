@@ -400,7 +400,7 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         if !ncs_ids.contains(&model.ncs_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
-                "scenarios/non_controllable_models.parquet",
+                "scenarios/non_controllable_stats.parquet",
                 Some(format!("NcsModel[{i}]")),
                 format!(
                     "NcsModel[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",

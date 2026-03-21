@@ -1,7 +1,7 @@
-//! Parsing for `scenarios/non_controllable_models.parquet` — per-NCS-per-stage
+//! Parsing for `scenarios/non_controllable_stats.parquet` — per-NCS-per-stage
 //! mean and standard deviation of the stochastic availability factor.
 //!
-//! [`parse_ncs_models`] reads `scenarios/non_controllable_models.parquet`
+//! [`parse_ncs_stats`] reads `scenarios/non_controllable_stats.parquet`
 //! and returns a sorted `Vec<NcsModel>`.
 //!
 //! ## Parquet schema
@@ -39,7 +39,7 @@ use std::path::Path;
 use crate::LoadError;
 use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 
-/// Parse `scenarios/non_controllable_models.parquet` and return a sorted `Vec<NcsModel>`.
+/// Parse `scenarios/non_controllable_stats.parquet` and return a sorted `Vec<NcsModel>`.
 ///
 /// Reads all record batches from the Parquet file at `path`, validates per-row
 /// constraints, then returns all rows sorted by `(ncs_id, stage_id)` ascending.
@@ -57,14 +57,14 @@ use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::scenarios::parse_ncs_models;
+/// use cobre_io::scenarios::parse_ncs_stats;
 /// use std::path::Path;
 ///
-/// let models = parse_ncs_models(Path::new("scenarios/non_controllable_models.parquet"))
+/// let models = parse_ncs_stats(Path::new("scenarios/non_controllable_stats.parquet"))
 ///     .expect("valid NCS models file");
 /// println!("loaded {} NCS model rows", models.len());
 /// ```
-pub fn parse_ncs_models(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
+pub fn parse_ncs_stats(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
     let file = File::open(path).map_err(|e| LoadError::io(path, e))?;
 
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -102,7 +102,7 @@ pub fn parse_ncs_models(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
             if !mean.is_finite() || !(0.0..=1.0).contains(&mean) {
                 return Err(LoadError::SchemaError {
                     path: path.to_path_buf(),
-                    field: format!("non_controllable_models[{row_idx}].mean"),
+                    field: format!("non_controllable_stats[{row_idx}].mean"),
                     message: format!("value must be finite and in [0, 1], got {mean}"),
                 });
             }
@@ -111,7 +111,7 @@ pub fn parse_ncs_models(path: &Path) -> Result<Vec<NcsModel>, LoadError> {
             if !std.is_finite() || std < 0.0 {
                 return Err(LoadError::SchemaError {
                     path: path.to_path_buf(),
-                    field: format!("non_controllable_models[{row_idx}].std"),
+                    field: format!("non_controllable_stats[{row_idx}].std"),
                     message: format!("value must be non-negative and finite, got {std}"),
                 });
             }
@@ -200,7 +200,7 @@ mod tests {
             &[0.05, 0.03, 0.045, 0.035],
         );
         let tmp = write_parquet(&batch);
-        let rows = parse_ncs_models(tmp.path()).unwrap();
+        let rows = parse_ncs_stats(tmp.path()).unwrap();
 
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].ncs_id, EntityId::from(1));
@@ -221,7 +221,7 @@ mod tests {
     fn test_zero_std_is_accepted() {
         let batch = make_batch(&[1], &[0], &[0.5], &[0.0]);
         let tmp = write_parquet(&batch);
-        let rows = parse_ncs_models(tmp.path()).unwrap();
+        let rows = parse_ncs_stats(tmp.path()).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert!(rows[0].std.abs() < f64::EPSILON);
@@ -233,7 +233,7 @@ mod tests {
     fn test_negative_std() {
         let batch = make_batch(&[1], &[0], &[0.5], &[-0.05]);
         let tmp = write_parquet(&batch);
-        let err = parse_ncs_models(tmp.path()).unwrap_err();
+        let err = parse_ncs_stats(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, .. } => {
@@ -252,7 +252,7 @@ mod tests {
     fn test_nan_mean() {
         let batch = make_batch(&[1], &[0], &[f64::NAN], &[0.05]);
         let tmp = write_parquet(&batch);
-        let err = parse_ncs_models(tmp.path()).unwrap_err();
+        let err = parse_ncs_stats(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, .. } => {
@@ -271,7 +271,7 @@ mod tests {
     fn test_mean_out_of_range() {
         let batch = make_batch(&[1], &[0], &[1.5], &[0.0]);
         let tmp = write_parquet(&batch);
-        let err = parse_ncs_models(tmp.path()).unwrap_err();
+        let err = parse_ncs_stats(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, message, .. } => {
@@ -307,7 +307,7 @@ mod tests {
         )
         .unwrap();
         let tmp = write_parquet(&batch);
-        let err = parse_ncs_models(tmp.path()).unwrap_err();
+        let err = parse_ncs_stats(tmp.path()).unwrap_err();
 
         match &err {
             LoadError::SchemaError { field, message, .. } => {
@@ -330,7 +330,7 @@ mod tests {
     fn test_empty_parquet_returns_empty_vec() {
         let batch = make_batch(&[], &[], &[], &[]);
         let tmp = write_parquet(&batch);
-        let rows = parse_ncs_models(tmp.path()).unwrap();
+        let rows = parse_ncs_stats(tmp.path()).unwrap();
         assert!(rows.is_empty());
     }
 
@@ -352,8 +352,8 @@ mod tests {
         );
         let tmp_asc = write_parquet(&batch_asc);
         let tmp_desc = write_parquet(&batch_desc);
-        let rows_asc = parse_ncs_models(tmp_asc.path()).unwrap();
-        let rows_desc = parse_ncs_models(tmp_desc.path()).unwrap();
+        let rows_asc = parse_ncs_stats(tmp_asc.path()).unwrap();
+        let rows_desc = parse_ncs_stats(tmp_desc.path()).unwrap();
 
         let keys_asc: Vec<(i32, i32)> = rows_asc.iter().map(|r| (r.ncs_id.0, r.stage_id)).collect();
         let keys_desc: Vec<(i32, i32)> =

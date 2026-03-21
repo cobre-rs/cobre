@@ -38,7 +38,7 @@ my_case/
 │   ├── load_seasonal_stats.parquet          # Load model seasonal statistics (optional)
 │   ├── load_factors.json                    # Load scaling factors (optional)
 │   ├── non_controllable_factors.json        # NCS block scaling factors (optional)
-│   ├── non_controllable_models.parquet      # NCS stochastic availability (optional)
+│   ├── non_controllable_stats.parquet      # NCS stochastic availability (optional)
 │   ├── correlation.json                     # Cross-series correlation model (optional)
 │   └── noise_openings.parquet              # User-supplied backward-pass opening tree (optional)
 └── constraints/
@@ -59,45 +59,45 @@ my_case/
 
 ## File summary
 
-| File                                            | Format  | Required | Description                             |
-| ----------------------------------------------- | ------- | -------- | --------------------------------------- |
-| `config.json`                                   | JSON    | Yes      | Solver configuration                    |
-| `penalties.json`                                | JSON    | Yes      | Global penalty defaults                 |
-| `stages.json`                                   | JSON    | Yes      | Stage sequence and policy graph         |
-| `initial_conditions.json`                       | JSON    | Yes      | Initial reservoir storage               |
-| `system/buses.json`                             | JSON    | Yes      | Electrical bus registry                 |
-| `system/lines.json`                             | JSON    | Yes      | Transmission line registry              |
-| `system/hydros.json`                            | JSON    | Yes      | Hydro plant registry                    |
-| `system/thermals.json`                          | JSON    | Yes      | Thermal plant registry                  |
-| `system/non_controllable_sources.json`          | JSON    | No       | Intermittent source registry            |
-| `system/pumping_stations.json`                  | JSON    | No       | Pumping station registry                |
-| `system/energy_contracts.json`                  | JSON    | No       | Bilateral energy contract registry      |
-| `system/hydro_geometry.parquet`                 | Parquet | No       | Reservoir geometry elevation tables     |
-| `system/hydro_production_models.json`           | JSON    | No       | FPHA production function configs        |
-| `system/fpha_hyperplanes.parquet`               | Parquet | No       | FPHA hyperplane coefficients            |
-| `scenarios/inflow_history.parquet`              | Parquet | No       | Historical inflow time series           |
-| `scenarios/inflow_seasonal_stats.parquet`       | Parquet | No       | PAR model seasonal statistics           |
-| `scenarios/inflow_ar_coefficients.parquet`      | Parquet | No       | PAR autoregressive coefficients         |
-| `scenarios/external_scenarios.parquet`          | Parquet | No       | Pre-generated scenario inflows          |
-| `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics          |
-| `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage      |
-| `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage      |
-| `scenarios/non_controllable_models.parquet`     | Parquet | No       | NCS stochastic availability factors             |
-| `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model          |
-| `scenarios/noise_openings.parquet`             | Parquet | No       | User-supplied backward-pass opening tree |
-| `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds |
-| `constraints/hydro_bounds.parquet`              | Parquet | No       | Stage-varying hydro operational bounds  |
-| `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity        |
-| `constraints/pumping_bounds.parquet`            | Parquet | No       | Stage-varying pumping flow bounds       |
-| `constraints/contract_bounds.parquet`           | Parquet | No       | Stage-varying contract power bounds     |
-| `constraints/ncs_bounds.parquet`                | Parquet | No       | Stage-varying NCS available generation bounds   |
-| `constraints/exchange_factors.json`             | JSON    | No       | Block exchange factors                  |
-| `constraints/generic_constraints.json`          | JSON    | No       | User-defined LP constraints             |
-| `constraints/generic_constraint_bounds.parquet` | Parquet | No       | Generic constraint RHS bounds           |
-| `constraints/penalty_overrides_bus.parquet`     | Parquet | No       | Stage-varying bus excess cost           |
-| `constraints/penalty_overrides_line.parquet`    | Parquet | No       | Stage-varying line exchange cost        |
-| `constraints/penalty_overrides_hydro.parquet`   | Parquet | No       | Stage-varying hydro penalty costs       |
-| `constraints/penalty_overrides_ncs.parquet`     | Parquet | No       | Stage-varying NCS curtailment cost      |
+| File                                            | Format  | Required | Description                                   |
+| ----------------------------------------------- | ------- | -------- | --------------------------------------------- |
+| `config.json`                                   | JSON    | Yes      | Solver configuration                          |
+| `penalties.json`                                | JSON    | Yes      | Global penalty defaults                       |
+| `stages.json`                                   | JSON    | Yes      | Stage sequence and policy graph               |
+| `initial_conditions.json`                       | JSON    | Yes      | Initial reservoir storage                     |
+| `system/buses.json`                             | JSON    | Yes      | Electrical bus registry                       |
+| `system/lines.json`                             | JSON    | Yes      | Transmission line registry                    |
+| `system/hydros.json`                            | JSON    | Yes      | Hydro plant registry                          |
+| `system/thermals.json`                          | JSON    | Yes      | Thermal plant registry                        |
+| `system/non_controllable_sources.json`          | JSON    | No       | Intermittent source registry                  |
+| `system/pumping_stations.json`                  | JSON    | No       | Pumping station registry                      |
+| `system/energy_contracts.json`                  | JSON    | No       | Bilateral energy contract registry            |
+| `system/hydro_geometry.parquet`                 | Parquet | No       | Reservoir geometry elevation tables           |
+| `system/hydro_production_models.json`           | JSON    | No       | FPHA production function configs              |
+| `system/fpha_hyperplanes.parquet`               | Parquet | No       | FPHA hyperplane coefficients                  |
+| `scenarios/inflow_history.parquet`              | Parquet | No       | Historical inflow time series                 |
+| `scenarios/inflow_seasonal_stats.parquet`       | Parquet | No       | PAR model seasonal statistics                 |
+| `scenarios/inflow_ar_coefficients.parquet`      | Parquet | No       | PAR autoregressive coefficients               |
+| `scenarios/external_scenarios.parquet`          | Parquet | No       | Pre-generated scenario inflows                |
+| `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics                |
+| `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage            |
+| `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage    |
+| `scenarios/non_controllable_stats.parquet`      | Parquet | No       | NCS stochastic availability factors           |
+| `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model                |
+| `scenarios/noise_openings.parquet`              | Parquet | No       | User-supplied backward-pass opening tree      |
+| `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds       |
+| `constraints/hydro_bounds.parquet`              | Parquet | No       | Stage-varying hydro operational bounds        |
+| `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity              |
+| `constraints/pumping_bounds.parquet`            | Parquet | No       | Stage-varying pumping flow bounds             |
+| `constraints/contract_bounds.parquet`           | Parquet | No       | Stage-varying contract power bounds           |
+| `constraints/ncs_bounds.parquet`                | Parquet | No       | Stage-varying NCS available generation bounds |
+| `constraints/exchange_factors.json`             | JSON    | No       | Block exchange factors                        |
+| `constraints/generic_constraints.json`          | JSON    | No       | User-defined LP constraints                   |
+| `constraints/generic_constraint_bounds.parquet` | Parquet | No       | Generic constraint RHS bounds                 |
+| `constraints/penalty_overrides_bus.parquet`     | Parquet | No       | Stage-varying bus excess cost                 |
+| `constraints/penalty_overrides_line.parquet`    | Parquet | No       | Stage-varying line exchange cost              |
+| `constraints/penalty_overrides_hydro.parquet`   | Parquet | No       | Stage-varying hydro penalty costs             |
+| `constraints/penalty_overrides_ncs.parquet`     | Parquet | No       | Stage-varying NCS curtailment cost            |
 
 ---
 
@@ -221,17 +221,17 @@ Each entry has a `"type"` discriminator. Valid types:
 
 **`exports` section:**
 
-| Field             | Type           | Default | Description                                        |
-| ----------------- | -------------- | ------- | -------------------------------------------------- |
-| `training`        | boolean        | `true`  | Export training summary metrics                    |
-| `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)              |
-| `states`          | boolean        | `true`  | Export visited states                              |
-| `vertices`        | boolean        | `true`  | Export inner approximation vertices                |
-| `simulation`      | boolean        | `true`  | Export simulation results                          |
-| `forward_detail`  | boolean        | `false` | Export per-scenario forward-pass detail            |
-| `backward_detail` | boolean        | `false` | Export per-scenario backward-pass detail           |
-| `compression`     | string or null | `null`  | Output compression: `"zstd"`, `"lz4"`, or `"none"` |
-| `stochastic`      | boolean        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.       |
+| Field             | Type           | Default | Description                                                        |
+| ----------------- | -------------- | ------- | ------------------------------------------------------------------ |
+| `training`        | boolean        | `true`  | Export training summary metrics                                    |
+| `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)                              |
+| `states`          | boolean        | `true`  | Export visited states                                              |
+| `vertices`        | boolean        | `true`  | Export inner approximation vertices                                |
+| `simulation`      | boolean        | `true`  | Export simulation results                                          |
+| `forward_detail`  | boolean        | `false` | Export per-scenario forward-pass detail                            |
+| `backward_detail` | boolean        | `false` | Export per-scenario backward-pass detail                           |
+| `compression`     | string or null | `null`  | Output compression: `"zstd"`, `"lz4"`, or `"none"`                 |
+| `stochastic`      | boolean        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`. |
 
 **Minimal valid example:**
 
@@ -430,12 +430,12 @@ linearization are unavailable for all plants.
 4 columns, all non-nullable. Rows are sorted by `(hydro_id, volume_hm3)` ascending.
 Multiple rows per `hydro_id` together constitute the VHA curve for that plant.
 
-| Column       | Type   | Required | Description                              |
-| ------------ | ------ | -------- | ---------------------------------------- |
-| `hydro_id`   | INT32  | Yes      | Hydro plant ID                           |
-| `volume_hm3` | DOUBLE | Yes      | Total reservoir volume at this point (hm³). Non-negative and finite. |
+| Column       | Type   | Required | Description                                                              |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------ |
+| `hydro_id`   | INT32  | Yes      | Hydro plant ID                                                           |
+| `volume_hm3` | DOUBLE | Yes      | Total reservoir volume at this point (hm³). Non-negative and finite.     |
 | `height_m`   | DOUBLE | Yes      | Reservoir surface elevation at this volume (m). Non-negative and finite. |
-| `area_km2`   | DOUBLE | Yes      | Water surface area at this volume (km²). Non-negative and finite. |
+| `area_km2`   | DOUBLE | Yes      | Water surface area at this volume (km²). Non-negative and finite.        |
 
 **Validation:** all four columns must be present with the correct types. `volume_hm3`,
 `height_m`, and `area_km2` must be non-negative and finite. Monotonicity of
@@ -464,40 +464,40 @@ plant and is identified by a unique `hydro_id`. Results are loaded in
 
 **Per-hydro entry fields:**
 
-| Field            | Required | Description                                                              |
-| ---------------- | -------- | ------------------------------------------------------------------------ |
-| `hydro_id`       | Yes      | Hydro plant ID. Must be unique within the file.                          |
+| Field            | Required | Description                                                                 |
+| ---------------- | -------- | --------------------------------------------------------------------------- |
+| `hydro_id`       | Yes      | Hydro plant ID. Must be unique within the file.                             |
 | `selection_mode` | Yes      | How the model variant is chosen per stage: `"stage_ranges"` or `"seasonal"` |
 
 **`stage_ranges` mode.** The model for each stage is determined by the first
 matching `[start_stage_id, end_stage_id]` range. `end_stage_id` may be `null`
 to mean "until end of horizon".
 
-| Field within each range  | Required | Description                                                            |
-| ------------------------ | -------- | ---------------------------------------------------------------------- |
-| `start_stage_id`         | Yes      | First stage (inclusive) to which this entry applies                    |
-| `end_stage_id`           | Yes      | Last stage (inclusive); `null` means open-ended                        |
-| `model`                  | Yes      | Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"` |
-| `fpha_config`            | No       | Required when `model` is `"fpha"`. See FPHA config fields below.       |
+| Field within each range | Required | Description                                                             |
+| ----------------------- | -------- | ----------------------------------------------------------------------- |
+| `start_stage_id`        | Yes      | First stage (inclusive) to which this entry applies                     |
+| `end_stage_id`          | Yes      | Last stage (inclusive); `null` means open-ended                         |
+| `model`                 | Yes      | Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"` |
+| `fpha_config`           | No       | Required when `model` is `"fpha"`. See FPHA config fields below.        |
 
 **`seasonal` mode.** The model for a stage is determined by its `season_id`.
 Stages whose season is not listed use `default_model`.
 
-| Field            | Required | Description                                             |
-| ---------------- | -------- | ------------------------------------------------------- |
-| `default_model`  | Yes      | Fallback model name for unlisted seasons                |
-| `seasons`        | Yes      | Array of season overrides: `season_id`, `model`, optional `fpha_config` |
+| Field           | Required | Description                                                             |
+| --------------- | -------- | ----------------------------------------------------------------------- |
+| `default_model` | Yes      | Fallback model name for unlisted seasons                                |
+| `seasons`       | Yes      | Array of season overrides: `season_id`, `model`, optional `fpha_config` |
 
 **`fpha_config` fields (required when `model` is `"fpha"`):**
 
-| Field                             | Required | Default | Description                                                          |
-| --------------------------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `source`                          | Yes      | —       | `"precomputed"` or `"computed"`                                      |
-| `volume_discretization_points`    | No       | solver default | Number of volume grid points for hyperplane computation        |
-| `turbine_discretization_points`   | No       | solver default | Number of turbine-flow grid points for hyperplane computation  |
-| `spillage_discretization_points`  | No       | solver default | Number of spillage grid points for hyperplane computation      |
-| `max_planes_per_hydro`            | No       | solver default | Maximum hyperplanes per plant after selection heuristic        |
-| `fitting_window`                  | No       | full range | Volume range restriction for hyperplane computation             |
+| Field                            | Required | Default        | Description                                                   |
+| -------------------------------- | -------- | -------------- | ------------------------------------------------------------- |
+| `source`                         | Yes      | —              | `"precomputed"` or `"computed"`                               |
+| `volume_discretization_points`   | No       | solver default | Number of volume grid points for hyperplane computation       |
+| `turbine_discretization_points`  | No       | solver default | Number of turbine-flow grid points for hyperplane computation |
+| `spillage_discretization_points` | No       | solver default | Number of spillage grid points for hyperplane computation     |
+| `max_planes_per_hydro`           | No       | solver default | Maximum hyperplanes per plant after selection heuristic       |
+| `fitting_window`                 | No       | full range     | Volume range restriction for hyperplane computation           |
 
 `source: "precomputed"` means the hyperplanes are loaded from
 `system/fpha_hyperplanes.parquet`. `source: "computed"` means Cobre derives
@@ -509,12 +509,12 @@ must be present and the computed planes are automatically written to
 and percentile bounds (`volume_min_percentile`, `volume_max_percentile`) are
 mutually exclusive — set one pair or the other, not both.
 
-| Field                    | Type   | Description                                          |
-| ------------------------ | ------ | ---------------------------------------------------- |
-| `volume_min_hm3`         | number | Explicit minimum volume for fitting (hm³)            |
-| `volume_max_hm3`         | number | Explicit maximum volume for fitting (hm³)            |
-| `volume_min_percentile`  | number | Minimum as a percentile of the operating range (0–1) |
-| `volume_max_percentile`  | number | Maximum as a percentile of the operating range (0–1) |
+| Field                   | Type   | Description                                          |
+| ----------------------- | ------ | ---------------------------------------------------- |
+| `volume_min_hm3`        | number | Explicit minimum volume for fitting (hm³)            |
+| `volume_max_hm3`        | number | Explicit maximum volume for fitting (hm³)            |
+| `volume_min_percentile` | number | Minimum as a percentile of the operating range (0–1) |
+| `volume_max_percentile` | number | Maximum as a percentile of the operating range (0–1) |
 
 **Example — hydro 0 uses computed FPHA for stages 0–24, then constant productivity:**
 
@@ -581,19 +581,19 @@ Null `stage_id` sorts before any non-null stage and means the plane is valid for
 all stages of that hydro. One row per hyperplane; at least 3 planes are required
 per `(hydro_id, stage_id)` group.
 
-| Column            | Type    | Nullable | Description                                              |
-| ----------------- | ------- | -------- | -------------------------------------------------------- |
-| `hydro_id`        | INT32   | No       | Hydro plant ID                                           |
-| `stage_id`        | INT32   | Yes      | Stage the plane applies to. `null` = valid for all stages |
-| `plane_id`        | INT32   | No       | Plane index within this hydro (and stage)                |
-| `gamma_0`         | DOUBLE  | No       | Intercept coefficient (MW)                               |
-| `gamma_v`         | DOUBLE  | No       | Volume coefficient (MW/hm³). Positive.                   |
-| `gamma_q`         | DOUBLE  | No       | Turbined flow coefficient (MW per m³/s)                  |
-| `gamma_s`         | DOUBLE  | No       | Spillage coefficient (MW per m³/s). Typically non-positive. |
-| `kappa`           | DOUBLE  | Yes      | Correction factor. Defaults to `1.0` when absent or null. |
-| `valid_v_min_hm3` | DOUBLE  | Yes      | Volume range minimum where this plane is valid (hm³)     |
-| `valid_v_max_hm3` | DOUBLE  | Yes      | Volume range maximum where this plane is valid (hm³)     |
-| `valid_q_max_m3s` | DOUBLE  | Yes      | Maximum turbined flow where this plane is valid (m³/s)   |
+| Column            | Type   | Nullable | Description                                                 |
+| ----------------- | ------ | -------- | ----------------------------------------------------------- |
+| `hydro_id`        | INT32  | No       | Hydro plant ID                                              |
+| `stage_id`        | INT32  | Yes      | Stage the plane applies to. `null` = valid for all stages   |
+| `plane_id`        | INT32  | No       | Plane index within this hydro (and stage)                   |
+| `gamma_0`         | DOUBLE | No       | Intercept coefficient (MW)                                  |
+| `gamma_v`         | DOUBLE | No       | Volume coefficient (MW/hm³). Positive.                      |
+| `gamma_q`         | DOUBLE | No       | Turbined flow coefficient (MW per m³/s)                     |
+| `gamma_s`         | DOUBLE | No       | Spillage coefficient (MW per m³/s). Typically non-positive. |
+| `kappa`           | DOUBLE | Yes      | Correction factor. Defaults to `1.0` when absent or null.   |
+| `valid_v_min_hm3` | DOUBLE | Yes      | Volume range minimum where this plane is valid (hm³)        |
+| `valid_v_max_hm3` | DOUBLE | Yes      | Volume range maximum where this plane is valid (hm³)        |
+| `valid_q_max_m3s` | DOUBLE | Yes      | Maximum turbined flow where this plane is valid (m³/s)      |
 
 **Validation:** required columns (`hydro_id`, `plane_id`, `gamma_0`, `gamma_v`,
 `gamma_q`, `gamma_s`) must be present with the correct types. Optional columns
@@ -643,12 +643,12 @@ tree directly from this file instead of generating it internally via
 `generate_opening_tree()`. This enables cross-tool comparison, sensitivity
 analysis, and round-trip replay of a previously exported opening tree.
 
-| Column          | Type   | Required | Description                                                                        |
-| --------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
-| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                                         |
-| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1)            |
-| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order (see entity ordering below)      |
-| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple                         |
+| Column          | Type   | Required | Description                                                                   |
+| --------------- | ------ | -------- | ----------------------------------------------------------------------------- |
+| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                                    |
+| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1)       |
+| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order (see entity ordering below) |
+| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple                    |
 
 **Entity ordering.** The `entity_index` column follows the system dimension
 convention: hydro entities first (sorted by canonical ID), then load buses
@@ -708,17 +708,17 @@ to 1.0 for every block.
 
 **Fields per entry:**
 
-| Field           | Type    | Description                                                         |
-| --------------- | ------- | ------------------------------------------------------------------- |
-| `bus_id`        | integer | Bus entity ID. Must refer to a bus defined in `system/buses.json`.  |
-| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.     |
-| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.          |
+| Field           | Type    | Description                                                        |
+| --------------- | ------- | ------------------------------------------------------------------ |
+| `bus_id`        | integer | Bus entity ID. Must refer to a bus defined in `system/buses.json`. |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.    |
+| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.         |
 
 **`block_factors` entry fields:**
 
-| Field      | Type    | Constraints                     | Description                                                   |
-| ---------- | ------- | ------------------------------- | ------------------------------------------------------------- |
-| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                      |
+| Field      | Type    | Constraints                     | Description                                                                       |
+| ---------- | ------- | ------------------------------- | --------------------------------------------------------------------------------- |
+| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                                          |
 | `factor`   | number  | > 0, finite                     | Multiplier applied to the stochastic load realization (MW) at this bus and block. |
 
 **Effect:** `load_rhs = mean_mw * stochastic_noise_factor * block_factor`.
@@ -758,17 +758,17 @@ for every block.
 
 **Fields per entry:**
 
-| Field           | Type    | Description                                                                     |
-| --------------- | ------- | ------------------------------------------------------------------------------- |
+| Field           | Type    | Description                                                                      |
+| --------------- | ------- | -------------------------------------------------------------------------------- |
 | `ncs_id`        | integer | NCS entity ID. Must refer to a source in `system/non_controllable_sources.json`. |
-| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.                 |
-| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.                      |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.                  |
+| `block_factors` | array   | Array of `{ block_id, factor }` pairs for each load block.                       |
 
 **`block_factors` entry fields:**
 
-| Field      | Type    | Constraints                     | Description                                                              |
-| ---------- | ------- | ------------------------------- | ------------------------------------------------------------------------ |
-| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                                 |
+| Field      | Type    | Constraints                     | Description                                                                |
+| ---------- | ------- | ------------------------------- | -------------------------------------------------------------------------- |
+| `block_id` | integer | Must be a valid block for stage | Zero-based block index within the stage.                                   |
 | `factor`   | number  | >= 0, finite                    | Multiplier applied to the stage available generation bound for this block. |
 
 **Effect:** `available_mw_block = available_generation_mw * block_factor`.
@@ -777,18 +777,18 @@ to zero for that block (complete generation unavailability).
 
 ---
 
-### `scenarios/non_controllable_models.parquet`
+### `scenarios/non_controllable_stats.parquet`
 
 Per-NCS, per-stage stochastic availability model. Each row provides the mean
 and standard deviation of the availability factor for one NCS entity at one
 stage. The noise transform produces: `A_r = max_gen × clamp(mean + std × η, 0, 1)`.
 
-| Column     | Type   | Required | Description                                                     |
-| ---------- | ------ | -------- | --------------------------------------------------------------- |
-| `ncs_id`   | INT32  | Yes      | Non-controllable source ID                                      |
-| `stage_id` | INT32  | Yes      | Stage ID (0-based)                                              |
-| `mean`     | DOUBLE | Yes      | Mean availability factor in [0, 1]                              |
-| `std`      | DOUBLE | Yes      | Standard deviation of availability factor (>= 0)               |
+| Column     | Type   | Required | Description                                      |
+| ---------- | ------ | -------- | ------------------------------------------------ |
+| `ncs_id`   | INT32  | Yes      | Non-controllable source ID                       |
+| `stage_id` | INT32  | Yes      | Stage ID (0-based)                               |
+| `mean`     | DOUBLE | Yes      | Mean availability factor in [0, 1]               |
+| `std`      | DOUBLE | Yes      | Standard deviation of availability factor (>= 0) |
 
 When absent, NCS availability is deterministic from `constraints/ncs_bounds.parquet`
 or the entity's `max_generation_mw`.
@@ -883,10 +883,10 @@ sparse storage: only `(ncs_id, stage_id)` pairs that differ from the base
 entity-level value need rows. Absent rows keep the entity's declared
 `available_generation_mw` unchanged.
 
-| Column                    | Type   | Required | Description                                      |
-| ------------------------- | ------ | -------- | ------------------------------------------------ |
-| `ncs_id`                  | INT32  | Yes      | Non-controllable source ID                       |
-| `stage_id`                | INT32  | Yes      | Stage ID                                         |
+| Column                    | Type   | Required | Description                                                     |
+| ------------------------- | ------ | -------- | --------------------------------------------------------------- |
+| `ncs_id`                  | INT32  | Yes      | Non-controllable source ID                                      |
+| `stage_id`                | INT32  | Yes      | Stage ID                                                        |
 | `available_generation_mw` | DOUBLE | Yes      | Maximum available generation for this stage (MW). Must be >= 0. |
 
 The per-block available generation bound in the LP is:
@@ -926,19 +926,19 @@ every block.
 
 **Fields per entry:**
 
-| Field           | Type    | Description                                                             |
-| --------------- | ------- | ----------------------------------------------------------------------- |
-| `line_id`       | integer | Line entity ID. Must refer to a line defined in `system/lines.json`.    |
-| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.         |
-| `block_factors` | array   | Array of `{ block_id, direct_factor, reverse_factor }` pairs.           |
+| Field           | Type    | Description                                                          |
+| --------------- | ------- | -------------------------------------------------------------------- |
+| `line_id`       | integer | Line entity ID. Must refer to a line defined in `system/lines.json`. |
+| `stage_id`      | integer | Study stage index. Must be a valid stage ID from `stages.json`.      |
+| `block_factors` | array   | Array of `{ block_id, direct_factor, reverse_factor }` pairs.        |
 
 **`block_factors` entry fields:**
 
-| Field            | Type    | Constraints                     | Description                                                               |
-| ---------------- | ------- | ------------------------------- | ------------------------------------------------------------------------- |
-| `block_id`       | integer | Must be a valid block for stage | Zero-based block index within the stage.                                  |
-| `direct_factor`  | number  | >= 0, finite                    | Multiplier for the direct-direction flow capacity (`direct_mw`).          |
-| `reverse_factor` | number  | >= 0, finite                    | Multiplier for the reverse-direction flow capacity (`reverse_mw`).        |
+| Field            | Type    | Constraints                     | Description                                                        |
+| ---------------- | ------- | ------------------------------- | ------------------------------------------------------------------ |
+| `block_id`       | integer | Must be a valid block for stage | Zero-based block index within the stage.                           |
+| `direct_factor`  | number  | >= 0, finite                    | Multiplier for the direct-direction flow capacity (`direct_mw`).   |
+| `reverse_factor` | number  | >= 0, finite                    | Multiplier for the reverse-direction flow capacity (`reverse_mw`). |
 
 **Effect:** `col_upper_fwd = direct_mw * direct_factor`,
 `col_upper_rev = reverse_mw * reverse_factor`. A factor of 1.0 leaves the

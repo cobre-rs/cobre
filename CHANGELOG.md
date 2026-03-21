@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`LineExchange` generic constraint term** -- New `VariableRef::LineExchange`
+  variant (the 20th) enables generic constraints to reference net line flow
+  (direct - reverse) as a single expression term via `line_exchange(id)`. The
+  resolver returns two LP column entries: `(fwd_col, +1.0)` and
+  `(rev_col, -1.0)`. Includes referential validation for line ID existence.
+- **Per-stage productivity override** -- `productivity_override: Option<f64>`
+  field on `StageRange` and `SeasonConfig` in `hydro_production_models.json`.
+  When present, replaces the entity's base `productivity_mw_per_m3s` for the
+  covered stages. Validated to be positive and rejected on FPHA stages. Enables
+  exact reproduction of NEWAVE cases with temporal head/elevation overrides.
+
 ## [0.1.7] - 2026-03-21
 
 ### Added
@@ -46,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Generic constraints** -- User-defined linear constraints over LP variables,
   specified via `constraints/generic_constraints.json` with stage-varying bounds
-  from `constraints/generic_constraint_bounds.parquet`. Supports all 19 variable
+  from `constraints/generic_constraint_bounds.parquet`. Supports all 19 variable (now 20 with `line_exchange`)
   types (thermal generation, hydro storage, hydro outflow, line flows, etc.),
   optional slack variables with per-constraint penalties, and three constraint
   senses (`<=`, `>=`, `==`). Includes dual and slack extraction during training

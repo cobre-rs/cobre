@@ -473,20 +473,21 @@ plant and is identified by a unique `hydro_id`. Results are loaded in
 matching `[start_stage_id, end_stage_id]` range. `end_stage_id` may be `null`
 to mean "until end of horizon".
 
-| Field within each range | Required | Description                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------- |
-| `start_stage_id`        | Yes      | First stage (inclusive) to which this entry applies                     |
-| `end_stage_id`          | Yes      | Last stage (inclusive); `null` means open-ended                         |
-| `model`                 | Yes      | Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"` |
-| `fpha_config`           | No       | Required when `model` is `"fpha"`. See FPHA config fields below.        |
+| Field within each range | Required | Description                                                                                                           |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `start_stage_id`        | Yes      | First stage (inclusive) to which this entry applies                                                                   |
+| `end_stage_id`          | Yes      | Last stage (inclusive); `null` means open-ended                                                                       |
+| `model`                 | Yes      | Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"`                                               |
+| `fpha_config`           | No       | Required when `model` is `"fpha"`. See FPHA config fields below.                                                      |
+| `productivity_override` | No       | Replaces base `productivity_mw_per_m3s` for this range. Must be > 0. Rejected on `"fpha"`. Default: entity base value |
 
 **`seasonal` mode.** The model for a stage is determined by its `season_id`.
 Stages whose season is not listed use `default_model`.
 
-| Field           | Required | Description                                                             |
-| --------------- | -------- | ----------------------------------------------------------------------- |
-| `default_model` | Yes      | Fallback model name for unlisted seasons                                |
-| `seasons`       | Yes      | Array of season overrides: `season_id`, `model`, optional `fpha_config` |
+| Field           | Required | Description                                                                                      |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `default_model` | Yes      | Fallback model name for unlisted seasons                                                         |
+| `seasons`       | Yes      | Array of season overrides: `season_id`, `model`, optional `fpha_config`, `productivity_override` |
 
 **`fpha_config` fields (required when `model` is `"fpha"`):**
 
@@ -539,7 +540,8 @@ mutually exclusive — set one pair or the other, not both.
         {
           "start_stage_id": 25,
           "end_stage_id": null,
-          "model": "constant_productivity"
+          "model": "constant_productivity",
+          "productivity_override": 0.72
         }
       ]
     }

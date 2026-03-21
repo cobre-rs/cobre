@@ -267,6 +267,9 @@ Two selection strategies are supported:
 }
 ```
 
+Each stage range and season entry may include an optional `productivity_override`
+field (see [Productivity Override](#productivity-override) below).
+
 **`seasonal`** — assigns a model based on season index, with a fallback for seasons
 not explicitly listed:
 
@@ -433,6 +436,37 @@ This file uses the same 11-column schema as the input `system/fpha_hyperplanes.p
 To switch from computed to precomputed fitting on a subsequent run, copy this file
 to `system/fpha_hyperplanes.parquet` and change `source` to `"precomputed"` in
 `hydro_production_models.json`.
+
+### Productivity Override
+
+When a plant uses the `constant_productivity` or `linearized_head` model, the
+productivity value normally comes from the entity's `productivity_mw_per_m3s` field
+in `hydros.json`. The optional `productivity_override` field on a stage range or
+season entry replaces this base value for the stages covered by that entry.
+
+This is useful when external data (e.g., NEWAVE MODIF.DAT temporal overrides of
+tailrace or forebay elevations) changes the effective head drop at specific stages,
+requiring a different productivity coefficient.
+
+```json
+{
+  "start_stage_id": 12,
+  "end_stage_id": 24,
+  "model": "constant_productivity",
+  "productivity_override": 0.72
+}
+```
+
+| Field                   | Type           | Default | Description                                                                                           |
+| ----------------------- | -------------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| `productivity_override` | number or null | `null`  | When present, replaces `productivity_mw_per_m3s` for this entry. Must be positive. Not valid on FPHA. |
+
+**Validation rules:**
+
+- `productivity_override` must be strictly positive when present.
+- `productivity_override` is rejected when `model` is `"fpha"` (FPHA computes
+  productivity from hyperplanes, not a scalar coefficient).
+- When absent or `null`, the entity's base `productivity_mw_per_m3s` is used.
 
 ---
 

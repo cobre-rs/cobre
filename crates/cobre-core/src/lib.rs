@@ -71,12 +71,13 @@ pub use penalty::{
 pub use resolved::{
     BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,
     LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
-    ResolvedGenericConstraintBounds, ResolvedPenalties, ThermalStageBounds,
+    ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
+    ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, ThermalStageBounds,
 };
 pub use scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-    CorrelationScheduleEntry, ExternalSelectionMode, InflowModel, LoadModel, SamplingScheme,
-    ScenarioSource,
+    CorrelationScheduleEntry, ExternalSelectionMode, InflowModel, LoadModel, NcsModel,
+    SamplingScheme, ScenarioSource,
 };
 pub use system::{System, SystemBuilder};
 pub use temporal::{

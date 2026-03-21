@@ -257,21 +257,73 @@ pub struct LoadModel {
 }
 
 // ---------------------------------------------------------------------------
+// NcsModel (per NCS entity, per stage)
+// ---------------------------------------------------------------------------
+
+/// Per-stage normal noise model parameters for a non-controllable source.
+///
+/// Loaded from `scenarios/non_controllable_stats.parquet`. Each row provides
+/// the mean and standard deviation of the stochastic availability factor for
+/// one NCS entity at one stage. The scenario pipeline uses these parameters
+/// to generate per-scenario availability realisations.
+///
+/// The noise model is: `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)`,
+/// where `epsilon ~ N(0,1)` and `mean`, `std` are dimensionless availability
+/// factors in `[0, 1]`.
+///
+/// The `System` holds a `Vec<NcsModel>` sorted by `(ncs_id, stage_id)`.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::NcsModel};
+///
+/// let model = NcsModel {
+///     ncs_id: EntityId(3),
+///     stage_id: 0,
+///     mean: 0.5,
+///     std: 0.1,
+/// };
+/// assert_eq!(model.mean, 0.5);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct NcsModel {
+    /// NCS entity identifier matching `NonControllableSource.id`.
+    pub ncs_id: EntityId,
+
+    /// Stage (0-based index within `System::stages`) this model applies to.
+    pub stage_id: i32,
+
+    /// Mean availability factor [dimensionless, in `[0, 1]`].
+    pub mean: f64,
+
+    /// Standard deviation of the availability factor [dimensionless, >= 0].
+    pub std: f64,
+}
+
+// ---------------------------------------------------------------------------
 // CorrelationEntity
 // ---------------------------------------------------------------------------
 
 /// A single entity reference within a correlation group.
 ///
-/// `entity_type` is a string tag (currently always `"inflow"`) that
-/// identifies the kind of stochastic variable. Using `String` rather than
-/// an enum preserves forward compatibility when additional entity types
-/// (e.g., load, wind) are added without a breaking schema change.
+/// `entity_type` is a string tag that identifies the kind of stochastic
+/// variable. Valid values are:
+///
+/// - `"inflow"` — hydro inflow series (entity ID matches `Hydro.id`)
+/// - `"load"` — stochastic load demand (entity ID matches `Bus.id`)
+/// - `"ncs"` — non-controllable source availability (entity ID matches
+///   `NonControllableSource.id`)
+///
+/// Using `String` rather than an enum preserves forward compatibility when
+/// additional entity types are added without a breaking schema change.
 ///
 /// See [Input Scenarios §5](input-scenarios.md).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CorrelationEntity {
-    /// Entity type tag. Currently `"inflow"` for hydro inflow series.
+    /// Entity type tag: `"inflow"`, `"load"`, or `"ncs"`.
     pub entity_type: String,
 
     /// Entity identifier matching the corresponding entity's `id` field.
@@ -485,7 +537,7 @@ mod tests {
 
     use super::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-        CorrelationScheduleEntry, InflowModel, SamplingScheme,
+        CorrelationScheduleEntry, InflowModel, NcsModel, SamplingScheme,
     };
     #[cfg(feature = "serde")]
     use super::{ExternalSelectionMode, ScenarioSource};
@@ -668,6 +720,35 @@ mod tests {
         let deserialized: InflowModel = serde_json::from_str(&json).unwrap();
         assert_eq!(model, deserialized);
         assert!((deserialized.residual_std_ratio - 0.85).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_ncs_model_construction() {
+        let model = NcsModel {
+            ncs_id: EntityId(3),
+            stage_id: 0,
+            mean: 0.5,
+            std: 0.1,
+        };
+
+        assert_eq!(model.ncs_id, EntityId(3));
+        assert_eq!(model.stage_id, 0);
+        assert_eq!(model.mean, 0.5);
+        assert_eq!(model.std, 0.1);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_ncs_model_serde_roundtrip() {
+        let model = NcsModel {
+            ncs_id: EntityId(5),
+            stage_id: 2,
+            mean: 0.75,
+            std: 0.15,
+        };
+        let json = serde_json::to_string(&model).unwrap();
+        let deserialized: NcsModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(model, deserialized);
     }
 
     #[test]

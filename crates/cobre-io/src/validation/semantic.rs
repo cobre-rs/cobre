@@ -1468,6 +1468,8 @@ mod tests {
             load_seasonal_stats: vec![],
             load_factors: vec![],
             correlation: None,
+            non_controllable_factors: vec![],
+            ncs_models: vec![],
             thermal_bounds: vec![],
             hydro_bounds: vec![],
             line_bounds: vec![],
@@ -1480,6 +1482,7 @@ mod tests {
             penalty_overrides_line: vec![],
             penalty_overrides_hydro: vec![],
             penalty_overrides_ncs: vec![],
+            ncs_bounds: vec![],
         }
     }
 
@@ -2368,6 +2371,8 @@ mod tests {
             load_seasonal_stats: vec![],
             load_factors: vec![],
             correlation,
+            non_controllable_factors: vec![],
+            ncs_models: vec![],
             thermal_bounds: vec![],
             hydro_bounds: vec![],
             line_bounds: vec![],
@@ -2380,6 +2385,7 @@ mod tests {
             penalty_overrides_line: vec![],
             penalty_overrides_hydro: vec![],
             penalty_overrides_ncs: vec![],
+            ncs_bounds: vec![],
         }
     }
 
@@ -3547,6 +3553,8 @@ mod tests {
             load_seasonal_stats: vec![],
             load_factors: vec![],
             correlation: None,
+            non_controllable_factors: vec![],
+            ncs_models: vec![],
             thermal_bounds: vec![],
             hydro_bounds: vec![],
             line_bounds: vec![],
@@ -3559,6 +3567,7 @@ mod tests {
             penalty_overrides_line: vec![],
             penalty_overrides_hydro: vec![],
             penalty_overrides_ncs: vec![],
+            ncs_bounds: vec![],
         }
     }
 
@@ -3788,6 +3797,8 @@ mod tests {
             load_seasonal_stats: vec![],
             load_factors: vec![],
             correlation: None,
+            non_controllable_factors: vec![],
+            ncs_models: vec![],
             thermal_bounds: vec![],
             hydro_bounds: vec![],
             line_bounds: vec![],
@@ -3800,6 +3811,7 @@ mod tests {
             penalty_overrides_line: vec![],
             penalty_overrides_hydro: vec![],
             penalty_overrides_ncs: vec![],
+            ncs_bounds: vec![],
         }
     }
 

@@ -1,0 +1,11 @@
+{
+  "non_controllable_sources": [
+    {
+      "id": 0,
+      "name": "NCS0",
+      "bus_id": 0,
+      "max_generation_mw": 100.0,
+      "curtailment_cost": 0.001
+    }
+  ]
+}

@@ -23,23 +23,60 @@ appear in the input files.
 
 ## Entity Types
 
-Cobre models seven entity types. Four are fully implemented and contribute LP
-variables and constraints. Three are registered stubs that appear in the entity
+Cobre models seven entity types. Five are fully implemented and contribute LP
+variables and constraints. Two are registered stubs that appear in the entity
 model but do not yet contribute LP variables in the current release.
 
-| Entity Type      | Status | JSON File                      | Description                                                                                                                |
-| ---------------- | ------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Bus              | Full   | `system/buses.json`            | Electrical node. Power balance constraint per stage per block. See [Network Topology](./network-topology.md).              |
-| Line             | Full   | `system/lines.json`            | Transmission interconnection between two buses with flow limits and losses. See [Network Topology](./network-topology.md). |
-| Hydro            | Full   | `system/hydros.json`           | Reservoir-turbine-spillway system with cascade linkage. See [Hydro Plants](./hydro-plants.md).                             |
-| Thermal          | Full   | `system/thermals.json`         | Dispatchable generator with piecewise-linear cost curve. See [Thermal Units](./thermal-units.md).                          |
-| Contract         | Stub   | `system/contracts.json`        | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                            |
-| Pumping Station  | Stub   | `system/pumping_stations.json` | Pumped-storage or water-transfer station. Entity exists in registry; no LP variables in this release.                      |
-| Non-Controllable | Stub   | `system/non_controllable.json` | Variable renewable source (wind, solar, run-of-river). Entity exists in registry; no LP variables in this release.         |
+| Entity Type      | Status | JSON File                              | Description                                                                                                                                        |
+| ---------------- | ------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bus              | Full   | `system/buses.json`                    | Electrical node. Power balance constraint per stage per block. See [Network Topology](./network-topology.md).                                      |
+| Line             | Full   | `system/lines.json`                    | Transmission interconnection between two buses with flow limits and losses. See [Network Topology](./network-topology.md).                         |
+| Hydro            | Full   | `system/hydros.json`                   | Reservoir-turbine-spillway system with cascade linkage. See [Hydro Plants](./hydro-plants.md).                                                     |
+| Thermal          | Full   | `system/thermals.json`                 | Dispatchable generator with piecewise-linear cost curve. See [Thermal Units](./thermal-units.md).                                                  |
+| Contract         | Stub   | `system/contracts.json`                | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                                                    |
+| Pumping Station  | Stub   | `system/pumping_stations.json`         | Pumped-storage or water-transfer station. Entity exists in registry; no LP variables in this release.                                              |
+| Non-Controllable | Full   | `system/non_controllable_sources.json` | Variable renewable source (wind, solar, run-of-river). Generation variable bounded by available capacity × block factor, with curtailment penalty. |
 
-The three stub types are registered in the entity model from Phase 1 so that LP
-construction code can iterate over all seven types consistently. Adding LP
-contributions for stub entities is planned for future releases.
+The two remaining stub types (Contract and Pumping Station) are registered in
+the entity model so that LP construction code can iterate over all seven types
+consistently. Adding LP contributions for these entities is planned for future
+releases.
+
+---
+
+## Non-Controllable Sources
+
+A non-controllable source (NCS) represents a variable renewable generator whose
+output is externally specified rather than optimized by the solver. Typical
+examples include wind farms, utility-scale solar arrays, and run-of-river hydro
+units without significant storage. The solver dispatches the NCS at its full
+available capacity unless doing so would oversupply the bus, in which case
+curtailment occurs and the solver pays a curtailment penalty.
+
+Each NCS contributes one generation LP variable per block, bounded by:
+
+```
+0 <= generation_mw <= available_generation_mw * block_factor
+```
+
+where `available_generation_mw` comes from `constraints/ncs_bounds.parquet`
+(with `system/non_controllable_sources.json` providing the base value) and
+`block_factor` from `scenarios/non_controllable_factors.json` (default 1.0).
+
+When `scenarios/non_controllable_stats.parquet` is present, NCS availability
+becomes stochastic: each forward and backward pass scenario draws a random
+availability factor and the LP column upper bound varies per scenario. See
+[Stochastic Modeling](./stochastic-modeling.md#stochastic-ncs-availability)
+for details.
+
+The objective coefficient is `-curtailment_cost * block_hours`, making it
+cheaper to generate than to curtail. The NCS generation variable injects +1.0 MW
+at its connected bus in the power balance constraint, identical to a thermal plant.
+
+Simulation output is written to `simulation/non_controllables/` with columns
+for `generation_mw`, `available_mw`, `curtailment_mw`, and `curtailment_cost`
+per (stage, block, source) triplet. See the
+[Output Format Reference](../reference/output-format.md) for the complete schema.
 
 ---
 

@@ -188,7 +188,7 @@ mod tests {
             .unwrap();
 
         let user_tree = OpeningTree::from_parts(vec![1.0_f64; 2 * 2], vec![2, 2], 1);
-        let ctx = build_stochastic_context(&system, 42, &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], Some(user_tree)).unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -212,7 +212,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -230,7 +230,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -254,7 +254,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().correlation,
@@ -271,7 +271,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().correlation,
@@ -295,7 +295,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().inflow_model,
@@ -312,7 +312,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.provenance().inflow_model,

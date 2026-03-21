@@ -77,7 +77,7 @@ use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
-    noise::{transform_inflow_noise, transform_load_noise},
+    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
     state_exchange::ExchangeBuffers,
@@ -231,6 +231,19 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
         n_blks,
         &mut ws.scratch.load_rhs_buf,
     );
+    let n_stochastic_ncs = training_ctx.stochastic.n_stochastic_ncs();
+    if n_stochastic_ncs > 0 {
+        transform_ncs_noise(
+            raw_noise,
+            ctx.n_hydros,
+            ctx.n_load_buses,
+            training_ctx.stochastic,
+            s,
+            ctx.block_counts_per_stage[s],
+            ctx.ncs_max_gen,
+            &mut ws.scratch.ncs_col_upper_buf,
+        );
+    }
     ws.solver.load_model(&ctx.templates[s]);
     ws.solver.add_rows(cut_batch);
     ws.patch_buf.fill_forward_patches(
@@ -253,6 +266,25 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
         &ws.patch_buf.lower[..pc],
         &ws.patch_buf.upper[..pc],
     );
+    // Patch NCS column upper bounds with per-opening availability.
+    if n_stochastic_ncs > 0 && !training_ctx.indexer.ncs_generation.is_empty() {
+        let n_blks_stage = ctx.block_counts_per_stage[s];
+        ws.scratch.ncs_col_indices_buf.clear();
+        ws.scratch.ncs_col_lower_buf.clear();
+        for ncs_idx in 0..n_stochastic_ncs {
+            for blk in 0..n_blks_stage {
+                ws.scratch
+                    .ncs_col_indices_buf
+                    .push(training_ctx.indexer.ncs_generation.start + ncs_idx * n_blks_stage + blk);
+                ws.scratch.ncs_col_lower_buf.push(0.0);
+            }
+        }
+        ws.solver.set_col_bounds(
+            &ws.scratch.ncs_col_indices_buf,
+            &ws.scratch.ncs_col_lower_buf,
+            &ws.scratch.ncs_col_upper_buf,
+        );
+    }
 }
 
 /// Process one trial point `m` in the backward pass, iterating over all openings.
@@ -755,6 +787,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -939,7 +974,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────
@@ -1036,6 +1071,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1106,6 +1142,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1176,6 +1213,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1242,6 +1280,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1308,6 +1347,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1372,6 +1412,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1480,6 +1521,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1566,6 +1608,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1657,6 +1700,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1735,6 +1779,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1822,6 +1867,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1904,6 +1950,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -1979,6 +2026,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -2062,6 +2110,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -2147,6 +2196,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -2161,6 +2213,7 @@ mod tests {
             load_balance_row_starts: &[],
             load_bus_indices: &[],
             block_counts_per_stage: &[],
+            ncs_max_gen: &[],
         };
         let _ = run_backward_pass(
             &mut workspaces_1,
@@ -2200,6 +2253,9 @@ mod tests {
                     par_inflow_buf: Vec::new(),
                     eta_floor_buf: Vec::new(),
                     zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                 },
@@ -2419,7 +2475,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// AC: Given a backward pass with 1 stochastic load bus and opening noise
@@ -2491,6 +2547,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
             },
@@ -2517,6 +2576,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -2610,6 +2670,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -2630,6 +2693,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[1_usize; 2],
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {
@@ -2724,6 +2788,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
             },
@@ -2748,6 +2815,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &mut fcf,
             &TrainingContext {

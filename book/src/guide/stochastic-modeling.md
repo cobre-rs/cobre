@@ -35,6 +35,7 @@ my_study/
     load_seasonal_stats.parquet
     inflow_ar_coefficients.parquet    (only when ar_order > 0)
     inflow_history.parquet            (alternative to pre-computed stats)
+    non_controllable_stats.parquet   (stochastic NCS availability)
 ```
 
 The directory is optional. When it is absent, Cobre generates independent
@@ -325,6 +326,53 @@ you want to isolate inflow uncertainty in isolation.
 
 ---
 
+## Stochastic NCS Availability
+
+Non-controllable sources (wind, solar, run-of-river) can have stochastic
+available generation. When `scenarios/non_controllable_stats.parquet` is
+present, Cobre samples a per-scenario availability factor for each NCS entity
+and applies it to the entity's `max_generation_mw`.
+
+### Schema
+
+The file provides one row per `(ncs_id, stage_id)` pair:
+
+| Column     | Type   | Nullable | Description                                                     |
+| ---------- | ------ | -------- | --------------------------------------------------------------- |
+| `ncs_id`   | INT32  | No       | NCS entity ID (matches `id` in `non_controllable_sources.json`) |
+| `stage_id` | INT32  | No       | Stage identifier (matches `id` in `stages.json`)                |
+| `mean`     | DOUBLE | No       | Mean availability factor (dimensionless, must be in [0, 1])     |
+| `std`      | DOUBLE | No       | Standard deviation of availability factor (must be >= 0)        |
+
+### How it works
+
+For each forward and backward pass scenario, Cobre draws a standard normal
+noise value `η` from the opening tree and computes:
+
+```text
+A_r = max_generation_mw × clamp(mean + std × η, 0, 1)
+```
+
+The result `A_r` is then multiplied by the per-block factor from
+`scenarios/non_controllable_factors.json` (default 1.0) to produce the
+final NCS column upper bound:
+
+```text
+col_upper = A_r × block_factor
+```
+
+With `std = 0`, the availability is deterministic at `mean × max_generation_mw`,
+making the stochastic pipeline a strict generalization of the deterministic
+`ncs_bounds.parquet` approach.
+
+### Optional: deterministic NCS without the file
+
+When `non_controllable_stats.parquet` is absent, NCS availability is
+deterministic: the LP column upper bound comes from `constraints/ncs_bounds.parquet`
+(or defaults to `max_generation_mw`). No per-scenario variation occurs.
+
+---
+
 ## Scenario Count and Seeds
 
 ### `num_scenarios` in `stages.json`
@@ -388,12 +436,12 @@ runs as usual.
 
 The file has exactly four columns:
 
-| Column          | Type   | Required | Description                                                                    |
-| --------------- | ------ | -------- | ------------------------------------------------------------------------------ |
-| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                                     |
-| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1)        |
-| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order                               |
-| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple                     |
+| Column          | Type   | Required | Description                                                             |
+| --------------- | ------ | -------- | ----------------------------------------------------------------------- |
+| `stage_id`      | INT32  | Yes      | Zero-based stage index (0 to n_stages − 1)                              |
+| `opening_index` | UINT32 | Yes      | Zero-based opening index within the stage (0 to openings_per_stage − 1) |
+| `entity_index`  | UINT32 | Yes      | Zero-based entity index in system dimension order                       |
+| `value`         | DOUBLE | Yes      | Noise realization for this (stage, opening, entity) triple              |
 
 ### Entity ordering
 
@@ -401,6 +449,7 @@ The `entity_index` column follows the system dimension convention:
 
 1. Hydro entities, sorted by canonical ID (ascending)
 2. Load buses, sorted by canonical ID (ascending)
+3. NCS entities, sorted by canonical ID (ascending)
 
 This matches the ordering used by Cobre's internal opening tree generator. The
 file stores only indices, not entity identifiers, so an incorrect ordering

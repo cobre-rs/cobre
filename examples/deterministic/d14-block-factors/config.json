@@ -1,0 +1,20 @@
+{
+  "training": {
+    "forward_passes": 1,
+    "stopping_rules": [
+      {
+        "type": "iteration_limit",
+        "limit": 10
+      }
+    ]
+  },
+  "simulation": {
+    "enabled": false,
+    "num_scenarios": 1
+  },
+  "modeling": {
+    "inflow_non_negativity": {
+      "method": "none"
+    }
+  }
+}

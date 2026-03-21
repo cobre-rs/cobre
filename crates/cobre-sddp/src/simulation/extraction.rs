@@ -172,6 +172,24 @@ pub struct StageExtractionSpec<'a> {
     /// pipeline to map LP row/column indices back to constraint identity and
     /// block, and to read slack/dual values from the solution vectors.
     pub generic_constraint_entries: &'a [GenericConstraintRowEntry],
+    /// Column index of the first NCS generation variable at this stage.
+    ///
+    /// NCS columns are laid out as `ncs_col_start + local_idx * n_blks + blk`.
+    /// Zero when no NCS entities are active at this stage.
+    pub ncs_col_start: usize,
+    /// Number of active NCS entities at this stage.
+    pub n_ncs: usize,
+    /// Entity IDs of active NCS entities at this stage, in ID-sorted order.
+    ///
+    /// Length equals `n_ncs`.  Empty when no NCS entities are active.
+    pub ncs_entity_ids: &'a [i32],
+    /// Column upper bounds for NCS columns at this stage.
+    ///
+    /// Slice into the stage template's `col_upper`, starting at `ncs_col_start`
+    /// with length `n_ncs * n_blks`.  Each entry is `available_gen * factor`,
+    /// representing the maximum generation for that (ncs, block) pair.
+    /// Empty when no NCS entities are active.
+    pub ncs_col_upper: &'a [f64],
 }
 
 /// Extract hydro results from a raw LP solution view.
@@ -600,14 +618,15 @@ pub fn extract_stage_result(
 
     let (generic_violations, generic_violation_cost) =
         extract_generic_violations(view, spec, stage_id);
+    let (non_controllables, ncs_curtailment_cost) = extract_non_controllables(view, spec, stage_id);
     let costs = vec![compute_cost_result(
         view,
         spec.indexer,
         generic_violation_cost,
+        ncs_curtailment_cost,
         stage_id,
     )];
-    let (inflow_lags, pumping_stations, contracts, non_controllables) =
-        extract_stub_collections(view, spec, stage_id);
+    let (inflow_lags, pumping_stations, contracts) = extract_stub_collections(view, spec, stage_id);
 
     SimulationStageResult {
         stage_id,
@@ -629,6 +648,7 @@ fn compute_cost_result(
     view: &SolutionView<'_>,
     indexer: &StageIndexer,
     generic_violation_cost: f64,
+    ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
     let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col];
@@ -703,7 +723,7 @@ fn compute_cost_result(
         generic_violation_cost,
         spillage_cost,
         fpha_turbined_cost,
-        curtailment_cost: 0.0,
+        curtailment_cost: ncs_curtailment_cost,
         exchange_cost,
         pumping_cost: 0.0,
     }
@@ -787,8 +807,72 @@ fn extract_generic_violations(
     (results, total_cost)
 }
 
+/// Extract NCS generation results from a solved LP.
+///
+/// For each active NCS entity, reads the generation value from the primal
+/// vector, computes curtailment as `available - generation`, and computes
+/// the curtailment cost contribution.  Returns the result records and the
+/// total NCS curtailment cost (sum of `primal[col] * objective[col]` over
+/// all NCS columns, negated so the cost is positive in the cost breakdown).
+///
+/// When no NCS entities are active (`spec.n_ncs == 0`), returns empty
+/// results and zero cost.
+fn extract_non_controllables(
+    view: &SolutionView<'_>,
+    spec: &StageExtractionSpec<'_>,
+    stage_id: u32,
+) -> (Vec<SimulationNonControllableResult>, f64) {
+    let n_ncs = spec.n_ncs;
+    if n_ncs == 0 {
+        return (Vec::new(), 0.0);
+    }
+
+    let n_blks = spec.indexer.n_blks;
+    let col_start = spec.ncs_col_start;
+    let mut results = Vec::with_capacity(n_ncs * n_blks);
+    let mut total_curtailment_cost = 0.0;
+
+    for (local_idx, &ncs_id) in spec.ncs_entity_ids.iter().enumerate() {
+        for blk in 0..n_blks {
+            let col = col_start + local_idx * n_blks + blk;
+            let generation_mw = view.primal[col];
+            // Column upper bound encodes available_gen * block_factor.
+            let col_upper_offset = local_idx * n_blks + blk;
+            debug_assert!(
+                col_upper_offset < spec.ncs_col_upper.len(),
+                "NCS col_upper out of bounds: offset {col_upper_offset}, len {}",
+                spec.ncs_col_upper.len()
+            );
+            let available_mw = spec.ncs_col_upper[col_upper_offset];
+            let curtailment_mw = available_mw - generation_mw;
+            // NCS objective coefficient is negative (-curtailment_cost * block_hours),
+            // so primal * obj_coeff is negative when generating.  The cost breakdown
+            // uses positive values, so negate.
+            let col_cost = -(view.primal[col] * view.objective_coeffs[col]);
+            total_curtailment_cost += col_cost;
+
+            #[allow(clippy::cast_possible_truncation)]
+            results.push(SimulationNonControllableResult {
+                stage_id,
+                block_id: Some(blk as u32),
+                non_controllable_id: ncs_id,
+                generation_mw,
+                available_mw,
+                curtailment_mw,
+                curtailment_cost: col_cost,
+                operative_state_code: 1,
+            });
+        }
+    }
+
+    (results, total_curtailment_cost)
+}
+
 /// Extract stub (zero-value) result collections for currently-unmodeled entity types.
-#[allow(clippy::type_complexity)]
+///
+/// Inflow lags are not stubs (they read real primal values), but are grouped
+/// here because they share the per-entity iteration pattern.  Pumping stations
+/// and contracts produce zero-valued placeholders.
 fn extract_stub_collections(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
@@ -797,7 +881,6 @@ fn extract_stub_collections(
     Vec<SimulationInflowLagResult>,
     Vec<SimulationPumpingResult>,
     Vec<SimulationContractResult>,
-    Vec<SimulationNonControllableResult>,
 ) {
     let indexer = spec.indexer;
     let inflow_lags: Vec<SimulationInflowLagResult> = spec
@@ -846,22 +929,7 @@ fn extract_stub_collections(
             operative_state_code: 1,
         })
         .collect();
-    let non_controllables: Vec<SimulationNonControllableResult> = spec
-        .entity_counts
-        .non_controllable_ids
-        .iter()
-        .map(|&non_controllable_id| SimulationNonControllableResult {
-            stage_id,
-            block_id: None,
-            non_controllable_id,
-            generation_mw: 0.0,
-            available_mw: 0.0,
-            curtailment_mw: 0.0,
-            curtailment_cost: 0.0,
-            operative_state_code: 1,
-        })
-        .collect();
-    (inflow_lags, pumping_stations, contracts, non_controllables)
+    (inflow_lags, pumping_stations, contracts)
 }
 
 /// Add one stage's cost breakdown into a running per-category accumulator.
@@ -1078,6 +1146,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             3,
         );
@@ -1110,6 +1182,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1142,6 +1218,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1177,6 +1257,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1224,6 +1308,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             2,
         );
@@ -1253,6 +1341,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             stage_id,
         );
@@ -1288,6 +1380,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1408,6 +1504,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &block_hours,
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1492,6 +1592,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1725,6 +1829,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1788,6 +1896,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1862,6 +1974,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -1946,6 +2062,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -2005,6 +2125,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -2094,6 +2218,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -2152,6 +2280,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );
@@ -2211,6 +2343,10 @@ mod tests {
                 inflow_m3s_per_hydro: &[],
                 block_hours: &[],
                 generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
             },
             0,
         );

@@ -265,8 +265,10 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     } else {
         let user_tree: Option<OpeningTree> =
             tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
-        build_stochastic_context(&system, seed, &[], user_tree).map_err(|e| CliError::Internal {
-            message: format!("stochastic context error: {e}"),
+        build_stochastic_context(&system, seed, &[], &[], user_tree).map_err(|e| {
+            CliError::Internal {
+                message: format!("stochastic context error: {e}"),
+            }
         })?
     };
 

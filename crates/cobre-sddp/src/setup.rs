@@ -31,7 +31,7 @@
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
-//! let stochastic = build_stochastic_context(system, 42, &[], None)?;
+//! let stochastic = build_stochastic_context(system, 42, &[], &[], None)?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
@@ -228,6 +228,11 @@ pub struct StudySetup {
     // ── Hydro models ──────────────────────────────────────────────────────────
     hydro_models: PrepareHydroModelsResult,
 
+    // ── NCS per-stage entity IDs (for simulation extraction) ────────────────
+    ncs_entity_ids_per_stage: Vec<Vec<i32>>,
+    /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
+    ncs_max_gen: Vec<f64>,
+
     // ── Derived layout values ─────────────────────────────────────────────────
     block_counts_per_stage: Vec<usize>,
     max_blocks: usize,
@@ -371,7 +376,7 @@ impl StudySetup {
             .max()
             .unwrap_or(0);
 
-        let indexer = StageIndexer::with_equipment_and_evaporation(
+        let mut indexer = StageIndexer::with_equipment_and_evaporation(
             stage_templates_ref[0].n_hydro,
             stage_templates_ref[0].max_par_order,
             system.thermals().len(),
@@ -384,6 +389,22 @@ impl StudySetup {
             evap_hydro_indices,
             max_deficit_segments,
         );
+
+        // Wire NCS column range from the LP builder's stage-0 layout.
+        if !stage_templates.ncs_col_starts.is_empty() {
+            let ncs_start = stage_templates.ncs_col_starts[0];
+            let n_ncs_stage0 = stage_templates.n_ncs_per_stage[0];
+            indexer.ncs_generation = ncs_start..(ncs_start + n_ncs_stage0 * n_blks_stage0);
+            indexer.n_ncs = n_ncs_stage0;
+
+            // Debug: verify NCS column starts are consistent across stages.
+            for (s, &start) in stage_templates.ncs_col_starts.iter().enumerate() {
+                debug_assert_eq!(
+                    start, ncs_start,
+                    "NCS column start differs at stage {s}: expected {ncs_start}, got {start}"
+                );
+            }
+        }
 
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
@@ -415,6 +436,34 @@ impl StudySetup {
         // ── Entity counts ─────────────────────────────────────────────────────
         let entity_counts = build_entity_counts(system);
 
+        // ── NCS per-stage entity IDs ──────────────────────────────────────────
+        let ncs_entity_ids_per_stage: Vec<Vec<i32>> = stage_templates
+            .active_ncs_indices
+            .iter()
+            .map(|stage_indices| {
+                stage_indices
+                    .iter()
+                    .map(|&sys_idx| entity_counts.non_controllable_ids[sys_idx])
+                    .collect()
+            })
+            .collect();
+
+        // ── NCS max generation for stochastic entities ───────────────────────
+        let ncs_max_gen: Vec<f64> = {
+            let stoch_ncs_ids = stochastic.ncs_entity_ids();
+            stoch_ncs_ids
+                .iter()
+                .map(|ncs_id| {
+                    system
+                        .non_controllable_sources()
+                        .iter()
+                        .find(|n| n.id == *ncs_id)
+                        .map(|n| n.max_generation_mw)
+                        .unwrap_or(0.0)
+                })
+                .collect()
+        };
+
         // ── Block layout ──────────────────────────────────────────────────────
         let block_counts_per_stage: Vec<usize> = stage_templates
             .block_hours_per_stage
@@ -432,6 +481,8 @@ impl StudySetup {
             horizon,
             risk_measures,
             entity_counts,
+            ncs_entity_ids_per_stage,
+            ncs_max_gen,
             hydro_models,
             block_counts_per_stage,
             max_blocks,
@@ -622,6 +673,7 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+            ncs_max_gen: &self.ncs_max_gen,
         }
     }
 
@@ -681,6 +733,7 @@ impl StudySetup {
             load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
+            ncs_max_gen: &self.ncs_max_gen,
         };
 
         let training_ctx = TrainingContext {
@@ -750,6 +803,9 @@ impl StudySetup {
             block_hours_per_stage: &self.stage_templates.block_hours_per_stage,
             entity_counts: &self.entity_counts,
             generic_constraint_row_entries: &self.stage_templates.generic_constraint_row_entries,
+            ncs_col_starts: &self.stage_templates.ncs_col_starts,
+            n_ncs_per_stage: &self.stage_templates.n_ncs_per_stage,
+            ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
             event_sender,
         };
 
@@ -1028,6 +1084,73 @@ fn load_user_opening_tree_inner(
 ///
 /// ## MPI note
 ///
+/// Build NCS entity factor entries from the `ResolvedNcsFactors` stored in `System`.
+///
+/// Converts the dense 3D factor table into the `(entity_id, stage_id, block_pairs)`
+/// tuple format expected by `PrecomputedNormal::build`. Includes all NCS entities
+/// that have model entries in `non_controllable_stats.parquet`. Entities with
+/// `std_mw = 0` produce deterministic availability at their `mean_mw` value.
+fn build_ncs_factor_entries(
+    system: &System,
+) -> Vec<(
+    cobre_core::EntityId,
+    i32,
+    Vec<cobre_stochastic::normal::precompute::BlockFactorPair>,
+)> {
+    use cobre_stochastic::normal::precompute::BlockFactorPair;
+    use std::collections::BTreeSet;
+
+    // Collect NCS entity IDs that have model entries.
+    let stochastic_ncs: BTreeSet<cobre_core::EntityId> =
+        system.ncs_models().iter().map(|m| m.ncs_id).collect();
+
+    if stochastic_ncs.is_empty() {
+        return Vec::new();
+    }
+
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+    let ncs_ids: Vec<cobre_core::EntityId> = system
+        .non_controllable_sources()
+        .iter()
+        .map(|n| n.id)
+        .collect();
+
+    let mut entries = Vec::new();
+    for (ncs_idx, ncs_id) in ncs_ids.iter().enumerate() {
+        if !stochastic_ncs.contains(ncs_id) {
+            continue;
+        }
+        for (stage_idx, stage) in study_stages.iter().enumerate() {
+            let block_pairs: Vec<BlockFactorPair> = stage
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(block_idx, _)| {
+                    let factor = system
+                        .resolved_ncs_factors()
+                        .factor(ncs_idx, stage_idx, block_idx);
+                    (block_idx as i32, factor)
+                })
+                .collect();
+            entries.push((*ncs_id, stage.id, block_pairs));
+        }
+    }
+    entries
+}
+
+/// Load `scenarios/load_factors.json` from the case directory, returning an
+/// empty vec when the file is absent. This is consumed by the stochastic
+/// context builder for per-block noise scaling.
+fn load_load_factors_for_stochastic(
+    case_dir: &Path,
+) -> Result<Vec<cobre_io::scenarios::LoadFactorEntry>, SddpError> {
+    let path = case_dir.join("scenarios").join("load_factors.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    cobre_io::scenarios::parse_load_factors(&path).map_err(SddpError::from)
+}
+
 /// Under MPI, this function must only be called on rank 0. Non-root ranks
 /// should receive the opening tree via broadcast and call
 /// [`cobre_stochastic::build_stochastic_context`] directly.
@@ -1049,8 +1172,49 @@ pub fn prepare_stochastic(
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
 
-    let stochastic =
-        cobre_stochastic::build_stochastic_context(&system, seed, &[], user_opening_tree)?;
+    // Load block-level load factors (optional). When present, these scale the
+    // stochastic noise realization per block, mirroring how the LP builder
+    // scales the deterministic load balance RHS.
+    let load_factor_entries = load_load_factors_for_stochastic(case_dir)?;
+
+    // Convert LoadFactorEntry -> Vec<BlockFactorPair> per entry. The pairs
+    // vec must outlive the entity_factor_entries references.
+    let block_pairs: Vec<Vec<cobre_stochastic::normal::precompute::BlockFactorPair>> =
+        load_factor_entries
+            .iter()
+            .map(|e| {
+                e.block_factors
+                    .iter()
+                    .map(|bf| (bf.block_id, bf.factor))
+                    .collect()
+            })
+            .collect();
+
+    let entity_factor_entries: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
+        load_factor_entries
+            .iter()
+            .zip(block_pairs.iter())
+            .map(|(e, pairs)| (e.bus_id, e.stage_id, pairs.as_slice()))
+            .collect();
+
+    // Build NCS block factor entries from ResolvedNcsFactors, mirroring the
+    // load factor conversion above. NCS entities consume their block factors
+    // from the resolved NCS factors table.
+    let ncs_factor_entries = build_ncs_factor_entries(&system);
+    let ncs_entity_factor_entries: Vec<
+        cobre_stochastic::normal::precompute::EntityFactorEntry<'_>,
+    > = ncs_factor_entries
+        .iter()
+        .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
+        .collect();
+
+    let stochastic = cobre_stochastic::build_stochastic_context(
+        &system,
+        seed,
+        &entity_factor_entries,
+        &ncs_entity_factor_entries,
+        user_opening_tree,
+    )?;
 
     Ok(PrepareStochasticResult {
         system,
@@ -1347,7 +1511,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1367,7 +1531,7 @@ mod tests {
         let system = minimal_system(0);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1391,7 +1555,7 @@ mod tests {
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 50);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1436,7 +1600,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1460,7 +1624,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1483,7 +1647,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1505,7 +1669,7 @@ mod tests {
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1549,7 +1713,7 @@ mod tests {
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1588,7 +1752,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1626,7 +1790,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1667,7 +1831,7 @@ mod tests {
 
         let system = minimal_system(2);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1693,7 +1857,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1723,7 +1887,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 2);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1777,7 +1941,7 @@ mod tests {
 
         let system = minimal_system(2);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2182,7 +2346,7 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_config(1, 5);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
         let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
 
         let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
@@ -2538,7 +2702,7 @@ mod tests {
             minimal_system_2_hydros_with_past_inflows(3, vec![600.0, 500.0], vec![200.0, 100.0]);
         let config = minimal_config(1, 10);
         let stochastic =
-            build_stochastic_context(&system, 42, &[], None).expect("stochastic context");
+            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,

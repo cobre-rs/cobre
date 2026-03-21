@@ -104,6 +104,23 @@ pub struct SimulationOutputSpec<'a> {
     /// rows/columns back to constraint identity.
     pub generic_constraint_row_entries: &'a [Vec<crate::lp_builder::GenericConstraintRowEntry>],
 
+    /// Per-stage NCS column start indices.
+    ///
+    /// `ncs_col_starts[stage]` is the column index of the first NCS generation
+    /// variable at that stage.
+    pub ncs_col_starts: &'a [usize],
+
+    /// Per-stage active NCS entity counts.
+    ///
+    /// `n_ncs_per_stage[stage]` is the number of active NCS entities at that stage.
+    pub n_ncs_per_stage: &'a [usize],
+
+    /// Per-stage active NCS entity IDs, in ID-sorted order.
+    ///
+    /// `ncs_entity_ids_per_stage[stage]` lists the entity IDs of NCS sources
+    /// active at that stage.
+    pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
+
     /// Optional event sender for streaming progress events to the CLI/UI.
     pub event_sender: Option<Sender<TrainingEvent>>,
 }
@@ -248,6 +265,20 @@ fn solve_simulation_stage<S: SolverInterface>(
         n_blks,
         ctx.load_bus_indices,
     );
+    // NCS column upper bounds from the template for extraction.
+    let ncs_n = output.n_ncs_per_stage.get(t).copied().unwrap_or(0);
+    let ncs_col_start = output.ncs_col_starts.get(t).copied().unwrap_or(0);
+    let ncs_col_upper = if ncs_n > 0 && n_blks > 0 {
+        let start = ncs_col_start;
+        let end = start + ncs_n * n_blks;
+        if end <= ctx.templates[t].col_upper.len() {
+            &ctx.templates[t].col_upper[start..end]
+        } else {
+            &[]
+        }
+    } else {
+        &[]
+    };
     let result = extract_stage_result(
         &SolutionView {
             primal: view.primal,
@@ -265,6 +296,13 @@ fn solve_simulation_stage<S: SolverInterface>(
                 .generic_constraint_row_entries
                 .get(t)
                 .map_or(&[], Vec::as_slice),
+            ncs_col_start,
+            n_ncs: ncs_n,
+            ncs_entity_ids: output
+                .ncs_entity_ids_per_stage
+                .get(t)
+                .map_or(&[], Vec::as_slice),
+            ncs_col_upper,
         },
         ids.stage_id_u32,
     );
@@ -899,7 +937,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -920,6 +958,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -967,6 +1008,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -983,6 +1025,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1049,6 +1094,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1065,6 +1111,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1125,6 +1174,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1141,6 +1191,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1199,6 +1252,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1215,6 +1269,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1274,6 +1331,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1290,6 +1348,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1347,6 +1408,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1363,6 +1425,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1416,6 +1481,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1432,6 +1498,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1485,6 +1554,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1501,6 +1571,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1521,6 +1594,9 @@ mod tests {
                     par_inflow_buf: Vec::new(),
                     eta_floor_buf: Vec::new(),
                     zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                 },
@@ -1537,6 +1613,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1553,6 +1630,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1634,6 +1714,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1650,6 +1731,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: Some(event_tx),
             },
             &comm,
@@ -1728,6 +1812,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1744,6 +1829,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -1807,6 +1895,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1823,6 +1912,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: Some(event_tx),
             },
             &comm,
@@ -1897,6 +1989,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1913,6 +2006,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: Some(event_tx),
             },
             &comm,
@@ -1986,6 +2082,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2002,6 +2099,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: Some(event_tx),
             },
             &comm,
@@ -2090,6 +2190,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2106,6 +2207,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: Some(event_tx),
             },
             &comm,
@@ -2261,7 +2365,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// When a simulation has 1 stochastic load bus (mean=300, std=30),
@@ -2321,6 +2425,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2344,6 +2451,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2360,6 +2468,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -2468,6 +2579,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[1],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2484,6 +2596,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -2566,6 +2681,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: Vec::new(),
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
             },
@@ -2587,6 +2705,7 @@ mod tests {
                 load_balance_row_starts: &load_balance_row_starts,
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2603,6 +2722,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -2758,7 +2880,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], None).unwrap()
+        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
     }
 
     /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
@@ -2806,6 +2928,9 @@ mod tests {
                 par_inflow_buf: Vec::new(),
                 eta_floor_buf: Vec::new(),
                 zero_targets_buf: vec![0.0_f64; hydro_count],
+                ncs_col_upper_buf: Vec::new(),
+                ncs_col_lower_buf: Vec::new(),
+                ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
             },
@@ -2870,6 +2995,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2886,6 +3012,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,
@@ -2958,6 +3087,7 @@ mod tests {
                 load_balance_row_starts: &[],
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
+                ncs_max_gen: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2974,6 +3104,9 @@ mod tests {
                 block_hours_per_stage: &[],
                 entity_counts: &entity_counts,
                 generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
                 event_sender: None,
             },
             &comm,

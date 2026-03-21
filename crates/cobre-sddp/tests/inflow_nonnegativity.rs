@@ -335,7 +335,7 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42, &[], None).unwrap()
+    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
 }
 
 /// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
@@ -522,6 +522,7 @@ fn train_fixture(
         load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
         load_bus_indices: &fx.stage_templates.load_bus_indices,
         block_counts_per_stage: &block_counts,
+        ncs_max_gen: &[],
     };
     train(
         &mut solver,
@@ -599,6 +600,7 @@ fn simulate_fixture(
             load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
             load_bus_indices: &fx.stage_templates.load_bus_indices,
             block_counts_per_stage: &block_counts_sim,
+            ncs_max_gen: &[],
         },
         fcf,
         &TrainingContext {
@@ -618,6 +620,9 @@ fn simulate_fixture(
             block_hours_per_stage: &fx.stage_templates.block_hours_per_stage,
             entity_counts: &fx.entity_counts,
             generic_constraint_row_entries: &[],
+            ncs_col_starts: &[],
+            n_ncs_per_stage: &[],
+            ncs_entity_ids_per_stage: &[],
             event_sender: None,
         },
         &comm,

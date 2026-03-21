@@ -414,7 +414,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], None).unwrap()
+    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -520,6 +520,7 @@ fn train_converges_with_mock_solver() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -571,6 +572,7 @@ fn train_deterministic_with_same_seed() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result1 = train(
         &mut solver1,
@@ -616,6 +618,7 @@ fn train_deterministic_with_same_seed() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result2 = train(
         &mut solver2,
@@ -681,6 +684,7 @@ fn train_lb_monotonically_nondecreasing() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     train(
         &mut solver,
@@ -752,6 +756,7 @@ fn train_emits_correct_event_sequence() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     train(
         &mut solver,
@@ -819,6 +824,7 @@ fn train_stops_at_iteration_limit() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -882,6 +888,7 @@ fn train_stops_on_graceful_shutdown() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,
@@ -935,6 +942,7 @@ fn train_propagates_infeasible_error() {
         load_balance_row_starts: &[],
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
     };
     let result = train(
         &mut solver,

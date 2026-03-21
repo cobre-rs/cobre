@@ -26,13 +26,15 @@
 //! - Stage 0 should never be infeasible (the penalty system guarantees recourse),
 //!   so `SddpError::Infeasible` from this function indicates a modelling error.
 
+use std::ops::Range;
+
 use cobre_comm::Communicator;
 use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::OpeningTree;
+use cobre_stochastic::{OpeningTree, StochasticContext};
 
 use crate::{
     FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch,
+    forward::build_cut_row_batch, noise::transform_ncs_noise,
 };
 use cobre_solver::StageTemplate;
 
@@ -52,6 +54,23 @@ pub struct LbEvalSpec<'a> {
     pub opening_tree: &'a OpeningTree,
     /// Risk measure for stage-0 objective aggregation.
     pub risk_measure: &'a RiskMeasure,
+    /// Stochastic context for NCS availability patching.
+    ///
+    /// When `Some`, stochastic NCS column bounds are patched per opening using
+    /// `transform_ncs_noise`. When `None`, NCS patching is skipped (used in
+    /// tests or when no stochastic NCS entities are present).
+    pub stochastic: Option<&'a StochasticContext>,
+    /// Number of buses with stochastic load noise (needed as offset into the
+    /// raw noise vector to locate the NCS noise dimensions).
+    pub n_load_buses: usize,
+    /// Maximum generation [MW] per stochastic NCS entity, sorted by entity ID.
+    /// Length equals the number of stochastic NCS entities. Empty when none exist.
+    pub ncs_max_gen: &'a [f64],
+    /// Number of blocks at stage 0.
+    pub block_count: usize,
+    /// Column range for NCS generation variables in the stage-0 LP.
+    /// Empty when no NCS entities are present; NCS patching is skipped.
+    pub ncs_generation: Range<usize>,
 }
 
 /// Evaluate the global lower bound for the current FCF approximation.
@@ -101,8 +120,14 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         n_hydros,
         opening_tree,
         risk_measure,
+        stochastic,
+        n_load_buses,
+        ncs_max_gen,
+        block_count,
+        ncs_generation,
     } = spec;
-    let (base_row, n_hydros) = (*base_row, *n_hydros);
+    let (base_row, n_hydros, n_load_buses, block_count) =
+        (*base_row, *n_hydros, *n_load_buses, *block_count);
     let mut lb = 0.0_f64;
 
     if comm.rank() == 0 {
@@ -115,6 +140,9 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         let cut_batch = build_cut_row_batch(fcf, 0, indexer);
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
+        let mut ncs_col_upper_buf: Vec<f64> = Vec::new();
+        let mut ncs_col_indices_buf: Vec<usize> = Vec::new();
+        let mut ncs_col_lower_buf: Vec<f64> = Vec::new();
 
         for opening_idx in 0..n_openings {
             solver.load_model(template);
@@ -135,6 +163,37 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 &patch_buf.lower[..n_patches],
                 &patch_buf.upper[..n_patches],
             );
+
+            // Patch NCS column upper bounds with per-opening stochastic availability.
+            if let Some(stoch) = stochastic {
+                let n_stochastic_ncs = stoch.n_stochastic_ncs();
+                if n_stochastic_ncs > 0 && !ncs_generation.is_empty() {
+                    transform_ncs_noise(
+                        raw_noise,
+                        n_hydros,
+                        n_load_buses,
+                        stoch,
+                        0,
+                        block_count,
+                        ncs_max_gen,
+                        &mut ncs_col_upper_buf,
+                    );
+                    ncs_col_indices_buf.clear();
+                    ncs_col_lower_buf.clear();
+                    for ncs_idx in 0..n_stochastic_ncs {
+                        for blk in 0..block_count {
+                            ncs_col_indices_buf
+                                .push(ncs_generation.start + ncs_idx * block_count + blk);
+                            ncs_col_lower_buf.push(0.0);
+                        }
+                    }
+                    solver.set_col_bounds(
+                        &ncs_col_indices_buf,
+                        &ncs_col_lower_buf,
+                        &ncs_col_upper_buf,
+                    );
+                }
+            }
 
             let view = solver.solve().map_err(|e| match e {
                 SolverError::Infeasible => SddpError::Infeasible {
@@ -471,6 +530,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -511,6 +575,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -558,6 +627,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -602,6 +676,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -642,6 +721,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let result = evaluate_lower_bound(
             &mut solver,
@@ -680,6 +764,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let result = evaluate_lower_bound(
             &mut solver,
@@ -725,6 +814,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -767,6 +861,11 @@ mod tests {
             n_hydros: 0,
             opening_tree: &opening_tree,
             risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
         };
 
         // First call: solver returns [50, 100] → LB = 75.

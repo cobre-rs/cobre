@@ -663,7 +663,18 @@ fn load_entity_type(py: Python<'_>, entity_dir: &std::path::Path) -> PyResult<Py
 }
 
 /// Entity types supported by the simulation output.
-const ENTITY_TYPES: &[&str] = &["costs", "buses", "hydros", "thermals", "inflow_lags"];
+const ENTITY_TYPES: &[&str] = &[
+    "costs",
+    "buses",
+    "hydros",
+    "thermals",
+    "exchanges",
+    "pumping_stations",
+    "contracts",
+    "non_controllables",
+    "inflow_lags",
+    "violations/generic",
+];
 
 /// Load simulation results from Hive-partitioned Parquet files.
 ///

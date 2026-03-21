@@ -12,8 +12,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
-    InflowModel, InitialConditions, Line, LoadModel, NetworkTopology, NonControllableSource,
-    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
+    InflowModel, InitialConditions, Line, LoadModel, NcsModel, NetworkTopology,
+    NonControllableSource, PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
+    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
     ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
 };
 
@@ -101,12 +102,22 @@ pub struct System {
     bounds: ResolvedBounds,
     /// Pre-resolved RHS bound table for user-defined generic linear constraints.
     resolved_generic_bounds: ResolvedGenericConstraintBounds,
+    /// Pre-resolved per-block load scaling factors.
+    resolved_load_factors: ResolvedLoadFactors,
+    /// Pre-resolved per-block exchange capacity factors.
+    resolved_exchange_factors: ResolvedExchangeFactors,
+    /// Pre-resolved per-stage NCS available generation bounds.
+    resolved_ncs_bounds: ResolvedNcsBounds,
+    /// Pre-resolved per-block NCS generation scaling factors.
+    resolved_ncs_factors: ResolvedNcsFactors,
 
     // Scenario pipeline data (raw parameters loaded by cobre-io)
     /// PAR(p) inflow model parameters, one entry per (hydro, stage) pair.
     inflow_models: Vec<InflowModel>,
     /// Seasonal load statistics, one entry per (bus, stage) pair.
     load_models: Vec<LoadModel>,
+    /// NCS availability noise model parameters, one entry per (ncs, stage) pair.
+    ncs_models: Vec<NcsModel>,
     /// Correlation model for stochastic inflow/load generation.
     correlation: CorrelationModel,
 
@@ -316,6 +327,30 @@ impl System {
         &self.resolved_generic_bounds
     }
 
+    /// Returns a reference to the pre-resolved per-block load scaling factors.
+    #[must_use]
+    pub fn resolved_load_factors(&self) -> &ResolvedLoadFactors {
+        &self.resolved_load_factors
+    }
+
+    /// Returns a reference to the pre-resolved per-block exchange capacity factors.
+    #[must_use]
+    pub fn resolved_exchange_factors(&self) -> &ResolvedExchangeFactors {
+        &self.resolved_exchange_factors
+    }
+
+    /// Returns a reference to the pre-resolved per-stage NCS available generation bounds.
+    #[must_use]
+    pub fn resolved_ncs_bounds(&self) -> &ResolvedNcsBounds {
+        &self.resolved_ncs_bounds
+    }
+
+    /// Returns a reference to the pre-resolved per-block NCS generation scaling factors.
+    #[must_use]
+    pub fn resolved_ncs_factors(&self) -> &ResolvedNcsFactors {
+        &self.resolved_ncs_factors
+    }
+
     /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).
     #[must_use]
     pub fn inflow_models(&self) -> &[InflowModel] {
@@ -326,6 +361,12 @@ impl System {
     #[must_use]
     pub fn load_models(&self) -> &[LoadModel] {
         &self.load_models
+    }
+
+    /// Returns all NCS availability noise models in canonical order (by NCS ID, then stage ID).
+    #[must_use]
+    pub fn ncs_models(&self) -> &[NcsModel] {
+        &self.ncs_models
     }
 
     /// Returns a reference to the correlation model.
@@ -470,8 +511,13 @@ pub struct SystemBuilder {
     penalties: ResolvedPenalties,
     bounds: ResolvedBounds,
     resolved_generic_bounds: ResolvedGenericConstraintBounds,
+    resolved_load_factors: ResolvedLoadFactors,
+    resolved_exchange_factors: ResolvedExchangeFactors,
+    resolved_ncs_bounds: ResolvedNcsBounds,
+    resolved_ncs_factors: ResolvedNcsFactors,
     inflow_models: Vec<InflowModel>,
     load_models: Vec<LoadModel>,
+    ncs_models: Vec<NcsModel>,
     correlation: CorrelationModel,
     initial_conditions: InitialConditions,
     generic_constraints: Vec<GenericConstraint>,
@@ -504,8 +550,13 @@ impl SystemBuilder {
             penalties: ResolvedPenalties::empty(),
             bounds: ResolvedBounds::empty(),
             resolved_generic_bounds: ResolvedGenericConstraintBounds::empty(),
+            resolved_load_factors: ResolvedLoadFactors::empty(),
+            resolved_exchange_factors: ResolvedExchangeFactors::empty(),
+            resolved_ncs_bounds: ResolvedNcsBounds::empty(),
+            resolved_ncs_factors: ResolvedNcsFactors::empty(),
             inflow_models: Vec::new(),
             load_models: Vec::new(),
+            ncs_models: Vec::new(),
             correlation: CorrelationModel::default(),
             initial_conditions: InitialConditions::default(),
             generic_constraints: Vec::new(),
@@ -609,6 +660,45 @@ impl SystemBuilder {
         self
     }
 
+    /// Set the pre-resolved per-block load scaling factors.
+    ///
+    /// Populated by `cobre-io` after resolving `load_factors.json` entries.
+    #[must_use]
+    pub fn resolved_load_factors(mut self, resolved_load_factors: ResolvedLoadFactors) -> Self {
+        self.resolved_load_factors = resolved_load_factors;
+        self
+    }
+
+    /// Set the pre-resolved per-block exchange capacity factors.
+    ///
+    /// Populated by `cobre-io` after resolving `exchange_factors.json` entries.
+    #[must_use]
+    pub fn resolved_exchange_factors(
+        mut self,
+        resolved_exchange_factors: ResolvedExchangeFactors,
+    ) -> Self {
+        self.resolved_exchange_factors = resolved_exchange_factors;
+        self
+    }
+
+    /// Set the pre-resolved per-stage NCS available generation bounds.
+    ///
+    /// Populated by `cobre-io` after resolving `ncs_bounds.parquet` entries.
+    #[must_use]
+    pub fn resolved_ncs_bounds(mut self, resolved_ncs_bounds: ResolvedNcsBounds) -> Self {
+        self.resolved_ncs_bounds = resolved_ncs_bounds;
+        self
+    }
+
+    /// Set the pre-resolved per-block NCS generation scaling factors.
+    ///
+    /// Populated by `cobre-io` after resolving `non_controllable_factors.json` entries.
+    #[must_use]
+    pub fn resolved_ncs_factors(mut self, resolved_ncs_factors: ResolvedNcsFactors) -> Self {
+        self.resolved_ncs_factors = resolved_ncs_factors;
+        self
+    }
+
     /// Set the PAR(p) inflow model collection.
     #[must_use]
     pub fn inflow_models(mut self, inflow_models: Vec<InflowModel>) -> Self {
@@ -620,6 +710,13 @@ impl SystemBuilder {
     #[must_use]
     pub fn load_models(mut self, load_models: Vec<LoadModel>) -> Self {
         self.load_models = load_models;
+        self
+    }
+
+    /// Set the NCS availability noise model collection.
+    #[must_use]
+    pub fn ncs_models(mut self, ncs_models: Vec<NcsModel>) -> Self {
+        self.ncs_models = ncs_models;
         self
     }
 
@@ -785,8 +882,13 @@ impl SystemBuilder {
             penalties: self.penalties,
             bounds: self.bounds,
             resolved_generic_bounds: self.resolved_generic_bounds,
+            resolved_load_factors: self.resolved_load_factors,
+            resolved_exchange_factors: self.resolved_exchange_factors,
+            resolved_ncs_bounds: self.resolved_ncs_bounds,
+            resolved_ncs_factors: self.resolved_ncs_factors,
             inflow_models: self.inflow_models,
             load_models: self.load_models,
+            ncs_models: self.ncs_models,
             correlation: self.correlation,
             initial_conditions: self.initial_conditions,
             generic_constraints: self.generic_constraints,

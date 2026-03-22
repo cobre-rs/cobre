@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-03-22
+
+### Added
+
+- **PAR estimation overhaul** -- Replaced AIC-based order selection with
+  periodic Yule-Walker coefficient estimation and PACF-based order selection.
+  Added contribution-based validation, negative phi_1 rejection gate, and
+  iterative PACF order reduction for improved numerical stability on
+  real-world inflow series.
+- **LP scaling** -- Row scaling with RHS prescaling and dual unscaling, plus
+  internal objective cost scaling (`COST_SCALE_FACTOR = 1000`), improving
+  solver conditioning on large systems with heterogeneous constraint
+  magnitudes.
+- **Solver statistics** -- Three-channel instrumentation architecture:
+  LP scaling diagnostics report (`solver_stats/scaling_report.json`),
+  per-phase solver statistics Parquet output (`solver_stats/solver_stats.parquet`),
+  and enhanced CLI display with per-solve timing, basis reuse tracking, and
+  simplex iteration counts for both training and simulation.
+- **Per-scenario simulation statistics** -- Individual scenario cost and LP
+  solve metrics in simulation CLI summary output alongside aggregate results.
+
+### Changed
+
+- **Simulation pipeline performance** -- Eliminated two per-LP-solve `Vec<f64>`
+  clones in `solve_simulation_stage` by using `std::mem::take` to temporarily
+  move unscaled buffers out of `ScratchBuffers`, resolving a borrow conflict
+  without allocation.
+
+### Fixed
+
+- **Clippy compliance** -- Resolved all clippy warnings across the workspace
+  for CI compliance with `-D warnings`.
+
 ## [0.1.8] - 2026-03-21
 
 ### Added

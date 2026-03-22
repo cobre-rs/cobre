@@ -337,14 +337,41 @@ impl StudySetup {
             &hydro_models.evaporation,
         )?;
 
-        // Compute and apply column scaling for numerical conditioning.
-        // Scale factors are stored in the template for unscaling primal/dual
-        // solutions in the forward and backward passes.
+        // Compute and apply column scaling, then row scaling for numerical
+        // conditioning (D_r * A * D_c form). Scale factors are stored in the
+        // template for unscaling primal/dual solutions in the forward and
+        // backward passes.
         for tmpl in &mut stage_templates.templates {
             let col_scale =
                 lp_builder::compute_col_scale(tmpl.num_cols, &tmpl.col_starts, &tmpl.values);
             lp_builder::apply_col_scale(tmpl, &col_scale);
             tmpl.col_scale = col_scale;
+            // Row scaling is applied to the already column-scaled matrix.
+            let row_scale = lp_builder::compute_row_scale(
+                tmpl.num_rows,
+                tmpl.num_cols,
+                &tmpl.col_starts,
+                &tmpl.row_indices,
+                &tmpl.values,
+            );
+            lp_builder::apply_row_scale(tmpl, &row_scale);
+            tmpl.row_scale = row_scale;
+        }
+
+        // Pre-scale noise_scale by row_scale so that the inflow noise
+        // perturbation (noise_scale * eta) is in the same scaled units as
+        // the template row bounds (which were already row-scaled above).
+        // Without this, transform_inflow_noise would produce a mixed-scale
+        // RHS: scaled base + unscaled perturbation.
+        let n_hydros_noise = stage_templates.n_hydros;
+        for (s_idx, tmpl) in stage_templates.templates.iter().enumerate() {
+            if !tmpl.row_scale.is_empty() {
+                let base_row = stage_templates.base_rows[s_idx];
+                for h in 0..n_hydros_noise {
+                    stage_templates.noise_scale[s_idx * n_hydros_noise + h] *=
+                        tmpl.row_scale[base_row + h];
+                }
+            }
         }
 
         if stage_templates.templates.is_empty() {

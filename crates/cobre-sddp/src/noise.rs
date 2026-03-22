@@ -292,6 +292,7 @@ mod tests {
             load_rhs_buf: Vec::new(),
             row_lower_buf: Vec::new(),
             unscaled_primal: Vec::new(),
+            unscaled_dual: Vec::new(),
         }
     }
 

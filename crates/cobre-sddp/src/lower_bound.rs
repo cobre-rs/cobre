@@ -172,7 +172,13 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta);
             }
 
-            patch_buf.fill_forward_patches(indexer, initial_state, &noise_buf, base_row);
+            patch_buf.fill_forward_patches(
+                indexer,
+                initial_state,
+                &noise_buf,
+                base_row,
+                &template.row_scale,
+            );
             let n_patches = patch_buf.forward_patch_count();
             solver.set_row_bounds(
                 &patch_buf.indices[..n_patches],

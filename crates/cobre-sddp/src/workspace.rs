@@ -54,6 +54,13 @@ pub(crate) struct ScratchBuffers {
     /// `x_original[j] = col_scale[j] * x_scaled[j]`. Reused across solves
     /// to avoid per-solve allocation.
     pub(crate) unscaled_primal: Vec<f64>,
+    /// Scratch buffer for unscaled dual values.
+    ///
+    /// When row scaling is active, solver dual values are in scaled
+    /// coordinates. This buffer holds the unscaled values after applying
+    /// `dual_original[i] = row_scale[i] * dual_scaled[i]`. Reused across
+    /// solves to avoid per-solve allocation.
+    pub(crate) unscaled_dual: Vec<f64>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -105,6 +112,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }
     }
@@ -159,6 +167,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
                 },
             })
             .collect();
@@ -215,6 +224,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
                 },
             });
         }

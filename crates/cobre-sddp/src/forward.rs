@@ -491,6 +491,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         &ws.current_state,
         &ws.scratch.noise_buf,
         ctx.base_rows[t],
+        &ctx.templates[t].row_scale,
     );
     if n_load_buses > 0 {
         ws.patch_buf.fill_load_patches(
@@ -498,6 +499,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
             ctx.block_counts_per_stage[t],
             &ws.scratch.load_rhs_buf,
             ctx.load_bus_indices,
+            &ctx.templates[t].row_scale,
         );
     }
     let pc = ws.patch_buf.forward_patch_count();
@@ -571,7 +573,22 @@ fn run_forward_stage<S: SolverInterface + Send>(
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
     rec.dual.clear();
-    rec.dual.extend_from_slice(view.dual);
+    // Unscale duals: structural rows use row_scale[i]; cut rows (i >= num_rows)
+    // have implicit row_scale = 1.0 and are used as-is.
+    let row_scale = &ctx.templates[t].row_scale;
+    if row_scale.is_empty() {
+        rec.dual.extend_from_slice(view.dual);
+    } else {
+        rec.dual.reserve(view.dual.len());
+        for (i, &d) in view.dual.iter().enumerate() {
+            let scale = if i < row_scale.len() {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            rec.dual.push(d * scale);
+        }
+    }
     rec.stage_cost = stage_cost;
     rec.state.clear();
     rec.state
@@ -1239,6 +1256,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }
     }
@@ -2775,6 +2793,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
 
@@ -2875,6 +2894,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
 

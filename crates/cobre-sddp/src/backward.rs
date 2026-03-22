@@ -251,6 +251,7 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
         x_hat,
         &ws.scratch.noise_buf,
         ctx.base_rows[s],
+        &ctx.templates[s].row_scale,
     );
     if ctx.n_load_buses > 0 {
         ws.patch_buf.fill_load_patches(
@@ -258,6 +259,7 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
             n_blks,
             &ws.scratch.load_rhs_buf,
             ctx.load_bus_indices,
+            &ctx.templates[s].row_scale,
         );
     }
     let pc = ws.patch_buf.forward_patch_count();
@@ -337,7 +339,20 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         })?;
 
         let objective = view.objective;
-        let coefficients: Vec<f64> = view.dual[..indexer.n_state].to_vec();
+        // Unscale duals from scaled units back to original units.
+        // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
+        // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
+        // Cut rows have implicit row_scale = 1.0 and require no adjustment.
+        let row_scale = &ctx.templates[s].row_scale;
+        let coefficients: Vec<f64> = if row_scale.is_empty() {
+            view.dual[..indexer.n_state].to_vec()
+        } else {
+            view.dual[..indexer.n_state]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| d * row_scale[i])
+                .collect()
+        };
         let intercept = objective
             - coefficients
                 .iter()
@@ -801,6 +816,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }]
     }
@@ -2211,6 +2227,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2269,6 +2286,7 @@ mod tests {
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
                 },
             })
             .collect();
@@ -2567,6 +2585,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2693,6 +2712,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2815,6 +2835,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];

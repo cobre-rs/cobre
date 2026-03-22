@@ -243,6 +243,7 @@ fn solve_simulation_stage<S: SolverInterface>(
         &ws.current_state,
         &ws.scratch.noise_buf,
         ctx.base_rows[t],
+        &ctx.templates[t].row_scale,
     );
     if ctx.n_load_buses > 0 {
         ws.patch_buf.fill_load_patches(
@@ -250,6 +251,7 @@ fn solve_simulation_stage<S: SolverInterface>(
             ctx.block_counts_per_stage[t],
             &ws.scratch.load_rhs_buf,
             ctx.load_bus_indices,
+            &ctx.templates[t].row_scale,
         );
     }
     let pc = ws.patch_buf.forward_patch_count();
@@ -298,20 +300,41 @@ fn solve_simulation_stage<S: SolverInterface>(
             }
         }
     }
-    // The mutable borrow of unscaled_primal is released; now borrow
-    // scratch mutably for extract_sim_stage_result while reading
-    // unscaled_primal immutably through the SolutionView.
+    // Unscale dual values when row scaling is active.
+    // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
+    // Structural rows use row_scale[i]; rows beyond the template length
+    // (cut rows) have implicit row_scale = 1.0.
+    let row_scale = &ctx.templates[ids.t].row_scale;
+    {
+        let buf = &mut ws.scratch.unscaled_dual;
+        if row_scale.is_empty() {
+            buf.clear();
+            buf.extend_from_slice(view.dual);
+        } else {
+            buf.resize(view.dual.len(), 0.0);
+            for (i, &d) in view.dual.iter().enumerate() {
+                let scale = if i < row_scale.len() {
+                    row_scale[i]
+                } else {
+                    1.0
+                };
+                buf[i] = d * scale;
+            }
+        }
+    }
+    // The mutable borrows of unscaled_primal and unscaled_dual are released;
+    // now borrow scratch mutably for extract_sim_stage_result while reading
+    // unscaled values immutably through the SolutionView.
     //
     // Unfortunately extract_sim_stage_result takes &mut ScratchBuffers,
-    // which conflicts with an immutable borrow of unscaled_primal.
-    // Work around by splitting: extract_sim_stage_result only uses
-    // inflow_m3s_buf and row_lower_buf from scratch.  We clone the
-    // unscaled primal into a local before calling extract.
+    // which conflicts with immutable borrows of the unscaled scratch buffers.
+    // Work around by cloning into locals before calling extract.
     let unscaled_primal_local: Vec<f64> = ws.scratch.unscaled_primal.clone();
+    let unscaled_dual_local: Vec<f64> = ws.scratch.unscaled_dual.clone();
     let unscaled_view = cobre_solver::SolutionView {
         objective: view.objective,
         primal: &unscaled_primal_local,
-        dual: view.dual,
+        dual: &unscaled_dual_local,
         reduced_costs: view.reduced_costs,
         iterations: view.iterations,
         solve_time_seconds: view.solve_time_seconds,
@@ -1095,6 +1118,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }]
     }
@@ -1732,6 +1756,7 @@ mod tests {
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
                 },
             })
             .collect();
@@ -2566,6 +2591,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }];
 
@@ -2825,6 +2851,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }];
 
@@ -3075,6 +3102,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }]
     }

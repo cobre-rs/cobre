@@ -332,6 +332,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &stderr,
         );
     }
+    // Write scaling report (rank 0 only, before training starts).
+    if is_root {
+        let scaling_path = output_dir.join("training/scaling_report.json");
+        cobre_io::write_scaling_report(&scaling_path, setup.scaling_report()).map_err(|e| {
+            CliError::Internal {
+                message: format!("failed to write scaling report: {e}"),
+            }
+        })?;
+    }
+
     comm.barrier().map_err(|e| CliError::Internal {
         message: format!("post-export barrier error: {e}"),
     })?;

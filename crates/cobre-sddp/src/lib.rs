@@ -55,6 +55,7 @@ pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
 pub mod risk_measure;
+pub mod scaling_report;
 pub mod setup;
 pub mod simulation;
 pub mod solver_stats;
@@ -94,6 +95,7 @@ pub use lp_builder::{
     build_stage_templates,
 };
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use scaling_report::ScalingReport;
 pub use setup::{
     DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,
     StudyParams, StudySetup, prepare_stochastic,

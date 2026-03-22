@@ -14,8 +14,10 @@ pub mod hydro_models;
 pub mod manifest;
 pub mod parquet_config;
 pub mod policy;
+pub mod scaling_report;
 pub(crate) mod schemas;
 pub mod simulation_writer;
+pub mod solver_stats_writer;
 pub mod stochastic;
 pub mod training_writer;
 
@@ -31,7 +33,9 @@ pub use manifest::{
     write_metadata, write_simulation_manifest, write_training_manifest,
 };
 pub use parquet_config::ParquetWriterConfig;
+pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;
+pub use solver_stats_writer::{SolverStatsRow, write_solver_stats};
 pub use stochastic::{
     FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,

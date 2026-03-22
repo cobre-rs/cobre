@@ -218,6 +218,8 @@ pub enum TrainingEvent {
         backward_ms: u64,
         /// Total number of LP solves in this iteration (forward + backward stages).
         lp_solves: u64,
+        /// Cumulative LP solve wall-clock time for this iteration, in milliseconds.
+        solve_time_ms: f64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -276,6 +278,10 @@ pub enum TrainingEvent {
         /// Total cost of the most recently completed simulation scenario,
         /// in cost units.
         scenario_cost: f64,
+        /// Cumulative LP solve time for this scenario, in milliseconds.
+        solve_time_ms: f64,
+        /// Number of LP solves in this scenario.
+        lp_solves: u64,
     },
 
     /// Emitted once when policy simulation completes.
@@ -356,6 +362,7 @@ mod tests {
                 forward_ms: 80,
                 backward_ms: 100,
                 lp_solves: 240,
+                solve_time_ms: 45.2,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),
@@ -379,6 +386,8 @@ mod tests {
                 scenarios_total: 200,
                 elapsed_ms: 5_000,
                 scenario_cost: 45_230.0,
+                solve_time_ms: 0.0,
+                lp_solves: 0,
             },
             TrainingEvent::SimulationFinished {
                 scenarios: 200,
@@ -551,12 +560,15 @@ mod tests {
             scenarios_total: 500,
             elapsed_ms: 10_000,
             scenario_cost: 45_230.0,
+            solve_time_ms: 0.0,
+            lp_solves: 0,
         };
         let TrainingEvent::SimulationProgress {
             scenarios_complete,
             scenarios_total,
             elapsed_ms,
             scenario_cost,
+            ..
         } = event
         else {
             panic!("wrong variant")
@@ -575,6 +587,8 @@ mod tests {
             scenarios_total: 200,
             elapsed_ms: 100,
             scenario_cost: 50_000.0,
+            solve_time_ms: 0.0,
+            lp_solves: 0,
         };
         let TrainingEvent::SimulationProgress { scenario_cost, .. } = event else {
             panic!("wrong variant")

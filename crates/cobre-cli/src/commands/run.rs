@@ -332,6 +332,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             &stderr,
         );
     }
+    // Write scaling report (rank 0 only, before training starts).
+    if is_root {
+        let scaling_path = output_dir.join("training/scaling_report.json");
+        cobre_io::write_scaling_report(&scaling_path, setup.scaling_report()).map_err(|e| {
+            CliError::Internal {
+                message: format!("failed to write scaling report: {e}"),
+            }
+        })?;
+    }
+
     comm.barrier().map_err(|e| CliError::Internal {
         message: format!("post-export barrier error: {e}"),
     })?;
@@ -396,6 +406,43 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-training barrier error: {e}"),
     })?;
 
+    // Aggregate solver stats from the stats log for the summary display.
+    let (
+        total_first_try,
+        total_retried,
+        total_failed,
+        total_solve_time_s,
+        total_basis_offered,
+        total_basis_rejections,
+        total_simplex_iter,
+    ) = {
+        let mut first_try = 0u64;
+        let mut retried = 0u64;
+        let mut failed = 0u64;
+        let mut solve_time = 0.0_f64;
+        let mut basis_offered = 0u64;
+        let mut basis_rejections = 0u64;
+        let mut simplex = 0u64;
+        for (_, _, _, delta) in &training_result.solver_stats_log {
+            first_try += delta.first_try_successes;
+            retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
+            failed += delta.lp_failures;
+            solve_time += delta.solve_time_ms;
+            basis_offered += delta.basis_offered;
+            basis_rejections += delta.basis_rejections;
+            simplex += delta.simplex_iterations;
+        }
+        (
+            first_try,
+            retried,
+            failed,
+            solve_time / 1000.0,
+            basis_offered,
+            basis_rejections,
+            simplex,
+        )
+    };
+
     // Print training summary immediately after training completes.
     let training_summary = TrainingSummary {
         iterations: training_result.iterations,
@@ -414,6 +461,13 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         total_cuts_generated: training_output.cut_stats.total_generated,
         total_lp_solves: global_lp_solves,
         total_time_ms: training_result.total_time_ms,
+        total_first_try,
+        total_retried,
+        total_failed,
+        total_solve_time_seconds: total_solve_time_s,
+        total_basis_offered,
+        total_basis_rejections,
+        total_simplex_iterations: total_simplex_iter,
     };
     if !quiet && is_root {
         crate::summary::print_training_summary(&stderr, &training_summary);
@@ -471,7 +525,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         #[allow(clippy::expect_used)]
         let local_results = drain_handle.join().expect("drain thread panicked");
 
-        sim_result?;
+        let sim_run_result = sim_result?;
 
         #[allow(clippy::cast_possible_truncation)]
         let sim_time_ms = sim_start.elapsed().as_millis() as u64;
@@ -482,6 +536,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("post-simulation barrier error: {e}"),
         })?;
 
+        // Aggregate solver stats from per-scenario deltas for the summary display.
+        let sim_solver_agg = cobre_sddp::SolverStatsDelta::aggregate(
+            &sim_run_result
+                .solver_stats
+                .iter()
+                .map(|(_, delta)| delta.clone())
+                .collect::<Vec<_>>(),
+        );
+
         // Print the simulation summary now — before I/O starts.
         if !quiet && is_root {
             crate::summary::print_simulation_summary(
@@ -491,6 +554,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     completed: n_scenarios,
                     failed: 0,
                     total_time_ms: sim_time_ms,
+                    total_lp_solves: sim_solver_agg.lp_solves,
+                    total_first_try: sim_solver_agg.first_try_successes,
+                    total_retried: sim_solver_agg
+                        .lp_successes
+                        .saturating_sub(sim_solver_agg.first_try_successes),
+                    total_failed_solves: sim_solver_agg.lp_failures,
+                    total_solve_time_seconds: sim_solver_agg.solve_time_ms / 1000.0,
+                    total_basis_offered: sim_solver_agg.basis_offered,
+                    total_basis_rejections: sim_solver_agg.basis_rejections,
+                    total_simplex_iterations: sim_solver_agg.simplex_iterations,
                 },
             );
         }
@@ -529,6 +602,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 Some(&sim_output),
                 &setup,
                 &training_result,
+                Some(&sim_run_result.solver_stats),
                 quiet,
                 &stderr,
             )?;
@@ -546,6 +620,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             None,
             &setup,
             &training_result,
+            None,
             quiet,
             &stderr,
         )?;
@@ -622,6 +697,33 @@ fn gather_simulation_results<C: Communicator>(
 
 /// Write training checkpoint and results to the output directory.
 ///
+/// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
+///
+/// The `id` parameter is the row identifier: iteration number for training phases,
+/// scenario ID for the simulation phase.
+#[allow(clippy::cast_possible_truncation)]
+fn delta_to_stats_row(
+    id: u32,
+    phase: &str,
+    stage: i32,
+    delta: &cobre_sddp::SolverStatsDelta,
+) -> cobre_io::SolverStatsRow {
+    cobre_io::SolverStatsRow {
+        iteration: id,
+        phase: phase.to_string(),
+        stage,
+        lp_solves: delta.lp_solves as u32,
+        lp_successes: delta.lp_successes as u32,
+        lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
+        lp_failures: delta.lp_failures as u32,
+        retry_attempts: delta.retry_attempts as u32,
+        basis_offered: delta.basis_offered as u32,
+        basis_rejections: delta.basis_rejections as u32,
+        simplex_iterations: delta.simplex_iterations,
+        solve_time_ms: delta.solve_time_ms,
+    }
+}
+
 /// Extracted from `execute()` to give the output-writing step a clear boundary.
 /// Handles both the with-simulation path (`sim_output = Some(...)`) and the
 /// training-only path (`sim_output = None`). Prints "Writing outputs..." and
@@ -635,6 +737,7 @@ fn write_outputs(
     sim_output: Option<&cobre_io::SimulationOutput>,
     setup: &StudySetup,
     training_result: &cobre_sddp::TrainingResult,
+    sim_solver_stats: Option<&[(u32, cobre_sddp::SolverStatsDelta)]>,
     quiet: bool,
     stderr: &Term,
 ) -> Result<(), CliError> {
@@ -659,6 +762,32 @@ fn write_outputs(
 
     write_results(output_dir, training_output, sim_output, system, config)
         .map_err(CliError::from)?;
+
+    // Write training solver stats to training/solver/iterations.parquet.
+    if !training_result.solver_stats_log.is_empty() {
+        let rows: Vec<cobre_io::SolverStatsRow> = training_result
+            .solver_stats_log
+            .iter()
+            .map(|(iter, phase, stage, delta)| {
+                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
+                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            })
+            .collect();
+        cobre_io::write_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+    }
+
+    // Write simulation solver stats to simulation/solver/iterations.parquet.
+    if let Some(stats) = sim_solver_stats {
+        if !stats.is_empty() {
+            let rows: Vec<cobre_io::SolverStatsRow> = stats
+                .iter()
+                .map(|(scenario_id, delta)| {
+                    delta_to_stats_row(*scenario_id, "simulation", -1, delta)
+                })
+                .collect();
+            cobre_io::write_simulation_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+        }
+    }
 
     if !quiet {
         let write_secs = write_start.elapsed().as_secs_f64();

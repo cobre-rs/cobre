@@ -59,7 +59,7 @@ use crate::{
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
-    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    simulation::{EntityCounts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
 
@@ -238,6 +238,9 @@ pub struct StudySetup {
     block_counts_per_stage: Vec<usize>,
     max_blocks: usize,
 
+    // ── Scaling diagnostics ──────────────────────────────────────────────────
+    scaling_report: crate::scaling_report::ScalingReport,
+
     // ── Config-derived scalars ────────────────────────────────────────────────
     seed: u64,
     forward_passes: u32,
@@ -327,6 +330,11 @@ impl StudySetup {
         cut_selection: Option<CutSelectionStrategy>,
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
+        use crate::scaling_report::{
+            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
+            summarize_scale_factors,
+        };
+
         // ── Stage templates ───────────────────────────────────────────────────
         let mut stage_templates = build_stage_templates(
             system,
@@ -341,11 +349,20 @@ impl StudySetup {
         // conditioning (D_r * A * D_c form). Scale factors are stored in the
         // template for unscaling primal/dual solutions in the forward and
         // backward passes.
-        for tmpl in &mut stage_templates.templates {
+        //
+        // Scaling report: capture pre/post coefficient ranges for diagnostics.
+
+        let mut stage_scaling_reports = Vec::with_capacity(stage_templates.templates.len());
+
+        for (stage_id, tmpl) in stage_templates.templates.iter_mut().enumerate() {
+            // Pre-scaling snapshot (before col/row scaling; cost scaling is
+            // already baked into the objective during template construction).
+            let pre_scaling = compute_coefficient_range(tmpl);
+
             let col_scale =
                 lp_builder::compute_col_scale(tmpl.num_cols, &tmpl.col_starts, &tmpl.values);
             lp_builder::apply_col_scale(tmpl, &col_scale);
-            tmpl.col_scale = col_scale;
+            tmpl.col_scale.clone_from(&col_scale);
             // Row scaling is applied to the already column-scaled matrix.
             let row_scale = lp_builder::compute_row_scale(
                 tmpl.num_rows,
@@ -355,8 +372,27 @@ impl StudySetup {
                 &tmpl.values,
             );
             lp_builder::apply_row_scale(tmpl, &row_scale);
-            tmpl.row_scale = row_scale;
+            tmpl.row_scale.clone_from(&row_scale);
+
+            // Post-scaling snapshot (after col + row scaling).
+            let post_scaling = compute_coefficient_range(tmpl);
+
+            stage_scaling_reports.push(StageScalingReport {
+                stage_id,
+                dimensions: LpDimensions {
+                    num_cols: tmpl.num_cols,
+                    num_rows: tmpl.num_rows,
+                    num_nz: tmpl.num_nz,
+                },
+                pre_scaling,
+                post_scaling,
+                col_scale: summarize_scale_factors(&col_scale),
+                row_scale: summarize_scale_factors(&row_scale),
+            });
         }
+
+        let scaling_report =
+            build_scaling_report(lp_builder::COST_SCALE_FACTOR, stage_scaling_reports);
 
         // Pre-scale noise_scale by row_scale so that the inflow noise
         // perturbation (noise_scale * eta) is in the same scaled units as
@@ -527,6 +563,7 @@ impl StudySetup {
             ncs_max_gen,
             block_counts_per_stage,
             max_blocks,
+            scaling_report,
             seed,
             forward_passes,
             max_iterations,
@@ -545,6 +582,12 @@ impl StudySetup {
     #[must_use]
     pub fn templates_full(&self) -> &StageTemplates {
         &self.stage_templates
+    }
+
+    /// Return a reference to the LP scaling report captured during template build.
+    #[must_use]
+    pub fn scaling_report(&self) -> &crate::scaling_report::ScalingReport {
+        &self.scaling_report
     }
 
     /// Return the slice of [`StageTemplate`](cobre_solver::StageTemplate)s,
@@ -832,7 +875,7 @@ impl StudySetup {
         comm: &C,
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
-    ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+    ) -> Result<crate::SimulationRunResult, SimulationError> {
         let stage_ctx = self.stage_ctx();
         let training_ctx = self.training_ctx();
 
@@ -2011,7 +2054,7 @@ mod tests {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
         let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
-        let costs = setup
+        let sim_result = setup
             .simulate(&mut pool.workspaces, &comm, &result_tx, None)
             .expect("simulate");
 
@@ -2020,8 +2063,13 @@ mod tests {
         let _results = drain_handle.join().expect("drain thread");
 
         assert!(
-            !costs.is_empty(),
+            !sim_result.costs.is_empty(),
             "simulate must return at least one cost entry"
+        );
+        assert_eq!(
+            sim_result.solver_stats.len(),
+            sim_result.costs.len(),
+            "one solver stats entry per scenario"
         );
     }
 

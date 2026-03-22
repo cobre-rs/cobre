@@ -323,6 +323,27 @@ pub struct TrainingSummary {
 
     /// Total elapsed wall-clock time for the training run (milliseconds).
     pub total_time_ms: u64,
+
+    /// Number of solves that returned optimal on the first attempt.
+    pub total_first_try: u64,
+
+    /// Number of solves that required retry escalation.
+    pub total_retried: u64,
+
+    /// Number of solves that exhausted all retry levels.
+    pub total_failed: u64,
+
+    /// Total LP solve wall-clock time in seconds.
+    pub total_solve_time_seconds: f64,
+
+    /// Total number of `solve_with_basis` calls.
+    pub total_basis_offered: u64,
+
+    /// Total number of basis rejections.
+    pub total_basis_rejections: u64,
+
+    /// Total simplex iterations across all solves.
+    pub total_simplex_iterations: u64,
 }
 
 /// Simulation completion statistics for display in the post-run summary.
@@ -338,6 +359,30 @@ pub struct SimulationSummary {
 
     /// Total elapsed wall-clock time for the simulation phase (milliseconds).
     pub total_time_ms: u64,
+
+    /// Total LP solves across all scenarios.
+    pub total_lp_solves: u64,
+
+    /// Solves that returned optimal on the first attempt.
+    pub total_first_try: u64,
+
+    /// Solves that required retry escalation before succeeding.
+    pub total_retried: u64,
+
+    /// Solves that exhausted all retry levels.
+    pub total_failed_solves: u64,
+
+    /// Cumulative LP solve wall-clock time in seconds.
+    pub total_solve_time_seconds: f64,
+
+    /// Number of `solve_with_basis` calls.
+    pub total_basis_offered: u64,
+
+    /// Times the basis was rejected (cold-start fallback).
+    pub total_basis_rejections: u64,
+
+    /// Total simplex iterations across all solves.
+    pub total_simplex_iterations: u64,
 }
 
 /// All data needed to render the complete post-run summary block.
@@ -479,7 +524,30 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
         "  Cuts:         {} active / {} generated",
         t.total_cuts_active, t.total_cuts_generated
     ));
-    let _ = stderr.write_line(&format!("  LP solves:    {}", t.total_lp_solves));
+    let _ = stderr.write_line(&format!(
+        "  LP solves:    {} ({} first-try, {} retried, {} failed)",
+        t.total_lp_solves, t.total_first_try, t.total_retried, t.total_failed
+    ));
+    #[allow(clippy::cast_precision_loss)]
+    let avg_ms = if t.total_lp_solves > 0 {
+        t.total_solve_time_seconds * 1000.0 / t.total_lp_solves as f64
+    } else {
+        0.0
+    };
+    let _ = stderr.write_line(&format!(
+        "  LP time:      {:.1}s total, {avg_ms:.1}ms avg",
+        t.total_solve_time_seconds
+    ));
+    if t.total_basis_offered > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let hit_pct =
+            (1.0 - t.total_basis_rejections as f64 / t.total_basis_offered as f64) * 100.0;
+        let _ = stderr.write_line(&format!(
+            "  Basis reuse:  {hit_pct:.1}% hit ({} rejections / {} offered)",
+            t.total_basis_rejections, t.total_basis_offered
+        ));
+    }
+    let _ = stderr.write_line(&format!("  Simplex iter: {}", t.total_simplex_iterations));
 }
 
 /// Print the simulation completion summary to `stderr`.
@@ -496,6 +564,30 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
         "  Completed: {}  Failed: {}",
         sim.completed, sim.failed
     ));
+    let _ = stderr.write_line(&format!(
+        "  LP solves:    {} ({} first-try, {} retried, {} failed)",
+        sim.total_lp_solves, sim.total_first_try, sim.total_retried, sim.total_failed_solves
+    ));
+    #[allow(clippy::cast_precision_loss)]
+    let avg_ms = if sim.total_lp_solves > 0 {
+        sim.total_solve_time_seconds * 1000.0 / sim.total_lp_solves as f64
+    } else {
+        0.0
+    };
+    let _ = stderr.write_line(&format!(
+        "  LP time:      {:.1}s total, {avg_ms:.1}ms avg",
+        sim.total_solve_time_seconds
+    ));
+    if sim.total_basis_offered > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let hit_pct =
+            (1.0 - sim.total_basis_rejections as f64 / sim.total_basis_offered as f64) * 100.0;
+        let _ = stderr.write_line(&format!(
+            "  Basis reuse:  {hit_pct:.1}% hit ({} rejections / {} offered)",
+            sim.total_basis_rejections, sim.total_basis_offered
+        ));
+    }
+    let _ = stderr.write_line(&format!("  Simplex iter: {}", sim.total_simplex_iterations));
 }
 
 /// Print the output directory path and write duration to `stderr`.
@@ -555,6 +647,13 @@ mod tests {
             total_cuts_generated: 1200,
             total_lp_solves: 36_000,
             total_time_ms: 5_000,
+            total_first_try: 35_900,
+            total_retried: 100,
+            total_failed: 0,
+            total_solve_time_seconds: 28.8,
+            total_basis_offered: 34_000,
+            total_basis_rejections: 200,
+            total_simplex_iterations: 1_800_000,
         }
     }
 
@@ -618,6 +717,14 @@ mod tests {
             completed: 198,
             failed: 2,
             total_time_ms: 10_000,
+            total_lp_solves: 0,
+            total_first_try: 0,
+            total_retried: 0,
+            total_failed_solves: 0,
+            total_solve_time_seconds: 0.0,
+            total_basis_offered: 0,
+            total_basis_rejections: 0,
+            total_simplex_iterations: 0,
         };
         let summary = make_run_summary(Some(sim));
         let s = format_summary_string(&summary);
@@ -773,6 +880,14 @@ mod tests {
             completed: 100,
             failed: 0,
             total_time_ms: 5_000,
+            total_lp_solves: 0,
+            total_first_try: 0,
+            total_retried: 0,
+            total_failed_solves: 0,
+            total_solve_time_seconds: 0.0,
+            total_basis_offered: 0,
+            total_basis_rejections: 0,
+            total_simplex_iterations: 0,
         };
         let summary = make_run_summary(Some(sim));
         print_summary(&Term::buffered_stderr(), &summary);

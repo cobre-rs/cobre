@@ -2322,7 +2322,7 @@ mod tests {
     /// over FPHA generation columns, multiplied by `COST_SCALE_FACTOR`.
     ///
     /// Setup: 1 FPHA hydro (h0), 1 constant-productivity hydro (h1), 1 block.
-    /// FPHA generation column: primal=30.0, `objective_coeff`=0.01 → scaled_cost=0.3 → unscaled=300.0
+    /// FPHA generation column: primal=30.0, `objective_coeff`=0.01 → `scaled_cost`=0.3 → unscaled=300.0
     #[test]
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();

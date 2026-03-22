@@ -89,6 +89,70 @@ The following features were delivered in v0.1.4:
   evaporation, multi-deficit, and inflow non-negativity.
 - **MSRV bumped to 1.86** -- Workspace `rust-version` updated from 1.85 to 1.86.
 
+## v0.1.5 Deliverables
+
+The following features were delivered in v0.1.5:
+
+- **Python bindings (PyO3)** -- `cobre-python` package with case loading,
+  validation, training, simulation, and Arrow zero-copy result inspection.
+  Tested on Python 3.12/3.13/3.14.
+- **Past inflows initialization** -- `past_inflows` field in
+  `initial_conditions.json` for initializing PAR(p) lag state from historical
+  inflow records.
+
+## v0.1.6 Deliverables
+
+The following features were delivered in v0.1.6:
+
+- **Generic constraints LP wiring** -- User-defined generic constraints over 20
+  LP variable types (thermal generation, hydro storage, spillage, line flow,
+  etc.) with slack penalties and violation output.
+- **Water withdrawal** -- Hydroelectric water withdrawal constraints modeled as
+  LP bounds on turbined outflow.
+- **JSON schemas** -- Formal JSON Schema definitions for all input files,
+  enabling IDE validation and tooling integration.
+
+## v0.1.7 Deliverables
+
+The following features were delivered in v0.1.7:
+
+- **Block factors** -- Per-bus load demand factors, per-line exchange capacity
+  factors, and per-source NCS availability factors (per-stage, per-block).
+- **NCS stochastic availability** -- Non-controllable source stochastic model
+  via `non_controllable_stats.parquet` (mean + std availability factor per
+  source per stage, clamped normal draw patched per scenario in
+  forward/backward pass and lower bound evaluation).
+- **Deterministic regression tests D13--D15** -- NCS availability, block
+  factors, and combined NCS + block factor test cases.
+
+## v0.1.8 Deliverables
+
+The following features were delivered in v0.1.8:
+
+- **LineExchange variable** -- `line_exchange` variant added to the generic
+  constraint variable catalog, enabling constraints on net power flow across
+  transmission lines.
+- **Per-stage productivity override** -- `hydro_production_models.json` supports
+  per-stage productivity replacement, overriding base `productivity_mw_per_m3s`
+  for specific stages or seasons.
+
+## v0.1.9 Deliverables
+
+The following features were delivered in v0.1.9:
+
+- **PAR estimation overhaul** -- Periodic Yule-Walker coefficient estimation,
+  PACF-based order selection (replacing AIC), contribution-based validation,
+  negative phi_1 rejection gate, and iterative PACF order reduction for
+  improved numerical stability.
+- **LP scaling** -- Row scaling with RHS prescaling and dual unscaling, plus
+  internal objective cost scaling (`COST_SCALE_FACTOR`), improving solver
+  conditioning on real-world systems.
+- **Solver statistics** -- Three-channel instrumentation: LP scaling diagnostics
+  report (JSON), per-phase solver statistics (Parquet), and enhanced CLI display
+  with per-solve timing, basis reuse tracking, and simplex iteration counts.
+- **Per-scenario simulation statistics** -- Individual scenario cost and LP solve
+  metrics exported alongside aggregate simulation results.
+
 ## Sections
 
 The roadmap is organized into four areas:
@@ -97,8 +161,8 @@ The roadmap is organized into four areas:
   from v0.1.0. (`Truncation` was delivered in v0.1.1.)
 - **HPC Optimizations** -- Performance improvements beyond the rayon baseline,
   grouped into near-term (v0.1.x/v0.2.x) and longer-term (v0.3+) items.
-- **Post-MVP Crates** -- Implementation plans for the three stubbed workspace
-  crates: `cobre-mcp`, `cobre-python`, and `cobre-tui`.
+- **Post-MVP Crates** -- `cobre-python` was delivered in v0.1.5. `cobre-mcp`
+  and `cobre-tui` remain stubbed for future implementation.
 - **Algorithm Extensions** -- Deferred solver variants: multi-cut formulation
   and infinite-horizon policy graphs. (CVaR risk measure was delivered in
   v0.1.1. Cut selection wiring was delivered in v0.1.2.)

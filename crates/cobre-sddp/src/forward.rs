@@ -1430,9 +1430,9 @@ mod tests {
     /// Behavioral: `cost_sum` and `cost_sum_sq` are correctly accumulated.
     ///
     /// With 2 scenarios and `stage_cost=70_000` at every `(scenario, stage)`:
-    /// - `total_cost` per scenario = 70_000 * 3 = 210_000
-    /// - `cost_sum` = 210_000 + 210_000 = 420_000
-    /// - `cost_sum_sq` = 210_000^2 + 210_000^2 = 88_200_000_000
+    /// - `total_cost` per scenario = `70_000` \* 3 = `210_000`
+    /// - `cost_sum` = `210_000` + `210_000` = `420_000`
+    /// - `cost_sum_sq` = `210_000`^2 + `210_000`^2 = `88_200_000_000`
     #[test]
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);

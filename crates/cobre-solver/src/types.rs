@@ -157,6 +157,18 @@ pub struct SolverStatistics {
 
     /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
     pub basis_rejections: u64,
+
+    /// Number of solves that returned optimal on the first attempt (before any retry).
+    ///
+    /// Enables first-try rate computation: `first_try_rate = first_try_successes / solve_count`.
+    /// The complement `success_count - first_try_successes` gives the number of retried solves.
+    pub first_try_successes: u64,
+
+    /// Total number of `solve_with_basis` calls (basis offers).
+    ///
+    /// Combined with `basis_rejections`, enables basis hit rate computation:
+    /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
+    pub basis_offered: u64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -474,6 +486,8 @@ mod tests {
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
         assert_eq!(stats.basis_rejections, 0);
+        assert_eq!(stats.first_try_successes, 0);
+        assert_eq!(stats.basis_offered, 0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

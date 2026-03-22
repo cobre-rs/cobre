@@ -212,7 +212,7 @@ fn validate_order_contributions(
 /// matrix. In Rust, `f64::sqrt()` of a negative number returns `NaN`, and
 /// `NaN.clamp(a, b)` propagates `NaN` (IEEE 754 semantics). A `NaN`
 /// `residual_std_ratio` would then poison the noise scale and eventually cause
-/// the HiGHS solver to reject row-bound patches.
+/// the `HiGHS` solver to reject row-bound patches.
 ///
 /// This helper treats non-positive `sigma2` as evidence that the AR model at the
 /// given order is numerically unstable and falls back to the white-noise baseline
@@ -359,6 +359,7 @@ fn run_estimation(
 /// coefficients, then calls `levinson_durbin` per `(entity, season)` pair to
 /// get `sigma2_per_order` for AIC minimisation, and truncates the coefficient
 /// vector to the AIC-selected order.
+#[allow(clippy::too_many_arguments)]
 fn estimate_ar_coefficients_with_selection(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -1860,6 +1861,7 @@ mod tests {
 
     /// Generate synthetic observations for a single-season AR(p) process.
     /// Uses a fixed seed for reproducibility.
+    #[allow(clippy::cast_precision_loss, clippy::cast_lossless)] // u64 >> 33 fits in f64; u32::MAX fits in f64
     fn generate_ar_observations(coefficients: &[f64], n: usize) -> Vec<f64> {
         let p = coefficients.len();
         let mut values = vec![0.0_f64; n + p];
@@ -2095,8 +2097,7 @@ mod tests {
         let final_order = estimates[0].coefficients.len();
         assert!(
             final_order <= 2,
-            "Fixed path should truncate; got order {}",
-            final_order
+            "Fixed path should truncate; got order {final_order}"
         );
 
         // Verify a reduction was recorded.

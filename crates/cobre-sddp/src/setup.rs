@@ -59,7 +59,7 @@ use crate::{
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
-    simulation::{EntityCounts, ScenarioCategoryCosts, SimulationOutputSpec},
+    simulation::{EntityCounts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
 
@@ -874,7 +874,7 @@ impl StudySetup {
         comm: &C,
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
-    ) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+    ) -> Result<crate::SimulationRunResult, SimulationError> {
         let stage_ctx = self.stage_ctx();
         let training_ctx = self.training_ctx();
 
@@ -2053,7 +2053,7 @@ mod tests {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
         let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
-        let costs = setup
+        let sim_result = setup
             .simulate(&mut pool.workspaces, &comm, &result_tx, None)
             .expect("simulate");
 
@@ -2062,8 +2062,13 @@ mod tests {
         let _results = drain_handle.join().expect("drain thread");
 
         assert!(
-            !costs.is_empty(),
+            !sim_result.costs.is_empty(),
             "simulate must return at least one cost entry"
+        );
+        assert_eq!(
+            sim_result.solver_stats.len(),
+            sim_result.costs.len(),
+            "one solver stats entry per scenario"
         );
     }
 

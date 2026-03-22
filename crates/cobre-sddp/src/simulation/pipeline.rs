@@ -63,6 +63,7 @@ use crate::{
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
+    solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
 };
 
@@ -79,6 +80,20 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// Each parallel worker returns `Ok(WorkerCosts)` for its assigned scenarios.
 /// The outer function flattens and sorts the results.
 type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
+
+/// Per-worker solver statistics accumulation type.
+///
+/// Each entry is `(scenario_id, delta)` for one scenario.
+type WorkerStats = Vec<(u32, SolverStatsDelta)>;
+
+/// Result of a simulation run, containing per-scenario costs and solver statistics.
+#[derive(Debug)]
+pub struct SimulationRunResult {
+    /// Per-scenario `(scenario_id, total_cost, category_costs)`, sorted by `scenario_id`.
+    pub costs: Vec<(u32, f64, ScenarioCategoryCosts)>,
+    /// Per-scenario solver statistics delta, sorted by `scenario_id`.
+    pub solver_stats: Vec<(u32, SolverStatsDelta)>,
+}
 
 /// Output-related inputs bundled from the caller for [`simulate`].
 ///
@@ -652,7 +667,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     config: &SimulationConfig,
     output: SimulationOutputSpec<'_>,
     comm: &C,
-) -> Result<Vec<(u32, f64, ScenarioCategoryCosts)>, SimulationError> {
+) -> Result<SimulationRunResult, SimulationError> {
     let TrainingContext {
         horizon,
         indexer,
@@ -692,18 +707,22 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     let sim_start = Instant::now();
     let scenarios_complete = AtomicU32::new(0);
 
-    let worker_results: Vec<Result<WorkerCosts, SimulationError>> = workspaces
+    let worker_results: Vec<Result<(WorkerCosts, WorkerStats), SimulationError>> = workspaces
         .par_iter_mut()
         .enumerate()
         .map(|(w, ws)| {
             let (start_local, end_local) = partition(local_count, n_workers, w);
             let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
-            let mut worker_costs = Vec::with_capacity(end_local - start_local);
+            let n_scenarios = end_local - start_local;
+            let mut worker_costs = Vec::with_capacity(n_scenarios);
+            let mut worker_stats = Vec::with_capacity(n_scenarios);
 
             for local_idx in start_local..end_local {
                 #[allow(clippy::cast_possible_truncation)]
                 let scenario_id = (scenario_start + local_idx) as u32;
                 let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
+
+                let stats_before = ws.solver.statistics();
                 let (total_cost, stage_results) = process_scenario_stages(
                     ws,
                     ctx,
@@ -716,6 +735,12 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         num_stages,
                     },
                 )?;
+                let stats_after = ws.solver.statistics();
+                worker_stats.push((
+                    scenario_id,
+                    SolverStatsDelta::from_snapshots(&stats_before, &stats_after),
+                ));
+
                 worker_costs.push(dispatch_scenario_result(
                     &output,
                     scenario_id,
@@ -732,15 +757,19 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     sim_start.elapsed().as_millis() as u64,
                 );
             }
-            Ok(worker_costs)
+            Ok((worker_costs, worker_stats))
         })
         .collect();
 
     let mut all_costs = Vec::with_capacity(local_count);
+    let mut all_stats = Vec::with_capacity(local_count);
     for result in worker_results {
-        all_costs.extend(result?);
+        let (costs, stats) = result?;
+        all_costs.extend(costs);
+        all_stats.extend(stats);
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
+    all_stats.sort_by_key(|&(id, _)| id);
 
     if let Some(sender) = output.event_sender {
         #[allow(clippy::cast_possible_truncation)]
@@ -750,7 +779,10 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
             elapsed_ms: sim_start.elapsed().as_millis() as u64,
         });
     }
-    Ok(all_costs)
+    Ok(SimulationRunResult {
+        costs: all_costs,
+        solver_stats: all_stats,
+    })
 }
 
 #[cfg(test)]
@@ -1191,8 +1223,12 @@ mod tests {
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
-        let cost_buffer = result.unwrap();
-        assert_eq!(cost_buffer.len(), 4, "cost buffer should have 4 entries");
+        let run_result = result.unwrap();
+        assert_eq!(
+            run_result.costs.len(),
+            4,
+            "cost buffer should have 4 entries"
+        );
 
         // Drain the channel and count results.
         let mut received = 0;
@@ -1478,7 +1514,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(16);
 
         let mut workspaces = single_workspace(solver);
-        let cost_buffer = simulate(
+        let run_result = simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1515,8 +1551,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(cost_buffer.len(), 2);
-        for (scenario_id, total_cost, _) in &cost_buffer {
+        assert_eq!(run_result.costs.len(), 2);
+        for (scenario_id, total_cost, _) in &run_result.costs {
             assert!(
                 (total_cost - expected_total_cost).abs() < 1e-9,
                 "scenario {scenario_id}: expected total_cost={expected_total_cost}, got {total_cost}"
@@ -1555,7 +1591,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(16);
 
         let mut workspaces = single_workspace(solver);
-        let cost_buffer = simulate(
+        let run_result = simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1592,8 +1628,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(cost_buffer.len(), 3, "rank 0 should process 3 scenarios");
-        let ids: Vec<u32> = cost_buffer.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(
+            run_result.costs.len(),
+            3,
+            "rank 0 should process 3 scenarios"
+        );
+        let ids: Vec<u32> = run_result.costs.iter().map(|(id, _, _)| *id).collect();
         assert_eq!(
             ids,
             vec![0, 1, 2],
@@ -1701,7 +1741,7 @@ mod tests {
         // Run with 1 workspace.
         let (tx1, _rx1) = mpsc::sync_channel(64);
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
-        let costs_1 = simulate(
+        let result_1 = simulate(
             &mut workspaces_1,
             &StageContext {
                 templates: &templates,
@@ -1762,7 +1802,7 @@ mod tests {
                 },
             })
             .collect();
-        let costs_4 = simulate(
+        let result_4 = simulate(
             &mut workspaces_4,
             &StageContext {
                 templates: &templates,
@@ -1798,6 +1838,9 @@ mod tests {
             &comm,
         )
         .unwrap();
+
+        let costs_1 = &result_1.costs;
+        let costs_4 = &result_4.costs;
 
         // Both cost buffers must have exactly 20 entries sorted by scenario_id.
         assert_eq!(
@@ -1998,9 +2041,9 @@ mod tests {
         );
 
         assert!(result.is_ok(), "simulate returned error: {result:?}");
-        let cost_buffer = result.unwrap();
+        let run_result = result.unwrap();
         assert_eq!(
-            cost_buffer.len(),
+            run_result.costs.len(),
             4,
             "cost buffer must have 4 entries when event_sender is None"
         );

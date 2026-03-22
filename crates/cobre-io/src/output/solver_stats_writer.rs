@@ -18,9 +18,10 @@ use super::schemas::solver_iterations_schema;
 /// A single row in the solver statistics Parquet file.
 #[derive(Debug, Clone)]
 pub struct SolverStatsRow {
-    /// Iteration number (1-based).
+    /// Row identifier: iteration number (1-based) for training phases,
+    /// scenario ID (0-based) for the simulation phase.
     pub iteration: u32,
-    /// Phase name: `"forward"`, `"backward"`, or `"lower_bound"`.
+    /// Phase name: `"forward"`, `"backward"`, `"lower_bound"`, or `"simulation"`.
     pub phase: String,
     /// Stage index for backward phase, `-1` for forward/LB.
     pub stage: i32,
@@ -44,7 +45,7 @@ pub struct SolverStatsRow {
     pub solve_time_ms: f64,
 }
 
-/// Write solver statistics rows to `training/solver/iterations.parquet`.
+/// Write training solver statistics to `training/solver/iterations.parquet`.
 ///
 /// Creates the `training/solver/` directory if it does not exist. Uses atomic
 /// write (`.tmp` + rename).
@@ -53,8 +54,27 @@ pub struct SolverStatsRow {
 ///
 /// Returns [`OutputError`] on filesystem or serialization failures.
 pub fn write_solver_stats(output_dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
-    let dir = output_dir.join("training/solver");
-    std::fs::create_dir_all(&dir).map_err(|e| OutputError::io(&dir, e))?;
+    write_solver_stats_to(&output_dir.join("training/solver"), rows)
+}
+
+/// Write simulation solver statistics to `simulation/solver/iterations.parquet`.
+///
+/// Creates the `simulation/solver/` directory if it does not exist. Uses atomic
+/// write (`.tmp` + rename).
+///
+/// # Errors
+///
+/// Returns [`OutputError`] on filesystem or serialization failures.
+pub fn write_simulation_solver_stats(
+    output_dir: &Path,
+    rows: &[SolverStatsRow],
+) -> Result<(), OutputError> {
+    write_solver_stats_to(&output_dir.join("simulation/solver"), rows)
+}
+
+/// Internal: write solver statistics rows to `{dir}/iterations.parquet`.
+fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
+    std::fs::create_dir_all(dir).map_err(|e| OutputError::io(dir, e))?;
 
     let path = dir.join("iterations.parquet");
     let tmp_path = path.with_extension("parquet.tmp");

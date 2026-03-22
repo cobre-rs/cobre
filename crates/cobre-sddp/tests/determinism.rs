@@ -682,7 +682,7 @@ fn run_simulation(
     drop(result_tx);
     let _ = drain_thread.join().unwrap();
 
-    cost_buffer
+    cost_buffer.costs
 }
 
 // ===========================================================================

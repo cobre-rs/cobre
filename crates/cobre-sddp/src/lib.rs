@@ -105,9 +105,9 @@ pub use simulation::{
     SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
     SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationOutputSpec, SimulationPumpingResult,
-    SimulationScenarioResult, SimulationStageResult, SimulationSummary, SimulationThermalResult,
-    StageSummaryStats, accumulate_category_costs, aggregate_simulation, assign_scenarios,
-    extract_stage_result, simulate,
+    SimulationRunResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
+    SimulationThermalResult, StageSummaryStats, accumulate_category_costs, aggregate_simulation,
+    assign_scenarios, extract_stage_result, simulate,
 };
 pub use solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics};
 pub use state_exchange::ExchangeBuffers;

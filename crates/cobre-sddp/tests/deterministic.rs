@@ -1007,7 +1007,7 @@ fn d12_checkpoint_round_trip() {
     // ── Step 9: compute mean simulation cost and compare to training LB ───────
 
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     assert_eq!(

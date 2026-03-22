@@ -525,7 +525,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         #[allow(clippy::expect_used)]
         let local_results = drain_handle.join().expect("drain thread panicked");
 
-        sim_result?;
+        let sim_run_result = sim_result?;
 
         #[allow(clippy::cast_possible_truncation)]
         let sim_time_ms = sim_start.elapsed().as_millis() as u64;
@@ -583,6 +583,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 Some(&sim_output),
                 &setup,
                 &training_result,
+                Some(&sim_run_result.solver_stats),
                 quiet,
                 &stderr,
             )?;
@@ -600,6 +601,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             None,
             &setup,
             &training_result,
+            None,
             quiet,
             &stderr,
         )?;
@@ -676,6 +678,33 @@ fn gather_simulation_results<C: Communicator>(
 
 /// Write training checkpoint and results to the output directory.
 ///
+/// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
+///
+/// The `id` parameter is the row identifier: iteration number for training phases,
+/// scenario ID for the simulation phase.
+#[allow(clippy::cast_possible_truncation)]
+fn delta_to_stats_row(
+    id: u32,
+    phase: &str,
+    stage: i32,
+    delta: &cobre_sddp::SolverStatsDelta,
+) -> cobre_io::SolverStatsRow {
+    cobre_io::SolverStatsRow {
+        iteration: id,
+        phase: phase.to_string(),
+        stage,
+        lp_solves: delta.lp_solves as u32,
+        lp_successes: delta.lp_successes as u32,
+        lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
+        lp_failures: delta.lp_failures as u32,
+        retry_attempts: delta.retry_attempts as u32,
+        basis_offered: delta.basis_offered as u32,
+        basis_rejections: delta.basis_rejections as u32,
+        simplex_iterations: delta.simplex_iterations,
+        solve_time_ms: delta.solve_time_ms,
+    }
+}
+
 /// Extracted from `execute()` to give the output-writing step a clear boundary.
 /// Handles both the with-simulation path (`sim_output = Some(...)`) and the
 /// training-only path (`sim_output = None`). Prints "Writing outputs..." and
@@ -689,6 +718,7 @@ fn write_outputs(
     sim_output: Option<&cobre_io::SimulationOutput>,
     setup: &StudySetup,
     training_result: &cobre_sddp::TrainingResult,
+    sim_solver_stats: Option<&[(u32, cobre_sddp::SolverStatsDelta)]>,
     quiet: bool,
     stderr: &Term,
 ) -> Result<(), CliError> {
@@ -713,6 +743,31 @@ fn write_outputs(
 
     write_results(output_dir, training_output, sim_output, system, config)
         .map_err(CliError::from)?;
+
+    // Write training solver stats to training/solver/iterations.parquet.
+    if !training_result.solver_stats_log.is_empty() {
+        let rows: Vec<cobre_io::SolverStatsRow> = training_result
+            .solver_stats_log
+            .iter()
+            .map(|(iter, phase, stage, delta)| {
+                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            })
+            .collect();
+        cobre_io::write_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+    }
+
+    // Write simulation solver stats to simulation/solver/iterations.parquet.
+    if let Some(stats) = sim_solver_stats {
+        if !stats.is_empty() {
+            let rows: Vec<cobre_io::SolverStatsRow> = stats
+                .iter()
+                .map(|(scenario_id, delta)| {
+                    delta_to_stats_row(*scenario_id, "simulation", -1, delta)
+                })
+                .collect();
+            cobre_io::write_simulation_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+        }
+    }
 
     if !quiet {
         let write_secs = write_start.elapsed().as_secs_f64();

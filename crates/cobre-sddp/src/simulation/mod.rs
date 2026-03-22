@@ -18,7 +18,7 @@ pub use extraction::{
     EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
     extract_stage_result,
 };
-pub use pipeline::{SimulationOutputSpec, simulate};
+pub use pipeline::{SimulationOutputSpec, SimulationRunResult, simulate};
 pub use types::{
     CategoryCostStats, ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult,
     SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,

@@ -35,7 +35,7 @@ pub use manifest::{
 pub use parquet_config::ParquetWriterConfig;
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;
-pub use solver_stats_writer::{SolverStatsRow, write_solver_stats};
+pub use solver_stats_writer::{SolverStatsRow, write_simulation_solver_stats, write_solver_stats};
 pub use stochastic::{
     FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,

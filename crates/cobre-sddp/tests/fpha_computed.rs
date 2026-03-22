@@ -372,7 +372,7 @@ fn fpha_computed_case_converges() {
     drop(drain_handle.join().expect("drain thread must not panic"));
 
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
         .expect("aggregate_simulation must succeed");
     assert_eq!(summary.n_scenarios, 100, "must simulate 100 scenarios");
     assert!(summary.mean_cost > 0.0, "mean cost must be positive");

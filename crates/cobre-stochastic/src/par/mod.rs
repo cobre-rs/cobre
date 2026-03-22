@@ -32,9 +32,10 @@ pub use evaluate::{
     solve_par_noise_batch, solve_par_noises,
 };
 pub use fitting::{
-    AicSelectionResult, ArCoefficientEstimate, LevinsonDurbinResult, PacfSelectionResult,
-    SeasonalStats, estimate_ar_coefficients, estimate_correlation, estimate_seasonal_stats,
-    find_season_for_date, levinson_durbin, select_order_aic, select_order_pacf,
+    build_periodic_yw_matrix, estimate_ar_coefficients, estimate_correlation,
+    estimate_seasonal_stats, find_season_for_date, levinson_durbin, periodic_autocorrelation,
+    select_order_aic, select_order_pacf, solve_linear_system, AicSelectionResult,
+    ArCoefficientEstimate, LevinsonDurbinResult, PacfSelectionResult, SeasonalStats,
 };
 pub use precompute::PrecomputedPar;
-pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};
+pub use validation::{validate_par_parameters, ParValidationReport, ParWarning};

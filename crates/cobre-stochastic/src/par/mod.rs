@@ -25,7 +25,9 @@ pub mod fitting;
 pub mod precompute;
 pub mod validation;
 
-pub use contribution::{check_negative_contributions, compute_contributions, find_max_valid_order};
+pub use contribution::{
+    check_negative_contributions, compute_contributions, find_max_valid_order, has_negative_phi1,
+};
 #[allow(deprecated)]
 pub use evaluate::{
     evaluate_par, evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, solve_par_noise,

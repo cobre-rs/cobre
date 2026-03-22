@@ -135,6 +135,20 @@ pub fn check_negative_contributions(contributions: &[f64]) -> bool {
     contributions.iter().any(|&c| c < 0.0)
 }
 
+/// Check whether the first AR coefficient (`phi_1`) is negative.
+///
+/// A negative `phi_1` indicates that the AR model contradicts expected
+/// hydrological persistence: higher inflow in the previous period implies
+/// lower inflow in the current period. This is physically unrealistic for
+/// most seasonal inflow series.
+///
+/// Returns `true` when `coefficients` is non-empty and `coefficients[0] < 0.0`.
+/// Returns `false` when `coefficients` is empty (order-0 model has no `phi_1`).
+#[must_use]
+pub fn has_negative_phi1(coefficients: &[f64]) -> bool {
+    coefficients.first().is_some_and(|&c| c < 0.0)
+}
+
 /// Find the maximum lag order with no negative contributions.
 ///
 /// Scans `contributions` from lag 1 (index 0) forward and returns the index
@@ -366,5 +380,35 @@ mod tests {
         assert_close(result[0], 0.5, "lag 1");
         assert_close(result[1], 0.45, "lag 2");
         assert_close(result[2], 0.425, "lag 3");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for has_negative_phi1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn phi1_negative_returns_true() {
+        assert!(has_negative_phi1(&[-0.5, 0.3]));
+    }
+
+    #[test]
+    fn phi1_positive_returns_false() {
+        assert!(!has_negative_phi1(&[0.5, -0.3]));
+    }
+
+    #[test]
+    fn phi1_zero_returns_false() {
+        assert!(!has_negative_phi1(&[0.0, 0.3]));
+    }
+
+    #[test]
+    fn phi1_empty_returns_false() {
+        assert!(!has_negative_phi1(&[]));
+    }
+
+    #[test]
+    fn phi1_near_zero_negative_returns_true() {
+        // NEWAVE rejects even near-zero negative values.
+        assert!(has_negative_phi1(&[-0.001]));
     }
 }

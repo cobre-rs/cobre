@@ -39,6 +39,7 @@ use cobre_stochastic::{
     StochasticError,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
+        has_negative_phi1,
     },
     par::fitting::{
         ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
@@ -601,6 +602,27 @@ fn apply_contribution_validation(
                 est.coefficients.clear();
                 est.residual_std_ratio = 1.0;
             }
+        }
+    }
+
+    // Pre-pass 2: phi_1 negativity rejection.
+    // A negative first AR coefficient contradicts hydrological persistence.
+    // This check is cheaper than contribution analysis and catches most
+    // unstable models early.
+    for est in estimates.iter_mut() {
+        if has_negative_phi1(&est.coefficients) {
+            let original_order = est.coefficients.len();
+            all_reductions
+                .entry(est.hydro_id)
+                .or_default()
+                .push(ContributionReduction {
+                    season_id: est.season_id,
+                    original_order,
+                    reduced_order: 0,
+                    contributions: Vec::new(),
+                });
+            est.coefficients.clear();
+            est.residual_std_ratio = 1.0;
         }
     }
 
@@ -1354,6 +1376,200 @@ mod tests {
         assert!(
             (estimates[0].residual_std_ratio - 1.0).abs() < 1e-10,
             "white-noise residual ratio should be 1.0"
+        );
+    }
+
+    // ── Phi_1 rejection tests ────────────────────────────────────────────────
+
+    #[test]
+    fn phi1_rejection_sets_order_to_zero() {
+        let hydro_id = EntityId(1);
+        let n_seasons = 2;
+
+        let mut estimates = vec![
+            ArCoefficientEstimate {
+                hydro_id,
+                season_id: 0,
+                coefficients: vec![-0.3, 0.5],
+                residual_std_ratio: 0.8,
+            },
+            ArCoefficientEstimate {
+                hydro_id,
+                season_id: 1,
+                coefficients: vec![0.4, 0.2],
+                residual_std_ratio: 0.7,
+            },
+        ];
+
+        let stats = vec![
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 0,
+                mean: 50.0,
+                std: 10.0,
+            },
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 1,
+                mean: 60.0,
+                std: 12.0,
+            },
+        ];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = stats
+            .iter()
+            .enumerate()
+            .map(|(i, s)| ((s.entity_id, i), s))
+            .collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map, None);
+
+        // Season 0 should have been rejected (negative phi_1).
+        assert!(
+            estimates[0].coefficients.is_empty(),
+            "season 0 should be cleared to order 0"
+        );
+        assert!(
+            (estimates[0].residual_std_ratio - 1.0).abs() < 1e-10,
+            "season 0 residual_std_ratio should be 1.0"
+        );
+
+        // Season 1 should be unchanged.
+        assert_eq!(
+            estimates[1].coefficients,
+            vec![0.4, 0.2],
+            "season 1 should be unchanged"
+        );
+
+        // Verify reduction entry for season 0.
+        let hydro_reductions = reductions.get(&hydro_id).expect("should have reductions");
+        let r = hydro_reductions
+            .iter()
+            .find(|r| r.season_id == 0)
+            .expect("should have reduction for season 0");
+        assert_eq!(r.original_order, 2);
+        assert_eq!(r.reduced_order, 0);
+        assert!(r.contributions.is_empty());
+    }
+
+    #[test]
+    fn phi1_rejection_before_contribution_analysis() {
+        // A season with phi_1 = -0.01 and phi_2 = 0.5 with uniform std.
+        // The contribution analysis would NOT catch this (contributions may
+        // be non-negative), but the phi_1 gate fires first.
+        let hydro_id = EntityId(1);
+        let n_seasons = 1;
+
+        let mut estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![-0.01, 0.5],
+            residual_std_ratio: 0.8,
+        }];
+
+        let stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: 50.0,
+            std: 10.0,
+        }];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> =
+            stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map, None);
+
+        // Should be rejected by phi_1 gate.
+        assert!(
+            estimates[0].coefficients.is_empty(),
+            "phi_1 = -0.01 should trigger rejection"
+        );
+        assert!(
+            reductions.contains_key(&hydro_id),
+            "should have a reduction entry"
+        );
+    }
+
+    #[test]
+    fn phi1_zero_is_not_rejected() {
+        let hydro_id = EntityId(1);
+        let n_seasons = 1;
+
+        let mut estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![0.0, 0.3],
+            residual_std_ratio: 0.8,
+        }];
+
+        let stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: 50.0,
+            std: 10.0,
+        }];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> =
+            stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let _reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map, None);
+
+        // phi_1 = 0.0 is NOT negative, so it should pass to contribution analysis.
+        assert_eq!(
+            estimates[0].coefficients.len(),
+            2,
+            "phi_1 = 0.0 should not be rejected"
+        );
+    }
+
+    #[test]
+    fn phi1_rejection_interacts_with_magnitude_bound() {
+        // phi_1 = -50.0 is both negative and above any reasonable magnitude bound.
+        // The magnitude-bound pre-pass should fire first, and the phi_1 check
+        // should see the already-cleared vector and skip.
+        let hydro_id = EntityId(1);
+        let n_seasons = 1;
+
+        let mut estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![-50.0, 0.3],
+            residual_std_ratio: 0.8,
+        }];
+
+        let stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: 50.0,
+            std: 10.0,
+        }];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> =
+            stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let reductions = apply_contribution_validation(
+            &mut estimates,
+            n_seasons,
+            &stats_map,
+            &sigma2_map,
+            Some(10.0), // magnitude bound that catches -50.0
+        );
+
+        // The season should be cleared (by magnitude bound).
+        assert!(
+            estimates[0].coefficients.is_empty(),
+            "should be cleared to order 0"
+        );
+
+        // Only ONE reduction entry should exist (from magnitude bound, NOT doubled).
+        let hydro_reductions = reductions.get(&hydro_id).expect("should have reductions");
+        assert_eq!(
+            hydro_reductions.len(),
+            1,
+            "should have exactly 1 reduction entry (magnitude bound only)"
         );
     }
 }

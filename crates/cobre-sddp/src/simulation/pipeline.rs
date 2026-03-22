@@ -338,19 +338,16 @@ fn solve_simulation_stage<S: SolverInterface>(
             }
         }
     }
-    // The mutable borrows of unscaled_primal and unscaled_dual are released;
-    // now borrow scratch mutably for extract_sim_stage_result while reading
-    // unscaled values immutably through the SolutionView.
-    //
-    // Unfortunately extract_sim_stage_result takes &mut ScratchBuffers,
-    // which conflicts with immutable borrows of the unscaled scratch buffers.
-    // Work around by cloning into locals before calling extract.
-    let unscaled_primal_local: Vec<f64> = ws.scratch.unscaled_primal.clone();
-    let unscaled_dual_local: Vec<f64> = ws.scratch.unscaled_dual.clone();
+    // Temporarily take the unscaled buffers out of scratch so we can
+    // simultaneously read them (via the SolutionView) and mutate other
+    // scratch fields inside extract_sim_stage_result.  std::mem::take
+    // replaces each field with an empty Vec (no allocation).
+    let unscaled_primal = std::mem::take(&mut ws.scratch.unscaled_primal);
+    let unscaled_dual = std::mem::take(&mut ws.scratch.unscaled_dual);
     let unscaled_view = cobre_solver::SolutionView {
         objective: view.objective,
-        primal: &unscaled_primal_local,
-        dual: &unscaled_dual_local,
+        primal: &unscaled_primal,
+        dual: &unscaled_dual,
         reduced_costs: view.reduced_costs,
         iterations: view.iterations,
         solve_time_seconds: view.solve_time_seconds,
@@ -366,7 +363,10 @@ fn solve_simulation_stage<S: SolverInterface>(
     );
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&unscaled_primal_local[..indexer.n_state]);
+        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+    // Put the buffers back so they are reused on the next stage.
+    ws.scratch.unscaled_primal = unscaled_primal;
+    ws.scratch.unscaled_dual = unscaled_dual;
     Ok((immediate_cost, result))
 }
 

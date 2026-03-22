@@ -87,6 +87,9 @@ will not produce `simulation/pumping_stations/`.
         ...
   hydro_models/
     fpha_hyperplanes.parquet         (when any hydro uses source: "computed")
+  solver_stats/
+    solver_stats.parquet             (always)
+    scaling_report.json              (always)
   stochastic/
     inflow_seasonal_stats.parquet    (when estimation was performed)
     inflow_ar_coefficients.parquet   (when estimation was performed)
@@ -802,19 +805,19 @@ in the current run. The schema is identical to the input file
 `system/fpha_hyperplanes.parquet`: 11 columns, all with the same names, types,
 and nullability.
 
-| Column            | Type    | Nullable | Description                                                    |
-| ----------------- | ------- | -------- | -------------------------------------------------------------- |
-| `hydro_id`        | INT32   | No       | Hydro plant ID                                                 |
-| `stage_id`        | INT32   | Yes      | Stage the plane applies to. `null` = valid for all stages      |
-| `plane_id`        | INT32   | No       | Plane index within this hydro (and stage)                      |
-| `gamma_0`         | DOUBLE  | No       | Intercept coefficient (MW), unscaled                           |
-| `gamma_v`         | DOUBLE  | No       | Volume coefficient (MW/hm³)                                    |
-| `gamma_q`         | DOUBLE  | No       | Turbined flow coefficient (MW per m³/s)                        |
-| `gamma_s`         | DOUBLE  | No       | Spillage coefficient (MW per m³/s)                             |
-| `kappa`           | DOUBLE  | Yes      | Correction factor. Defaults to `1.0` when absent or null.      |
-| `valid_v_min_hm3` | DOUBLE  | Yes      | Volume range minimum where this plane is valid (hm³)           |
-| `valid_v_max_hm3` | DOUBLE  | Yes      | Volume range maximum where this plane is valid (hm³)           |
-| `valid_q_max_m3s` | DOUBLE  | Yes      | Maximum turbined flow where this plane is valid (m³/s)         |
+| Column            | Type   | Nullable | Description                                               |
+| ----------------- | ------ | -------- | --------------------------------------------------------- |
+| `hydro_id`        | INT32  | No       | Hydro plant ID                                            |
+| `stage_id`        | INT32  | Yes      | Stage the plane applies to. `null` = valid for all stages |
+| `plane_id`        | INT32  | No       | Plane index within this hydro (and stage)                 |
+| `gamma_0`         | DOUBLE | No       | Intercept coefficient (MW), unscaled                      |
+| `gamma_v`         | DOUBLE | No       | Volume coefficient (MW/hm³)                               |
+| `gamma_q`         | DOUBLE | No       | Turbined flow coefficient (MW per m³/s)                   |
+| `gamma_s`         | DOUBLE | No       | Spillage coefficient (MW per m³/s)                        |
+| `kappa`           | DOUBLE | Yes      | Correction factor. Defaults to `1.0` when absent or null. |
+| `valid_v_min_hm3` | DOUBLE | Yes      | Volume range minimum where this plane is valid (hm³)      |
+| `valid_v_max_hm3` | DOUBLE | Yes      | Volume range maximum where this plane is valid (hm³)      |
+| `valid_q_max_m3s` | DOUBLE | Yes      | Maximum turbined flow where this plane is valid (m³/s)    |
 
 The file is written atomically (via a `.tmp` rename) and uses the same
 `(hydro_id, stage_id, plane_id)`-sorted row order as the input schema. It can
@@ -837,14 +840,14 @@ Export is off by default in v0.1.x.
 
 ### Exported files
 
-| File path                                          | Export condition          | Schema source                                            |
-| -------------------------------------------------- | ------------------------- | -------------------------------------------------------- |
-| `stochastic/inflow_seasonal_stats.parquet`         | Estimation was performed  | Same as input `scenarios/inflow_seasonal_stats.parquet`  |
-| `stochastic/inflow_ar_coefficients.parquet`        | Estimation was performed  | Same as input `scenarios/inflow_ar_coefficients.parquet` |
-| `stochastic/correlation.json`                      | Always                    | Same as input `scenarios/correlation.json`               |
-| `stochastic/fitting_report.json`                   | Estimation was performed  | JSON diagnostic report (see below)                       |
-| `stochastic/noise_openings.parquet`                | Always                    | Same schema as `scenarios/noise_openings.parquet`        |
-| `stochastic/load_seasonal_stats.parquet`           | Load buses exist          | Same as input `scenarios/load_seasonal_stats.parquet`    |
+| File path                                   | Export condition         | Schema source                                            |
+| ------------------------------------------- | ------------------------ | -------------------------------------------------------- |
+| `stochastic/inflow_seasonal_stats.parquet`  | Estimation was performed | Same as input `scenarios/inflow_seasonal_stats.parquet`  |
+| `stochastic/inflow_ar_coefficients.parquet` | Estimation was performed | Same as input `scenarios/inflow_ar_coefficients.parquet` |
+| `stochastic/correlation.json`               | Always                   | Same as input `scenarios/correlation.json`               |
+| `stochastic/fitting_report.json`            | Estimation was performed | JSON diagnostic report (see below)                       |
+| `stochastic/noise_openings.parquet`         | Always                   | Same schema as `scenarios/noise_openings.parquet`        |
+| `stochastic/load_seasonal_stats.parquet`    | Load buses exist         | Same as input `scenarios/load_seasonal_stats.parquet`    |
 
 "Estimation was performed" means the user did not supply the corresponding
 scenario file directly; Cobre derived it from `inflow_history.parquet`.
@@ -875,11 +878,11 @@ when Cobre performed estimation from `inflow_history.parquet`.
 }
 ```
 
-| Field            | Type             | Description                                                                      |
-| ---------------- | ---------------- | -------------------------------------------------------------------------------- |
-| `selected_order` | integer          | AIC-selected AR order for this hydro plant                                       |
-| `aic_scores`     | number array     | AIC score for each candidate order; `aic_scores[i]` is the score for order `i+1` |
-| `coefficients`   | nested array     | One row per season; each row contains the AR coefficients for that season         |
+| Field            | Type         | Description                                                                      |
+| ---------------- | ------------ | -------------------------------------------------------------------------------- |
+| `selected_order` | integer      | AIC-selected AR order for this hydro plant                                       |
+| `aic_scores`     | number array | AIC score for each candidate order; `aic_scores[i]` is the score for order `i+1` |
+| `coefficients`   | nested array | One row per season; each row contains the AR coefficients for that season        |
 
 This file is diagnostic only. It is not consumed as input on subsequent runs.
 

@@ -22,7 +22,7 @@ summary to stderr:
 
 ```
  ━━━━━━━━━━━●
- ━━━━━━━━━━━●⚡  COBRE v0.1.0
+ ━━━━━━━━━━━●⚡  COBRE v0.1.9
  ━━━━━━━━━━━●   Power systems in Rust
 
 Created my_first_study case directory from template '1dtoy':
@@ -98,7 +98,7 @@ The banner, a progress bar, and a post-run summary are printed to stderr:
 
 ```
  ━━━━━━━━━━━●
- ━━━━━━━━━━━●⚡  COBRE v0.1.0
+ ━━━━━━━━━━━●⚡  COBRE v0.1.9
  ━━━━━━━━━━━●   Power systems in Rust
 
 Training complete in 3.2s (128 iterations, converged at iter 94)
@@ -106,10 +106,16 @@ Training complete in 3.2s (128 iterations, converged at iter 94)
   Upper bound:  143.1 +/- 1.2 $/stage
   Gap:          0.6%
   Cuts:         94 active / 94 generated
-  LP solves:    512
+  LP solves:    512 (512 first-try, 0 retried, 0 failed)
+  LP time:      1.2s total, 2.3ms avg
+  Basis reuse:  100.0% hit (0 rejections / 510 offered)
+  Simplex iter: 2048
 
 Simulation complete (100 scenarios)
   Completed: 100  Failed: 0
+  LP solves:    400 (400 first-try, 0 retried, 0 failed)
+  LP time:      0.8s total, 2.0ms avg
+  Simplex iter: 3200
 
 Output written to my_first_study/results/
 ```

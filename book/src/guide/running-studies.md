@@ -102,11 +102,12 @@ Exits with code 0 on success or 2 if the results directory does not exist.
 
 ### Training Only
 
-```bash
-cobre run /path/to/my_study --skip-simulation
-```
+To run training without simulation, set `simulation.enabled` to `false` in
+`config.json`:
 
-Trains the policy without simulation.
+```json
+{ "simulation": { "enabled": false } }
+```
 
 ### Quiet Mode for Scripts
 
@@ -157,14 +158,14 @@ The CLI flag takes priority over the config field.
 
 ### What is exported
 
-| File                                          | Written when                     |
-| --------------------------------------------- | -------------------------------- |
-| `output/stochastic/inflow_seasonal_stats.parquet`  | Estimation was performed    |
-| `output/stochastic/inflow_ar_coefficients.parquet` | Estimation was performed    |
-| `output/stochastic/correlation.json`               | Always                      |
-| `output/stochastic/fitting_report.json`            | Estimation was performed    |
-| `output/stochastic/noise_openings.parquet`         | Always                      |
-| `output/stochastic/load_seasonal_stats.parquet`    | Load buses exist            |
+| File                                               | Written when             |
+| -------------------------------------------------- | ------------------------ |
+| `output/stochastic/inflow_seasonal_stats.parquet`  | Estimation was performed |
+| `output/stochastic/inflow_ar_coefficients.parquet` | Estimation was performed |
+| `output/stochastic/correlation.json`               | Always                   |
+| `output/stochastic/fitting_report.json`            | Estimation was performed |
+| `output/stochastic/noise_openings.parquet`         | Always                   |
+| `output/stochastic/load_seasonal_stats.parquet`    | Load buses exist         |
 
 "Estimation was performed" means the user did not supply the corresponding
 scenario file; Cobre derived it from `inflow_history.parquet`.

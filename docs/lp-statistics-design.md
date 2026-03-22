@@ -1,7 +1,7 @@
 # LP Statistics Collection — Design Specification
 
 > **Date:** 2026-03-22
-> **Status:** Approved design, ready for implementation
+> **Status:** Implemented (v0.1.9)
 > **Context:** After implementing column scaling, row scaling, cost scaling, and
 > a 12-level retry policy, we need instrumentation to answer: "Did it help?",
 > "Where do problems remain?", and "What's the solver bottleneck?"

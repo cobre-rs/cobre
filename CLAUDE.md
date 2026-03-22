@@ -75,7 +75,7 @@ identifiers in the spec files:
 
 ---
 
-## Current State (v0.1.8)
+## Current State (v0.1.9)
 
 The SDDP solver is fully functional. The pipeline covers case loading, stochastic
 scenario generation, training, simulation, policy checkpointing, and output writing.
@@ -89,9 +89,13 @@ Includes a deterministic regression suite (D01-D15) with hand-computed expected 
 - User-defined generic constraints over LP variables (20 variable types including `line_exchange` for net flow) with slack penalties and violation output
 - Per-stage productivity override in `hydro_production_models.json` (replaces base `productivity_mw_per_m3s` for specific stages/seasons)
 - Multi-segment deficit pricing (N deficit columns per bus per block with capacity constraints)
-- PAR(p) fitting (Levinson-Durbin, AIC order selection), stochastic load demand
+- PAR(p) fitting (periodic YW, PACF-based order selection), stochastic load demand
 - PAR(p) lag initialization from `past_inflows` in `initial_conditions.json` with validation rules
+- LP scaling (row scaling with RHS prescaling, cost scaling) for improved solver conditioning
+- Solver statistics: per-phase LP timing, simplex iterations, basis reuse tracking, Parquet output
+- LP scaling diagnostics report (JSON) with per-stage conditioning analysis
 - Simulation pipeline with FlatBuffers policy checkpoint and Parquet output
+- Per-scenario simulation statistics
 - Multi-bus transmission with line flow limits
 - MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
 - CLI: `init`, `run`, `validate`, `report`, `summary`, `version`

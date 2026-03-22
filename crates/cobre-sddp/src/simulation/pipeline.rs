@@ -51,6 +51,7 @@ use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
+    lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
         config::SimulationConfig,
@@ -368,7 +369,7 @@ fn extract_sim_stage_result(
     n_stochastic_ncs: usize,
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
-    let immediate_cost = view.objective - view.primal[indexer.theta];
+    let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
     scratch.inflow_m3s_buf.clear();
     if let Some(&zeta) = output.zeta_per_stage.get(t) {
         if zeta > 0.0 {
@@ -1442,8 +1443,8 @@ mod tests {
     /// Acceptance criterion: `total_cost` in cost buffer equals sum of
     /// `(objective - primal[theta])` across all stages for each scenario.
     ///
-    /// With objective=100.0 and theta=30.0: `stage_cost` = 100 - 30 = 70 per stage.
-    /// For 3 stages: `total_cost` = 3 * 70 = 210.
+    /// With objective=100.0 and theta=30.0: `stage_cost` = (100 - 30) * COST_SCALE_FACTOR = 70_000 per stage.
+    /// For 3 stages: `total_cost` = 3 * 70_000 = 210_000.
     #[test]
     fn simulate_total_cost_equals_sum_of_stage_costs() {
         let n_stages = 3;
@@ -1464,9 +1465,10 @@ mod tests {
 
         let objective = 100.0_f64;
         let theta_val = 30.0_f64;
-        let expected_stage_cost = objective - theta_val; // 70.0
+        // stage_cost = (objective - theta) * COST_SCALE_FACTOR = 70 * 1000 = 70_000
+        let expected_stage_cost = (objective - theta_val) * 1000.0; // 70_000.0
         #[allow(clippy::cast_precision_loss)]
-        let expected_total_cost = expected_stage_cost * n_stages as f64; // 210.0
+        let expected_total_cost = expected_stage_cost * n_stages as f64; // 210_000.0
 
         let solution = fixed_solution(objective, theta_val);
         let solver = MockSolver::always_ok(solution);
@@ -2124,9 +2126,9 @@ mod tests {
         };
         let initial_state = vec![50.0_f64];
 
-        // objective=100, theta=30 → stage_cost = 70.0 every scenario.
+        // objective=100, theta=30 → stage_cost = (100-30)*COST_SCALE_FACTOR = 70_000.0 every scenario.
         let solution = fixed_solution(100.0, 30.0);
-        let expected_stage_cost = 70.0_f64;
+        let expected_stage_cost = 70_000.0_f64;
 
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm { rank: 0, size: 1 };

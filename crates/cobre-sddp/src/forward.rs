@@ -71,6 +71,7 @@ use rayon::iter::{
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
+    lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
@@ -568,7 +569,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     }
 
-    let stage_cost = view.objective - unscaled_primal[indexer.theta];
+    let stage_cost = (view.objective - unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
@@ -1264,7 +1265,7 @@ mod tests {
     // ── Acceptance criteria integration tests ───────────────────────────────
 
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
-    /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70`.
+    /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70_000`.
     #[test]
     fn ac_two_scenarios_three_stages_fixed_solution() {
         // StageIndexer: N=1, L=0 → n_state=1, theta=2, num_cols=3
@@ -1327,16 +1328,16 @@ mod tests {
 
         // AC: scenario_costs has exactly 2 entries (one per forward pass).
         assert_eq!(result.scenario_costs.len(), 2);
-        // AC: all 6 records have stage_cost = 100 - 30 = 70.
+        // AC: all 6 records have stage_cost = (100 - 30) * COST_SCALE_FACTOR = 70_000.
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
-                record.stage_cost, 70.0,
-                "record[{i}].stage_cost should be 70.0 (objective - theta)"
+                record.stage_cost, 70_000.0,
+                "record[{i}].stage_cost should be 70_000.0 ((objective - theta) * COST_SCALE_FACTOR)"
             );
         }
-        // AC: each scenario cost = 70 * 3 stages = 210.
-        assert_eq!(result.scenario_costs[0], 210.0);
-        assert_eq!(result.scenario_costs[1], 210.0);
+        // AC: each scenario cost = 70_000 * 3 stages = 210_000.
+        assert_eq!(result.scenario_costs[0], 210_000.0);
+        assert_eq!(result.scenario_costs[1], 210_000.0);
     }
 
     /// AC: mock solver returns `Infeasible` at stage 1, scenario 0.
@@ -1428,10 +1429,10 @@ mod tests {
 
     /// Behavioral: `cost_sum` and `cost_sum_sq` are correctly accumulated.
     ///
-    /// With 2 scenarios and `stage_cost=70` at every `(scenario, stage)`:
-    /// - `total_cost` per scenario = 70 * 3 = 210
-    /// - `cost_sum` = 210 + 210 = 420
-    /// - `cost_sum_sq` = 210^2 + 210^2 = 88200
+    /// With 2 scenarios and `stage_cost=70_000` at every `(scenario, stage)`:
+    /// - `total_cost` per scenario = 70_000 * 3 = 210_000
+    /// - `cost_sum` = 210_000 + 210_000 = 420_000
+    /// - `cost_sum_sq` = 210_000^2 + 210_000^2 = 88_200_000_000
     #[test]
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);
@@ -1491,16 +1492,16 @@ mod tests {
         )
         .unwrap();
 
-        // stage_cost per solve = 100 - 30 = 70
-        // total_cost per scenario = 70 * 3 stages = 210
+        // stage_cost per solve = (100 - 30) * COST_SCALE_FACTOR = 70_000
+        // total_cost per scenario = 70_000 * 3 stages = 210_000
         assert_eq!(result.scenario_costs.len(), 2);
-        assert_eq!(result.scenario_costs[0], 210.0);
-        assert_eq!(result.scenario_costs[1], 210.0);
-        // Derived statistics: sum = 420, sum_sq = 88200.
+        assert_eq!(result.scenario_costs[0], 210_000.0);
+        assert_eq!(result.scenario_costs[1], 210_000.0);
+        // Derived statistics: sum = 420_000, sum_sq = 210_000^2 * 2.
         let cost_sum: f64 = result.scenario_costs.iter().sum();
         let cost_sum_sq: f64 = result.scenario_costs.iter().map(|c| c * c).sum();
-        assert_eq!(cost_sum, 420.0);
-        assert_eq!(cost_sum_sq, 210.0_f64.powi(2) * 2.0);
+        assert_eq!(cost_sum, 420_000.0);
+        assert_eq!(cost_sum_sq, 210_000.0_f64.powi(2) * 2.0);
     }
 
     // ── Unit tests: SyncResult ───────────────────────────────────────────────
@@ -2531,8 +2532,8 @@ mod tests {
         assert_eq!(result.scenario_costs.len(), 2);
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
-                record.stage_cost, 70.0,
-                "none_method: record[{i}].stage_cost should be 70.0 (objective - theta)"
+                record.stage_cost, 70_000.0,
+                "none_method: record[{i}].stage_cost should be 70_000.0 ((objective - theta) * COST_SCALE_FACTOR)"
             );
         }
     }

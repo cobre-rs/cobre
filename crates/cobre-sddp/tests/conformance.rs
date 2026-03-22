@@ -808,7 +808,8 @@ mod lb_conformance {
             ncs_generation: 0..0,
         };
 
-        // First call: solver returns [50, 100] → LB = E[50, 100] = 75.
+        // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
+        // After unscaling by COST_SCALE_FACTOR (1000), LB = 75_000.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
         let lb1 = evaluate_lower_bound(
             &mut solver1,
@@ -821,9 +822,13 @@ mod lb_conformance {
         )
         .expect("first evaluate_lower_bound must succeed");
 
-        assert!((lb1 - 75.0).abs() < 1e-10, "lb1 must equal 75.0, got {lb1}");
+        assert!(
+            (lb1 - 75_000.0).abs() < 1e-7,
+            "lb1 must equal 75_000.0, got {lb1}"
+        );
 
-        // Second call: solver returns [80, 120] → LB = E[80, 120] = 100.
+        // Second call: solver returns [80, 120] → LB = E[80, 120] = 100 (scaled).
+        // After unscaling by COST_SCALE_FACTOR (1000), LB = 100_000.
         // This simulates the effect of tighter cuts (higher stage-0 LP objectives).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
         let lb2 = evaluate_lower_bound(
@@ -838,8 +843,8 @@ mod lb_conformance {
         .expect("second evaluate_lower_bound must succeed");
 
         assert!(
-            (lb2 - 100.0).abs() < 1e-10,
-            "lb2 must equal 100.0, got {lb2}"
+            (lb2 - 100_000.0).abs() < 1e-7,
+            "lb2 must equal 100_000.0, got {lb2}"
         );
 
         // Monotonicity: lb2 >= lb1

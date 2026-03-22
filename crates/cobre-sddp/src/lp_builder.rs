@@ -691,6 +691,15 @@ pub struct StageTemplates {
 /// from the stage definition.
 const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 
+/// Divisor applied to all objective-function cost coefficients.
+///
+/// Dividing monetary costs by this factor reduces objective magnitudes
+/// (e.g., from ~8.8e11 to ~8.8e8), improving LP solver numerical
+/// conditioning without changing the optimization argmin. All cost-domain
+/// outputs (objective values, duals, cost breakdowns) are multiplied by
+/// this factor at the reporting boundary to recover original units.
+pub(crate) const COST_SCALE_FACTOR: f64 = 1_000.0;
+
 // ---------------------------------------------------------------------------
 // Per-stage template builder internals
 // ---------------------------------------------------------------------------
@@ -2050,6 +2059,28 @@ fn build_single_stage_template(
         &mut row_upper,
     );
 
+    // Scale all monetary objective coefficients for numerical conditioning.
+    // The entire SDDP algorithm operates in scaled cost space; outputs
+    // are unscaled at the reporting boundary (forward.rs, lower_bound.rs,
+    // simulation/pipeline.rs, simulation/extraction.rs).
+    //
+    // Theta (the future cost approximation variable) must NOT be divided by
+    // COST_SCALE_FACTOR.  The Benders cuts enforce `theta >= intercept_scaled`
+    // where `intercept_scaled = Q_successor / K`, so theta holds the SCALED
+    // future cost.  The LP objective is `sum(c_i/K * x_i) + 1.0 * theta`, and
+    // the total scaled objective = (stage_cost + future_cost) / K.  Multiplying
+    // by K at the reporting boundary recovers the original monetary cost.
+    //
+    // If theta were also divided by K its objective coefficient would become
+    // 1/K, making the LP objective `stage_cost/K + (1/K)*theta` which, after
+    // multiplication by K, gives `stage_cost + future_cost/K` -- wrong.
+    let theta_col = StageIndexer::new(ctx.n_hydros, ctx.max_par_order).theta;
+    for (i, coeff) in objective.iter_mut().enumerate() {
+        if i != theta_col {
+            *coeff /= COST_SCALE_FACTOR;
+        }
+    }
+
     // Sort each column's entries by row index (CSC invariant).
     for entries in &mut col_entries {
         entries.sort_unstable_by_key(|&(row, _)| row);
@@ -2574,7 +2605,7 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -3709,7 +3740,7 @@ mod tests {
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
             t.objective[theta_col], 1.0,
-            "theta column objective must be 1.0"
+            "theta column objective must be 1.0 (theta is not scaled by COST_SCALE_FACTOR)"
         );
     }
 
@@ -3970,9 +4001,9 @@ mod tests {
         .expect("fpha system builds ok");
         let t = &result.templates[0];
         let turbine_col = 3_usize;
-        let expected = 0.5 * 720.0;
+        let expected = 0.5 * 720.0 / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[turbine_col] - expected).abs() < 1e-12,
+            (t.objective[turbine_col] - expected).abs() < 1e-15,
             "FPHA turbine col objective: expected {expected}, got {}",
             t.objective[turbine_col]
         );
@@ -4026,13 +4057,15 @@ mod tests {
         let col_blk0 = 3_usize;
         let col_blk1 = 4_usize;
         assert!(
-            (t.objective[col_blk0] - 300.0).abs() < 1e-12,
-            "block 0 turbine objective: expected 300.0, got {}",
+            (t.objective[col_blk0] - 300.0 / COST_SCALE_FACTOR).abs() < 1e-15,
+            "block 0 turbine objective: expected {}, got {}",
+            300.0 / COST_SCALE_FACTOR,
             t.objective[col_blk0]
         );
         assert!(
-            (t.objective[col_blk1] - 420.0).abs() < 1e-12,
-            "block 1 turbine objective: expected 420.0, got {}",
+            (t.objective[col_blk1] - 420.0 / COST_SCALE_FACTOR).abs() < 1e-15,
+            "block 1 turbine objective: expected {}, got {}",
+            420.0 / COST_SCALE_FACTOR,
             t.objective[col_blk1]
         );
     }
@@ -4114,17 +4147,16 @@ mod tests {
             t.objective[col_turbine_start + 1]
         );
 
-        // Hydros 2, 3 are FPHA → objective = 1.0 * 744.0 = 744.0.
+        // Hydros 2, 3 are FPHA → objective = 1.0 * 744.0 / COST_SCALE_FACTOR.
+        let expected_fpha = block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[col_turbine_start + 2] - block_hours).abs() < 1e-12,
-            "FPHA hydro 2 turbine objective should be {}, got {}",
-            block_hours,
+            (t.objective[col_turbine_start + 2] - expected_fpha).abs() < 1e-15,
+            "FPHA hydro 2 turbine objective should be {expected_fpha}, got {}",
             t.objective[col_turbine_start + 2]
         );
         assert!(
-            (t.objective[col_turbine_start + 3] - block_hours).abs() < 1e-12,
-            "FPHA hydro 3 turbine objective should be {}, got {}",
-            block_hours,
+            (t.objective[col_turbine_start + 3] - expected_fpha).abs() < 1e-15,
+            "FPHA hydro 3 turbine objective should be {expected_fpha}, got {}",
             t.objective[col_turbine_start + 3]
         );
     }
@@ -4487,9 +4519,9 @@ mod tests {
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6,
         // inflow_slack=7, withdrawal_slack=8. Inflow slack is now second-to-last.
         let slack_col = t.num_cols - 2; // inflow_slack (withdrawal_slack is last)
-        let expected_obj = 1000.0 * 744.0;
+        let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_col] - expected_obj).abs() < 1e-9,
+            (t.objective[slack_col] - expected_obj).abs() < 1e-12,
             "expected objective {expected_obj}, got {}",
             t.objective[slack_col]
         );
@@ -7246,7 +7278,7 @@ mod tests {
         let col_f_plus = t.num_cols - 3;
         let col_f_minus = t.num_cols - 2;
 
-        let expected = 500.0 * 730.0; // 365_000.0
+        let expected = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7794,15 +7826,15 @@ mod tests {
             "segment 1 upper bound must be +infinity (unbounded final segment)"
         );
         assert!(
-            (t.objective[col_seg0] - 500.0 * block_hours).abs() < 1e-12,
-            "segment 0 objective must be cost * block_hours = {} but got {}",
-            500.0 * block_hours,
+            (t.objective[col_seg0] - 500.0 * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "segment 0 objective must be cost * block_hours / COST_SCALE_FACTOR = {} but got {}",
+            500.0 * block_hours / COST_SCALE_FACTOR,
             t.objective[col_seg0]
         );
         assert!(
-            (t.objective[col_seg1] - 5000.0 * block_hours).abs() < 1e-12,
-            "segment 1 objective must be cost * block_hours = {} but got {}",
-            5000.0 * block_hours,
+            (t.objective[col_seg1] - 5000.0 * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "segment 1 objective must be cost * block_hours / COST_SCALE_FACTOR = {} but got {}",
+            5000.0 * block_hours / COST_SCALE_FACTOR,
             t.objective[col_seg1]
         );
     }
@@ -7847,8 +7879,8 @@ mod tests {
             "single segment must be unbounded (None depth_mw)"
         );
         assert!(
-            (t.objective[col_def] - cost * block_hours).abs() < 1e-12,
-            "single-segment objective must be cost * block_hours"
+            (t.objective[col_def] - cost * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "single-segment objective must be cost * block_hours / COST_SCALE_FACTOR"
         );
 
         // Excess column immediately follows deficit (S_max=1, B=1, K=1 → excess at col 2)
@@ -8323,9 +8355,9 @@ mod tests {
 
         let t = &result.templates[0];
         let col_w = t.num_cols - 1;
-        let expected_obj = violation_cost * total_hours;
+        let expected_obj = violation_cost * total_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[col_w] - expected_obj).abs() < 1e-9,
+            (t.objective[col_w] - expected_obj).abs() < 1e-12,
             "withdrawal slack objective: expected {expected_obj}, got {}",
             t.objective[col_w]
         );
@@ -9492,10 +9524,10 @@ mod tests {
             t.col_upper[slack_col]
         );
 
-        // Objective: penalty * block_hours
-        let expected_obj = penalty * block_hours;
+        // Objective: penalty * block_hours / COST_SCALE_FACTOR
+        let expected_obj = penalty * block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_col] - expected_obj).abs() < 1e-12,
             "slack objective must be {expected_obj}, got {}",
             t.objective[slack_col]
         );
@@ -9628,9 +9660,9 @@ mod tests {
             t.col_upper[slack_plus_col].is_infinite() && t.col_upper[slack_plus_col] > 0.0,
             "plus slack col_upper must be +INF"
         );
-        let expected_obj = penalty * block_hours;
+        let expected_obj = penalty * block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_plus_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_plus_col] - expected_obj).abs() < 1e-12,
             "plus slack objective must be {expected_obj}, got {}",
             t.objective[slack_plus_col]
         );
@@ -9645,13 +9677,13 @@ mod tests {
             "plus slack CSC must be +1.0 for == sense, got {plus_total}"
         );
 
-        // Minus slack: col_upper=+INF, objective=penalty*block_hours, CSC -1.0.
+        // Minus slack: col_upper=+INF, objective=penalty*block_hours/COST_SCALE_FACTOR, CSC -1.0.
         assert!(
             t.col_upper[slack_minus_col].is_infinite() && t.col_upper[slack_minus_col] > 0.0,
             "minus slack col_upper must be +INF"
         );
         assert!(
-            (t.objective[slack_minus_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_minus_col] - expected_obj).abs() < 1e-12,
             "minus slack objective must be {expected_obj}"
         );
         let minus_entries = csc_entries_at(t, slack_minus_col, generic_row);

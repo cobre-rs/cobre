@@ -215,13 +215,15 @@ estimation steps automatically before building the scenario model:
    `inflow_seasonal_stats.parquet`.
 
 2. **AR order selection** — Cobre evaluates candidate orders and selects
-   the best fit per (hydro plant, stage) using AIC (Akaike Information
-   Criterion). This avoids overfitting in series with little autocorrelation
-   and captures meaningful persistence where it exists.
+   the best fit per (hydro plant, stage) using the periodic partial
+   autocorrelation function (PACF) with a 95% significance threshold.
+   This avoids overfitting in series with little autocorrelation and
+   captures meaningful persistence where it exists.
 
 3. **AR coefficients** — Coefficients for the selected order are estimated
-   via the Levinson-Durbin algorithm applied to the partial autocorrelation
-   structure of the standardised historical series.
+   by solving the periodic Yule-Walker matrix system, which correctly
+   accounts for the non-Toeplitz covariance structure of periodic
+   autoregressive processes.
 
 4. **Spatial correlation** — The contemporaneous correlation between
    hydro plants is estimated from the historical residuals after AR fitting.

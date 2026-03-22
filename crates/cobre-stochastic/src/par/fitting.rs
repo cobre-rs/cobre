@@ -1,17 +1,23 @@
-//! Levinson-Durbin recursion and seasonal statistics estimation for PAR model fitting.
+//! Periodic Yule-Walker estimation and seasonal statistics for PAR model fitting.
 //!
-//! This module provides four core primitives for fitting Periodic Autoregressive
+//! This module provides the core primitives for fitting Periodic Autoregressive
 //! models:
 //!
-//! 1. [`levinson_durbin`] — solves Yule-Walker equations in O(p²) time given
-//!    a sequence of autocorrelation values.
-//! 2. [`estimate_seasonal_stats`] — computes seasonal means and
-//!    Bessel-corrected standard deviations from historical inflow observations,
+//! 1. [`periodic_autocorrelation`] — computes the periodic normalised
+//!    autocorrelation `rho(p, k)` with population divisor and cross-year
+//!    lag adjustment.
+//! 2. [`build_periodic_yw_matrix`] — constructs the non-Toeplitz periodic
+//!    Yule-Walker matrix for a given season and AR order.
+//! 3. [`periodic_pacf`] — computes the periodic PACF via progressive matrix
+//!    solves for order selection.
+//! 4. [`estimate_periodic_ar_coefficients`] — solves the periodic YW system
+//!    at the selected order to produce AR coefficients and residual std ratio.
+//! 5. [`estimate_seasonal_stats`] — computes seasonal means and
+//!    Bessel-corrected standard deviations from historical observations,
 //!    grouped by `(entity, season)` pair.
-//! 3. [`estimate_ar_coefficients`] — computes cross-seasonal autocorrelations
-//!    and calls the Levinson-Durbin recursion to produce standardized AR
-//!    coefficients and residual std ratios for each `(entity, season)` pair.
-//! 4. [`estimate_correlation`] — computes the Pearson correlation matrix of
+//! 6. [`estimate_ar_coefficients`] — legacy interface using Levinson-Durbin;
+//!    used by the `Fixed` order selection path.
+//! 7. [`estimate_correlation`] — computes the Pearson correlation matrix of
 //!    PAR model residuals across entities, returning a [`CorrelationModel`]
 //!    suitable for downstream Cholesky decomposition.
 //!
@@ -34,9 +40,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
+    EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
 use crate::StochasticError;
@@ -2161,11 +2167,11 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -2769,7 +2775,7 @@ mod tests {
             let val = (i + 1) as f64;
             observations.push(obs(1, year, 1, val)); // Jan
             observations.push(obs(1, year, 2, val + 0.5)); // Feb ≈ Jan
-                                                           // Other months: enough data to avoid InsufficientData.
+            // Other months: enough data to avoid InsufficientData.
             for month in 3u32..=12 {
                 observations.push(obs(1, year, month, month as f64 * 5.0 + i as f64));
             }
@@ -2845,7 +2851,7 @@ mod tests {
     // estimate_correlation tests
     // -----------------------------------------------------------------------
 
-    use super::{estimate_correlation, ArCoefficientEstimate, SeasonalStats};
+    use super::{ArCoefficientEstimate, SeasonalStats, estimate_correlation};
 
     /// Helper: build a single-season study over `n_years` monthly stages.
     /// Season 0 covers month `month` of each year.

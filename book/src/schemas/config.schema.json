@@ -6,46 +6,31 @@
         "compress": {
           "default": null,
           "description": "Compress checkpoint files.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": ["boolean", "null"]
         },
         "enabled": {
           "default": null,
           "description": "Enable periodic checkpointing.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": ["boolean", "null"]
         },
         "initial_iteration": {
           "default": null,
           "description": "First iteration to write a checkpoint.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "interval_iterations": {
           "default": null,
           "description": "Iterations between checkpoints.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "store_basis": {
           "default": null,
           "description": "Include LP basis in checkpoints for warm-start.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": ["boolean", "null"]
         }
       },
       "type": "object"
@@ -58,45 +43,30 @@
           "description": "Iterations between pruning checks.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "cut_activity_tolerance": {
           "default": null,
           "description": "Minimum dual multiplier for a cut to count as binding.",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "enabled": {
           "default": null,
           "description": "Enable cut pruning.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": ["boolean", "null"]
         },
         "method": {
           "default": null,
           "description": "Method: `\"level1\"`, `\"lml1\"`, or `\"domination\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "threshold": {
           "default": null,
           "description": "Minimum iterations before first pruning pass.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         }
       },
       "type": "object"
@@ -120,8 +90,8 @@
         },
         "order_selection": {
           "$ref": "#/$defs/OrderSelectionMethod",
-          "default": "aic",
-          "description": "Order selection criterion: fixed maximum or information-criterion-based."
+          "default": "pacf",
+          "description": "Order selection criterion: fixed maximum or periodic PACF significance testing."
         }
       },
       "type": "object"
@@ -137,10 +107,7 @@
         "compression": {
           "default": null,
           "description": "Compression algorithm for output files: `\"zstd\"`, `\"lz4\"`, or `\"none\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "cuts": {
           "default": true,
@@ -188,9 +155,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "type"
-      ],
+      "required": ["type"],
       "type": "object"
     },
     "InflowNonNegativityConfig": {
@@ -217,27 +182,18 @@
           "default": null,
           "description": "Fallback value when automatic computation fails.",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "mode": {
           "default": null,
           "description": "Computation mode: `\"auto\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "scale_factor": {
           "default": null,
           "description": "Multiplicative safety margin applied to computed Lipschitz constants.",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         }
       },
       "type": "object"
@@ -265,8 +221,8 @@
           "type": "string"
         },
         {
-          "const": "aic",
-          "description": "Select the lag order minimising the Akaike Information Criterion.",
+          "const": "pacf",
+          "description": "Select the lag order using periodic PACF significance testing.",
           "type": "string"
         }
       ]
@@ -328,18 +284,12 @@
         "output_mode": {
           "default": null,
           "description": "Output mode: `\"streaming\"` or `\"batched\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "output_path": {
           "default": null,
           "description": "Directory for simulation output files.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "policy_type": {
           "default": "outer",
@@ -384,10 +334,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type",
-            "limit"
-          ],
+          "required": ["type", "limit"],
           "type": "object"
         },
         {
@@ -403,10 +350,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type",
-            "seconds"
-          ],
+          "required": ["type", "seconds"],
           "type": "object"
         },
         {
@@ -428,11 +372,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type",
-            "iterations",
-            "tolerance"
-          ],
+          "required": ["type", "iterations", "tolerance"],
           "type": "object"
         },
         {
@@ -489,10 +429,7 @@
         "cut_formulation": {
           "default": null,
           "description": "Cut formulation: `\"single\"` or `\"multi\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
@@ -526,19 +463,13 @@
           "description": "Number of forward-pass scenario trajectories $M$ per iteration.\n\n**Mandatory** — no default. The loader rejects any config that omits this field.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "seed": {
           "default": null,
           "description": "Random seed for reproducible scenario generation.",
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "solver": {
           "$ref": "#/$defs/TrainingSolverConfig",
@@ -558,10 +489,7 @@
           "items": {
             "$ref": "#/$defs/StoppingRuleConfig"
           },
-          "type": [
-            "array",
-            "null"
-          ]
+          "type": ["array", "null"]
         }
       },
       "type": "object"
@@ -591,30 +519,21 @@
         "enabled": {
           "default": null,
           "description": "Enable vertex-based inner approximation for upper bound computation.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": ["boolean", "null"]
         },
         "initial_iteration": {
           "default": null,
           "description": "First iteration to compute the upper bound.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "interval_iterations": {
           "default": null,
           "description": "Iterations between upper-bound evaluations.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "lipschitz": {
           "$ref": "#/$defs/LipschitzConfig",
@@ -634,17 +553,14 @@
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "estimation": {
       "$ref": "#/$defs/EstimationConfig",
       "default": {
         "max_order": 6,
         "min_observations_per_season": 30,
-        "order_selection": "aic"
+        "order_selection": "pacf"
       },
       "description": "Time series estimation settings for automatic model parameter fitting."
     },
@@ -723,9 +639,7 @@
       "description": "Upper-bound evaluation via inner approximation."
     }
   },
-  "required": [
-    "training"
-  ],
+  "required": ["training"],
   "title": "Config",
   "type": "object"
 }

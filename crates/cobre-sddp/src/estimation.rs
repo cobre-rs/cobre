@@ -16,13 +16,12 @@
 //! `correlation.json` is handled independently: if present, the existing
 //! `system.correlation()` is kept; if absent, the correlation is estimated from residuals.
 //!
-//! ## AIC order selection
+//! ## PACF order selection
 //!
-//! When `config.estimation.order_selection = "aic"`, the module calls
-//! `levinson_durbin` directly per `(entity, season)` pair to obtain the
-//! `sigma2_per_order` sequence, then uses `select_order_aic` to pick the
-//! best order and truncates the AR coefficient vector accordingly.
-//! This avoids changing `ArCoefficientEstimate`'s public API.
+//! When `config.estimation.order_selection = "pacf"` (the default), the module
+//! computes the periodic PACF via progressive periodic Yule-Walker matrix solves,
+//! selects the order using a 95% significance threshold, then estimates
+//! coefficients at the selected order using the periodic YW system.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -30,22 +29,23 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
+    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
-    validate_structure, Config, FileManifest, LoadError, ValidationContext,
+    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
+    validate_structure,
 };
 use cobre_stochastic::{
+    StochasticError,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
     },
     par::fitting::{
-        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
-        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
-        find_season_for_date, periodic_pacf, select_order_pacf, ArCoefficientEstimate,
-        SeasonalStats,
+        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
+        estimate_correlation_with_season_map, estimate_periodic_ar_coefficients,
+        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
+        select_order_pacf,
     },
-    StochasticError,
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -851,8 +851,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            scenario::{CorrelationModel, InflowModel},
             Bus, DeficitSegment,
+            scenario::{CorrelationModel, InflowModel},
         };
 
         let bus = Bus {

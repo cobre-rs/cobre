@@ -369,22 +369,22 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{CorrelationModel, InflowModel},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
     use cobre_stochastic::build_stochastic_context;
 
     use super::{
-        build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
-        inflow_models_to_stats_rows, StochasticSource,
+        StochasticSource, build_stochastic_summary, estimation_report_to_fitting_report,
+        inflow_models_to_ar_rows, inflow_models_to_stats_rows,
     };
-    use crate::estimation::HydroEstimationEntry;
     use crate::EstimationReport;
+    use crate::estimation::HydroEstimationEntry;
 
     // ── Test helpers ──────────────────────────────────────────────────────────
 

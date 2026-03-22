@@ -243,14 +243,20 @@ pub fn run_progress_thread(
                         }
                     }
 
+                    TrainingEvent::TrainingStarted { .. } => {
+                        let bar = training_bar
+                            .get_or_insert_with(|| create_training_bar(max_iterations, term_width));
+                        bar.set_position(0);
+                        bar.set_message("starting...");
+                    }
+
                     TrainingEvent::ForwardPassComplete { .. }
                     | TrainingEvent::ForwardSyncComplete { .. }
                     | TrainingEvent::BackwardPassComplete { .. }
                     | TrainingEvent::CutSyncComplete { .. }
                     | TrainingEvent::CutSelectionComplete { .. }
                     | TrainingEvent::ConvergenceUpdate { .. }
-                    | TrainingEvent::CheckpointComplete { .. }
-                    | TrainingEvent::TrainingStarted { .. } => {}
+                    | TrainingEvent::CheckpointComplete { .. } => {}
                 }
             } else {
                 if let Some(bar) = training_bar.take() {

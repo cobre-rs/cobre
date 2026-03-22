@@ -32,12 +32,12 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::NaiveDate;
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, SystemBuilder,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, SystemBuilder,
 };
 use cobre_io::Config;
 use cobre_sddp::estimation::estimate_from_history;
@@ -378,7 +378,7 @@ fn test_estimate_from_history_aic_order() {
     let dir = TempDir::new().unwrap();
     let case_dir = dir.path();
 
-    create_minimal_case_skeleton(case_dir, "aic", MAX_ORDER);
+    create_minimal_case_skeleton(case_dir, "pacf", MAX_ORDER);
     write_inflow_history(&case_dir.join("scenarios/inflow_history.parquet"));
 
     let system = build_system_with_one_hydro();
@@ -470,7 +470,7 @@ fn generate_par1_interleaved(
     n_per_season: usize,
     seed: u64,
 ) -> Vec<f64> {
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
     use rand_distr::{Distribution, Normal};
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -556,12 +556,12 @@ fn write_par1_inflow_history(path: &Path, n_hydros: usize) {
 /// 15th of January or February) falls within a stage's `[1st, 1st-of-next)` window.
 fn build_system_for_par1(n_hydros: usize) -> cobre_core::System {
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     let bus = Bus {

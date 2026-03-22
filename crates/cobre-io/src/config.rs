@@ -424,14 +424,13 @@ impl Default for SimulationSamplingConfig {
 pub enum OrderSelectionMethod {
     /// Use a fixed maximum lag order specified by `max_order`.
     Fixed,
-    /// Select the lag order minimising the Akaike Information Criterion.
-    #[default]
-    Aic,
-    /// Select the lag order using partial autocorrelation significance testing.
+    /// Select the lag order using periodic partial autocorrelation significance
+    /// testing via the periodic Yule-Walker matrix method.
     ///
     /// Tests each lag against a 95% confidence interval (`1.96 / sqrt(N)`)
     /// and selects the maximum lag with a statistically significant partial
-    /// autocorrelation. Generally more conservative than AIC.
+    /// autocorrelation.
+    #[default]
     Pacf,
 }
 
@@ -468,7 +467,7 @@ impl Default for EstimationConfig {
     fn default() -> Self {
         Self {
             max_order: 6,
-            order_selection: OrderSelectionMethod::Aic,
+            order_selection: OrderSelectionMethod::Pacf,
             min_observations_per_season: 30,
             max_coefficient_magnitude: None,
         }
@@ -984,8 +983,8 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(cfg.estimation.max_order, 6);
         assert!(
-            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Aic),
-            "default order_selection should be Aic"
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Pacf),
+            "default order_selection should be Pacf"
         );
         assert_eq!(cfg.estimation.min_observations_per_season, 30);
     }

@@ -186,7 +186,7 @@ pub fn build_stochastic_summary(
                 .values()
                 .map(|entry| entry.selected_order as usize)
                 .collect();
-            ("AIC".to_string(), orders)
+            (report.method.clone(), orders)
         } else {
             // Derive from loaded inflow models: use max AR coefficient length per hydro.
             let orders: Vec<usize> = system
@@ -295,7 +295,6 @@ pub fn estimation_report_to_fitting_report(report: &EstimationReport) -> Fitting
                     id.0.to_string(),
                     HydroFittingEntry {
                         selected_order: entry.selected_order,
-                        aic_scores: entry.aic_scores.clone(),
                         coefficients: entry.coefficients.clone(),
                         contribution_reductions: entry
                             .contribution_reductions
@@ -370,22 +369,22 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{CorrelationModel, InflowModel},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
     use cobre_stochastic::build_stochastic_context;
 
     use super::{
-        StochasticSource, build_stochastic_summary, estimation_report_to_fitting_report,
-        inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+        build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
+        inflow_models_to_stats_rows, StochasticSource,
     };
-    use crate::EstimationReport;
     use crate::estimation::HydroEstimationEntry;
+    use crate::EstimationReport;
 
     // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -534,7 +533,6 @@ mod tests {
             EntityId(1),
             HydroEstimationEntry {
                 selected_order: 3,
-                aic_scores: vec![10.0, 9.5, 9.2, 9.8],
                 coefficients: vec![vec![0.4, -0.1, 0.05], vec![0.3, -0.08, 0.04]],
                 contribution_reductions: Vec::new(),
             },
@@ -543,12 +541,14 @@ mod tests {
             EntityId(5),
             HydroEstimationEntry {
                 selected_order: 2,
-                aic_scores: vec![12.1, 11.3, 11.5],
                 coefficients: vec![vec![0.6, -0.2]],
                 contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
         let fitting = estimation_report_to_fitting_report(&report);
 
         assert_eq!(
@@ -559,12 +559,10 @@ mod tests {
 
         let h1 = fitting.hydros.get("1").unwrap();
         assert_eq!(h1.selected_order, 3);
-        assert_eq!(h1.aic_scores, vec![10.0, 9.5, 9.2, 9.8]);
         assert_eq!(h1.coefficients.len(), 2);
 
         let h5 = fitting.hydros.get("5").unwrap();
         assert_eq!(h5.selected_order, 2);
-        assert_eq!(h5.aic_scores, vec![12.1, 11.3, 11.5]);
         assert_eq!(h5.coefficients, vec![vec![0.6, -0.2]]);
     }
 
@@ -670,12 +668,14 @@ mod tests {
             EntityId(10),
             HydroEstimationEntry {
                 selected_order: 2,
-                aic_scores: vec![-10.0, -12.0],
                 coefficients: vec![vec![0.5, 0.3], vec![0.4, 0.2]],
                 contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 7);
 
@@ -787,12 +787,14 @@ mod tests {
             EntityId(10),
             HydroEstimationEntry {
                 selected_order: 1,
-                aic_scores: vec![-5.0, -6.0],
                 coefficients: vec![vec![0.4]],
                 contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 1);
 

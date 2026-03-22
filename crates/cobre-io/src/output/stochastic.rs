@@ -61,7 +61,6 @@
 //!   "hydros": {
 //!     "<hydro_id>": {
 //!       "selected_order": 3,
-//!       "aic_scores": [12.4, 11.1, 10.8, 11.3],
 //!       "coefficients": [[0.42, -0.11, 0.07]]
 //!     }
 //!   }
@@ -619,12 +618,8 @@ fn build_load_seasonal_stats_batch(
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
 pub struct HydroFittingEntry {
-    /// AIC-selected AR order for this hydro plant.
+    /// Selected AR order for this hydro plant.
     pub selected_order: u32,
-    /// AIC values for candidate orders 1 through `max_order`.
-    ///
-    /// `aic_scores[i]` is the AIC for order `i + 1`.
-    pub aic_scores: Vec<f64>,
     /// Per-season AR coefficients.
     ///
     /// `coefficients[s]` contains the AR lag coefficients for season `s`,
@@ -700,7 +695,6 @@ pub struct FittingReport {
 /// let mut hydros = BTreeMap::new();
 /// hydros.insert("1".to_string(), HydroFittingEntry {
 ///     selected_order: 3,
-///     aic_scores: vec![12.4, 11.1, 10.8, 11.3],
 ///     coefficients: vec![vec![0.42, -0.11, 0.07]],
 ///     contribution_reductions: Vec::new(),
 /// });
@@ -784,7 +778,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        use crate::scenarios::{NoiseOpeningRow, assemble_opening_tree, parse_noise_openings};
+        use crate::scenarios::{assemble_opening_tree, parse_noise_openings, NoiseOpeningRow};
 
         let tree = make_tree_2s_2d();
         let tmp = tempfile::tempdir().expect("tempdir must succeed");
@@ -1732,7 +1726,6 @@ mod tests {
             "1".to_string(),
             HydroFittingEntry {
                 selected_order: 3,
-                aic_scores: vec![12.4, 11.1, 10.8, 11.3],
                 coefficients: vec![vec![0.42, -0.11, 0.07], vec![0.35, -0.08, 0.05]],
                 contribution_reductions: Vec::new(),
             },
@@ -1741,7 +1734,6 @@ mod tests {
             "5".to_string(),
             HydroFittingEntry {
                 selected_order: 1,
-                aic_scores: vec![8.2, 8.9],
                 coefficients: vec![vec![0.60], vec![0.55]],
                 contribution_reductions: Vec::new(),
             },
@@ -1776,11 +1768,6 @@ mod tests {
             Some(3),
             "selected_order for hydro 1 must be 3"
         );
-        let aic = value["hydros"]["1"]["aic_scores"]
-            .as_array()
-            .expect("aic_scores must be an array");
-        assert_eq!(aic.len(), 4, "aic_scores for hydro 1 must have 4 elements");
-
         let coefficients = value["hydros"]["1"]["coefficients"]
             .as_array()
             .expect("coefficients must be an array");
@@ -1870,68 +1857,4 @@ mod tests {
     // -------------------------------------------------------------------------
     // write_fitting_report_aic_scores_preserved
     // -------------------------------------------------------------------------
-
-    #[test]
-    fn write_fitting_report_aic_scores_preserved() {
-        let aic_scores = vec![12.4, 11.1, 10.8, 11.3];
-        let coefficients = vec![vec![0.42, -0.11, 0.07], vec![0.35, -0.08, 0.05]];
-        let mut hydros = BTreeMap::new();
-        hydros.insert(
-            "1".to_string(),
-            HydroFittingEntry {
-                selected_order: 3,
-                aic_scores: aic_scores.clone(),
-                coefficients: coefficients.clone(),
-                contribution_reductions: Vec::new(),
-            },
-        );
-        let report = FittingReport { hydros };
-
-        let tmp = tempfile::tempdir().expect("tempdir must succeed");
-        let path = tmp.path().join("fitting_report.json");
-
-        write_fitting_report(&path, &report).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("file must be readable");
-        let recovered: FittingReport =
-            serde_json::from_str(&content).expect("must deserialize back");
-        let entry = recovered.hydros.get("1").expect("hydro 1 must be present");
-
-        assert_eq!(
-            entry.aic_scores.len(),
-            aic_scores.len(),
-            "aic_scores length must be preserved"
-        );
-        for (i, (&original, &recovered_val)) in
-            aic_scores.iter().zip(entry.aic_scores.iter()).enumerate()
-        {
-            assert!(
-                (original - recovered_val).abs() < 1e-10,
-                "aic_scores[{i}] must survive JSON round-trip: expected {original}, got {recovered_val}"
-            );
-        }
-
-        assert_eq!(
-            entry.coefficients.len(),
-            coefficients.len(),
-            "coefficients row count must be preserved"
-        );
-        for (row_idx, (orig_row, rec_row)) in coefficients
-            .iter()
-            .zip(entry.coefficients.iter())
-            .enumerate()
-        {
-            assert_eq!(
-                orig_row.len(),
-                rec_row.len(),
-                "coefficients[{row_idx}] length must be preserved"
-            );
-            for (col_idx, (&ov, &rv)) in orig_row.iter().zip(rec_row.iter()).enumerate() {
-                assert!(
-                    (ov - rv).abs() < 1e-10,
-                    "coefficients[{row_idx}][{col_idx}] must survive JSON round-trip: expected {ov}, got {rv}"
-                );
-            }
-        }
-    }
 }

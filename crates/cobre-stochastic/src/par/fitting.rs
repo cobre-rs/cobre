@@ -1326,6 +1326,89 @@ pub fn select_order_aic(sigma2_per_order: &[f64], n_observations: usize) -> AicS
 }
 
 // ---------------------------------------------------------------------------
+// PACF-based AR order selection
+// ---------------------------------------------------------------------------
+
+/// Result of PACF-based AR order selection.
+///
+/// Produced by [`select_order_pacf`]. Contains the selected AR order, the
+/// PACF values for each lag, and the significance threshold used.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PacfSelectionResult {
+    /// Selected AR order.
+    ///
+    /// The maximum lag `k` where `|parcor[k-1]| > threshold`.
+    /// `0` when no lag exceeds the significance threshold.
+    pub selected_order: usize,
+    /// PACF values (partial autocorrelation coefficients) for lags `1..=p_max`.
+    ///
+    /// `pacf_values[k]` is the PACF at lag `k+1`. Same as
+    /// [`LevinsonDurbinResult::parcor`].
+    pub pacf_values: Vec<f64>,
+    /// Significance threshold: `z_alpha / sqrt(n_observations)`.
+    pub threshold: f64,
+}
+
+/// Select the AR order using partial autocorrelation function (PACF)
+/// significance testing.
+///
+/// For each lag `k` in `1..=p_max`, tests whether the partial
+/// autocorrelation coefficient (reflection coefficient from Levinson-Durbin)
+/// exceeds the significance threshold `z_alpha / sqrt(N)`. Selects the
+/// **maximum** lag with a significant PACF value.
+///
+/// If no lag exceeds the threshold, order 0 is selected (white noise).
+///
+/// # Parameters
+///
+/// - `parcor` -- partial autocorrelation coefficients from
+///   [`LevinsonDurbinResult::parcor`]. `parcor[k]` is the PACF at lag `k+1`.
+/// - `n_observations` -- number of historical observations for this season.
+/// - `z_alpha` -- z-score for the desired confidence level (e.g., `1.96`
+///   for 95% two-sided).
+///
+/// # Examples
+///
+/// ```
+/// use cobre_stochastic::par::fitting::select_order_pacf;
+///
+/// // PACF at lag 1 = 0.5 exceeds 1.96/sqrt(100) = 0.196; lag 2 = 0.1 does not.
+/// let result = select_order_pacf(&[0.5, 0.1], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // No significant PACF values -> order 0.
+/// let result = select_order_pacf(&[0.05, 0.03], 100, 1.96);
+/// assert_eq!(result.selected_order, 0);
+/// ```
+pub fn select_order_pacf(
+    parcor: &[f64],
+    n_observations: usize,
+    z_alpha: f64,
+) -> PacfSelectionResult {
+    #[allow(clippy::cast_precision_loss)]
+    let threshold = if n_observations > 0 {
+        z_alpha / (n_observations as f64).sqrt()
+    } else {
+        f64::INFINITY
+    };
+
+    // Find the maximum lag with |PACF| > threshold.
+    let selected_order = parcor
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|&(_, p)| p.abs() > threshold)
+        .map_or(0, |(k, _)| k + 1);
+
+    PacfSelectionResult {
+        selected_order,
+        pacf_values: parcor.to_vec(),
+        threshold,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1339,7 +1422,7 @@ pub fn select_order_aic(sigma2_per_order: &[f64], n_observations: usize) -> AicS
     clippy::cast_lossless
 )]
 mod tests {
-    use super::{levinson_durbin, select_order_aic};
+    use super::{levinson_durbin, select_order_aic, select_order_pacf};
 
     // -----------------------------------------------------------------------
     // AR(1) known values
@@ -2684,5 +2767,70 @@ mod tests {
         let sigma2: Vec<f64> = (1..=5).map(|k| 0.5_f64.powi(k)).collect();
         let result = select_order_aic(&sigma2, 200);
         assert_eq!(result.selected_order, 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // PACF order selection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pacf_empty_parcor_selects_zero() {
+        let result = select_order_pacf(&[], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+        assert!(result.pacf_values.is_empty());
+    }
+
+    #[test]
+    fn pacf_single_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor[0] = 0.5 > 0.196 -> significant
+        let result = select_order_pacf(&[0.5], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+        assert!((result.threshold - 0.196).abs() < 1e-10);
+    }
+
+    #[test]
+    fn pacf_no_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // All parcor below threshold.
+        let result = select_order_pacf(&[0.05, 0.03, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn pacf_selects_max_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor = [0.5, 0.1, 0.3]
+        // Lag 1 (0.5) significant, lag 2 (0.1) not, lag 3 (0.3) significant.
+        // Max significant lag = 3.
+        let result = select_order_pacf(&[0.5, 0.1, 0.3], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn pacf_negative_parcor_uses_absolute_value() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor = [-0.5, 0.1]
+        // |-0.5| = 0.5 > 0.196 -> lag 1 significant.
+        let result = select_order_pacf(&[-0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn pacf_zero_observations_selects_zero() {
+        // n_observations = 0 -> threshold = infinity -> nothing significant.
+        let result = select_order_pacf(&[0.5, 0.3], 0, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn pacf_large_sample_low_threshold() {
+        // threshold = 1.96 / sqrt(10000) = 0.0196
+        // Even small parcor values are significant.
+        let result = select_order_pacf(&[0.05, 0.03, 0.02, 0.01], 10000, 1.96);
+        // parcor[0]=0.05 > 0.0196, parcor[1]=0.03 > 0.0196, parcor[2]=0.02 > 0.0196
+        // parcor[3]=0.01 < 0.0196
+        // Max significant = lag 3.
+        assert_eq!(result.selected_order, 3);
     }
 }

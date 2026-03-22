@@ -45,7 +45,7 @@ use cobre_stochastic::{
         AicSelectionResult, ArCoefficientEstimate, SeasonalStats,
         estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
         estimate_seasonal_stats_with_season_map, find_season_for_date, levinson_durbin,
-        select_order_aic,
+        select_order_aic, select_order_pacf,
     },
 };
 
@@ -369,6 +369,14 @@ fn estimate_ar_coefficients_with_selection(
             max_order,
             season_map,
         ),
+        OrderSelectionMethod::Pacf => estimate_ar_with_pacf(
+            observations,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            max_order,
+            season_map,
+        ),
     }
 }
 
@@ -537,6 +545,169 @@ fn estimate_ar_with_aic(
         }
 
         // Store sigma2_per_order for contribution-based reduction (reuses LD results).
+        sigma2_map.insert(key, ld.sigma2_per_order);
+    }
+
+    // === Contribution-based order validation ===
+    let reductions =
+        apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
+    Ok((estimates, report))
+}
+
+/// PACF-based AR order selection.
+///
+/// Follows the same structure as [`estimate_ar_with_aic`] but selects the AR
+/// order using the partial autocorrelation function (PACF) significance test
+/// instead of AIC minimisation. The PACF threshold uses a 95% confidence
+/// interval (`z_alpha = 1.96`).
+#[allow(clippy::too_many_lines)]
+fn estimate_ar_with_pacf(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[cobre_core::temporal::Stage],
+    hydro_ids: &[EntityId],
+    max_order: usize,
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
+) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
+    // Get full-order estimates first.
+    let mut estimates = estimate_ar_coefficients_with_season_map(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        max_order,
+        season_map,
+    )?;
+
+    if max_order == 0 {
+        let report = EstimationReport {
+            entries: BTreeMap::new(),
+        };
+        return Ok((estimates, report));
+    }
+
+    // Build stage and stats lookups (same as AIC path).
+    let mut stage_index = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect::<Vec<_>>();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
+    let stage_id_to_season: HashMap<i32, usize> = stage_index
+        .iter()
+        .map(|&(_, _, stage_id, season_id)| (stage_id, season_id))
+        .collect();
+
+    let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
+        .iter()
+        .filter_map(|s| {
+            let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
+            Some(((s.entity_id, season_id), s))
+        })
+        .collect();
+
+    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
+    let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+    for &(entity_id, date, value) in observations {
+        if !entity_set.contains(&entity_id) {
+            continue;
+        }
+        let Some(season_id) = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+        else {
+            continue;
+        };
+        group_obs
+            .entry((entity_id, season_id))
+            .or_default()
+            .push(value);
+    }
+
+    let n_seasons: usize = {
+        let mut max_season = 0usize;
+        for &(_, _, _, season_id) in &stage_index {
+            if season_id >= max_season {
+                max_season = season_id + 1;
+            }
+        }
+        max_season
+    };
+
+    // Capture AIC-compatible results for the report builder.
+    let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+    let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+    // 95% confidence z-score for the PACF significance threshold.
+    let z_alpha = 1.96_f64;
+
+    for est in &mut estimates {
+        let key = (est.hydro_id, est.season_id);
+
+        let Some(stats_m) = stats_map.get(&key) else {
+            continue;
+        };
+
+        if stats_m.std == 0.0 {
+            continue;
+        }
+
+        let Some(pair_obs) = group_obs.get(&key) else {
+            continue;
+        };
+
+        let n_obs = pair_obs.len();
+        if n_obs < 2 {
+            continue;
+        }
+
+        let actual_order = est.coefficients.len();
+        if actual_order == 0 {
+            continue;
+        }
+
+        let autocorrelations = compute_autocorrelations(
+            est.hydro_id,
+            est.season_id,
+            actual_order,
+            n_seasons,
+            pair_obs,
+            &stats_map,
+            &group_obs,
+        );
+
+        if autocorrelations.len() < actual_order {
+            continue;
+        }
+
+        let ld = levinson_durbin(&autocorrelations, actual_order);
+
+        if ld.sigma2_per_order.is_empty() {
+            continue;
+        }
+
+        // PACF-based order selection.
+        let pacf_result = select_order_pacf(&ld.parcor, n_obs, z_alpha);
+        let selected = pacf_result.selected_order;
+
+        // Store an AIC-compatible result for the report builder.
+        // Use the sigma2_per_order to compute AIC values for diagnostic purposes.
+        let effective_n = n_obs.saturating_sub(actual_order);
+        let aic_result = select_order_aic(&ld.sigma2_per_order, effective_n);
+        aic_results.insert(key, aic_result);
+
+        if selected < actual_order {
+            est.coefficients.truncate(selected);
+
+            let sigma2_selected = if selected == 0 {
+                1.0
+            } else {
+                ld.sigma2_per_order[selected - 1]
+            };
+            est.residual_std_ratio = sigma2_selected.sqrt().clamp(f64::EPSILON, 1.0);
+        }
+
         sigma2_map.insert(key, ld.sigma2_per_order);
     }
 

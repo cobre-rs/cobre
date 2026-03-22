@@ -427,6 +427,12 @@ pub enum OrderSelectionMethod {
     /// Select the lag order minimising the Akaike Information Criterion.
     #[default]
     Aic,
+    /// Select the lag order using partial autocorrelation significance testing.
+    ///
+    /// Tests each lag against a 95% confidence interval (`1.96 / sqrt(N)`)
+    /// and selects the maximum lag with a statistically significant partial
+    /// autocorrelation. Generally more conservative than AIC.
+    Pacf,
 }
 
 /// Time series estimation settings (`config.json → estimation`).

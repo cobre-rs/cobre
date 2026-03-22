@@ -212,6 +212,7 @@ pub fn run_progress_thread(
                         scenarios_total,
                         scenario_cost,
                         solve_time_ms,
+                        lp_solves,
                         ..
                     } => {
                         let bar = simulation_bar.get_or_insert_with(|| {
@@ -221,9 +222,8 @@ pub fn run_progress_thread(
                         let acc = sim_acc.get_or_insert_with(WelfordAccumulator::new);
                         acc.update(scenario_cost);
                         sim_solve_time_ms += solve_time_ms;
-                        sim_lp_count += 1;
+                        sim_lp_count += lp_solves;
                         #[allow(clippy::cast_precision_loss)]
-                        // lp_count is small; f64 precision is sufficient
                         let avg_lp = if sim_lp_count > 0 {
                             format!("LP: {:.1}ms", sim_solve_time_ms / sim_lp_count as f64)
                         } else {
@@ -368,6 +368,7 @@ mod tests {
             elapsed_ms: u64::from(complete) * 50,
             scenario_cost: 45_230.4,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         }
     }
 
@@ -521,6 +522,7 @@ mod tests {
             elapsed_ms: 2_500,
             scenario_cost: 45_230.4,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         })
         .unwrap();
         tx.send(make_simulation_finished()).unwrap();
@@ -552,6 +554,7 @@ mod tests {
             elapsed_ms: 50,
             scenario_cost: 45_230.4,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         })
         .unwrap();
         tx.send(make_simulation_finished()).unwrap();
@@ -621,6 +624,7 @@ mod tests {
                 elapsed_ms: u64::from(complete) * 50,
                 scenario_cost: cost,
                 solve_time_ms: 0.0,
+                lp_solves: 0,
             })
             .unwrap();
         }
@@ -659,6 +663,7 @@ mod tests {
                 elapsed_ms: (i as u64 + 1) * 50,
                 scenario_cost: cost,
                 solve_time_ms: 0.0,
+                lp_solves: 0,
             })
             .unwrap();
         }
@@ -727,6 +732,7 @@ mod tests {
             elapsed_ms: 50,
             scenario_cost: 100.0,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         })
         .unwrap();
         tx.send(TrainingEvent::SimulationProgress {
@@ -735,6 +741,7 @@ mod tests {
             elapsed_ms: 100,
             scenario_cost: 200.0,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         })
         .unwrap();
         tx.send(TrainingEvent::SimulationProgress {
@@ -743,6 +750,7 @@ mod tests {
             elapsed_ms: 150,
             scenario_cost: 300.0,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         })
         .unwrap();
         tx.send(make_simulation_finished()).unwrap();

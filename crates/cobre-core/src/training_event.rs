@@ -280,6 +280,8 @@ pub enum TrainingEvent {
         scenario_cost: f64,
         /// Cumulative LP solve time for this scenario, in milliseconds.
         solve_time_ms: f64,
+        /// Number of LP solves in this scenario.
+        lp_solves: u64,
     },
 
     /// Emitted once when policy simulation completes.
@@ -385,6 +387,7 @@ mod tests {
                 elapsed_ms: 5_000,
                 scenario_cost: 45_230.0,
                 solve_time_ms: 0.0,
+                lp_solves: 0,
             },
             TrainingEvent::SimulationFinished {
                 scenarios: 200,
@@ -558,6 +561,7 @@ mod tests {
             elapsed_ms: 10_000,
             scenario_cost: 45_230.0,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         };
         let TrainingEvent::SimulationProgress {
             scenarios_complete,
@@ -584,6 +588,7 @@ mod tests {
             elapsed_ms: 100,
             scenario_cost: 50_000.0,
             solve_time_ms: 0.0,
+            lp_solves: 0,
         };
         let TrainingEvent::SimulationProgress { scenario_cost, .. } = event else {
             panic!("wrong variant")

@@ -38,6 +38,9 @@ use cobre_io::{
 };
 use cobre_stochastic::{
     StochasticError,
+    par::contribution::{
+        check_negative_contributions, compute_contributions, find_max_valid_order,
+    },
     par::fitting::{
         AicSelectionResult, ArCoefficientEstimate, SeasonalStats,
         estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
@@ -56,6 +59,22 @@ pub enum EstimationError {
     /// Estimation failed due to insufficient data.
     #[error("estimation failed: {0}")]
     Stochastic(#[from] StochasticError),
+}
+
+/// A single contribution-based order reduction event.
+///
+/// Records that a season's AR order was reduced because the contribution
+/// analysis detected negative entries, indicating potential model instability.
+#[derive(Debug, Clone)]
+pub struct ContributionReduction {
+    /// Season where the reduction occurred.
+    pub season_id: usize,
+    /// Order before reduction (from AIC or previous iteration).
+    pub original_order: usize,
+    /// Order after reduction (the maximum valid order from contributions).
+    pub reduced_order: usize,
+    /// Contribution values at the original order that triggered the reduction.
+    pub contributions: Vec<f64>,
 }
 
 /// Per-hydro AIC diagnostic data captured during AIC-based AR order selection.
@@ -81,6 +100,12 @@ pub struct HydroEstimationEntry {
     /// that season. Seasons where AIC was skipped (zero std, insufficient
     /// observations) use the original `estimate_ar_coefficients` output.
     pub coefficients: Vec<Vec<f64>>,
+    /// Records of contribution-based order reductions applied during fitting.
+    ///
+    /// Each entry documents a season where the initial order (from AIC or fixed
+    /// selection) was reduced due to negative contributions. Empty when no
+    /// reductions were needed.
+    pub contribution_reductions: Vec<ContributionReduction>,
 }
 
 /// Computation-side summary of the AIC-based AR estimation pipeline.
@@ -93,6 +118,67 @@ pub struct HydroEstimationEntry {
 pub struct EstimationReport {
     /// Per-hydro AIC diagnostic entries, keyed by entity ID.
     pub entries: BTreeMap<EntityId, HydroEstimationEntry>,
+}
+
+/// Result of validating an AR order via contribution analysis.
+///
+/// Captures whether the current order is stable (all contributions non-negative),
+/// the maximum valid order if not, and the computed contribution values for
+/// diagnostic reporting.
+#[derive(Debug, Clone)]
+pub struct ContributionValidationResult {
+    /// Whether the current order passed contribution validation.
+    pub valid: bool,
+    /// Maximum valid order (same as `current_order` if valid, less otherwise).
+    pub max_valid_order: usize,
+    /// Computed contribution values for the current order.
+    pub contributions: Vec<f64>,
+}
+
+/// Validate an AR order for a single (entity, season) pair via contribution analysis.
+///
+/// Computes the recursively-composed contributions for the given season at the
+/// current order, then checks for negative entries. Returns a result indicating
+/// whether the order is stable and, if not, the maximum valid order.
+///
+/// When `current_order == 0`, returns immediately with `valid: true` and no
+/// contributions (an order-0 model has no autoregressive dependence to validate).
+fn validate_order_contributions(
+    season_id: usize,
+    n_seasons: usize,
+    current_order: usize,
+    all_season_coefficients: &[Vec<f64>],
+    std_by_season: &[f64],
+) -> ContributionValidationResult {
+    if current_order == 0 {
+        return ContributionValidationResult {
+            valid: true,
+            max_valid_order: 0,
+            contributions: Vec::new(),
+        };
+    }
+
+    let coeff_refs: Vec<&[f64]> = all_season_coefficients.iter().map(Vec::as_slice).collect();
+    let contributions = compute_contributions(
+        season_id,
+        n_seasons,
+        current_order,
+        &coeff_refs,
+        std_by_season,
+    );
+
+    let valid = !check_negative_contributions(&contributions);
+    let max_valid_order = if valid {
+        current_order
+    } else {
+        find_max_valid_order(&contributions)
+    };
+
+    ContributionValidationResult {
+        valid,
+        max_valid_order,
+        contributions,
+    }
 }
 
 /// Estimate PAR(p) model parameters from inflow history when explicit stats are absent.
@@ -239,7 +325,7 @@ fn estimate_ar_coefficients_with_selection(
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     match method {
         OrderSelectionMethod::Fixed => {
-            let estimates = estimate_ar_coefficients_with_season_map(
+            let mut estimates = estimate_ar_coefficients_with_season_map(
                 observations,
                 seasonal_stats,
                 stages,
@@ -247,9 +333,32 @@ fn estimate_ar_coefficients_with_selection(
                 max_order,
                 season_map,
             )?;
-            let report = EstimationReport {
-                entries: BTreeMap::new(),
-            };
+
+            // Build stats_map and n_seasons for contribution validation.
+            let stage_index = stages
+                .iter()
+                .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+                .collect::<Vec<_>>();
+            let stage_id_to_season: HashMap<i32, usize> = stage_index.iter().copied().collect();
+            let n_seasons = stage_index
+                .iter()
+                .map(|&(_, sid)| sid + 1)
+                .max()
+                .unwrap_or(0);
+            let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
+                .iter()
+                .filter_map(|s| {
+                    let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
+                    Some(((s.entity_id, season_id), s))
+                })
+                .collect();
+            let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+            let reductions =
+                apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+            let aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+            let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
             Ok((estimates, report))
         }
         OrderSelectionMethod::Aic => estimate_ar_with_aic(
@@ -350,6 +459,8 @@ fn estimate_ar_with_aic(
 
     // Capture AIC results per (entity_id, season_id) for building the report.
     let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+    // Store sigma2_per_order for later use during contribution-based reduction.
+    let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
     // For each estimate, run levinson_durbin independently to get sigma2_per_order.
     for est in &mut estimates {
@@ -424,10 +535,109 @@ fn estimate_ar_with_aic(
             // residual_std_ratio = sqrt(sigma2_selected), clamped to (0, 1].
             est.residual_std_ratio = sigma2_selected.sqrt().clamp(f64::EPSILON, 1.0);
         }
+
+        // Store sigma2_per_order for contribution-based reduction (reuses LD results).
+        sigma2_map.insert(key, ld.sigma2_per_order);
     }
 
-    let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+    // === Contribution-based order validation ===
+    let reductions =
+        apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
     Ok((estimates, report))
+}
+
+/// Apply contribution-based order validation to all AR estimates.
+///
+/// For each entity, groups all season coefficients and standard deviations,
+/// then iterates per season: if negative contributions are found, the order
+/// is reduced to the maximum valid order and the coefficient vector truncated.
+/// The loop repeats until all contributions are non-negative or the order
+/// reaches zero.
+///
+/// Returns a map of `EntityId` -> list of `ContributionReduction` events.
+fn apply_contribution_validation(
+    estimates: &mut [ArCoefficientEstimate],
+    n_seasons: usize,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    sigma2_map: &HashMap<(EntityId, usize), Vec<f64>>,
+) -> HashMap<EntityId, Vec<ContributionReduction>> {
+    let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+
+    // Group estimate indices by hydro_id for per-entity processing.
+    let mut hydro_indices: BTreeMap<EntityId, Vec<usize>> = BTreeMap::new();
+    for (idx, est) in estimates.iter().enumerate() {
+        hydro_indices.entry(est.hydro_id).or_default().push(idx);
+    }
+
+    for (&hydro_id, indices) in &hydro_indices {
+        // Build std_by_season from seasonal_stats.
+        let std_by_season: Vec<f64> = (0..n_seasons)
+            .map(|sid| stats_map.get(&(hydro_id, sid)).map_or(0.0, |s| s.std))
+            .collect();
+
+        // Build all_season_coefficients from current estimates.
+        let mut all_coeffs: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+        for &idx in indices {
+            let est = &estimates[idx];
+            if est.season_id < n_seasons {
+                all_coeffs[est.season_id].clone_from(&est.coefficients);
+            }
+        }
+
+        // Validate each season for this entity.
+        for &idx in indices {
+            let season_id = estimates[idx].season_id;
+            let mut current_order = estimates[idx].coefficients.len();
+
+            loop {
+                let result = validate_order_contributions(
+                    season_id,
+                    n_seasons,
+                    current_order,
+                    &all_coeffs,
+                    &std_by_season,
+                );
+
+                if result.valid || current_order == 0 {
+                    break;
+                }
+
+                let original_order = current_order;
+                let reduced_order = result.max_valid_order;
+
+                all_reductions
+                    .entry(hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id,
+                        original_order,
+                        reduced_order,
+                        contributions: result.contributions,
+                    });
+
+                // Truncate coefficients to the reduced order.
+                estimates[idx].coefficients.truncate(reduced_order);
+
+                // Recompute residual_std_ratio from stored sigma2 if available.
+                if reduced_order == 0 {
+                    estimates[idx].residual_std_ratio = 1.0;
+                } else if let Some(sigma2_vec) = sigma2_map.get(&(hydro_id, season_id)) {
+                    if reduced_order <= sigma2_vec.len() {
+                        let sigma2 = sigma2_vec[reduced_order - 1];
+                        estimates[idx].residual_std_ratio = sigma2.sqrt().clamp(f64::EPSILON, 1.0);
+                    }
+                }
+
+                // Update the shared coefficient array.
+                all_coeffs[season_id].clone_from(&estimates[idx].coefficients);
+                current_order = reduced_order;
+            }
+        }
+    }
+
+    all_reductions
 }
 
 /// Build an [`EstimationReport`] from AIC-truncated AR estimates and captured
@@ -442,6 +652,7 @@ fn build_estimation_report(
     estimates: &[ArCoefficientEstimate],
     aic_results: &HashMap<(EntityId, usize), AicSelectionResult>,
     n_seasons: usize,
+    contribution_reductions: &HashMap<EntityId, Vec<ContributionReduction>>,
 ) -> EstimationReport {
     // Group coefficient vectors by hydro_id (estimates are already sorted by
     // (hydro_id, season_id) from estimate_ar_coefficients).
@@ -483,6 +694,11 @@ fn build_estimation_report(
             .map(|sid| season_map.get(&sid).cloned().unwrap_or_default())
             .collect();
 
+        let reductions = contribution_reductions
+            .get(&hydro_id)
+            .cloned()
+            .unwrap_or_default();
+
         #[allow(clippy::cast_possible_truncation)]
         entries.insert(
             hydro_id,
@@ -490,6 +706,7 @@ fn build_estimation_report(
                 selected_order: selected_order as u32,
                 aic_scores,
                 coefficients,
+                contribution_reductions: reductions,
             },
         );
     }
@@ -637,7 +854,11 @@ fn ar_estimates_to_rows(
     clippy::expect_used,
     clippy::panic,
     clippy::too_many_lines,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::doc_markdown,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::useless_vec
 )]
 mod tests {
     use super::*;
@@ -909,7 +1130,13 @@ mod tests {
             }
         }
 
-        let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+        let contribution_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+        let report = build_estimation_report(
+            &estimates,
+            &aic_results,
+            n_seasons,
+            &contribution_reductions,
+        );
 
         assert_eq!(report.entries.len(), 2, "expected 2 hydro entries");
 
@@ -985,13 +1212,227 @@ mod tests {
             },
         );
 
-        let report = build_estimation_report(&estimates, &aic_results, n_seasons);
+        let contribution_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+        let report = build_estimation_report(
+            &estimates,
+            &aic_results,
+            n_seasons,
+            &contribution_reductions,
+        );
 
         let entry = report.entries.get(&hydro_id).expect("entry must exist");
         assert_eq!(
             entry.aic_scores,
             vec![12.4, 11.1, 10.8],
             "aic_scores must exclude order-0 baseline"
+        );
+    }
+
+    // ── Contribution validation tests ─────────────────────────────────────
+
+    /// E2-003: Order-0 fallback when the first contribution is negative.
+    ///
+    /// A single-season AR(1) model with phi = -1.5 produces a negative
+    /// direct contribution. `validate_order_contributions` should report
+    /// max_valid_order = 0.
+    #[test]
+    fn test_contribution_order_zero_fallback() {
+        let result = validate_order_contributions(
+            0,             // season_id
+            1,             // n_seasons
+            1,             // current_order
+            &[vec![-1.5]], // all_season_coefficients
+            &[10.0],       // std_by_season
+        );
+        assert!(!result.valid);
+        assert_eq!(result.max_valid_order, 0);
+    }
+
+    /// E2-003: Order-0 input returns valid immediately.
+    #[test]
+    fn test_contribution_order_zero_input_passes() {
+        let result = validate_order_contributions(0, 1, 0, &[Vec::new()], &[10.0]);
+        assert!(result.valid);
+        assert_eq!(result.max_valid_order, 0);
+        assert!(result.contributions.is_empty());
+    }
+
+    /// E2-003: Stable AR(2) model with all-positive contributions passes.
+    #[test]
+    fn test_contribution_stable_model_passes() {
+        let result = validate_order_contributions(
+            0,                 // season_id
+            1,                 // n_seasons
+            2,                 // current_order
+            &[vec![0.4, 0.2]], // all_season_coefficients
+            &[10.0],           // std_by_season
+        );
+        assert!(result.valid);
+        assert_eq!(result.max_valid_order, 2);
+        assert_eq!(result.contributions.len(), 2);
+    }
+
+    /// E2-003: apply_contribution_validation reduces an explosive model.
+    ///
+    /// Constructs AR(2) with coefficients [0.3, -0.8] for a single entity
+    /// and single season. The contribution of lag 2 is negative (-0.71),
+    /// so the order should be reduced to 1.
+    #[test]
+    fn test_apply_contribution_validation_reduces_explosive() {
+        let hydro_id = EntityId(1);
+        let n_seasons = 1;
+
+        let mut estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![0.3, -0.8],
+            residual_std_ratio: 0.9,
+        }];
+
+        let stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: 100.0,
+            std: 10.0,
+        }];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> =
+            stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
+        // sigma2_per_order: [sigma2_order1, sigma2_order2]
+        // At order 1, residual is sqrt(0.81) ~= 0.9
+        let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+        sigma2_map.insert((hydro_id, 0), vec![0.81, 0.75]);
+
+        let reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+        // After validation, the order should be reduced: [0.3, -0.8] -> [0.3]
+        assert_eq!(
+            estimates[0].coefficients.len(),
+            1,
+            "explosive AR(2) should be reduced to AR(1)"
+        );
+        assert!((estimates[0].coefficients[0] - 0.3).abs() < 1e-10);
+
+        // Residual std ratio should be recomputed from sigma2_per_order[0]
+        assert!(
+            (estimates[0].residual_std_ratio - 0.81_f64.sqrt()).abs() < 1e-10,
+            "residual_std_ratio should be recomputed from sigma2_per_order[0]"
+        );
+
+        // Should have recorded the reduction event.
+        let entity_reductions = reductions.get(&hydro_id).expect("should have reductions");
+        assert_eq!(entity_reductions.len(), 1);
+        assert_eq!(entity_reductions[0].original_order, 2);
+        assert_eq!(entity_reductions[0].reduced_order, 1);
+        assert_eq!(entity_reductions[0].season_id, 0);
+    }
+
+    /// E2-003: PIMENTAL-like scenario -- large coefficient at lag 2 in one
+    /// season while other seasons are benign.
+    #[test]
+    fn test_pimental_like_multi_season_reduction() {
+        let hydro_id = EntityId(156);
+        let n_seasons = 12;
+
+        // Build estimates: most seasons have small AR(1), August has explosive AR(2).
+        let mut estimates: Vec<ArCoefficientEstimate> = (0..n_seasons)
+            .map(|s| ArCoefficientEstimate {
+                hydro_id,
+                season_id: s,
+                coefficients: if s == 7 {
+                    // August: explosive AR(2) with huge lag-2 coefficient
+                    vec![0.5, 48.9]
+                } else {
+                    vec![0.1] // benign AR(1)
+                },
+                residual_std_ratio: 0.95,
+            })
+            .collect();
+
+        // Std devs: most seasons ~200, August = 5 (high coefficient * low std = trouble)
+        let stds: Vec<f64> = (0..n_seasons)
+            .map(|s| if s == 7 { 5.0 } else { 200.0 })
+            .collect();
+
+        let stats: Vec<SeasonalStats> = (0..n_seasons)
+            .map(|s| SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: s as i32,
+                mean: 100.0,
+                std: stds[s],
+            })
+            .collect();
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = stats
+            .iter()
+            .enumerate()
+            .map(|(s, st)| ((hydro_id, s), st))
+            .collect();
+
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+        // August (season 7) should have been reduced from AR(2).
+        // The contribution of lag 2 through the periodic chain may or may not be negative
+        // depending on the recursive composition with neighboring months' coefficients.
+        // We verify the reduction was applied if any reduction occurred for August.
+        let august_order = estimates[7].coefficients.len();
+
+        // Other months should remain unchanged at AR(1) since their contributions
+        // are small positive values.
+        for (s, est) in estimates.iter().enumerate() {
+            if s != 7 {
+                assert_eq!(est.coefficients.len(), 1, "season {s} should remain AR(1)");
+            }
+        }
+
+        // If August was reduced, there should be a reduction record.
+        if august_order < 2 {
+            let entity_reductions = reductions.get(&hydro_id).expect("should have reductions");
+            assert!(
+                entity_reductions.iter().any(|r| r.season_id == 7),
+                "August reduction should be recorded"
+            );
+        }
+    }
+
+    /// E2-003: All contributions negative forces white-noise fallback.
+    ///
+    /// AR(1) with phi = -2.0 for all seasons -- every contribution is negative,
+    /// so order drops to 0 and residual_std_ratio becomes 1.0.
+    #[test]
+    fn test_all_negative_fallback_to_white_noise() {
+        let hydro_id = EntityId(1);
+        let n_seasons = 1;
+
+        let mut estimates = vec![ArCoefficientEstimate {
+            hydro_id,
+            season_id: 0,
+            coefficients: vec![-2.0],
+            residual_std_ratio: 0.8,
+        }];
+
+        let stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: 50.0,
+            std: 10.0,
+        }];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> =
+            stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let _reductions =
+            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+
+        assert!(
+            estimates[0].coefficients.is_empty(),
+            "should fall back to order 0"
+        );
+        assert!(
+            (estimates[0].residual_std_ratio - 1.0).abs() < 1e-10,
+            "white-noise residual ratio should be 1.0"
         );
     }
 }

@@ -526,6 +526,7 @@ mod tests {
                 selected_order: 3,
                 aic_scores: vec![10.0, 9.5, 9.2, 9.8],
                 coefficients: vec![vec![0.4, -0.1, 0.05], vec![0.3, -0.08, 0.04]],
+                contribution_reductions: Vec::new(),
             },
         );
         entries.insert(
@@ -534,6 +535,7 @@ mod tests {
                 selected_order: 2,
                 aic_scores: vec![12.1, 11.3, 11.5],
                 coefficients: vec![vec![0.6, -0.2]],
+                contribution_reductions: Vec::new(),
             },
         );
         let report = EstimationReport { entries };
@@ -660,6 +662,7 @@ mod tests {
                 selected_order: 2,
                 aic_scores: vec![-10.0, -12.0],
                 coefficients: vec![vec![0.5, 0.3], vec![0.4, 0.2]],
+                contribution_reductions: Vec::new(),
             },
         );
         let report = EstimationReport { entries };
@@ -776,6 +779,7 @@ mod tests {
                 selected_order: 1,
                 aic_scores: vec![-5.0, -6.0],
                 coefficients: vec![vec![0.4]],
+                contribution_reductions: Vec::new(),
             },
         );
         let report = EstimationReport { entries };

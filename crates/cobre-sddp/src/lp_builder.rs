@@ -2137,6 +2137,7 @@ fn build_single_stage_template(
 /// LP: multiply each column's matrix entries, objective coefficient, and column bounds
 /// by the corresponding scale factor.
 #[must_use]
+#[allow(clippy::cast_sign_loss)] // col_starts are non-negative by CSC construction
 pub(crate) fn compute_col_scale(num_cols: usize, col_starts: &[i32], values: &[f64]) -> Vec<f64> {
     let mut scale = vec![1.0_f64; num_cols];
     for j in 0..num_cols {
@@ -2179,6 +2180,8 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     debug_assert_eq!(col_scale.len(), num_cols);
 
     // Scale matrix values (CSC: iterate columns).
+    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
+    // j+1 access; col_starts non-negative by construction
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -2189,17 +2192,21 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     }
 
     // Scale objective coefficients.
-    for j in 0..num_cols {
-        template.objective[j] *= col_scale[j];
+    for (obj, &d) in template.objective.iter_mut().zip(col_scale) {
+        *obj *= d;
     }
 
     // Inverse-scale column bounds.
     // The scaled variable is x_tilde = x / d_j, so bounds become [lo/d, hi/d].
     // For d > 0 this preserves bound ordering.
-    for j in 0..num_cols {
-        let d = col_scale[j];
-        template.col_lower[j] /= d;
-        template.col_upper[j] /= d;
+    for ((lo, hi), &d) in template
+        .col_lower
+        .iter_mut()
+        .zip(template.col_upper.iter_mut())
+        .zip(col_scale)
+    {
+        *lo /= d;
+        *hi /= d;
     }
 }
 
@@ -2211,12 +2218,13 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
 ///
 /// The matrix is given in CSC (column-major) form; row statistics are accumulated
 /// by iterating all nonzeros once in O(nnz). This function should be called on
-/// the already column-scaled matrix to obtain the standard D_r * A * D_c form.
+/// the already column-scaled matrix to obtain the standard `D_r * A * D_c` form.
 ///
 /// The returned vector has length `num_rows`. Applying row scaling transforms the
 /// LP: multiply each row's matrix entries, row lower bound, and row upper bound
 /// by the corresponding scale factor.
 #[must_use]
+#[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by CSC construction
 pub(crate) fn compute_row_scale(
     num_rows: usize,
     num_cols: usize,
@@ -2227,6 +2235,7 @@ pub(crate) fn compute_row_scale(
     let mut row_max = vec![0.0_f64; num_rows];
     let mut row_min = vec![f64::INFINITY; num_rows];
 
+    #[allow(clippy::needless_range_loop)] // j+1 access on col_starts requires index
     for j in 0..num_cols {
         let start = col_starts[j] as usize;
         let end = col_starts[j + 1] as usize;
@@ -2241,9 +2250,9 @@ pub(crate) fn compute_row_scale(
     }
 
     let mut scale = vec![1.0_f64; num_rows];
-    for i in 0..num_rows {
-        if row_max[i] > 0.0 && row_min[i] < f64::INFINITY {
-            scale[i] = 1.0 / (row_max[i] * row_min[i]).sqrt();
+    for (s, (&rmax, &rmin)) in scale.iter_mut().zip(row_max.iter().zip(row_min.iter())) {
+        if rmax > 0.0 && rmin < f64::INFINITY {
+            *s = 1.0 / (rmax * rmin).sqrt();
         }
         // Otherwise keep 1.0 (empty row or all structural zeros).
     }
@@ -2268,6 +2277,8 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
 
     // Scale matrix values (CSC: iterate columns, apply per-row factor).
     let num_cols = template.num_cols;
+    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
+    // j+1 access; values non-negative by construction
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -2278,10 +2289,14 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
     }
 
     // Scale row bounds.
-    for i in 0..num_rows {
-        let d = row_scale[i];
-        template.row_lower[i] *= d;
-        template.row_upper[i] *= d;
+    for ((lo, hi), &d) in template
+        .row_lower
+        .iter_mut()
+        .zip(template.row_upper.iter_mut())
+        .zip(row_scale)
+    {
+        *lo *= d;
+        *hi *= d;
     }
 }
 

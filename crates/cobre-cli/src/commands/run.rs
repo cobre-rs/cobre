@@ -769,6 +769,7 @@ fn write_outputs(
             .solver_stats_log
             .iter()
             .map(|(iter, phase, stage, delta)| {
+                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
                 delta_to_stats_row(*iter as u32, phase, *stage, delta)
             })
             .collect();

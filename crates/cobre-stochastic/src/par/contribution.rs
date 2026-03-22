@@ -277,7 +277,7 @@ mod tests {
         stds[6] = 200.0;
         stds[5] = 200.0;
 
-        let coeffs_refs: Vec<&[f64]> = coeffs_data.iter().map(|v| v.as_slice()).collect();
+        let coeffs_refs: Vec<&[f64]> = coeffs_data.iter().map(Vec::as_slice).collect();
         let result = compute_contributions(7, 12, 2, &coeffs_refs, &stds);
 
         assert_eq!(result.len(), 2);
@@ -291,7 +291,7 @@ mod tests {
 
         // Now make the coefficient negative to trigger explosive behavior
         coeffs_data[7] = vec![0.5, -48.9];
-        let coeffs_refs2: Vec<&[f64]> = coeffs_data.iter().map(|v| v.as_slice()).collect();
+        let coeffs_refs2: Vec<&[f64]> = coeffs_data.iter().map(Vec::as_slice).collect();
         let result2 = compute_contributions(7, 12, 2, &coeffs_refs2, &stds);
 
         assert_close(result2[0], 0.0125, "lag 1 negative case");

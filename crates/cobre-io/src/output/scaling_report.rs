@@ -39,6 +39,7 @@ pub fn write_scaling_report(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use serde::Serialize;

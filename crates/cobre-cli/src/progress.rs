@@ -222,6 +222,8 @@ pub fn run_progress_thread(
                         acc.update(scenario_cost);
                         sim_solve_time_ms += solve_time_ms;
                         sim_lp_count += 1;
+                        #[allow(clippy::cast_precision_loss)]
+                        // lp_count is small; f64 precision is sufficient
                         let avg_lp = if sim_lp_count > 0 {
                             format!("LP: {:.1}ms", sim_solve_time_ms / sim_lp_count as f64)
                         } else {

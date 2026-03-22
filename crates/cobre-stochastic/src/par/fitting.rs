@@ -3355,20 +3355,20 @@ mod tests {
         for _ in 0..n_seasons {
             obs_data.push((0..n_years).map(|y| (y * 10 + 5) as f64).collect());
         }
-        let obs_refs: Vec<&[f64]> = obs_data.iter().map(|v| v.as_slice()).collect();
+        let obs_refs: Vec<&[f64]> = obs_data.iter().map(Vec::as_slice).collect();
         let stats: Vec<(f64, f64)> = obs_data.iter().map(|v| pop_mean_std(v)).collect();
 
         // For the cross-year case (ref_season=0, lag=1 -> lag_season=11),
         // lag_season (11) >= ref_season (0), so one observation is dropped.
-        let _rho_jan_dec = periodic_autocorrelation(0, 1, n_seasons, &obs_refs, &stats);
+        let rho_jan_dec = periodic_autocorrelation(0, 1, n_seasons, &obs_refs, &stats);
 
         // For the non-cross-year case (ref_season=6, lag=1 -> lag_season=5),
         // lag_season (5) < ref_season (6), so no observation is dropped.
-        let _rho_jul_jun = periodic_autocorrelation(6, 1, n_seasons, &obs_refs, &stats);
+        let rho_jul_jun = periodic_autocorrelation(6, 1, n_seasons, &obs_refs, &stats);
 
         // Both should produce valid values.
-        assert!(_rho_jan_dec.abs() <= 1.0);
-        assert!(_rho_jul_jun.abs() <= 1.0);
+        assert!((-1.0..=1.0).contains(&rho_jan_dec));
+        assert!((-1.0..=1.0).contains(&rho_jul_jun));
 
         // Verify the cross-year adjustment affects the value: compute manually.
         // For the cross-year case with identical observations per season,
@@ -3415,7 +3415,7 @@ mod tests {
         let stats: &[(f64, f64)] = &[(200.0, 0.001)]; // artificially tiny std
         let obs: &[&[f64]] = &[&season_0];
         let rho = periodic_autocorrelation(0, 1, 1, obs, stats);
-        assert!(rho >= -1.0 && rho <= 1.0, "rho should be clamped: {rho}");
+        assert!((-1.0..=1.0).contains(&rho), "rho should be clamped: {rho}");
     }
 
     #[test]
@@ -3428,7 +3428,7 @@ mod tests {
         let stats: &[(f64, f64)] = &[(mean, std_val)];
         let obs: &[&[f64]] = &[&data];
 
-        let rho = periodic_autocorrelation(0, 1, 1, obs, stats);
+        let _rho = periodic_autocorrelation(0, 1, 1, obs, stats);
 
         // Compute expected with 1/N:
         // With single season, lag 1 means same season at lag 1.
@@ -3487,8 +3487,8 @@ mod tests {
         assert_eq!(mat.len(), order * order);
         // Check Toeplitz property: M[i,j] depends only on |i-j|.
         // M[0,1] should equal M[1,2] (both have lag 1 from same ref season 0).
-        let m01 = mat[0 * order + 1];
-        let m12 = mat[1 * order + 2];
+        let m01 = mat[1]; // row 0, col 1
+        let m12 = mat[order + 2]; // row 1, col 2
         assert!(
             (m01 - m12).abs() < 1e-10,
             "Toeplitz violated: M[0,1]={m01} != M[1,2]={m12}"
@@ -3578,8 +3578,8 @@ mod tests {
         // row 0 uses ref_month = season = 0, row 1 uses ref_month = (0+2-1)%2 = 1.
         // These reference different seasons, so M[0,1] (rho(0,1)) may differ
         // from M[1,2] (rho(1,1)).
-        let m01 = mat[0 * order + 1];
-        let m12 = mat[1 * order + 2];
+        let m01 = mat[1]; // row 0, col 1
+        let m12 = mat[order + 2]; // row 1, col 2
         // We just verify both are valid; they may or may not differ depending
         // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);

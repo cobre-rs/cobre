@@ -82,7 +82,7 @@ pub struct ScaleFactorSummary {
     /// Median scale factor.
     pub median: f64,
 
-    /// Number of scale factors (equal to num_cols or num_rows).
+    /// Number of scale factors (equal to `num_cols` or `num_rows`).
     pub count: usize,
 }
 
@@ -155,7 +155,7 @@ fn median(values: &[f64]) -> f64 {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len();
     if n % 2 == 0 {
-        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        f64::midpoint(sorted[n / 2 - 1], sorted[n / 2])
     } else {
         sorted[n / 2]
     }

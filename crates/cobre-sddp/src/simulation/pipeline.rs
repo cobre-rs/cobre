@@ -235,6 +235,7 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
 /// and returns `(immediate_cost, SimulationStageResult)`. Always cold-starts
 /// the LP to guarantee thread-count-independent determinism.
+#[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
@@ -660,7 +661,7 @@ fn dispatch_scenario_result(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
-#[allow(clippy::needless_pass_by_value)] // owned Option<Sender> required for worker clone pattern
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // owned Option<Sender> required for worker clone pattern
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,
@@ -1481,8 +1482,8 @@ mod tests {
     /// Acceptance criterion: `total_cost` in cost buffer equals sum of
     /// `(objective - primal[theta])` across all stages for each scenario.
     ///
-    /// With objective=100.0 and theta=30.0: `stage_cost` = (100 - 30) * COST_SCALE_FACTOR = 70_000 per stage.
-    /// For 3 stages: `total_cost` = 3 * 70_000 = 210_000.
+    /// With objective=100.0 and theta=30.0: `stage_cost` = (100 - 30) * `COST_SCALE_FACTOR` = `70_000` per stage.
+    /// For 3 stages: `total_cost` = 3 \* `70_000` = `210_000`.
     #[test]
     fn simulate_total_cost_equals_sum_of_stage_costs() {
         let n_stages = 3;

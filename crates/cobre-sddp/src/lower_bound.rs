@@ -104,6 +104,7 @@ pub struct LbEvalSpec<'a> {
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
+#[allow(clippy::too_many_lines)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,

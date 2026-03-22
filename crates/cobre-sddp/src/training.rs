@@ -447,7 +447,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 .collect();
             let agg = SolverStatsDelta::aggregate(&deltas);
             let total_ms = agg.solve_time_ms;
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             for (stage_idx, delta) in &backward_result.stage_stats {
                 solver_stats_log.push((
                     iteration,

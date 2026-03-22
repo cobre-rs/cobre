@@ -9,7 +9,7 @@ use std::sync::Arc;
 use arrow::array::{Float64Array, Int32Array, StringBuilder, UInt32Array, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
-use parquet::basic::Compression;
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 
 use super::error::OutputError;
@@ -129,7 +129,7 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
 
     let file = std::fs::File::create(&tmp_path).map_err(|e| OutputError::io(&tmp_path, e))?;
     let props = WriterProperties::builder()
-        .set_compression(Compression::ZSTD(Default::default()))
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
         .build();
     let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
         .map_err(|e| OutputError::serialization("solver_stats", format!("ArrowWriter: {e}")))?;

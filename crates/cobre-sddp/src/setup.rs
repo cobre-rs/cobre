@@ -330,6 +330,11 @@ impl StudySetup {
         cut_selection: Option<CutSelectionStrategy>,
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
+        use crate::scaling_report::{
+            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
+            summarize_scale_factors,
+        };
+
         // ── Stage templates ───────────────────────────────────────────────────
         let mut stage_templates = build_stage_templates(
             system,
@@ -346,10 +351,6 @@ impl StudySetup {
         // backward passes.
         //
         // Scaling report: capture pre/post coefficient ranges for diagnostics.
-        use crate::scaling_report::{
-            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
-            summarize_scale_factors,
-        };
 
         let mut stage_scaling_reports = Vec::with_capacity(stage_templates.templates.len());
 
@@ -361,7 +362,7 @@ impl StudySetup {
             let col_scale =
                 lp_builder::compute_col_scale(tmpl.num_cols, &tmpl.col_starts, &tmpl.values);
             lp_builder::apply_col_scale(tmpl, &col_scale);
-            tmpl.col_scale = col_scale.clone();
+            tmpl.col_scale.clone_from(&col_scale);
             // Row scaling is applied to the already column-scaled matrix.
             let row_scale = lp_builder::compute_row_scale(
                 tmpl.num_rows,
@@ -371,7 +372,7 @@ impl StudySetup {
                 &tmpl.values,
             );
             lp_builder::apply_row_scale(tmpl, &row_scale);
-            tmpl.row_scale = row_scale.clone();
+            tmpl.row_scale.clone_from(&row_scale);
 
             // Post-scaling snapshot (after col + row scaling).
             let post_scaling = compute_coefficient_range(tmpl);

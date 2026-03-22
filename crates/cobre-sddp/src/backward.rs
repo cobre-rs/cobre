@@ -2680,6 +2680,7 @@ mod tests {
     ///
     /// N=1, L=0 → `N*(2+L) = 2`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn backward_pass_no_load_buses_unchanged() {
         let n_stages = 2_usize;
         let n_openings = 2_usize;

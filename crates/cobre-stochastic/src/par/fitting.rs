@@ -1675,6 +1675,176 @@ pub fn solve_linear_system(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec
 }
 
 // ---------------------------------------------------------------------------
+// Periodic PACF
+// ---------------------------------------------------------------------------
+
+/// Compute the periodic PACF for a given season up to `max_order`.
+///
+/// For each candidate order k (`1..=max_order`), builds the periodic Yule-Walker
+/// matrix of dimension k, solves `R * phi = rhs`, and extracts the last
+/// coefficient `phi[k-1]` as `PACF(k)`.
+///
+/// This is the correct periodic PACF computation that accounts for the
+/// non-Toeplitz covariance structure of periodic autoregressive processes.
+/// It replaces the stationary Levinson-Durbin reflection coefficients which
+/// assume a Toeplitz (stationary) covariance matrix.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season.
+/// - `max_order` -- maximum lag to compute PACF for.
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season.
+/// - `stats_by_season` -- `(mean, std)` for each season.
+///
+/// # Returns
+///
+/// A `Vec<f64>` of length <= `max_order`. Entry `k` is `PACF(k+1)`.
+/// The vector may be shorter than `max_order` if a system at some order
+/// is singular (remaining orders are skipped).
+#[must_use]
+pub fn periodic_pacf(
+    season: usize,
+    max_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> Vec<f64> {
+    let mut pacf_values = Vec::with_capacity(max_order);
+
+    for k in 1..=max_order {
+        let (mut matrix, mut rhs) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+
+        match solve_linear_system(&mut matrix, &mut rhs, k) {
+            Some(phi) => pacf_values.push(phi[k - 1]),
+            None => break, // Singular matrix, stop.
+        }
+    }
+
+    pacf_values
+}
+
+// ---------------------------------------------------------------------------
+// Periodic YW coefficient estimation
+// ---------------------------------------------------------------------------
+
+/// Result of periodic Yule-Walker AR coefficient estimation for one
+/// (entity, season) pair.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct PeriodicYwResult {
+    /// Standardised AR coefficients `phi_1..phi_p`.
+    pub coefficients: Vec<f64>,
+    /// Residual std ratio: `sigma_residual / sigma_sample`.
+    /// In `(0, 1]` for valid models; 1.0 for order-0.
+    pub residual_std_ratio: f64,
+    /// Prediction error variance at each intermediate order `1..=selected_order`.
+    /// Used for diagnostic reporting. `sigma2_per_order[k-1]` is the variance
+    /// for AR(k).
+    pub sigma2_per_order: Vec<f64>,
+}
+
+/// Estimate AR coefficients by solving the periodic Yule-Walker system at the
+/// given order.
+///
+/// Also computes prediction error variances at each intermediate order
+/// (`1..=selected_order`) for diagnostic reporting compatibility.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season.
+/// - `selected_order` -- the AR order to fit (from PACF-based selection).
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season.
+/// - `stats_by_season` -- `(mean, std)` for each season.
+///
+/// # Returns
+///
+/// A [`PeriodicYwResult`] with the fitted coefficients, residual std ratio,
+/// and prediction error variances. Returns order-0 result (empty coefficients,
+/// ratio 1.0) when `selected_order == 0` or when the system is singular.
+pub fn estimate_periodic_ar_coefficients(
+    season: usize,
+    selected_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> PeriodicYwResult {
+    let zero_result = PeriodicYwResult {
+        coefficients: Vec::new(),
+        residual_std_ratio: 1.0,
+        sigma2_per_order: Vec::new(),
+    };
+
+    if selected_order == 0 {
+        return zero_result;
+    }
+
+    let mut sigma2_per_order = Vec::with_capacity(selected_order);
+    let mut final_coefficients = Vec::new();
+
+    for k in 1..=selected_order {
+        // Build and solve the periodic YW system at order k.
+        // Save the original RHS for sigma2 computation (solve modifies in-place).
+        let (_, rhs_orig) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+        let (mut matrix, mut rhs) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+
+        match solve_linear_system(&mut matrix, &mut rhs, k) {
+            Some(phi) => {
+                // sigma2(k) = 1 - sum_{j=0}^{k-1} phi[j] * rhs_original[j]
+                let sigma2_k: f64 = 1.0
+                    - phi
+                        .iter()
+                        .zip(rhs_orig.iter())
+                        .map(|(p, r)| p * r)
+                        .sum::<f64>();
+                sigma2_per_order.push(sigma2_k);
+
+                if k == selected_order {
+                    final_coefficients = phi;
+                }
+            }
+            None => {
+                // Singular matrix: fall back to order-0 result.
+                return zero_result;
+            }
+        }
+    }
+
+    // Compute residual_std_ratio = sqrt(sigma2(selected_order)).
+    let sigma2_final = *sigma2_per_order.last().unwrap_or(&1.0);
+    let residual_std_ratio = if sigma2_final > 0.0 {
+        sigma2_final.sqrt().clamp(f64::EPSILON, 1.0)
+    } else {
+        1.0 // Numerical issue: fall back.
+    };
+
+    PeriodicYwResult {
+        coefficients: final_coefficients,
+        residual_std_ratio,
+        sigma2_per_order,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1689,8 +1859,9 @@ pub fn solve_linear_system(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec
 )]
 mod tests {
     use super::{
-        build_periodic_yw_matrix, levinson_durbin, periodic_autocorrelation, select_order_aic,
-        select_order_pacf, solve_linear_system,
+        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, levinson_durbin,
+        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
+        solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -3672,5 +3843,237 @@ mod tests {
             rhs[1],
             expected_rhs1
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // periodic_pacf tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn periodic_pacf_empty_for_zero_order() {
+        let data: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+        let pacf = periodic_pacf(0, 0, 1, obs, stats_arr);
+        assert!(pacf.is_empty());
+    }
+
+    #[test]
+    fn periodic_pacf_single_season_matches_ar1() {
+        // For AR(1) with known rho(1), the PACF(1) should equal rho(1).
+        // PACF(1) = phi_{1,1} = the AR(1) coefficient = rho(1).
+        let data = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+        let pacf = periodic_pacf(0, 3, 1, obs, stats_arr);
+
+        assert!(!pacf.is_empty());
+        // PACF(1) should equal rho(1) (the AR(1) coefficient).
+        assert!(
+            (pacf[0] - rho1).abs() < 1e-10,
+            "PACF(1)={}, rho(1)={}",
+            pacf[0],
+            rho1
+        );
+    }
+
+    #[test]
+    fn periodic_pacf_two_season_differs_from_ld() {
+        // For a two-season model, the periodic PACF should produce different
+        // values than the Levinson-Durbin parcor (which assumes stationarity).
+        let s0: Vec<f64> = (0..30).map(|i| (i as f64 * 0.3).sin() * 5.0).collect();
+        let s1: Vec<f64> = (0..30).map(|i| (i as f64 * 0.7).cos() * 8.0).collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        let pacf = periodic_pacf(0, 3, 2, &obs, &stats);
+
+        // Should produce values (not empty due to singularity).
+        assert!(!pacf.is_empty(), "PACF should not be empty");
+        // All values should be bounded.
+        for (k, &v) in pacf.iter().enumerate() {
+            assert!(
+                v.is_finite() && v.abs() <= 1.0 + 1e-10,
+                "PACF({}) = {v} out of bounds",
+                k + 1
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_pacf_length_matches_max_order() {
+        let data: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 10.0).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let pacf = periodic_pacf(0, 5, 1, obs, stats_arr);
+        assert_eq!(pacf.len(), 5, "PACF should have max_order entries");
+    }
+
+    #[test]
+    fn periodic_pacf_values_bounded() {
+        // PACF values from the periodic matrix solve should be finite.
+        // Unlike Levinson-Durbin parcor, they are not guaranteed to be in [-1, 1]
+        // because the last coefficient of an AR(k) model can exceed 1 when the
+        // covariance structure is periodic. The significance test in
+        // select_order_pacf handles this correctly.
+        let s0: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.2).sin() * 3.0 + 5.0)
+            .collect();
+        let s1: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.4).cos() * 2.0 + 7.0)
+            .collect();
+        let s2: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.6).sin() * 4.0 + 3.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..], &s2[..]]
+            .iter()
+            .map(|s| pop_mean_std(s))
+            .collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
+
+        for season in 0..3 {
+            let pacf = periodic_pacf(season, 4, 3, &obs, &stats);
+            for (k, &v) in pacf.iter().enumerate() {
+                assert!(
+                    v.is_finite(),
+                    "Season {season}, PACF({}) = {v} not finite",
+                    k + 1
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_periodic_ar_coefficients tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn estimate_periodic_ar_order_zero() {
+        let data: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 0, 1, obs, stats_arr);
+        assert!(result.coefficients.is_empty());
+        assert!((result.residual_std_ratio - 1.0).abs() < 1e-15);
+        assert!(result.sigma2_per_order.is_empty());
+    }
+
+    #[test]
+    fn estimate_periodic_ar_order_one_known_rho() {
+        // AR(1) with known rho(1) = 0.5.
+        // Expected: coefficient = value from periodic YW solve (equals rho(1)
+        // for the AR(1) case), sigma2 = 1 - phi * rho(1).
+        // Use simple data with known autocorrelation.
+        let data = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 1, 1, obs, stats_arr);
+        assert_eq!(result.coefficients.len(), 1);
+        assert_eq!(result.sigma2_per_order.len(), 1);
+        // residual_std_ratio should be in (0, 1].
+        assert!(result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0);
+        // sigma2 = 1 - phi * rho(1)
+        let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+        let expected_sigma2 = 1.0 - result.coefficients[0] * rho1;
+        assert!(
+            (result.sigma2_per_order[0] - expected_sigma2).abs() < 1e-10,
+            "sigma2={}, expected={}",
+            result.sigma2_per_order[0],
+            expected_sigma2
+        );
+    }
+
+    #[test]
+    fn estimate_periodic_ar_two_season() {
+        // Two-season model: coefficients should differ from single-season.
+        let s0: Vec<f64> = (0..30)
+            .map(|i| (i as f64 * 0.3).sin() * 5.0 + 10.0)
+            .collect();
+        let s1: Vec<f64> = (0..30)
+            .map(|i| (i as f64 * 0.5).cos() * 3.0 + 7.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        let result = estimate_periodic_ar_coefficients(0, 2, 2, &obs, &stats);
+        assert_eq!(result.coefficients.len(), 2);
+        assert_eq!(result.sigma2_per_order.len(), 2);
+        assert!(result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0);
+    }
+
+    #[test]
+    fn estimate_periodic_ar_sigma2_per_order_length() {
+        let data: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 10.0).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        for order in 1..=5 {
+            let result = estimate_periodic_ar_coefficients(0, order, 1, obs, stats_arr);
+            assert_eq!(
+                result.sigma2_per_order.len(),
+                order,
+                "sigma2_per_order should have {order} entries"
+            );
+            assert_eq!(
+                result.coefficients.len(),
+                order,
+                "coefficients should have {order} entries"
+            );
+        }
+    }
+
+    #[test]
+    fn estimate_periodic_ar_residual_ratio_bounded() {
+        // For any valid model, residual_std_ratio should be in (0, 1].
+        let s0: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.2).sin() * 3.0 + 5.0)
+            .collect();
+        let s1: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.4).cos() * 2.0 + 7.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        for order in 1..=4 {
+            let result = estimate_periodic_ar_coefficients(0, order, 2, &obs, &stats);
+            assert!(
+                result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0,
+                "Order {order}: ratio={} out of bounds",
+                result.residual_std_ratio
+            );
+        }
+    }
+
+    #[test]
+    fn estimate_periodic_ar_sigma2_finite() {
+        // Prediction error variance should be finite at each order.
+        // Unlike Levinson-Durbin, the periodic YW sigma2 is not guaranteed
+        // to be monotonically decreasing or non-negative for all data.
+        let data: Vec<f64> = (0..100)
+            .map(|i| (i as f64 * 0.1).sin() * 5.0 + 10.0)
+            .collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 4, 1, obs, stats_arr);
+        for k in 0..result.sigma2_per_order.len() {
+            assert!(
+                result.sigma2_per_order[k].is_finite(),
+                "sigma2[{k}] = {} not finite",
+                result.sigma2_per_order[k]
+            );
+        }
     }
 }

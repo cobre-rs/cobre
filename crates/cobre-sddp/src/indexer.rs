@@ -766,6 +766,8 @@ impl StageIndexer {
     ///     n_dual_relevant: 9,
     ///     n_hydro: 3,
     ///     max_par_order: 2,
+    ///     col_scale: vec![],
+    ///     row_scale: vec![],
     /// };
     ///
     /// let idx = StageIndexer::from_stage_template(&template);
@@ -941,6 +943,8 @@ mod tests {
             n_dual_relevant: n_state,
             n_hydro,
             max_par_order,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

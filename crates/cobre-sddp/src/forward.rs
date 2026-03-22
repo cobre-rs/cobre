@@ -71,6 +71,7 @@ use rayon::iter::{
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
+    lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
@@ -269,6 +270,7 @@ pub fn build_cut_row_batch(
     fcf: &FutureCostFunction,
     stage: usize,
     indexer: &StageIndexer,
+    col_scale: &[f64],
 ) -> RowBatch {
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
@@ -316,7 +318,15 @@ pub fn build_cut_row_batch(
             );
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             col_indices.push(j as i32);
-            values.push(-c);
+            // When column scaling is active, cut row entries must be in the
+            // scaled LP's coordinate system: multiply by d_j so that the
+            // constraint reads -c_j * d_j * x_tilde_j = -c_j * x_j.
+            let d = if col_scale.is_empty() {
+                1.0
+            } else {
+                col_scale[j]
+            };
+            values.push(-c * d);
         }
 
         debug_assert!(
@@ -325,7 +335,13 @@ pub fn build_cut_row_batch(
         );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         col_indices.push(theta_col as i32);
-        values.push(1.0_f64);
+        // Theta column also needs scaling.
+        let d_theta = if col_scale.is_empty() {
+            1.0
+        } else {
+            col_scale[theta_col]
+        };
+        values.push(d_theta);
 
         row_lower.push(intercept);
         row_upper.push(f64::INFINITY);
@@ -476,6 +492,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         &ws.current_state,
         &ws.scratch.noise_buf,
         ctx.base_rows[t],
+        &ctx.templates[t].row_scale,
     );
     if n_load_buses > 0 {
         ws.patch_buf.fill_load_patches(
@@ -483,6 +500,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
             ctx.block_counts_per_stage[t],
             &ws.scratch.load_rhs_buf,
             ctx.load_bus_indices,
+            &ctx.templates[t].row_scale,
         );
     }
     let pc = ws.patch_buf.forward_patch_count();
@@ -536,18 +554,49 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     })?;
 
-    let stage_cost = view.objective - view.primal[indexer.theta];
+    // Unscale primal values from the solver's scaled coordinate system back
+    // to the original physical units. When col_scale is empty (no scaling
+    // applied), this loop is skipped.
+    let col_scale = &ctx.templates[t].col_scale;
+    let unscaled_primal = &mut ws.scratch.unscaled_primal;
+    if col_scale.is_empty() {
+        unscaled_primal.clear();
+        unscaled_primal.extend_from_slice(view.primal);
+    } else {
+        unscaled_primal.resize(view.primal.len(), 0.0);
+        for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
+            unscaled_primal[j] = d * xp;
+        }
+    }
+
+    let stage_cost = (view.objective - unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
-    rec.primal.extend_from_slice(view.primal);
+    rec.primal.extend_from_slice(unscaled_primal);
     rec.dual.clear();
-    rec.dual.extend_from_slice(view.dual);
+    // Unscale duals: structural rows use row_scale[i]; cut rows (i >= num_rows)
+    // have implicit row_scale = 1.0 and are used as-is.
+    let row_scale = &ctx.templates[t].row_scale;
+    if row_scale.is_empty() {
+        rec.dual.extend_from_slice(view.dual);
+    } else {
+        rec.dual.reserve(view.dual.len());
+        for (i, &d) in view.dual.iter().enumerate() {
+            let scale = if i < row_scale.len() {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            rec.dual.push(d * scale);
+        }
+    }
     rec.stage_cost = stage_cost;
     rec.state.clear();
-    rec.state.extend_from_slice(&view.primal[..indexer.n_state]);
+    rec.state
+        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&view.primal[..indexer.n_state]);
+        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {
@@ -649,7 +698,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
     let start = Instant::now();
     let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer))
+        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
         .collect();
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
@@ -928,6 +977,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -1117,7 +1168,7 @@ mod tests {
     fn build_cut_row_batch_empty_cuts_returns_empty_batch() {
         let fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
         let indexer = StageIndexer::new(1, 0);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 0);
         assert_eq!(batch.row_starts, vec![0]);
@@ -1132,7 +1183,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
         fcf.add_cut(0, 0, 0, 5.0, &[2.0]);
         let indexer = StageIndexer::new(1, 0);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
         assert_eq!(batch.row_starts, vec![0, 2]);
@@ -1148,7 +1199,7 @@ mod tests {
         fcf.add_cut(1, 0, 0, 10.0, &[1.0, 3.0]);
         fcf.add_cut(1, 1, 0, 20.0, &[2.0, 4.0]);
         let indexer = StageIndexer::new(1, 1);
-        let batch = build_cut_row_batch(&fcf, 1, &indexer);
+        let batch = build_cut_row_batch(&fcf, 1, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
@@ -1174,7 +1225,7 @@ mod tests {
         let mut fcf = FutureCostFunction::new(1, 2, 1, 5, 0);
         fcf.add_cut(0, 0, 0, 3.0, &[0.0, 7.0]);
         let indexer = StageIndexer::new(1, 1);
-        let batch = build_cut_row_batch(&fcf, 0, &indexer);
+        let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
         assert_eq!(batch.col_indices, vec![0, 1, 3]);
@@ -1205,6 +1256,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }
     }
@@ -1212,7 +1265,7 @@ mod tests {
     // ── Acceptance criteria integration tests ───────────────────────────────
 
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
-    /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70`.
+    /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70_000`.
     #[test]
     fn ac_two_scenarios_three_stages_fixed_solution() {
         // StageIndexer: N=1, L=0 → n_state=1, theta=2, num_cols=3
@@ -1275,16 +1328,16 @@ mod tests {
 
         // AC: scenario_costs has exactly 2 entries (one per forward pass).
         assert_eq!(result.scenario_costs.len(), 2);
-        // AC: all 6 records have stage_cost = 100 - 30 = 70.
+        // AC: all 6 records have stage_cost = (100 - 30) * COST_SCALE_FACTOR = 70_000.
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
-                record.stage_cost, 70.0,
-                "record[{i}].stage_cost should be 70.0 (objective - theta)"
+                record.stage_cost, 70_000.0,
+                "record[{i}].stage_cost should be 70_000.0 ((objective - theta) * COST_SCALE_FACTOR)"
             );
         }
-        // AC: each scenario cost = 70 * 3 stages = 210.
-        assert_eq!(result.scenario_costs[0], 210.0);
-        assert_eq!(result.scenario_costs[1], 210.0);
+        // AC: each scenario cost = 70_000 * 3 stages = 210_000.
+        assert_eq!(result.scenario_costs[0], 210_000.0);
+        assert_eq!(result.scenario_costs[1], 210_000.0);
     }
 
     /// AC: mock solver returns `Infeasible` at stage 1, scenario 0.
@@ -1376,10 +1429,10 @@ mod tests {
 
     /// Behavioral: `cost_sum` and `cost_sum_sq` are correctly accumulated.
     ///
-    /// With 2 scenarios and `stage_cost=70` at every `(scenario, stage)`:
-    /// - `total_cost` per scenario = 70 * 3 = 210
-    /// - `cost_sum` = 210 + 210 = 420
-    /// - `cost_sum_sq` = 210^2 + 210^2 = 88200
+    /// With 2 scenarios and `stage_cost=70_000` at every `(scenario, stage)`:
+    /// - `total_cost` per scenario = `70_000` \* 3 = `210_000`
+    /// - `cost_sum` = `210_000` + `210_000` = `420_000`
+    /// - `cost_sum_sq` = `210_000`^2 + `210_000`^2 = `88_200_000_000`
     #[test]
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);
@@ -1439,16 +1492,16 @@ mod tests {
         )
         .unwrap();
 
-        // stage_cost per solve = 100 - 30 = 70
-        // total_cost per scenario = 70 * 3 stages = 210
+        // stage_cost per solve = (100 - 30) * COST_SCALE_FACTOR = 70_000
+        // total_cost per scenario = 70_000 * 3 stages = 210_000
         assert_eq!(result.scenario_costs.len(), 2);
-        assert_eq!(result.scenario_costs[0], 210.0);
-        assert_eq!(result.scenario_costs[1], 210.0);
-        // Derived statistics: sum = 420, sum_sq = 88200.
+        assert_eq!(result.scenario_costs[0], 210_000.0);
+        assert_eq!(result.scenario_costs[1], 210_000.0);
+        // Derived statistics: sum = 420_000, sum_sq = 210_000^2 * 2.
         let cost_sum: f64 = result.scenario_costs.iter().sum();
         let cost_sum_sq: f64 = result.scenario_costs.iter().map(|c| c * c).sum();
-        assert_eq!(cost_sum, 420.0);
-        assert_eq!(cost_sum_sq, 210.0_f64.powi(2) * 2.0);
+        assert_eq!(cost_sum, 420_000.0);
+        assert_eq!(cost_sum_sq, 210_000.0_f64.powi(2) * 2.0);
     }
 
     // ── Unit tests: SyncResult ───────────────────────────────────────────────
@@ -2265,6 +2318,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -2477,8 +2532,8 @@ mod tests {
         assert_eq!(result.scenario_costs.len(), 2);
         for (i, record) in records.iter().enumerate() {
             assert_eq!(
-                record.stage_cost, 70.0,
-                "none_method: record[{i}].stage_cost should be 70.0 (objective - theta)"
+                record.stage_cost, 70_000.0,
+                "none_method: record[{i}].stage_cost should be 70_000.0 ((objective - theta) * COST_SCALE_FACTOR)"
             );
         }
     }
@@ -2738,6 +2793,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
 
@@ -2837,6 +2894,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
 

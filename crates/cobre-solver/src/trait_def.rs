@@ -279,6 +279,8 @@ mod tests {
             n_dual_relevant: 0,
             n_hydro: 0,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
 
         let batch = RowBatch {

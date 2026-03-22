@@ -259,14 +259,22 @@ impl PatchBuffer {
     ///
     /// Populates Categories 1, 2, and 3 in sequence:
     ///
-    /// - **Category 1** — `N` storage-fixing patches: row `h` ← `state[h]`
+    /// - **Category 1** — `N` storage-fixing patches: row `h` ← `row_scale[h] * state[h]`
     ///   for `h ∈ [0, N)`.
     /// - **Category 2** — `N*L` AR lag-fixing patches: row `N + ℓ·N + h` ←
-    ///   `state[N + ℓ·N + h]` for `h ∈ [0, N)`, `ℓ ∈ [0, L)`.
+    ///   `row_scale[N+ℓN+h] * state[N + ℓ·N + h]` for `h ∈ [0, N)`, `ℓ ∈ [0, L)`.
     /// - **Category 3** — `N` noise-fixing patches: row
     ///   `ar_dynamics_row_offset(base_row, h)` ← `noise[h]` for `h ∈ [0, N)`.
+    ///   Category 3 is NOT prescaled by `row_scale` because `noise[h]` is computed
+    ///   from `template.row_lower` (already row-scaled) plus an unscaled noise term.
+    ///   Prescaling would double-scale the base component.
     ///
     /// All patches are equality constraints: `lower[i] == upper[i] == value`.
+    ///
+    /// When `row_scale` is non-empty, Categories 1 and 2 values are multiplied by
+    /// the corresponding `row_scale[row_index]` before being stored.  Pass an
+    /// empty slice when no row scaling has been applied.  Category 3 is always
+    /// written as-is regardless of `row_scale`.
     ///
     /// After this call, pass `&buf.indices`, `&buf.lower`, `&buf.upper` to
     /// `SolverInterface::set_row_bounds`.
@@ -282,6 +290,8 @@ impl PatchBuffer {
     ///   static non-dual region of the LP ([Solver Abstraction SS2.2]).
     ///   Computed during stage template construction and stored alongside
     ///   `indexer`.
+    /// - `row_scale` — per-row scaling factors from the stage template.
+    ///   Pass `&[]` when no scaling is active.
     ///
     /// # Panics
     ///
@@ -293,6 +303,7 @@ impl PatchBuffer {
         state: &[f64],
         noise: &[f64],
         base_row: usize,
+        row_scale: &[f64],
     ) {
         debug_assert_eq!(
             state.len(),
@@ -312,26 +323,42 @@ impl PatchBuffer {
         let l = self.max_par_order;
 
         // Category 1: storage-fixing rows [0, N)
-        // patch(row = h, value = state[h])
+        // patch(row = h, value = state[h] * row_scale[h])
         for (h, &sv) in state[..n].iter().enumerate() {
             self.indices[h] = h;
-            self.lower[h] = sv;
-            self.upper[h] = sv;
+            let scaled = if row_scale.is_empty() {
+                sv
+            } else {
+                sv * row_scale[h]
+            };
+            self.lower[h] = scaled;
+            self.upper[h] = scaled;
         }
 
         // Category 2: AR lag-fixing rows [N, N*(1+L))
-        // patch(row = N + ℓ·N + h, value = state[N + ℓ·N + h])
+        // patch(row = N + ℓ·N + h, value = state[slot] * row_scale[slot])
         for lag in 0..l {
             for h in 0..n {
                 let slot = n + lag * n + h;
                 self.indices[slot] = slot;
-                self.lower[slot] = state[slot];
-                self.upper[slot] = state[slot];
+                let sv = state[slot];
+                let scaled = if row_scale.is_empty() {
+                    sv
+                } else {
+                    sv * row_scale[slot]
+                };
+                self.lower[slot] = scaled;
+                self.upper[slot] = scaled;
             }
         }
 
-        // Category 3: AR dynamics rows in the static non-dual region
-        // patch(row = ar_dynamics_row_offset(base_row, h), value = noise[h])
+        // Category 3: AR dynamics rows in the static non-dual region.
+        // The noise value is computed by the caller as:
+        //   noise[h] = template.row_lower[base_row + h] + noise_scale[h] * eta
+        // where `template.row_lower` is already scaled (by `apply_row_scale`).
+        // The `noise_scale` factor is in original units and is NOT rescaled, so
+        // `noise[h]` is already the best-available approximation of the scaled RHS
+        // and must be written as-is without additional prescaling.
         let cat3_start = n * (1 + l);
         for (h, &nv) in noise.iter().enumerate() {
             let slot = cat3_start + h;
@@ -352,6 +379,10 @@ impl PatchBuffer {
     /// - **Category 2** — `N*L` AR lag-fixing patches: row `N + ℓ·N + h` ←
     ///   `state[N + ℓ·N + h]` for `h ∈ [0, N)`, `ℓ ∈ [0, L)`.
     ///
+    /// When `row_scale` is non-empty, each patch value is prescaled by
+    /// `row_scale[row_index]` before being stored.  Pass `&[]` when no row
+    /// scaling has been applied.
+    ///
     /// Pass `&buf.indices[..active_len()]`, `&buf.lower[..active_len()]`, and
     /// `&buf.upper[..active_len()]` to `SolverInterface::set_row_bounds`,
     /// where `active_len` is `N*(1+L)`.  Use [`state_patch_count`] to obtain
@@ -361,13 +392,15 @@ impl PatchBuffer {
     ///
     /// - `indexer` — LP layout map for this stage.
     /// - `state` — incoming state vector of length `n_state = N*(1+L)`.
+    /// - `row_scale` — per-row scaling factors from the stage template.
+    ///   Pass `&[]` when no scaling is active.
     ///
     /// # Panics
     ///
     /// Panics in debug builds if `state.len() != indexer.n_state`.
     ///
     /// [`state_patch_count`]: PatchBuffer::state_patch_count
-    pub fn fill_state_patches(&mut self, indexer: &StageIndexer, state: &[f64]) {
+    pub fn fill_state_patches(&mut self, indexer: &StageIndexer, state: &[f64], row_scale: &[f64]) {
         debug_assert_eq!(
             state.len(),
             indexer.n_state,
@@ -382,8 +415,13 @@ impl PatchBuffer {
         // Category 1: storage-fixing rows [0, N)
         for (h, &sv) in state[..n].iter().enumerate() {
             self.indices[h] = h;
-            self.lower[h] = sv;
-            self.upper[h] = sv;
+            let scaled = if row_scale.is_empty() {
+                sv
+            } else {
+                sv * row_scale[h]
+            };
+            self.lower[h] = scaled;
+            self.upper[h] = scaled;
         }
 
         // Category 2: AR lag-fixing rows [N, N*(1+L))
@@ -391,8 +429,14 @@ impl PatchBuffer {
             for h in 0..n {
                 let slot = n + lag * n + h;
                 self.indices[slot] = slot;
-                self.lower[slot] = state[slot];
-                self.upper[slot] = state[slot];
+                let sv = state[slot];
+                let scaled = if row_scale.is_empty() {
+                    sv
+                } else {
+                    sv * row_scale[slot]
+                };
+                self.lower[slot] = scaled;
+                self.upper[slot] = scaled;
             }
         }
         // Category 3 is intentionally not written; the caller slices
@@ -412,6 +456,10 @@ impl PatchBuffer {
     /// The `load_rhs` slice is laid out as `[bus0_blk0, bus0_blk1, …, bus1_blk0, …]`
     /// (bus-major, block-minor), matching `bus_positions` order.
     ///
+    /// When `row_scale` is non-empty, each patch value is prescaled by
+    /// `row_scale[row]` before being stored.  Pass `&[]` when no row scaling
+    /// has been applied.
+    ///
     /// After this call, [`forward_patch_count`] returns `N*(2+L) + n_load_buses * n_blocks`
     /// so that the correct slice is passed to `set_row_bounds`.
     ///
@@ -423,6 +471,8 @@ impl PatchBuffer {
     ///   `self.load_bus_count * n_blocks`.
     /// - `bus_positions` — LP bus position for each stochastic load bus;
     ///   length must equal `self.load_bus_count`.
+    /// - `row_scale` — per-row scaling factors from the stage template.
+    ///   Pass `&[]` when no scaling is active.
     ///
     /// # Panics
     ///
@@ -438,6 +488,7 @@ impl PatchBuffer {
         n_blocks: usize,
         load_rhs: &[f64],
         bus_positions: &[usize],
+        row_scale: &[f64],
     ) {
         debug_assert_eq!(
             load_rhs.len(),
@@ -466,9 +517,14 @@ impl PatchBuffer {
             for blk in 0..n_blocks {
                 let row = load_row_start + bus_pos * n_blocks + blk;
                 let rhs = load_rhs[i * n_blocks + blk];
+                let scaled = if row_scale.is_empty() {
+                    rhs
+                } else {
+                    rhs * row_scale[row]
+                };
                 self.indices[slot] = row;
-                self.lower[slot] = rhs;
-                self.upper[slot] = rhs;
+                self.lower[slot] = scaled;
+                self.upper[slot] = scaled;
                 slot += 1;
             }
         }
@@ -634,6 +690,15 @@ pub struct StageTemplates {
 /// This constant is overridden per block using the actual `Block::duration_hours`
 /// from the stage definition.
 const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
+
+/// Divisor applied to all objective-function cost coefficients.
+///
+/// Dividing monetary costs by this factor reduces objective magnitudes
+/// (e.g., from ~8.8e11 to ~8.8e8), improving LP solver numerical
+/// conditioning without changing the optimization argmin. All cost-domain
+/// outputs (objective values, duals, cost breakdowns) are multiplied by
+/// this factor at the reporting boundary to recover original units.
+pub(crate) const COST_SCALE_FACTOR: f64 = 1_000.0;
 
 // ---------------------------------------------------------------------------
 // Per-stage template builder internals
@@ -1994,6 +2059,28 @@ fn build_single_stage_template(
         &mut row_upper,
     );
 
+    // Scale all monetary objective coefficients for numerical conditioning.
+    // The entire SDDP algorithm operates in scaled cost space; outputs
+    // are unscaled at the reporting boundary (forward.rs, lower_bound.rs,
+    // simulation/pipeline.rs, simulation/extraction.rs).
+    //
+    // Theta (the future cost approximation variable) must NOT be divided by
+    // COST_SCALE_FACTOR.  The Benders cuts enforce `theta >= intercept_scaled`
+    // where `intercept_scaled = Q_successor / K`, so theta holds the SCALED
+    // future cost.  The LP objective is `sum(c_i/K * x_i) + 1.0 * theta`, and
+    // the total scaled objective = (stage_cost + future_cost) / K.  Multiplying
+    // by K at the reporting boundary recovers the original monetary cost.
+    //
+    // If theta were also divided by K its objective coefficient would become
+    // 1/K, making the LP objective `stage_cost/K + (1/K)*theta` which, after
+    // multiplication by K, gives `stage_cost + future_cost/K` -- wrong.
+    let theta_col = StageIndexer::new(ctx.n_hydros, ctx.max_par_order).theta;
+    for (i, coeff) in objective.iter_mut().enumerate() {
+        if i != theta_col {
+            *coeff /= COST_SCALE_FACTOR;
+        }
+    }
+
     // Sort each column's entries by row index (CSC invariant).
     for entries in &mut col_entries {
         entries.sort_unstable_by_key(|&(row, _)| row);
@@ -2026,6 +2113,8 @@ fn build_single_stage_template(
         n_dual_relevant: layout.n_dual_relevant,
         n_hydro: layout.n_h,
         max_par_order: layout.lag_order,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     (
@@ -2037,6 +2126,178 @@ fn build_single_stage_template(
         n_ncs,
         ncs_active,
     )
+}
+
+/// Compute per-column geometric-mean scaling factors from a CSC constraint matrix.
+///
+/// For each column `j`, the scale factor is `1 / sqrt(max|A_ij| * min|A_ij|)` over
+/// nonzero entries. Columns with no nonzero entries receive a scale factor of 1.0.
+///
+/// The returned vector has length `num_cols`. Applying column scaling transforms the
+/// LP: multiply each column's matrix entries, objective coefficient, and column bounds
+/// by the corresponding scale factor.
+#[must_use]
+#[allow(clippy::cast_sign_loss)] // col_starts are non-negative by CSC construction
+pub(crate) fn compute_col_scale(num_cols: usize, col_starts: &[i32], values: &[f64]) -> Vec<f64> {
+    let mut scale = vec![1.0_f64; num_cols];
+    for j in 0..num_cols {
+        let start = col_starts[j] as usize;
+        let end = col_starts[j + 1] as usize;
+        if start == end {
+            // No nonzero entries in this column.
+            continue;
+        }
+        let mut max_abs = 0.0_f64;
+        let mut min_abs = f64::INFINITY;
+        for &v in &values[start..end] {
+            let abs_val = v.abs();
+            if abs_val > 0.0 {
+                max_abs = max_abs.max(abs_val);
+                min_abs = min_abs.min(abs_val);
+            }
+        }
+        if max_abs > 0.0 && min_abs < f64::INFINITY {
+            let d = 1.0 / (max_abs * min_abs).sqrt();
+            scale[j] = d;
+        }
+        // Otherwise keep 1.0 (all structural zeros or defensive fallback).
+    }
+    scale
+}
+
+/// Apply column scaling to a stage template's matrix, objective, and bounds.
+///
+/// Modifies the template in-place. After this call:
+/// - `values[k]` has been multiplied by `col_scale[col_of(k)]`
+/// - `objective[j]` has been multiplied by `col_scale[j]`
+/// - `col_lower[j]` has been divided by `col_scale[j]`
+/// - `col_upper[j]` has been divided by `col_scale[j]`
+///
+/// Infinite bounds remain infinite (dividing infinity by a finite positive
+/// scale factor yields infinity).
+pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
+    let num_cols = template.num_cols;
+    debug_assert_eq!(col_scale.len(), num_cols);
+
+    // Scale matrix values (CSC: iterate columns).
+    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
+    // j+1 access; col_starts non-negative by construction
+    for j in 0..num_cols {
+        let start = template.col_starts[j] as usize;
+        let end = template.col_starts[j + 1] as usize;
+        let d = col_scale[j];
+        for v in &mut template.values[start..end] {
+            *v *= d;
+        }
+    }
+
+    // Scale objective coefficients.
+    for (obj, &d) in template.objective.iter_mut().zip(col_scale) {
+        *obj *= d;
+    }
+
+    // Inverse-scale column bounds.
+    // The scaled variable is x_tilde = x / d_j, so bounds become [lo/d, hi/d].
+    // For d > 0 this preserves bound ordering.
+    for ((lo, hi), &d) in template
+        .col_lower
+        .iter_mut()
+        .zip(template.col_upper.iter_mut())
+        .zip(col_scale)
+    {
+        *lo /= d;
+        *hi /= d;
+    }
+}
+
+/// Compute per-row geometric-mean scaling factors from a CSC constraint matrix.
+///
+/// For each row `i`, the scale factor is `1 / sqrt(max|A_ij| * min|A_ij|)` over
+/// all nonzero entries in that row. Rows with no nonzero entries receive a scale
+/// factor of 1.0.
+///
+/// The matrix is given in CSC (column-major) form; row statistics are accumulated
+/// by iterating all nonzeros once in O(nnz). This function should be called on
+/// the already column-scaled matrix to obtain the standard `D_r * A * D_c` form.
+///
+/// The returned vector has length `num_rows`. Applying row scaling transforms the
+/// LP: multiply each row's matrix entries, row lower bound, and row upper bound
+/// by the corresponding scale factor.
+#[must_use]
+#[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by CSC construction
+pub(crate) fn compute_row_scale(
+    num_rows: usize,
+    num_cols: usize,
+    col_starts: &[i32],
+    row_indices: &[i32],
+    values: &[f64],
+) -> Vec<f64> {
+    let mut row_max = vec![0.0_f64; num_rows];
+    let mut row_min = vec![f64::INFINITY; num_rows];
+
+    #[allow(clippy::needless_range_loop)] // j+1 access on col_starts requires index
+    for j in 0..num_cols {
+        let start = col_starts[j] as usize;
+        let end = col_starts[j + 1] as usize;
+        for k in start..end {
+            let row = row_indices[k] as usize;
+            let abs_val = values[k].abs();
+            if abs_val > 0.0 {
+                row_max[row] = row_max[row].max(abs_val);
+                row_min[row] = row_min[row].min(abs_val);
+            }
+        }
+    }
+
+    let mut scale = vec![1.0_f64; num_rows];
+    for (s, (&rmax, &rmin)) in scale.iter_mut().zip(row_max.iter().zip(row_min.iter())) {
+        if rmax > 0.0 && rmin < f64::INFINITY {
+            *s = 1.0 / (rmax * rmin).sqrt();
+        }
+        // Otherwise keep 1.0 (empty row or all structural zeros).
+    }
+    scale
+}
+
+/// Apply row scaling to a stage template's matrix and row bounds.
+///
+/// Modifies the template in-place. After this call:
+/// - `values[k]` has been multiplied by `row_scale[row_of(k)]`
+/// - `row_lower[i]` has been multiplied by `row_scale[i]`
+/// - `row_upper[i]` has been multiplied by `row_scale[i]`
+///
+/// Infinite bounds remain infinite (multiplying infinity by a finite positive
+/// scale factor yields infinity).
+///
+/// The objective and column bounds are not modified — those are column-domain
+/// quantities already handled by column scaling.
+pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
+    let num_rows = template.num_rows;
+    debug_assert_eq!(row_scale.len(), num_rows);
+
+    // Scale matrix values (CSC: iterate columns, apply per-row factor).
+    let num_cols = template.num_cols;
+    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
+    // j+1 access; values non-negative by construction
+    for j in 0..num_cols {
+        let start = template.col_starts[j] as usize;
+        let end = template.col_starts[j + 1] as usize;
+        for k in start..end {
+            let row = template.row_indices[k] as usize;
+            template.values[k] *= row_scale[row];
+        }
+    }
+
+    // Scale row bounds.
+    for ((lo, hi), &d) in template
+        .row_lower
+        .iter_mut()
+        .zip(template.row_upper.iter_mut())
+        .zip(row_scale)
+    {
+        *lo *= d;
+        *hi *= d;
+    }
 }
 
 /// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation.
@@ -2359,7 +2620,7 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -2437,7 +2698,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         assert_eq!(buf.indices[0], 0);
         assert_eq!(buf.indices[1], 1);
@@ -2453,7 +2714,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         assert_eq!(buf.indices[3], 3); // N + 0·N + 0
         assert_eq!(buf.indices[4], 4); // N + 0·N + 1
@@ -2470,7 +2731,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         assert_eq!(buf.indices[9], 50); // ar_dynamics_row_offset(50, 0)
         assert_eq!(buf.indices[10], 51); // ar_dynamics_row_offset(50, 1)
@@ -2483,7 +2744,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         assert_eq!(buf.lower[0], 10.0);
         assert_eq!(buf.upper[0], 10.0);
@@ -2499,7 +2760,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         // ℓ=0: state[3]=1, state[4]=2, state[5]=3
         assert_eq!(buf.lower[3], 1.0);
@@ -2523,7 +2784,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         assert_eq!(buf.lower[9], 0.1);
         assert_eq!(buf.upper[9], 0.1);
@@ -2539,7 +2800,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         for i in 0..buf.forward_patch_count() {
             assert_eq!(
@@ -2557,7 +2818,7 @@ mod tests {
         // Backward pass: N*(1+L) patches, no noise
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        buf.fill_state_patches(&idx(3, 2), &state);
+        buf.fill_state_patches(&idx(3, 2), &state, &[]);
 
         // Active slice is [0, 9) = [0, N*(1+L))
         assert_eq!(buf.state_patch_count(), 9);
@@ -2567,7 +2828,7 @@ mod tests {
     fn fill_state_patches_category1_correct() {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        buf.fill_state_patches(&idx(3, 2), &state);
+        buf.fill_state_patches(&idx(3, 2), &state, &[]);
 
         assert_eq!(buf.indices[0], 0);
         assert_eq!(buf.lower[0], 10.0);
@@ -2584,7 +2845,7 @@ mod tests {
     fn fill_state_patches_category2_correct() {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        buf.fill_state_patches(&idx(3, 2), &state);
+        buf.fill_state_patches(&idx(3, 2), &state, &[]);
 
         // Same index/value expectations as fill_forward_patches for cat 2
         assert_eq!(buf.indices[3], 3);
@@ -2599,7 +2860,7 @@ mod tests {
     fn fill_state_patches_equality_constraints_in_active_range() {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        buf.fill_state_patches(&idx(3, 2), &state);
+        buf.fill_state_patches(&idx(3, 2), &state, &[]);
 
         let active = buf.state_patch_count();
         for i in 0..active {
@@ -2620,7 +2881,7 @@ mod tests {
         let mut buf = PatchBuffer::new(n, 0, 0, 0);
         let state = [5.0, 7.0]; // n_state = 2*(1+0) = 2
         let noise = [0.5, 0.6];
-        buf.fill_forward_patches(&idx(n, 0), &state, &noise, 10);
+        buf.fill_forward_patches(&idx(n, 0), &state, &noise, 10, &[]);
 
         // 4 patches total
         assert_eq!(buf.forward_patch_count(), 4);
@@ -2646,7 +2907,7 @@ mod tests {
         let n = 3;
         let mut buf = PatchBuffer::new(n, 0, 0, 0);
         let state = [1.0, 2.0, 3.0]; // n_state = 3
-        buf.fill_state_patches(&idx(n, 0), &state);
+        buf.fill_state_patches(&idx(n, 0), &state, &[]);
 
         assert_eq!(buf.state_patch_count(), 3);
         assert_eq!(buf.indices[0], 0);
@@ -2675,7 +2936,7 @@ mod tests {
         let n_state = n * (1 + l);
         let state: Vec<f64> = (0..n_state).map(|i| i as f64).collect();
         let noise: Vec<f64> = (0..n).map(|h| h as f64 * 0.01).collect();
-        buf.fill_forward_patches(&StageIndexer::new(n, l), &state, &noise, 500);
+        buf.fill_forward_patches(&StageIndexer::new(n, l), &state, &noise, 500, &[]);
 
         // Spot-check category 1
         assert_eq!(buf.indices[0], 0);
@@ -2729,7 +2990,7 @@ mod tests {
         let mut buf = PatchBuffer::new(0, 0, 2, 2);
         let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions);
+        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions, &[]);
 
         assert_eq!(buf.indices[0], 100); // bus 0, blk 0
         assert_eq!(buf.indices[1], 101); // bus 0, blk 1
@@ -2743,7 +3004,7 @@ mod tests {
         let mut buf = PatchBuffer::new(0, 0, 2, 2);
         let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions);
+        buf.fill_load_patches(100, 2, &load_rhs, &bus_positions, &[]);
 
         assert_eq!(buf.lower[0], 300.0);
         assert_eq!(buf.upper[0], 300.0);
@@ -2761,11 +3022,11 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 2, 3);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions, &[]);
 
         let count = buf.forward_patch_count();
         for i in 0..count {
@@ -2787,11 +3048,11 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 2, 3);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions, &[]);
 
         assert_eq!(buf.forward_patch_count(), 18); // 12 + 6
     }
@@ -2801,11 +3062,11 @@ mod tests {
     fn state_patch_count_excludes_load() {
         let mut buf = PatchBuffer::new(3, 2, 2, 3);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        buf.fill_state_patches(&idx(3, 2), &state);
+        buf.fill_state_patches(&idx(3, 2), &state, &[]);
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions);
+        buf.fill_load_patches(20, 3, &load_rhs, &bus_positions, &[]);
 
         // state_patch_count must be N*(1+L) = 3*3 = 9, not 18
         assert_eq!(buf.state_patch_count(), 9);
@@ -2817,7 +3078,7 @@ mod tests {
         let mut buf = PatchBuffer::new(3, 2, 0, 0);
         let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50);
+        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         // No fill_load_patches call: active_load_patches stays 0
         assert_eq!(buf.forward_patch_count(), 12); // 3*(2+2) only
@@ -3494,7 +3755,7 @@ mod tests {
         let theta_col = StageIndexer::new(1, lag_order).theta;
         assert_eq!(
             t.objective[theta_col], 1.0,
-            "theta column objective must be 1.0"
+            "theta column objective must be 1.0 (theta is not scaled by COST_SCALE_FACTOR)"
         );
     }
 
@@ -3755,9 +4016,9 @@ mod tests {
         .expect("fpha system builds ok");
         let t = &result.templates[0];
         let turbine_col = 3_usize;
-        let expected = 0.5 * 720.0;
+        let expected = 0.5 * 720.0 / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[turbine_col] - expected).abs() < 1e-12,
+            (t.objective[turbine_col] - expected).abs() < 1e-15,
             "FPHA turbine col objective: expected {expected}, got {}",
             t.objective[turbine_col]
         );
@@ -3811,13 +4072,15 @@ mod tests {
         let col_blk0 = 3_usize;
         let col_blk1 = 4_usize;
         assert!(
-            (t.objective[col_blk0] - 300.0).abs() < 1e-12,
-            "block 0 turbine objective: expected 300.0, got {}",
+            (t.objective[col_blk0] - 300.0 / COST_SCALE_FACTOR).abs() < 1e-15,
+            "block 0 turbine objective: expected {}, got {}",
+            300.0 / COST_SCALE_FACTOR,
             t.objective[col_blk0]
         );
         assert!(
-            (t.objective[col_blk1] - 420.0).abs() < 1e-12,
-            "block 1 turbine objective: expected 420.0, got {}",
+            (t.objective[col_blk1] - 420.0 / COST_SCALE_FACTOR).abs() < 1e-15,
+            "block 1 turbine objective: expected {}, got {}",
+            420.0 / COST_SCALE_FACTOR,
             t.objective[col_blk1]
         );
     }
@@ -3899,17 +4162,16 @@ mod tests {
             t.objective[col_turbine_start + 1]
         );
 
-        // Hydros 2, 3 are FPHA → objective = 1.0 * 744.0 = 744.0.
+        // Hydros 2, 3 are FPHA → objective = 1.0 * 744.0 / COST_SCALE_FACTOR.
+        let expected_fpha = block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[col_turbine_start + 2] - block_hours).abs() < 1e-12,
-            "FPHA hydro 2 turbine objective should be {}, got {}",
-            block_hours,
+            (t.objective[col_turbine_start + 2] - expected_fpha).abs() < 1e-15,
+            "FPHA hydro 2 turbine objective should be {expected_fpha}, got {}",
             t.objective[col_turbine_start + 2]
         );
         assert!(
-            (t.objective[col_turbine_start + 3] - block_hours).abs() < 1e-12,
-            "FPHA hydro 3 turbine objective should be {}, got {}",
-            block_hours,
+            (t.objective[col_turbine_start + 3] - expected_fpha).abs() < 1e-15,
+            "FPHA hydro 3 turbine objective should be {expected_fpha}, got {}",
             t.objective[col_turbine_start + 3]
         );
     }
@@ -4272,9 +4534,9 @@ mod tests {
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6,
         // inflow_slack=7, withdrawal_slack=8. Inflow slack is now second-to-last.
         let slack_col = t.num_cols - 2; // inflow_slack (withdrawal_slack is last)
-        let expected_obj = 1000.0 * 744.0;
+        let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_col] - expected_obj).abs() < 1e-9,
+            (t.objective[slack_col] - expected_obj).abs() < 1e-12,
             "expected objective {expected_obj}, got {}",
             t.objective[slack_col]
         );
@@ -7031,7 +7293,7 @@ mod tests {
         let col_f_plus = t.num_cols - 3;
         let col_f_minus = t.num_cols - 2;
 
-        let expected = 500.0 * 730.0; // 365_000.0
+        let expected = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7579,15 +7841,15 @@ mod tests {
             "segment 1 upper bound must be +infinity (unbounded final segment)"
         );
         assert!(
-            (t.objective[col_seg0] - 500.0 * block_hours).abs() < 1e-12,
-            "segment 0 objective must be cost * block_hours = {} but got {}",
-            500.0 * block_hours,
+            (t.objective[col_seg0] - 500.0 * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "segment 0 objective must be cost * block_hours / COST_SCALE_FACTOR = {} but got {}",
+            500.0 * block_hours / COST_SCALE_FACTOR,
             t.objective[col_seg0]
         );
         assert!(
-            (t.objective[col_seg1] - 5000.0 * block_hours).abs() < 1e-12,
-            "segment 1 objective must be cost * block_hours = {} but got {}",
-            5000.0 * block_hours,
+            (t.objective[col_seg1] - 5000.0 * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "segment 1 objective must be cost * block_hours / COST_SCALE_FACTOR = {} but got {}",
+            5000.0 * block_hours / COST_SCALE_FACTOR,
             t.objective[col_seg1]
         );
     }
@@ -7632,8 +7894,8 @@ mod tests {
             "single segment must be unbounded (None depth_mw)"
         );
         assert!(
-            (t.objective[col_def] - cost * block_hours).abs() < 1e-12,
-            "single-segment objective must be cost * block_hours"
+            (t.objective[col_def] - cost * block_hours / COST_SCALE_FACTOR).abs() < 1e-12,
+            "single-segment objective must be cost * block_hours / COST_SCALE_FACTOR"
         );
 
         // Excess column immediately follows deficit (S_max=1, B=1, K=1 → excess at col 2)
@@ -8108,9 +8370,9 @@ mod tests {
 
         let t = &result.templates[0];
         let col_w = t.num_cols - 1;
-        let expected_obj = violation_cost * total_hours;
+        let expected_obj = violation_cost * total_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[col_w] - expected_obj).abs() < 1e-9,
+            (t.objective[col_w] - expected_obj).abs() < 1e-12,
             "withdrawal slack objective: expected {expected_obj}, got {}",
             t.objective[col_w]
         );
@@ -9277,10 +9539,10 @@ mod tests {
             t.col_upper[slack_col]
         );
 
-        // Objective: penalty * block_hours
-        let expected_obj = penalty * block_hours;
+        // Objective: penalty * block_hours / COST_SCALE_FACTOR
+        let expected_obj = penalty * block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_col] - expected_obj).abs() < 1e-12,
             "slack objective must be {expected_obj}, got {}",
             t.objective[slack_col]
         );
@@ -9413,9 +9675,9 @@ mod tests {
             t.col_upper[slack_plus_col].is_infinite() && t.col_upper[slack_plus_col] > 0.0,
             "plus slack col_upper must be +INF"
         );
-        let expected_obj = penalty * block_hours;
+        let expected_obj = penalty * block_hours / COST_SCALE_FACTOR;
         assert!(
-            (t.objective[slack_plus_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_plus_col] - expected_obj).abs() < 1e-12,
             "plus slack objective must be {expected_obj}, got {}",
             t.objective[slack_plus_col]
         );
@@ -9430,13 +9692,13 @@ mod tests {
             "plus slack CSC must be +1.0 for == sense, got {plus_total}"
         );
 
-        // Minus slack: col_upper=+INF, objective=penalty*block_hours, CSC -1.0.
+        // Minus slack: col_upper=+INF, objective=penalty*block_hours/COST_SCALE_FACTOR, CSC -1.0.
         assert!(
             t.col_upper[slack_minus_col].is_infinite() && t.col_upper[slack_minus_col] > 0.0,
             "minus slack col_upper must be +INF"
         );
         assert!(
-            (t.objective[slack_minus_col] - expected_obj).abs() < f64::EPSILON,
+            (t.objective[slack_minus_col] - expected_obj).abs() < 1e-12,
             "minus slack objective must be {expected_obj}"
         );
         let minus_entries = csc_entries_at(t, slack_minus_col, generic_row);
@@ -9846,5 +10108,196 @@ mod tests {
             .resolved_generic_bounds(bounds)
             .build()
             .expect("one_bus_one_thermal_system: valid")
+    }
+
+    // =========================================================================
+    // Row scaling tests (ticket E3-001)
+    // =========================================================================
+
+    /// Build a minimal `StageTemplate` for row-scaling unit tests.
+    ///
+    /// The matrix is given in CSC form.  All non-LP-semantic fields are zeroed
+    /// so the helpers under test only touch the fields they care about.
+    fn minimal_template(
+        num_rows: usize,
+        num_cols: usize,
+        col_starts: Vec<i32>,
+        row_indices: Vec<i32>,
+        values: Vec<f64>,
+        row_lower: Vec<f64>,
+        row_upper: Vec<f64>,
+    ) -> StageTemplate {
+        let num_nz = values.len();
+        StageTemplate {
+            num_cols,
+            num_rows,
+            num_nz,
+            col_starts,
+            row_indices,
+            values,
+            col_lower: vec![0.0; num_cols],
+            col_upper: vec![f64::INFINITY; num_cols],
+            objective: vec![0.0; num_cols],
+            row_lower,
+            row_upper,
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        }
+    }
+
+    /// AC E3-001-1: a matrix where every row has min_abs == max_abs gives scale 1.0.
+    ///
+    /// Matrix (2 rows × 2 cols, column-major):
+    ///
+    /// ```text
+    /// col 0: row 0 → 3.0, row 1 → 3.0
+    /// col 1: row 0 → 3.0, row 1 → 3.0
+    /// ```
+    ///
+    /// For each row: min_abs = max_abs = 3.0 → scale = 1/sqrt(3*3) = 1/3.
+    /// Wait — "uniform" means min == max, so scale = 1/sqrt(max*min) = 1/max.
+    /// With all values 1.0: scale = 1/sqrt(1*1) = 1.0.
+    #[test]
+    fn row_scale_identity_for_uniform_matrix() {
+        // All nonzeros have |value| = 1.0.  min_abs = max_abs = 1.0.
+        // scale[i] = 1/sqrt(1.0 * 1.0) = 1.0 for every row.
+        let col_starts = vec![0, 2, 4];
+        let row_indices = vec![0, 1, 0, 1];
+        let values = vec![1.0, 1.0, 1.0, 1.0];
+        let scale = super::compute_row_scale(2, 2, &col_starts, &row_indices, &values);
+        assert_eq!(scale.len(), 2);
+        assert!(
+            (scale[0] - 1.0).abs() < 1e-15,
+            "row 0 scale should be 1.0, got {}",
+            scale[0]
+        );
+        assert!(
+            (scale[1] - 1.0).abs() < 1e-15,
+            "row 1 scale should be 1.0, got {}",
+            scale[1]
+        );
+    }
+
+    /// AC E3-001-2: geometric-mean scale matches expected value for known matrix.
+    ///
+    /// Matrix (2 rows × 2 cols):
+    ///
+    /// ```text
+    /// col 0: row 0 → 1.0
+    /// col 1: row 0 → 100.0, row 1 → 4.0
+    /// ```
+    ///
+    /// Row 0: min_abs = 1.0, max_abs = 100.0 → scale = 1/sqrt(100) = 0.1
+    /// Row 1: min_abs = max_abs = 4.0         → scale = 1/sqrt(16)  = 0.25
+    #[test]
+    fn row_scale_geometric_mean() {
+        let col_starts = vec![0, 1, 3];
+        let row_indices = vec![0, 0, 1];
+        let values = vec![1.0, 100.0, 4.0];
+        let scale = super::compute_row_scale(2, 2, &col_starts, &row_indices, &values);
+        assert_eq!(scale.len(), 2);
+        let expected_row0 = 1.0_f64 / (1.0_f64 * 100.0_f64).sqrt(); // 0.1
+        let expected_row1 = 1.0_f64 / (4.0_f64 * 4.0_f64).sqrt(); // 0.25
+        assert!(
+            (scale[0] - expected_row0).abs() < 1e-14,
+            "row 0 scale: expected {expected_row0}, got {}",
+            scale[0]
+        );
+        assert!(
+            (scale[1] - expected_row1).abs() < 1e-14,
+            "row 1 scale: expected {expected_row1}, got {}",
+            scale[1]
+        );
+    }
+
+    /// AC E3-001-3: `apply_row_scale` multiplies matrix values and row bounds.
+    ///
+    /// Uses the same 2×2 matrix as `row_scale_geometric_mean` so the expected
+    /// values are easily verified by hand.
+    #[test]
+    fn apply_row_scale_scales_values_and_bounds() {
+        // CSC: col 0 has one nonzero (row 0, val 1.0); col 1 has two (row 0→100.0, row 1→4.0).
+        let col_starts = vec![0_i32, 1, 3];
+        let row_indices = vec![0_i32, 0, 1];
+        let values = vec![1.0_f64, 100.0, 4.0];
+        let row_lower = vec![-5.0_f64, 7.0];
+        let row_upper = vec![f64::INFINITY, 7.0];
+
+        let mut tmpl =
+            minimal_template(2, 2, col_starts, row_indices, values, row_lower, row_upper);
+
+        // Row 0: scale = 1/sqrt(1*100) = 0.1
+        // Row 1: scale = 1/sqrt(4*4)   = 0.25
+        let row_scale = vec![0.1_f64, 0.25];
+        super::apply_row_scale(&mut tmpl, &row_scale);
+
+        // Matrix values: entry (row 0, col 0) = 1.0 * 0.1 = 0.1
+        assert!((tmpl.values[0] - 0.1).abs() < 1e-15, "value[0] wrong");
+        // Entry (row 0, col 1) = 100.0 * 0.1 = 10.0
+        assert!((tmpl.values[1] - 10.0).abs() < 1e-15, "value[1] wrong");
+        // Entry (row 1, col 1) = 4.0 * 0.25 = 1.0
+        assert!((tmpl.values[2] - 1.0).abs() < 1e-15, "value[2] wrong");
+
+        // Row bounds: row 0 lower = -5.0 * 0.1 = -0.5
+        assert!(
+            (tmpl.row_lower[0] - (-0.5)).abs() < 1e-15,
+            "row_lower[0] wrong"
+        );
+        // Row 0 upper is INFINITY — must remain INFINITY after scaling.
+        assert!(
+            tmpl.row_upper[0].is_infinite() && tmpl.row_upper[0] > 0.0,
+            "row_upper[0] must remain +inf"
+        );
+        // Row 1 lower = 7.0 * 0.25 = 1.75
+        assert!(
+            (tmpl.row_lower[1] - 1.75).abs() < 1e-15,
+            "row_lower[1] wrong"
+        );
+        // Row 1 upper = 7.0 * 0.25 = 1.75 (equality constraint: lower == upper after scaling)
+        assert!(
+            (tmpl.row_upper[1] - 1.75).abs() < 1e-15,
+            "row_upper[1] wrong"
+        );
+
+        // Column bounds and objective must be untouched.
+        assert_eq!(tmpl.col_lower, vec![0.0; 2]);
+        assert!(tmpl.col_upper[0].is_infinite());
+        assert!(tmpl.col_upper[1].is_infinite());
+        assert_eq!(tmpl.objective, vec![0.0; 2]);
+    }
+
+    /// AC E3-001-4: a row with no nonzeros receives scale factor 1.0.
+    ///
+    /// Matrix (3 rows × 1 col): only row 1 has a nonzero.
+    /// Rows 0 and 2 are structurally empty → scale = 1.0.
+    #[test]
+    fn row_scale_empty_row_gets_one() {
+        // col 0 has one nonzero: (row 1, val 8.0)
+        let col_starts = vec![0_i32, 1];
+        let row_indices = vec![1_i32];
+        let values = vec![8.0_f64];
+        let scale = super::compute_row_scale(3, 1, &col_starts, &row_indices, &values);
+        assert_eq!(scale.len(), 3);
+        // Rows 0 and 2 are empty → scale 1.0
+        assert!(
+            (scale[0] - 1.0).abs() < 1e-15,
+            "empty row 0 scale should be 1.0"
+        );
+        // Row 1 has min_abs = max_abs = 8.0 → scale = 1/8
+        let expected = 1.0_f64 / 8.0;
+        assert!(
+            (scale[1] - expected).abs() < 1e-15,
+            "row 1 scale: expected {expected}, got {}",
+            scale[1]
+        );
+        assert!(
+            (scale[2] - 1.0).abs() < 1e-15,
+            "empty row 2 scale should be 1.0"
+        );
     }
 }

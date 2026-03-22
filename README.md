@@ -155,7 +155,7 @@ Cobre is not a replacement for these tools — it's a new entry in the ecosystem
 
 ## Current State
 
-Cobre v0.1.8 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
+Cobre v0.1.9 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
 
 **What works today:**
 
@@ -172,6 +172,8 @@ Cobre v0.1.8 ships a fully functional SDDP solver for hydrothermal dispatch. The
 - CLI: `init`, `run`, `validate`, `report`, `summary`
 - Block factors for load demand, line capacity, and NCS availability (per-bus/line/source, per-stage, per-block scaling)
 - NCS stochastic availability via `non_controllable_stats.parquet` (mean + std per source per stage, clamped normal draw patched per scenario)
+- Solver statistics: per-phase LP timing, simplex iteration counts, basis reuse tracking, and Parquet output
+- LP scaling diagnostics report (JSON) with per-stage conditioning analysis
 - Python bindings (PyO3, tested on 3.12/3.13/3.14)
 
 ## Roadmap

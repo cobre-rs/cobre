@@ -34,7 +34,7 @@ use cobre_stochastic::{OpeningTree, StochasticContext};
 
 use crate::{
     FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch, noise::transform_ncs_noise,
+    forward::build_cut_row_batch, lp_builder::COST_SCALE_FACTOR, noise::transform_ncs_noise,
 };
 use cobre_solver::StageTemplate;
 
@@ -104,6 +104,7 @@ pub struct LbEvalSpec<'a> {
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
+#[allow(clippy::too_many_lines)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,
@@ -137,7 +138,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        let cut_batch = build_cut_row_batch(fcf, 0, indexer);
+        let cut_batch = build_cut_row_batch(fcf, 0, indexer, &template.col_scale);
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
         let mut ncs_col_upper_buf: Vec<f64> = Vec::new();
@@ -172,7 +173,13 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta);
             }
 
-            patch_buf.fill_forward_patches(indexer, initial_state, &noise_buf, base_row);
+            patch_buf.fill_forward_patches(
+                indexer,
+                initial_state,
+                &noise_buf,
+                base_row,
+                &template.row_scale,
+            );
             let n_patches = patch_buf.forward_patch_count();
             solver.set_row_bounds(
                 &patch_buf.indices[..n_patches],
@@ -217,7 +224,8 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
 
         #[allow(clippy::cast_precision_loss)]
         let uniform_prob = 1.0_f64 / n_openings as f64;
-        lb = risk_measure.evaluate_risk(&objectives, &vec![uniform_prob; n_openings]);
+        lb = risk_measure.evaluate_risk(&objectives, &vec![uniform_prob; n_openings])
+            * COST_SCALE_FACTOR;
     }
 
     comm.broadcast(std::slice::from_mut(&mut lb), 0)
@@ -264,6 +272,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -557,8 +567,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            (lb - 100.0).abs() < 1e-10,
-            "single opening expectation LB must equal objective 100.0, got {lb}"
+            (lb - 100_000.0).abs() < 1e-7,
+            "single opening expectation LB must equal objective 100.0 * COST_SCALE_FACTOR = 100_000.0, got {lb}"
         );
     }
 
@@ -601,10 +611,10 @@ mod tests {
         )
         .unwrap();
 
-        // E[60, 80, 100] with uniform probs = (60+80+100)/3 = 80.0
+        // E[60, 80, 100] with uniform probs = (60+80+100)/3 = 80.0; * COST_SCALE_FACTOR = 80_000.0
         assert!(
-            (lb - 80.0).abs() < 1e-10,
-            "three openings expectation LB must equal 80.0, got {lb}"
+            (lb - 80_000.0).abs() < 1e-7,
+            "three openings expectation LB must equal 80_000.0, got {lb}"
         );
     }
 
@@ -654,10 +664,10 @@ mod tests {
         .unwrap();
 
         // CVaR(alpha=0.5, lambda=1.0) with 2 uniform-probability openings
-        // concentrates all weight on the worst (150.0).
+        // concentrates all weight on the worst (150.0); * COST_SCALE_FACTOR = 150_000.0.
         assert!(
-            (lb - 150.0).abs() < 1e-10,
-            "pure CVaR(0.5, 1.0) with 2 openings must equal 150.0, got {lb}"
+            (lb - 150_000.0).abs() < 1e-7,
+            "pure CVaR(0.5, 1.0) with 2 openings must equal 150_000.0, got {lb}"
         );
     }
 
@@ -702,10 +712,10 @@ mod tests {
         )
         .unwrap();
 
-        // CVaR(alpha=1) = Expectation = (50+150)/2 = 100.0
+        // CVaR(alpha=1) = Expectation = (50+150)/2 = 100.0; * COST_SCALE_FACTOR = 100_000.0
         assert!(
-            (lb - 100.0).abs() < 1e-10,
-            "CVaR(alpha=1, lambda=1) must equal expectation 100.0, got {lb}"
+            (lb - 100_000.0).abs() < 1e-7,
+            "CVaR(alpha=1, lambda=1) must equal expectation 100_000.0, got {lb}"
         );
     }
 
@@ -840,10 +850,10 @@ mod tests {
         )
         .unwrap();
 
-        // E[200, 300] = 250.0
+        // E[200, 300] = 250.0; * COST_SCALE_FACTOR = 250_000.0
         assert!(
-            (lb - 250.0).abs() < 1e-10,
-            "integration round-trip must produce 250.0, got {lb}"
+            (lb - 250_000.0).abs() < 1e-7,
+            "integration round-trip must produce 250_000.0, got {lb}"
         );
     }
 

@@ -14,8 +14,10 @@ pub mod hydro_models;
 pub mod manifest;
 pub mod parquet_config;
 pub mod policy;
+pub mod scaling_report;
 pub(crate) mod schemas;
 pub mod simulation_writer;
+pub mod solver_stats_writer;
 pub mod stochastic;
 pub mod training_writer;
 
@@ -31,11 +33,13 @@ pub use manifest::{
     write_metadata, write_simulation_manifest, write_training_manifest,
 };
 pub use parquet_config::ParquetWriterConfig;
+pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;
+pub use solver_stats_writer::{SolverStatsRow, write_simulation_solver_stats, write_solver_stats};
 pub use stochastic::{
-    FittingReport, HydroFittingEntry, write_correlation_json, write_fitting_report,
-    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
-    write_noise_openings,
+    FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
+    write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
+    write_load_seasonal_stats, write_noise_openings,
 };
 pub use training_writer::TrainingParquetWriter;
 
@@ -139,6 +143,9 @@ pub struct IterationRecord {
 
     /// Total number of LP solves (across all stages and passes) in this iteration.
     pub lp_solves: u32,
+
+    /// Cumulative LP solve wall-clock time for this iteration, in milliseconds.
+    pub solve_time_ms: f64,
 }
 
 /// Summary statistics for the cut pool at the end of a training run.
@@ -457,6 +464,7 @@ mod tests {
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
             time_overhead_ms: 0,
+            solve_time_ms: 0.0,
         }
     }
 
@@ -594,6 +602,7 @@ mod tests {
             time_mpi_broadcast_ms: 2,
             time_io_write_ms: 0,
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 2),
+            solve_time_ms: 0.0,
         };
 
         assert_eq!(record.iteration, 7);

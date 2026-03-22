@@ -272,6 +272,8 @@ mod tests {
             n_dual_relevant: 0,
             n_hydro: 0,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -289,6 +291,8 @@ mod tests {
             ncs_col_indices_buf: Vec::new(),
             load_rhs_buf: Vec::new(),
             row_lower_buf: Vec::new(),
+            unscaled_primal: Vec::new(),
+            unscaled_dual: Vec::new(),
         }
     }
 

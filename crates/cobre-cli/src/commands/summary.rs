@@ -136,6 +136,15 @@ fn build_training_summary(
         total_cuts_generated: manifest.cuts.total_generated,
         total_lp_solves: convergence.total_lp_solves,
         total_time_ms: convergence.total_time_ms,
+        // Solver detail fields are not available from the manifest; filled when
+        // reading solver stats Parquet in a future version.
+        total_first_try: 0,
+        total_retried: 0,
+        total_failed: 0,
+        total_solve_time_seconds: 0.0,
+        total_basis_offered: 0,
+        total_basis_rejections: 0,
+        total_simplex_iterations: 0,
     }
 }
 
@@ -149,6 +158,15 @@ fn build_simulation_summary(manifest: &SimulationManifest) -> SimulationSummary 
         completed: manifest.scenarios.completed,
         failed: manifest.scenarios.failed,
         total_time_ms: 0,
+        // Solver stats are not stored in the manifest; zero-filled for `cobre summary`.
+        total_lp_solves: 0,
+        total_first_try: 0,
+        total_retried: 0,
+        total_failed_solves: 0,
+        total_solve_time_seconds: 0.0,
+        total_basis_offered: 0,
+        total_basis_rejections: 0,
+        total_simplex_iterations: 0,
     }
 }
 

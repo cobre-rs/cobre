@@ -186,7 +186,7 @@ fn fpha_evaporation_case_converges() {
 
     // Aggregate to obtain SimulationSummary.
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     // Acceptance criterion: n_scenarios == 100 and mean_cost > 0.

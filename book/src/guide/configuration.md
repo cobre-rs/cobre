@@ -115,7 +115,7 @@ Controls the optional post-training simulation phase.
 | `policy_type`   | `"outer"` | `"outer"` | Policy representation for simulation. `"outer"` uses the cut pool (Benders cuts). |
 
 When `simulation.enabled` is `false` or `num_scenarios` is `0`, the simulation
-phase is skipped regardless of the `--skip-simulation` flag.
+phase is skipped entirely.
 
 Example:
 
@@ -156,7 +156,7 @@ Controls which outputs are written to the results directory.
 | `forward_detail`  | boolean                        | `false` | Write per-scenario forward-pass detail (large; disabled by default).        |
 | `backward_detail` | boolean                        | `false` | Write per-scenario backward-pass detail (large; disabled by default).       |
 | `compression`     | `"zstd"`, `"lz4"`, or `"none"` | `null`  | Output Parquet compression algorithm. `null` uses the crate default (zstd). |
-| `stochastic`      | boolean                        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.           |
+| `stochastic`      | boolean                        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.          |
 
 ---
 

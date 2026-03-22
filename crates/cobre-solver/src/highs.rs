@@ -14,7 +14,7 @@
 //! # Configuration
 //!
 //! The constructor applies performance-tuned defaults (`HiGHS` Implementation
-//! SS4.1): dual simplex, no presolve, no parallelism, suppressed output, and
+//! SS4.1): primal simplex, no presolve, no parallelism, suppressed output, and
 //! tight feasibility tolerances. These defaults are optimised for repeated
 //! solves of small-to-medium LPs. Per-run parameters (time limit, iteration
 //! limit) are not set here -- those are applied by the caller before each solve.
@@ -30,7 +30,7 @@ use crate::{
 
 // ─── Default HiGHS configuration ─────────────────────────────────────────────
 //
-// The seven performance-tuned options applied at construction and restored after
+// The eight performance-tuned options applied at construction and restored after
 // each retry escalation. Keeping them in a single array eliminates per-option
 // error branches that are structurally impossible to trigger in tests (HiGHS
 // never rejects valid static option names).
@@ -79,8 +79,13 @@ impl DefaultOption {
     }
 }
 
-/// The seven performance-tuned default options (`HiGHS` Implementation SS4.1).
-fn default_options() -> [DefaultOption; 7] {
+/// Performance-tuned default options (`HiGHS` Implementation SS4.1).
+///
+/// These eight options are applied at construction and restored after each retry
+/// escalation. `simplex_scale_strategy` is explicitly set to 2 (equilibration,
+/// the `HiGHS` default) so that `restore_default_settings()` returns it to a known
+/// state after retry levels that override it.
+fn default_options() -> [DefaultOption; 8] {
     [
         DefaultOption {
             name: c"solver",
@@ -88,7 +93,11 @@ fn default_options() -> [DefaultOption; 7] {
         },
         DefaultOption {
             name: c"simplex_strategy",
-            value: OptionValue::Int(4),
+            value: OptionValue::Int(4), // Primal simplex
+        },
+        DefaultOption {
+            name: c"simplex_scale_strategy",
+            value: OptionValue::Int(2), // Equilibration (HiGHS default)
         },
         DefaultOption {
             name: c"presolve",
@@ -181,12 +190,13 @@ impl HighsSolver {
     /// Creates a new `HiGHS` solver instance with performance-tuned defaults.
     ///
     /// Calls `cobre_highs_create()` to allocate the `HiGHS` handle, then applies
-    /// the seven default options defined in `HiGHS` Implementation SS4.1:
+    /// the eight default options defined in `HiGHS` Implementation SS4.1:
     ///
     /// | Option                         | Value       | Type   |
     /// |--------------------------------|-------------|--------|
     /// | `solver`                       | `"simplex"` | string |
     /// | `simplex_strategy`             | `4`         | int    |
+    /// | `simplex_scale_strategy`       | `2`         | int    |
     /// | `presolve`                     | `"off"`     | string |
     /// | `parallel`                     | `"off"`     | string |
     /// | `output_flag`                  | `0`         | bool   |
@@ -242,7 +252,7 @@ impl HighsSolver {
         })
     }
 
-    /// Applies the seven performance-tuned `HiGHS` configuration options.
+    /// Applies the eight performance-tuned `HiGHS` configuration options.
     ///
     /// Called once during construction. Returns `Ok(())` if all options are set
     /// successfully, or `Err(SolverError::InternalError)` with the failing
@@ -665,36 +675,61 @@ impl SolverInterface for HighsSolver {
             let iterations =
                 unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
             self.stats.success_count += 1;
+            self.stats.first_try_successes += 1;
             self.stats.total_iterations += iterations;
             self.stats.total_solve_time_seconds += solve_time;
             return Ok(self.extract_solution_view(solve_time));
         }
 
         // Check for a definitive terminal status (not a retry-able error).
-        if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
-            self.stats.failure_count += 1;
-            return Err(terminal_err);
+        // UNBOUNDED is retried: HiGHS dual simplex can report spurious UNBOUNDED
+        // on numerically difficult LPs with wide coefficient ranges. The retry
+        // escalation (especially presolve in the core sequence) often resolves these.
+        let is_unbounded = model_status == ffi::HIGHS_MODEL_STATUS_UNBOUNDED;
+        if !is_unbounded {
+            if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
+                self.stats.failure_count += 1;
+                return Err(terminal_err);
+            }
         }
 
-        // 5-level retry escalation (HiGHS Implementation SS3). Apply progressively
-        // more permissive strategies on SOLVE_ERROR/UNKNOWN; break on OPTIMAL or
-        // definitive terminal status.
+        // 12-level retry escalation (HiGHS Implementation SS3). Organised into
+        // two phases:
+        //
+        // Phase 1 (levels 0-4): Core cumulative sequence. Each level adds one
+        //   option on top of the previous state. This proven sequence resolves
+        //   the vast majority of retry-recoverable failures.
+        //   L0: cold restart
+        //   L1: + presolve
+        //   L2: + dual simplex
+        //   L3: + relaxed tolerances 1e-6
+        //   L4: + IPM
+        //
+        // Phase 2 (levels 5-11): Extended strategies. Each level starts from
+        //   a clean default state with presolve enabled and a time cap, then
+        //   applies a specific combination of scaling, tolerances, and solver
+        //   type. These address LPs with extreme coefficient ranges that the
+        //   core sequence cannot resolve.
+        let retry_time_limit = 30.0_f64;
+        let num_retry_levels = 12_u32;
+
         let mut retry_attempts: u64 = 0;
-        // None = retry loop exhausted without success; Some(Err) = terminal failure.
-        // We accumulate the error, then after restoring settings we either return
-        // it or return Ok(view).
         let mut terminal_err: Option<SolverError> = None;
         let mut found_optimal = false;
         let mut optimal_time = 0.0_f64;
         let mut optimal_iterations: u64 = 0;
 
-        for level in 0..5_u32 {
+        for level in 0..num_retry_levels {
             // SAFETY: handle is valid non-null HiGHS pointer; option names/values
             // are static C strings; no retained pointers after call.
             match level {
+                // -- Phase 1: Core cumulative sequence (levels 0-4) -----------
+                //
+                // Level 0: cold restart (clear solver state), primal simplex.
                 0 => {
                     unsafe { ffi::cobre_highs_clear_solver(self.handle) };
                 }
+                // Level 1: + presolve.
                 1 => unsafe {
                     ffi::cobre_highs_set_string_option(
                         self.handle,
@@ -702,9 +737,13 @@ impl SolverInterface for HighsSolver {
                         c"on".as_ptr(),
                     );
                 },
+                // Level 2: + dual simplex.
+                // Cumulative: presolve + dual simplex.
                 2 => unsafe {
                     ffi::cobre_highs_set_int_option(self.handle, c"simplex_strategy".as_ptr(), 1);
                 },
+                // Level 3: + relaxed tolerances 1e-6.
+                // Cumulative: presolve + dual simplex + relaxed tolerances.
                 3 => unsafe {
                     ffi::cobre_highs_set_double_option(
                         self.handle,
@@ -717,6 +756,8 @@ impl SolverInterface for HighsSolver {
                         1e-6,
                     );
                 },
+                // Level 4: + IPM.
+                // Cumulative: presolve + relaxed tolerances + IPM.
                 4 => unsafe {
                     ffi::cobre_highs_set_string_option(
                         self.handle,
@@ -724,6 +765,219 @@ impl SolverInterface for HighsSolver {
                         c"ipm".as_ptr(),
                     );
                 },
+
+                // -- Phase 2: Extended strategies (levels 5-11) ---------------
+                // Each level starts from a clean default state with presolve
+                // and a time cap, then applies specific options.
+                //
+                // Level 5: presolve + primal + forced equilibration scaling.
+                5 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"simplex_scale_strategy".as_ptr(),
+                            3, // forced equilibration
+                        );
+                    }
+                }
+                // Level 6: presolve + dual + max-value scaling.
+                6 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"simplex_strategy".as_ptr(),
+                            1,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"simplex_scale_strategy".as_ptr(),
+                            4, // max value scaling
+                        );
+                    }
+                }
+                // Level 7: presolve + primal + relaxed tol + forced equil.
+                7 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"simplex_scale_strategy".as_ptr(),
+                            3,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"primal_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"dual_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                    }
+                }
+                // Level 8: presolve + user objective scaling (2^-10).
+                8 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_objective_scale".as_ptr(),
+                            -10,
+                        );
+                    }
+                }
+                // Level 9: presolve + dual + user objective + bound scaling.
+                9 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"simplex_strategy".as_ptr(),
+                            1,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_objective_scale".as_ptr(),
+                            -10,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_bound_scale".as_ptr(),
+                            -5,
+                        );
+                    }
+                }
+                // Level 10: presolve + aggressive user scaling + relaxed tol.
+                10 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_objective_scale".as_ptr(),
+                            -13,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_bound_scale".as_ptr(),
+                            -8,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"primal_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"dual_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                    }
+                }
+                // Level 11: IPM + presolve + user scaling + relaxed tol.
+                // Last resort: full stability toolkit.
+                11 => {
+                    self.restore_default_settings();
+                    unsafe {
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"solver".as_ptr(),
+                            c"ipm".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_string_option(
+                            self.handle,
+                            c"presolve".as_ptr(),
+                            c"on".as_ptr(),
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"time_limit".as_ptr(),
+                            retry_time_limit,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_objective_scale".as_ptr(),
+                            -10,
+                        );
+                        ffi::cobre_highs_set_int_option(
+                            self.handle,
+                            c"user_bound_scale".as_ptr(),
+                            -5,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"primal_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                        ffi::cobre_highs_set_double_option(
+                            self.handle,
+                            c"dual_feasibility_tolerance".as_ptr(),
+                            1e-6,
+                        );
+                    }
+                }
                 _ => unreachable!(),
             }
 
@@ -745,15 +999,30 @@ impl SolverInterface for HighsSolver {
                 break;
             }
 
-            if let Some(e) = self.interpret_terminal_status(retry_status, retry_time) {
-                terminal_err = Some(e);
-                break;
+            // UNBOUNDED and TIME_LIMIT during retry continue to the next level:
+            // UNBOUNDED may be spurious (presolve resolves it); TIME_LIMIT means
+            // this strategy is too slow but another may converge faster.
+            // Other terminal statuses (INFEASIBLE, ITERATION_LIMIT) stop immediately.
+            let retryable = retry_status == ffi::HIGHS_MODEL_STATUS_UNBOUNDED
+                || retry_status == ffi::HIGHS_MODEL_STATUS_TIME_LIMIT;
+            if !retryable {
+                if let Some(e) = self.interpret_terminal_status(retry_status, retry_time) {
+                    terminal_err = Some(e);
+                    break;
+                }
             }
-            // Still SOLVE_ERROR or UNKNOWN -- continue to next level.
+            // Still SOLVE_ERROR, UNKNOWN, UNBOUNDED, or TIME_LIMIT -- continue.
         }
 
         // Restore default settings unconditionally (regardless of retry outcome).
+        // `restore_default_settings()` covers all 8 defaults. Only retry-only
+        // options need explicit reset.
         self.restore_default_settings();
+        unsafe {
+            ffi::cobre_highs_set_double_option(self.handle, c"time_limit".as_ptr(), f64::INFINITY);
+            ffi::cobre_highs_set_int_option(self.handle, c"user_objective_scale".as_ptr(), 0);
+            ffi::cobre_highs_set_int_option(self.handle, c"user_bound_scale".as_ptr(), 0);
+        }
 
         // Update statistics with accumulated retry attempts.
         self.stats.retry_count += retry_attempts;
@@ -767,10 +1036,14 @@ impl SolverInterface for HighsSolver {
 
         self.stats.failure_count += 1;
         Err(terminal_err.unwrap_or_else(|| {
-            // All 5 retry levels exhausted without a definitive result.
-            SolverError::NumericalDifficulty {
-                message: "HiGHS failed to reach optimality after all 5 retry escalation levels"
-                    .to_string(),
+            // All 12 retry levels exhausted without a definitive result.
+            if is_unbounded {
+                SolverError::Unbounded
+            } else {
+                SolverError::NumericalDifficulty {
+                    message: "HiGHS failed to reach optimality after all retry escalation levels"
+                        .to_string(),
+                }
             }
         }))
     }
@@ -837,6 +1110,9 @@ impl SolverInterface for HighsSolver {
             basis.col_status.len(),
             self.num_cols
         );
+
+        // Track every call as a basis offer for diagnostics.
+        self.stats.basis_offered += 1;
 
         // Copy raw i32 codes directly into the pre-allocated buffers — no enum
         // translation. Zero-copy warm-start path.
@@ -940,6 +1216,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

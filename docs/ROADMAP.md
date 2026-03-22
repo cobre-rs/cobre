@@ -53,9 +53,25 @@ see the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/over
 
 ### Near-term
 
+- **Simulation basis warm-starting** — Currently simulation cold-starts every LP
+  for deterministic reproducibility (thread-count-independent results). This costs
+  ~10x per-solve (39ms cold vs 3.6ms warm on a 158-hydro system). A per-scenario,
+  per-stage basis cache (similar to training's `BasisStore`) can recover warm-start
+  speed while preserving determinism: each scenario runs a fixed stage sequence, so
+  `basis[scenario][stage]` is populated on first pass and reused on subsequent
+  simulation runs of the same case. Requires careful validation that warm-started
+  results remain bit-identical across thread counts.
+
 - **NUMA-aware thread/memory placement** — Pin rayon thread pools to NUMA domains;
   allocate per-thread workspaces from local memory. Expected 20--40% improvement on
   multi-socket servers.
+
+- **Backward pass coefficient buffer reuse** — The backward pass inner loop
+  allocates a `Vec<f64>` of `n_state` elements per opening per trial point for
+  cut coefficients (`BackwardOutcome.coefficients`). Replace with a flat
+  pre-allocated buffer of `max_openings * n_state` in the workspace and have
+  `aggregate_cut` operate on strided slices. Reduces backward pass allocation
+  count from `openings * trial_points * stages` per iteration to zero.
 
 - **Memory pool / arena allocation** — Replace per-iteration heap allocation with
   thread-local arenas to eliminate allocator contention at high thread counts.

@@ -6,7 +6,7 @@ Provides interoperability with PSS/E, CSV, Arrow/Parquet, and other power system
 
 ## Status
 
-**Experimental** — this is a name reservation. The first functional release will be `0.1.0`.
+**Alpha** — API is functional but not yet stable. See the [main repository](https://github.com/cobre-rs/cobre) for the current release.
 
 See the [main repository](https://github.com/cobre-rs/cobre) for the full roadmap.
 

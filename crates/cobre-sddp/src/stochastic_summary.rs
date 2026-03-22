@@ -10,7 +10,7 @@
 //! methods that use `console::style` remain in `cobre-cli`.
 
 use cobre_core::System;
-use cobre_io::output::{FittingReport, HydroFittingEntry};
+use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
 use cobre_stochastic::{ComponentProvenance, StochasticContext};
 
@@ -186,7 +186,7 @@ pub fn build_stochastic_summary(
                 .values()
                 .map(|entry| entry.selected_order as usize)
                 .collect();
-            ("AIC".to_string(), orders)
+            (report.method.clone(), orders)
         } else {
             // Derive from loaded inflow models: use max AR coefficient length per hydro.
             let orders: Vec<usize> = system
@@ -295,8 +295,18 @@ pub fn estimation_report_to_fitting_report(report: &EstimationReport) -> Fitting
                     id.0.to_string(),
                     HydroFittingEntry {
                         selected_order: entry.selected_order,
-                        aic_scores: entry.aic_scores.clone(),
                         coefficients: entry.coefficients.clone(),
+                        contribution_reductions: entry
+                            .contribution_reductions
+                            .iter()
+                            .map(|r| FittingReductionEntry {
+                                season_id: r.season_id,
+                                original_order: r.original_order,
+                                reduced_order: r.reduced_order,
+                                contributions: r.contributions.clone(),
+                                reason: r.reason.as_str().to_string(),
+                            })
+                            .collect(),
                     },
                 )
             },
@@ -524,19 +534,22 @@ mod tests {
             EntityId(1),
             HydroEstimationEntry {
                 selected_order: 3,
-                aic_scores: vec![10.0, 9.5, 9.2, 9.8],
                 coefficients: vec![vec![0.4, -0.1, 0.05], vec![0.3, -0.08, 0.04]],
+                contribution_reductions: Vec::new(),
             },
         );
         entries.insert(
             EntityId(5),
             HydroEstimationEntry {
                 selected_order: 2,
-                aic_scores: vec![12.1, 11.3, 11.5],
                 coefficients: vec![vec![0.6, -0.2]],
+                contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
         let fitting = estimation_report_to_fitting_report(&report);
 
         assert_eq!(
@@ -547,12 +560,10 @@ mod tests {
 
         let h1 = fitting.hydros.get("1").unwrap();
         assert_eq!(h1.selected_order, 3);
-        assert_eq!(h1.aic_scores, vec![10.0, 9.5, 9.2, 9.8]);
         assert_eq!(h1.coefficients.len(), 2);
 
         let h5 = fitting.hydros.get("5").unwrap();
         assert_eq!(h5.selected_order, 2);
-        assert_eq!(h5.aic_scores, vec![12.1, 11.3, 11.5]);
         assert_eq!(h5.coefficients, vec![vec![0.6, -0.2]]);
     }
 
@@ -658,11 +669,14 @@ mod tests {
             EntityId(10),
             HydroEstimationEntry {
                 selected_order: 2,
-                aic_scores: vec![-10.0, -12.0],
                 coefficients: vec![vec![0.5, 0.3], vec![0.4, 0.2]],
+                contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 7);
 
@@ -774,11 +788,14 @@ mod tests {
             EntityId(10),
             HydroEstimationEntry {
                 selected_order: 1,
-                aic_scores: vec![-5.0, -6.0],
                 coefficients: vec![vec![0.4]],
+                contribution_reductions: Vec::new(),
             },
         );
-        let report = EstimationReport { entries };
+        let report = EstimationReport {
+            entries,
+            method: "AIC".to_string(),
+        };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 1);
 
@@ -829,6 +846,130 @@ mod tests {
             matches!(summary.correlation_source, StochasticSource::None),
             "NotApplicable correlation must produce None, got {:?}",
             summary.correlation_source
+        );
+    }
+
+    // ── Reduction reason tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn fitting_report_includes_reason_strings() {
+        use crate::estimation::{
+            ContributionReduction, EstimationReport, HydroEstimationEntry, ReductionReason,
+        };
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            EntityId(1),
+            HydroEstimationEntry {
+                selected_order: 0,
+                coefficients: vec![vec![], vec![]],
+                contribution_reductions: vec![
+                    ContributionReduction {
+                        season_id: 0,
+                        original_order: 2,
+                        reduced_order: 0,
+                        contributions: Vec::new(),
+                        reason: ReductionReason::Phi1Negative,
+                    },
+                    ContributionReduction {
+                        season_id: 1,
+                        original_order: 3,
+                        reduced_order: 1,
+                        contributions: vec![0.3, -0.1],
+                        reason: ReductionReason::NegativeContribution,
+                    },
+                ],
+            },
+        );
+        entries.insert(
+            EntityId(2),
+            HydroEstimationEntry {
+                selected_order: 0,
+                coefficients: vec![vec![]],
+                contribution_reductions: vec![ContributionReduction {
+                    season_id: 0,
+                    original_order: 1,
+                    reduced_order: 0,
+                    contributions: Vec::new(),
+                    reason: ReductionReason::MagnitudeBound,
+                }],
+            },
+        );
+
+        let report = EstimationReport {
+            entries,
+            method: "PACF".to_string(),
+        };
+
+        let fitting = estimation_report_to_fitting_report(&report);
+
+        // Hydro 1 should have 2 reductions with correct reason strings.
+        let h1 = fitting.hydros.get("1").unwrap();
+        assert_eq!(h1.contribution_reductions.len(), 2);
+        assert_eq!(h1.contribution_reductions[0].reason, "phi1_negative");
+        assert_eq!(
+            h1.contribution_reductions[1].reason,
+            "negative_contribution"
+        );
+
+        // Hydro 2 should have 1 reduction with magnitude_bound.
+        let h2 = fitting.hydros.get("2").unwrap();
+        assert_eq!(h2.contribution_reductions.len(), 1);
+        assert_eq!(h2.contribution_reductions[0].reason, "magnitude_bound");
+    }
+
+    #[test]
+    fn estimation_report_tracks_all_reductions() {
+        use crate::estimation::{ContributionReduction, ReductionReason, build_estimation_report};
+        use std::collections::HashMap;
+
+        let estimates = vec![
+            cobre_stochastic::par::fitting::ArCoefficientEstimate {
+                hydro_id: EntityId(1),
+                season_id: 0,
+                coefficients: Vec::new(),
+                residual_std_ratio: 1.0,
+            },
+            cobre_stochastic::par::fitting::ArCoefficientEstimate {
+                hydro_id: EntityId(1),
+                season_id: 1,
+                coefficients: vec![0.4],
+                residual_std_ratio: 0.9,
+            },
+        ];
+
+        let mut reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+        reductions.insert(
+            EntityId(1),
+            vec![
+                ContributionReduction {
+                    season_id: 0,
+                    original_order: 2,
+                    reduced_order: 0,
+                    contributions: Vec::new(),
+                    reason: ReductionReason::Phi1Negative,
+                },
+                ContributionReduction {
+                    season_id: 1,
+                    original_order: 3,
+                    reduced_order: 1,
+                    contributions: vec![0.3, -0.2],
+                    reason: ReductionReason::NegativeContribution,
+                },
+            ],
+        );
+
+        let report = build_estimation_report(&estimates, 2, &reductions, "PACF");
+
+        let entry = report.entries.get(&EntityId(1)).unwrap();
+        assert_eq!(entry.contribution_reductions.len(), 2);
+        assert_eq!(
+            entry.contribution_reductions[0].reason,
+            ReductionReason::Phi1Negative
+        );
+        assert_eq!(
+            entry.contribution_reductions[1].reason,
+            ReductionReason::NegativeContribution
         );
     }
 }

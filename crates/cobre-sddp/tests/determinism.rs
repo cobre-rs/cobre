@@ -444,6 +444,8 @@ fn template_3h() -> StageTemplate {
         n_dual_relevant: 3,
         n_hydro: 3,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     }
 }
 
@@ -680,7 +682,7 @@ fn run_simulation(
     drop(result_tx);
     let _ = drain_thread.join().unwrap();
 
-    cost_buffer
+    cost_buffer.costs
 }
 
 // ===========================================================================

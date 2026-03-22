@@ -40,6 +40,8 @@ fn make_fixture_stage_template() -> StageTemplate {
         n_dual_relevant: 1,
         n_hydro: 1,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     }
 }
 
@@ -747,6 +749,8 @@ fn test_solver_highs_solve_infeasible() {
         n_dual_relevant: 0,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -808,6 +812,8 @@ fn test_solver_highs_solve_unbounded() {
         n_dual_relevant: 0,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -895,6 +901,8 @@ fn make_larger_lp_template() -> StageTemplate {
         n_dual_relevant: 1,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     }
 }
 
@@ -1078,6 +1086,8 @@ fn test_solver_highs_infeasible_with_rows() {
         n_dual_relevant: 2,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -1116,6 +1126,8 @@ fn test_solver_highs_infeasible_with_presolve() {
         n_dual_relevant: 2,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -1168,6 +1180,8 @@ fn test_solver_highs_unbounded_with_primal_ray() {
         n_dual_relevant: 1,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
@@ -1219,6 +1233,8 @@ fn test_solver_highs_unbounded_or_infeasible() {
         n_dual_relevant: 2,
         n_hydro: 0,
         max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
     };
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");

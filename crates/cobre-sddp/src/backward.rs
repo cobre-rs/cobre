@@ -80,6 +80,7 @@ use crate::{
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
+    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
 };
@@ -96,6 +97,14 @@ pub struct BackwardResult {
 
     /// Number of LP solves performed during this backward pass.
     pub lp_solves: u64,
+
+    /// Per-stage solver statistics deltas.
+    ///
+    /// Each entry is `(successor_stage_index, delta)` where the stage index
+    /// identifies which stage's LP was solved (the successor), not the stage
+    /// where cuts are added. Entries are in reverse stage order (matching
+    /// the backward iteration direction).
+    pub stage_stats: Vec<(usize, SolverStatsDelta)>,
 }
 
 /// Per-thread staging buffer for one aggregated cut produced at a single trial
@@ -251,6 +260,7 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
         x_hat,
         &ws.scratch.noise_buf,
         ctx.base_rows[s],
+        &ctx.templates[s].row_scale,
     );
     if ctx.n_load_buses > 0 {
         ws.patch_buf.fill_load_patches(
@@ -258,6 +268,7 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
             n_blks,
             &ws.scratch.load_rhs_buf,
             ctx.load_bus_indices,
+            &ctx.templates[s].row_scale,
         );
     }
     let pc = ws.patch_buf.forward_patch_count();
@@ -337,7 +348,20 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         })?;
 
         let objective = view.objective;
-        let coefficients: Vec<f64> = view.dual[..indexer.n_state].to_vec();
+        // Unscale duals from scaled units back to original units.
+        // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
+        // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
+        // Cut rows have implicit row_scale = 1.0 and require no adjustment.
+        let row_scale = &ctx.templates[s].row_scale;
+        let coefficients: Vec<f64> = if row_scale.is_empty() {
+            view.dual[..indexer.n_state].to_vec()
+        } else {
+            view.dual[..indexer.n_state]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| d * row_scale[i])
+                .collect()
+        };
         let intercept = objective
             - coefficients
                 .iter()
@@ -497,6 +521,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         .map(|ws| ws.solver.statistics().solve_count)
         .sum();
     let mut cuts_generated: usize = 0;
+    let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
     let tree_view = stochastic.tree_view();
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
@@ -509,11 +534,19 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         }
 
         let successor = t + 1;
+
+        // Snapshot pool stats before this stage's solves.
+        let stage_stats_before = {
+            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
+            aggregate_solver_statistics(&pool_stats)
+        };
+
         let n_openings = tree_view.n_openings(successor);
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
-        let cut_batch = build_cut_row_batch(fcf, successor, indexer);
+        let cut_batch =
+            build_cut_row_batch(fcf, successor, indexer, &ctx.templates[successor].col_scale);
         let num_cuts_at_successor = cut_batch.num_rows;
         let template_num_rows = ctx.templates[successor].num_rows;
         let successor_active_slots: Vec<usize> = fcf
@@ -562,6 +595,14 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
             }
         }
+
+        // Snapshot pool stats after this stage's solves and compute delta.
+        let stage_stats_after = {
+            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
+            aggregate_solver_statistics(&pool_stats)
+        };
+        let stage_delta = SolverStatsDelta::from_snapshots(&stage_stats_before, &stage_stats_after);
+        stage_stats.push((successor, stage_delta));
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -575,6 +616,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         cuts_generated,
         elapsed_ms,
         lp_solves: solves_after - solves_before,
+        stage_stats,
     })
 }
 
@@ -760,6 +802,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 
@@ -797,6 +841,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }]
     }
@@ -990,9 +1036,11 @@ mod tests {
             cuts_generated: 6,
             elapsed_ms: 42,
             lp_solves: 0,
+            stage_stats: Vec::new(),
         };
         assert_eq!(r.cuts_generated, 6);
         assert_eq!(r.elapsed_ms, 42);
+        assert!(r.stage_stats.is_empty());
     }
 
     #[test]
@@ -1001,6 +1049,7 @@ mod tests {
             cuts_generated: 3,
             elapsed_ms: 100,
             lp_solves: 0,
+            stage_stats: Vec::new(),
         };
         let c = r.clone();
         assert_eq!(c.cuts_generated, 3);
@@ -2206,6 +2255,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2263,6 +2314,8 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
                 },
             })
             .collect();
@@ -2524,6 +2577,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2558,6 +2613,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2623,6 +2680,7 @@ mod tests {
     ///
     /// N=1, L=0 → `N*(2+L) = 2`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn backward_pass_no_load_buses_unchanged() {
         let n_stages = 2_usize;
         let n_openings = 2_usize;
@@ -2649,6 +2707,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2681,6 +2741,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -2768,6 +2830,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         };
         let templates = vec![template; n_stages];
         let base_rows = vec![1_usize; n_stages];
@@ -2800,6 +2864,8 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                unscaled_primal: Vec::new(),
+                unscaled_dual: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];

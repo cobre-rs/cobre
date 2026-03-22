@@ -157,6 +157,18 @@ pub struct SolverStatistics {
 
     /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
     pub basis_rejections: u64,
+
+    /// Number of solves that returned optimal on the first attempt (before any retry).
+    ///
+    /// Enables first-try rate computation: `first_try_rate = first_try_successes / solve_count`.
+    /// The complement `success_count - first_try_successes` gives the number of retried solves.
+    pub first_try_successes: u64,
+
+    /// Total number of `solve_with_basis` calls (basis offers).
+    ///
+    /// Combined with `basis_rejections`, enables basis hit rate computation:
+    /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
+    pub basis_offered: u64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -235,6 +247,28 @@ pub struct StageTemplate {
     /// lag values regardless of their individual PAR order, enabling SIMD
     /// vectorization with a single contiguous state stride.
     pub max_par_order: usize,
+
+    /// Per-column scaling factors for numerical conditioning.
+    ///
+    /// When non-empty (length `num_cols`), the constraint matrix, objective
+    /// coefficients, and column bounds have been pre-scaled by these factors.
+    /// The calling algorithm is responsible for unscaling primal values after
+    /// each solve: `x_original[j] = col_scale[j] * x_scaled[j]`.
+    ///
+    /// When empty, no column scaling has been applied and solver results are
+    /// used directly.
+    pub col_scale: Vec<f64>,
+
+    /// Per-row scaling factors for numerical conditioning.
+    ///
+    /// When non-empty (length `num_rows`), the constraint matrix and row bounds
+    /// have been pre-scaled by these factors. The calling algorithm is responsible
+    /// for unscaling dual values after each solve:
+    /// `dual_original[i] = row_scale[i] * dual_scaled[i]`.
+    ///
+    /// When empty, no row scaling has been applied and solver results are
+    /// used directly.
+    pub row_scale: Vec<f64>,
 }
 
 /// Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
@@ -452,6 +486,8 @@ mod tests {
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
         assert_eq!(stats.basis_rejections, 0);
+        assert_eq!(stats.first_try_successes, 0);
+        assert_eq!(stats.basis_offered, 0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {
@@ -472,6 +508,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

@@ -62,6 +62,7 @@ pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut Valid
     check_lifecycle_consistency(data, ctx);
     check_filling_config(data, ctx);
     check_geometry_monotonicity(data, ctx);
+    check_evaporation_geometry_coverage(data, ctx);
     check_fpha_constraints(data, ctx);
     check_thermal_generation_bounds(data, ctx);
 }
@@ -331,6 +332,30 @@ fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut ValidationContext) {
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Hydros with `evaporation_coefficients_mm` require geometry rows in
+/// `hydro_geometry.parquet` (area-volume curve for linearization).
+fn check_evaporation_geometry_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
+    let geometry_hydro_ids: HashSet<i32> =
+        data.hydro_geometry.iter().map(|r| r.hydro_id.0).collect();
+
+    for hydro in &data.hydros {
+        if hydro.evaporation_coefficients_mm.is_some() && !geometry_hydro_ids.contains(&hydro.id.0)
+        {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "system/hydros.json",
+                Some(format!("Hydro {} (id={})", hydro.name, hydro.id.0)),
+                format!(
+                    "hydro {} (id={}) has evaporation_coefficients_mm but no geometry data \
+                     in hydro_geometry.parquet; evaporation linearization requires \
+                     area-volume curve data",
+                    hydro.name, hydro.id.0
+                ),
+            );
         }
     }
 }
@@ -1060,9 +1085,13 @@ fn check_load_factor_consistency(data: &ParsedData, ctx: &mut ValidationContext)
 /// Rule 21: Every hydro in the system must have at least one observation in
 /// `inflow_history.parquet`; missing hydros cannot be estimated.
 fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext) {
-    // Detect the estimation path: history present AND stats absent.
-    let estimation_active =
-        !data.inflow_history.is_empty() && data.inflow_seasonal_stats.is_empty();
+    // Detect the estimation path: history present AND (stats absent OR AR coefficients absent).
+    // Estimation runs whenever the system needs to derive AR coefficients from history.
+    // The runtime in estimation.rs skips only when BOTH stats AND coefficients are present.
+    let has_history = !data.inflow_history.is_empty();
+    let has_stats = !data.inflow_seasonal_stats.is_empty();
+    let has_ar_coefficients = !data.inflow_ar_coefficients.is_empty();
+    let estimation_active = has_history && !(has_stats && has_ar_coefficients);
 
     if !estimation_active {
         return;
@@ -3660,25 +3689,27 @@ mod tests {
         );
     }
 
-    /// When `inflow_seasonal_stats` is non-empty (explicit stats path),
-    /// no estimation-related errors or warnings are produced.
+    /// When BOTH `inflow_seasonal_stats` and `inflow_ar_coefficients` are
+    /// non-empty, no estimation-related errors or warnings are produced.
     #[test]
-    fn test_no_estimation_when_stats_present() {
+    fn test_no_estimation_when_stats_and_coefficients_present() {
         use crate::scenarios::InflowSeasonalStatsRow;
 
         let history = make_history_rows(1, 12);
         let stages = make_stages_with_seasons(12, false); // no season_map
 
-        // Provide a non-empty inflow_seasonal_stats — this deactivates estimation.
+        // Provide both stats AND AR coefficients to fully deactivate estimation.
         let stats = vec![InflowSeasonalStatsRow {
             hydro_id: EntityId::from(1),
             stage_id: 0,
             mean_m3s: 500.0,
             std_m3s: 50.0,
         }];
+        let ar_coefficients = vec![make_ar_row(1, 0, 1)];
 
         let mut data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
         data.inflow_seasonal_stats = stats;
+        data.inflow_ar_coefficients = ar_coefficients;
 
         let mut ctx = ValidationContext::new();
         validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
@@ -3696,8 +3727,48 @@ mod tests {
             .collect();
         assert!(
             estimation_errors.is_empty() && estimation_warnings.is_empty(),
-            "stats present should disable estimation checks; \
+            "stats+coefficients present should disable estimation checks; \
              errors: {estimation_errors:?}, warnings: {estimation_warnings:?}"
+        );
+    }
+
+    /// When `inflow_seasonal_stats` is present but `inflow_ar_coefficients`
+    /// is absent, estimation IS active and season_definitions is required.
+    #[test]
+    fn test_estimation_active_when_stats_present_but_coefficients_absent() {
+        use crate::scenarios::InflowSeasonalStatsRow;
+
+        let history = make_history_rows(1, 12);
+        let stages = make_stages_with_seasons(12, false); // no season_map
+
+        let stats = vec![InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            mean_m3s: 500.0,
+            std_m3s: 50.0,
+        }];
+
+        let mut data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+        data.inflow_seasonal_stats = stats;
+        // AR coefficients NOT provided — estimation should be active.
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        // Should produce a season_definitions error (Rule 19).
+        let estimation_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.file.to_string_lossy().contains("inflow_history.parquet")
+                    && e.message.contains("season_definitions")
+            })
+            .collect();
+        assert!(
+            !estimation_errors.is_empty(),
+            "stats present without coefficients should trigger estimation checks; \
+             got errors: {:?}",
+            ctx.errors()
         );
     }
 

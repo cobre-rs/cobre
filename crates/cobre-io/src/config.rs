@@ -424,9 +424,14 @@ impl Default for SimulationSamplingConfig {
 pub enum OrderSelectionMethod {
     /// Use a fixed maximum lag order specified by `max_order`.
     Fixed,
-    /// Select the lag order minimising the Akaike Information Criterion.
+    /// Select the lag order using periodic partial autocorrelation significance
+    /// testing via the periodic Yule-Walker matrix method.
+    ///
+    /// Tests each lag against a 95% confidence interval (`1.96 / sqrt(N)`)
+    /// and selects the maximum lag with a statistically significant partial
+    /// autocorrelation.
     #[default]
-    Aic,
+    Pacf,
 }
 
 /// Time series estimation settings (`config.json → estimation`).
@@ -446,14 +451,25 @@ pub struct EstimationConfig {
     /// Minimum number of observations required per (entity, season) group
     /// to proceed with estimation. Groups below this threshold are skipped.
     pub min_observations_per_season: u32,
+
+    /// Maximum allowed absolute magnitude for any AR coefficient.
+    ///
+    /// When set, any (entity, season) pair with `|coefficient| > threshold`
+    /// is immediately reduced to order 0 before the contribution analysis
+    /// runs. This acts as a fast-path safety net for the most extreme
+    /// explosive models. Defaults to `None` (disabled; contribution analysis
+    /// is the primary guard).
+    #[serde(default)]
+    pub max_coefficient_magnitude: Option<f64>,
 }
 
 impl Default for EstimationConfig {
     fn default() -> Self {
         Self {
             max_order: 6,
-            order_selection: OrderSelectionMethod::Aic,
+            order_selection: OrderSelectionMethod::Pacf,
             min_observations_per_season: 30,
+            max_coefficient_magnitude: None,
         }
     }
 }
@@ -967,8 +983,8 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(cfg.estimation.max_order, 6);
         assert!(
-            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Aic),
-            "default order_selection should be Aic"
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Pacf),
+            "default order_selection should be Pacf"
         );
         assert_eq!(cfg.estimation.min_observations_per_season, 30);
     }

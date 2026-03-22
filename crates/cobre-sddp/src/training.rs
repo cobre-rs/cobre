@@ -50,6 +50,7 @@ use crate::{
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
+    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool},
@@ -90,6 +91,14 @@ pub struct TrainingResult {
     /// the last stage in finite-horizon mode has no successor cuts).
     /// Used for policy checkpoint persistence.
     pub basis_cache: Vec<Option<Basis>>,
+
+    /// Per-iteration, per-phase solver statistics log.
+    ///
+    /// Each entry is `(iteration, phase_name, stage_index, delta)`.
+    /// Phase names: `"forward"`, `"backward"`, `"lower_bound"`.
+    /// Stage index is `-1` for forward and lower bound (which span all stages),
+    /// and the actual stage index for backward per-stage entries (added in T-004).
+    pub solver_stats_log: Vec<SolverStatsEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +337,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut final_gap = 0.0;
     let mut completed_iterations = 0u64;
     let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
+    let mut solver_stats_log: Vec<SolverStatsEntry> = Vec::new();
 
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
@@ -345,6 +355,17 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             iteration,
             fwd_offset: my_fwd_offset,
         };
+
+        // Snapshot pool stats before forward pass.
+        let fwd_stats_before = {
+            let pool_stats: Vec<_> = fwd_pool
+                .workspaces
+                .iter()
+                .map(|w| w.solver.statistics())
+                .collect();
+            aggregate_solver_statistics(&pool_stats)
+        };
+
         let forward_result = run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
@@ -354,6 +375,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &fwd_batch,
             &mut records[..fwd_record_len],
         )?;
+
+        // Snapshot pool stats after forward pass and compute delta.
+        let fwd_delta = {
+            let pool_stats: Vec<_> = fwd_pool
+                .workspaces
+                .iter()
+                .map(|w| w.solver.statistics())
+                .collect();
+            let fwd_stats_after = aggregate_solver_statistics(&pool_stats);
+            SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
+        };
+        let fwd_solve_time_ms = fwd_delta.solve_time_ms;
+        solver_stats_log.push((iteration, "forward".to_string(), -1, fwd_delta));
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 
@@ -393,6 +427,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             fwd_offset: my_fwd_offset,
             risk_measures,
         };
+
         let backward_result = run_backward_pass(
             &mut fwd_pool.workspaces,
             &basis_store,
@@ -402,6 +437,27 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &mut bwd_spec,
             comm,
         )?;
+
+        // Store per-stage backward deltas and compute aggregate solve time.
+        let bwd_solve_time_ms = {
+            let deltas: Vec<_> = backward_result
+                .stage_stats
+                .iter()
+                .map(|(_, d)| d.clone())
+                .collect();
+            let agg = SolverStatsDelta::aggregate(&deltas);
+            let total_ms = agg.solve_time_ms;
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+            for (stage_idx, delta) in &backward_result.stage_stats {
+                solver_stats_log.push((
+                    iteration,
+                    "backward".to_string(),
+                    *stage_idx as i32,
+                    delta.clone(),
+                ));
+            }
+            total_ms
+        };
 
         let backward_elapsed_ms = backward_result.elapsed_ms;
 
@@ -470,7 +526,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 );
             }
         }
-        let lb_solves_before = solver.statistics().solve_count;
+        // Snapshot solver stats before lower bound evaluation.
+        let lb_stats_before = solver.statistics();
+
         let lb_spec = LbEvalSpec {
             template: &stage_ctx.templates[0],
             base_row: stage_ctx.base_rows[0],
@@ -493,7 +551,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &lb_spec,
             comm,
         )?;
-        let lb_lp_solves = solver.statistics().solve_count - lb_solves_before;
+
+        // Snapshot solver stats after lower bound and compute delta.
+        let lb_stats_after = solver.statistics();
+        let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
+        let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
+        let lb_solve_time_ms = lb_delta.solve_time_ms;
+        solver_stats_log.push((iteration, "lower_bound".to_string(), -1, lb_delta));
 
         let (should_stop, rule_results) = convergence_monitor.update(lb, &sync_result);
 
@@ -531,6 +595,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 forward_ms: forward_elapsed_ms,
                 backward_ms: backward_elapsed_ms,
                 lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
+                solve_time_ms: fwd_solve_time_ms + bwd_solve_time_ms + lb_solve_time_ms,
             },
         );
 
@@ -580,6 +645,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         reason: termination_reason,
         total_time_ms,
         basis_cache,
+        solver_stats_log,
     })
 }
 
@@ -646,6 +712,8 @@ mod tests {
             n_dual_relevant: 1,
             n_hydro: 1,
             max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
         }
     }
 

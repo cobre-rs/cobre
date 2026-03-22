@@ -1,6 +1,6 @@
 # Installation
 
-Cobre v0.1.0 is a statically linked binary available for five platforms.
+Cobre is a statically linked binary available for five platforms.
 Choose the method that best fits your environment.
 
 ---
@@ -46,7 +46,7 @@ cobre version
 Expected output (exact versions and arch will vary):
 
 ```
-cobre   v0.1.0
+cobre   v0.1.9
 solver: HiGHS
 comm:   local
 zstd:   enabled

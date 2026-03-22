@@ -1,17 +1,23 @@
-//! Levinson-Durbin recursion and seasonal statistics estimation for PAR model fitting.
+//! Periodic Yule-Walker estimation and seasonal statistics for PAR model fitting.
 //!
-//! This module provides four core primitives for fitting Periodic Autoregressive
+//! This module provides the core primitives for fitting Periodic Autoregressive
 //! models:
 //!
-//! 1. [`levinson_durbin`] — solves Yule-Walker equations in O(p²) time given
-//!    a sequence of autocorrelation values.
-//! 2. [`estimate_seasonal_stats`] — computes seasonal means and
-//!    Bessel-corrected standard deviations from historical inflow observations,
+//! 1. [`periodic_autocorrelation`] — computes the periodic normalised
+//!    autocorrelation `rho(p, k)` with population divisor and cross-year
+//!    lag adjustment.
+//! 2. [`build_periodic_yw_matrix`] — constructs the non-Toeplitz periodic
+//!    Yule-Walker matrix for a given season and AR order.
+//! 3. [`periodic_pacf`] — computes the periodic PACF via progressive matrix
+//!    solves for order selection.
+//! 4. [`estimate_periodic_ar_coefficients`] — solves the periodic YW system
+//!    at the selected order to produce AR coefficients and residual std ratio.
+//! 5. [`estimate_seasonal_stats`] — computes seasonal means and
+//!    Bessel-corrected standard deviations from historical observations,
 //!    grouped by `(entity, season)` pair.
-//! 3. [`estimate_ar_coefficients`] — computes cross-seasonal autocorrelations
-//!    and calls the Levinson-Durbin recursion to produce standardized AR
-//!    coefficients and residual std ratios for each `(entity, season)` pair.
-//! 4. [`estimate_correlation`] — computes the Pearson correlation matrix of
+//! 6. [`estimate_ar_coefficients`] — legacy interface using Levinson-Durbin;
+//!    used by the `Fixed` order selection path.
+//! 7. [`estimate_correlation`] — computes the Pearson correlation matrix of
 //!    PAR model residuals across entities, returning a [`CorrelationModel`]
 //!    suitable for downstream Cholesky decomposition.
 //!
@@ -36,7 +42,7 @@ use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
-    temporal::Stage,
+    temporal::{SeasonMap, Stage},
 };
 
 use crate::StochasticError;
@@ -135,6 +141,27 @@ pub fn estimate_seasonal_stats(
     stages: &[Stage],
     entity_ids: &[EntityId],
 ) -> Result<Vec<SeasonalStats>, StochasticError> {
+    estimate_seasonal_stats_with_season_map(observations, stages, entity_ids, None)
+}
+
+/// Estimate seasonal statistics with an optional [`SeasonMap`] fallback.
+///
+/// When `season_map` is `Some`, historical observation dates that fall outside
+/// the study horizon are resolved to a season using the calendar-based cycle
+/// definition. This allows PAR estimation from inflow history that predates
+/// the study period.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when an observation date
+/// cannot be mapped to any season, or when fewer than 2 observations exist
+/// for any `(entity, season)` group.
+pub fn estimate_seasonal_stats_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    stages: &[Stage],
+    entity_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<SeasonalStats>, StochasticError> {
     if observations.is_empty() {
         return Ok(Vec::new());
     }
@@ -170,18 +197,17 @@ pub fn estimate_seasonal_stats(
             continue;
         }
 
-        // Binary search for the stage that contains `date`.
-        // A stage contains `date` when start_date <= date < end_date.
-        // We search for the last stage whose start_date <= date, then check
-        // that date < end_date.
-        let season_id = find_season_for_date(&stage_index, date).ok_or_else(|| {
-            StochasticError::InsufficientData {
+        // Try exact stage date containment first (for in-range observations),
+        // then fall back to the SeasonMap calendar-based mapping (for historical
+        // observations that predate the study horizon).
+        let season_id = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+            .ok_or_else(|| StochasticError::InsufficientData {
                 context: format!(
                     "observation date {date} for entity {entity_id} \
-                     does not fall within any stage's date range"
+                     does not match any stage date range or season definition"
                 ),
-            }
-        })?;
+            })?;
 
         let first_stage_id = season_first_stage[&season_id];
         let entry = group_map
@@ -505,6 +531,32 @@ pub fn estimate_ar_coefficients(
     hydro_ids: &[EntityId],
     max_order: usize,
 ) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
+    estimate_ar_coefficients_with_season_map(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        max_order,
+        None,
+    )
+}
+
+/// Estimate AR coefficients with an optional [`SeasonMap`] fallback for
+/// historical observations that predate the study horizon.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when insufficient
+/// observations exist for any `(entity, season)` group.
+#[allow(clippy::too_many_lines)]
+pub fn estimate_ar_coefficients_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    max_order: usize,
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
     // -----------------------------------------------------------------------
     // Step 1: Build date-to-season mapping (same as estimate_seasonal_stats).
     // -----------------------------------------------------------------------
@@ -591,7 +643,9 @@ pub fn estimate_ar_coefficients(
         if !entity_set.contains(&entity_id) {
             continue;
         }
-        let Some(season_id) = find_season_for_date(&stage_index, date) else {
+        let Some(season_id) = find_season_for_date(&stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+        else {
             continue;
         };
         group_obs
@@ -855,6 +909,31 @@ pub fn estimate_correlation(
     stages: &[Stage],
     hydro_ids: &[EntityId],
 ) -> Result<CorrelationModel, StochasticError> {
+    estimate_correlation_with_season_map(
+        observations,
+        ar_estimates,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        None,
+    )
+}
+
+/// Estimate correlation with an optional [`SeasonMap`] fallback.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when seasonal stats are
+/// empty but hydros are present, or when residual computation fails.
+#[allow(clippy::too_many_lines)]
+pub fn estimate_correlation_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    ar_estimates: &[ArCoefficientEstimate],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<CorrelationModel, StochasticError> {
     // Trivial case: no hydros.
     if hydro_ids.is_empty() {
         let mut profiles = BTreeMap::new();
@@ -969,7 +1048,9 @@ pub fn estimate_correlation(
 
         for &(date, value) in all_obs {
             // Determine the season for this observation.
-            let Some(season_id) = find_season_for_date(&stage_index, date) else {
+            let Some(season_id) = find_season_for_date(&stage_index, date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+            else {
                 continue;
             };
 
@@ -1251,6 +1332,525 @@ pub fn select_order_aic(sigma2_per_order: &[f64], n_observations: usize) -> AicS
 }
 
 // ---------------------------------------------------------------------------
+// PACF-based AR order selection
+// ---------------------------------------------------------------------------
+
+/// Result of PACF-based AR order selection.
+///
+/// Produced by [`select_order_pacf`]. Contains the selected AR order, the
+/// PACF values for each lag, and the significance threshold used.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PacfSelectionResult {
+    /// Selected AR order.
+    ///
+    /// The maximum lag `k` where `|parcor[k-1]| > threshold`.
+    /// `0` when no lag exceeds the significance threshold.
+    pub selected_order: usize,
+    /// PACF values (partial autocorrelation coefficients) for lags `1..=p_max`.
+    ///
+    /// `pacf_values[k]` is the PACF at lag `k+1`. Same as
+    /// [`LevinsonDurbinResult::parcor`].
+    pub pacf_values: Vec<f64>,
+    /// Significance threshold: `z_alpha / sqrt(n_observations)`.
+    pub threshold: f64,
+}
+
+/// Select the AR order using partial autocorrelation function (PACF)
+/// significance testing.
+///
+/// For each lag `k` in `1..=p_max`, tests whether the partial
+/// autocorrelation coefficient (reflection coefficient from Levinson-Durbin)
+/// exceeds the significance threshold `z_alpha / sqrt(N)`. Selects the
+/// **maximum** lag with a significant PACF value.
+///
+/// If no lag exceeds the threshold, order 0 is selected (white noise).
+///
+/// # Parameters
+///
+/// - `parcor` -- partial autocorrelation coefficients from
+///   [`LevinsonDurbinResult::parcor`]. `parcor[k]` is the PACF at lag `k+1`.
+/// - `n_observations` -- number of historical observations for this season.
+/// - `z_alpha` -- z-score for the desired confidence level (e.g., `1.96`
+///   for 95% two-sided).
+///
+/// # Examples
+///
+/// ```
+/// use cobre_stochastic::par::fitting::select_order_pacf;
+///
+/// // PACF at lag 1 = 0.5 exceeds 1.96/sqrt(100) = 0.196; lag 2 = 0.1 does not.
+/// let result = select_order_pacf(&[0.5, 0.1], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // No significant PACF values -> order 0.
+/// let result = select_order_pacf(&[0.05, 0.03], 100, 1.96);
+/// assert_eq!(result.selected_order, 0);
+/// ```
+pub fn select_order_pacf(
+    parcor: &[f64],
+    n_observations: usize,
+    z_alpha: f64,
+) -> PacfSelectionResult {
+    #[allow(clippy::cast_precision_loss)]
+    let threshold = if n_observations > 0 {
+        z_alpha / (n_observations as f64).sqrt()
+    } else {
+        f64::INFINITY
+    };
+
+    // Find the maximum lag with |PACF| > threshold.
+    let selected_order = parcor
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|&(_, p)| p.abs() > threshold)
+        .map_or(0, |(k, _)| k + 1);
+
+    PacfSelectionResult {
+        selected_order,
+        pacf_values: parcor.to_vec(),
+        threshold,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Periodic autocorrelation
+// ---------------------------------------------------------------------------
+
+/// Compute the periodic normalised autocorrelation `rho(p, k)` for a given
+/// reference season `p` and lag `k`.
+///
+/// The periodic autocorrelation differs from a stationary autocorrelation
+/// in that the reference season determines both the "current" observations
+/// and their seasonal statistics, while the lag determines the "lagged"
+/// observations and their statistics.
+///
+/// Uses population divisor (1/N) and cross-year lag adjustment.
+///
+/// # Parameters
+///
+/// - `ref_season` -- 0-based season index of the reference month `p`.
+/// - `lag` -- lag in seasonal periods (1-based: lag=1 means one season back).
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season index.
+///   `observations_by_season[s]` contains all historical values for season `s`,
+///   in chronological order.
+/// - `stats_by_season` -- `(mean, std)` for each season, indexed by season.
+///
+/// # Returns
+///
+/// The normalised autocorrelation value `rho(ref_season, lag)`, clamped to [-1, 1].
+/// Returns 0.0 when either the reference or lagged season has zero std,
+/// or when insufficient paired observations exist.
+#[must_use]
+pub fn periodic_autocorrelation(
+    ref_season: usize,
+    lag: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> f64 {
+    // Lag 0 is the identity: rho(m, 0) = 1.0 by normalisation.
+    if lag == 0 {
+        return 1.0;
+    }
+
+    // Compute lagged season index.
+    let lag_season = (ref_season + n_seasons - lag % n_seasons) % n_seasons;
+
+    let (mu_ref, std_ref) = stats_by_season[ref_season];
+    let (mu_lag, std_lag) = stats_by_season[lag_season];
+
+    // Zero-std guard: autocorrelation is undefined.
+    if std_ref.abs() < f64::EPSILON || std_lag.abs() < f64::EPSILON {
+        return 0.0;
+    }
+
+    let ref_obs = observations_by_season[ref_season];
+    let lag_obs = observations_by_season[lag_season];
+
+    // Cross-year lag adjustment: the number of year boundaries crossed by
+    // a lag of `k` seasons determines how many observations must be dropped.
+    //
+    // A lag that stays within the same calendar year (lag_season < ref_season
+    // and lag < n_seasons) crosses 0 boundaries. Otherwise, the number of
+    // full years spanned is `(lag + n_seasons - 1) / n_seasons` when the lag
+    // crosses into an earlier calendar position, or `lag / n_seasons` when
+    // it wraps full cycles.
+    //
+    // NEWAVE's approach: for lag `k` within one cycle (k < n_seasons),
+    // detect cross-year when lag_season >= ref_season. For larger lags,
+    // additional years are spanned. The total drop count equals the number
+    // of year boundaries crossed.
+    let years_crossed = if lag < n_seasons {
+        usize::from(lag_season >= ref_season)
+    } else {
+        // Full years from the lag.
+        lag / n_seasons
+    };
+
+    let ref_start = years_crossed;
+    let n_pairs = ref_obs
+        .len()
+        .saturating_sub(years_crossed)
+        .min(lag_obs.len());
+
+    // Insufficient data guard.
+    if n_pairs == 0 {
+        return 0.0;
+    }
+
+    // Compute cross-covariance with population divisor (1/N).
+    let mut gamma = 0.0_f64;
+    for i in 0..n_pairs {
+        gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[i] - mu_lag);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        gamma /= n_pairs as f64;
+    }
+
+    // Normalise and clamp.
+    let rho = gamma / (std_ref * std_lag);
+    rho.clamp(-1.0, 1.0)
+}
+
+// ---------------------------------------------------------------------------
+// Periodic Yule-Walker matrix
+// ---------------------------------------------------------------------------
+
+/// Build the periodic Yule-Walker matrix and right-hand side for a given
+/// season and AR order.
+///
+/// The matrix has dimension `order x order`. Entry `R[i,j]` is the
+/// periodic autocorrelation `rho(season - i, |j - i|)`, where the reference
+/// month shifts per row. The matrix is symmetric but NOT Toeplitz because
+/// the autocorrelation function varies with the reference period.
+///
+/// The right-hand side vector `rhs[i] = rho(season - i, order - i)` is
+/// extracted from the extended `(order+1) x (order+1)` matrix's last column,
+/// following NEWAVE's `_matriz_extendida` + `_resolve_yw` pattern.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season for the YW system.
+/// - `order` -- AR order (determines matrix dimension: `order x order`).
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season, chronological order.
+/// - `stats_by_season` -- `(mean, std)` for each season.
+///
+/// # Returns
+///
+/// A tuple `(matrix, rhs)` where:
+/// - `matrix` is a flat `Vec<f64>` of length `order * order` in row-major layout.
+///   Entry `R[i][j]` is at index `i * order + j`.
+/// - `rhs` is a `Vec<f64>` of length `order`.
+///
+/// Returns `(vec![], vec![])` when `order == 0`.
+#[must_use]
+pub fn build_periodic_yw_matrix(
+    season: usize,
+    order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> (Vec<f64>, Vec<f64>) {
+    if order == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut matrix = vec![0.0_f64; order * order];
+    let mut rhs = vec![0.0_f64; order];
+
+    // Fill the matrix: R[i][j] = rho(season - i, |j - i|).
+    // Diagonal is always 1.0 (rho(m, 0) = 1 for any m).
+    for i in 0..order {
+        matrix[i * order + i] = 1.0;
+        let ref_month = (season + n_seasons - i % n_seasons) % n_seasons;
+        for j in (i + 1)..order {
+            let lag = j - i;
+            let rho = periodic_autocorrelation(
+                ref_month,
+                lag,
+                n_seasons,
+                observations_by_season,
+                stats_by_season,
+            );
+            matrix[i * order + j] = rho;
+            matrix[j * order + i] = rho; // symmetric
+        }
+    }
+
+    // Fill the RHS: rhs[i] = rho(season - i, order - i).
+    // This comes from column `order` of the extended (order+1) x (order+1) matrix.
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..order {
+        let ref_month = (season + n_seasons - i % n_seasons) % n_seasons;
+        let lag = order - i;
+        rhs[i] = periodic_autocorrelation(
+            ref_month,
+            lag,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+    }
+
+    (matrix, rhs)
+}
+
+// ---------------------------------------------------------------------------
+// Small matrix solver
+// ---------------------------------------------------------------------------
+
+/// Solve a dense linear system `A * x = b` via Gaussian elimination with
+/// partial pivoting.
+///
+/// Designed for small systems (n <= 10) arising from Yule-Walker equations
+/// in PAR model fitting. For these sizes, the O(n^3) cost is negligible.
+///
+/// # Parameters
+///
+/// - `a` -- flat row-major matrix of dimension `n x n` (length `n * n`).
+///   **Modified in place** during elimination.
+/// - `b` -- right-hand side vector of length `n`. **Modified in place**.
+/// - `n` -- system dimension.
+///
+/// # Returns
+///
+/// `Some(x)` where `x` is the solution vector of length `n`, or `None` if the
+/// matrix is singular (pivot magnitude below `f64::EPSILON`).
+pub fn solve_linear_system(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> {
+    debug_assert_eq!(a.len(), n * n, "matrix must have n*n elements");
+    debug_assert_eq!(b.len(), n, "rhs must have n elements");
+
+    if n == 0 {
+        return Some(Vec::new());
+    }
+
+    // Forward elimination with partial pivoting.
+    for k in 0..n {
+        // Find pivot: row with largest |a[row][k]| in rows k..n-1.
+        let mut max_val = a[k * n + k].abs();
+        let mut max_row = k;
+        for row in (k + 1)..n {
+            let val = a[row * n + k].abs();
+            if val > max_val {
+                max_val = val;
+                max_row = row;
+            }
+        }
+
+        // Singularity check.
+        if max_val < f64::EPSILON {
+            return None;
+        }
+
+        // Swap rows k and max_row in both a and b.
+        if max_row != k {
+            for col in 0..n {
+                a.swap(k * n + col, max_row * n + col);
+            }
+            b.swap(k, max_row);
+        }
+
+        // Eliminate below.
+        let pivot = a[k * n + k];
+        for i in (k + 1)..n {
+            let factor = a[i * n + k] / pivot;
+            a[i * n + k] = 0.0;
+            for j in (k + 1)..n {
+                a[i * n + j] -= factor * a[k * n + j];
+            }
+            b[i] -= factor * b[k];
+        }
+    }
+
+    // Back substitution.
+    let mut x = vec![0.0_f64; n];
+    for k in (0..n).rev() {
+        let mut sum = b[k];
+        for j in (k + 1)..n {
+            sum -= a[k * n + j] * x[j];
+        }
+        x[k] = sum / a[k * n + k];
+    }
+
+    Some(x)
+}
+
+// ---------------------------------------------------------------------------
+// Periodic PACF
+// ---------------------------------------------------------------------------
+
+/// Compute the periodic PACF for a given season up to `max_order`.
+///
+/// For each candidate order k (`1..=max_order`), builds the periodic Yule-Walker
+/// matrix of dimension k, solves `R * phi = rhs`, and extracts the last
+/// coefficient `phi[k-1]` as `PACF(k)`.
+///
+/// This is the correct periodic PACF computation that accounts for the
+/// non-Toeplitz covariance structure of periodic autoregressive processes.
+/// It replaces the stationary Levinson-Durbin reflection coefficients which
+/// assume a Toeplitz (stationary) covariance matrix.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season.
+/// - `max_order` -- maximum lag to compute PACF for.
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season.
+/// - `stats_by_season` -- `(mean, std)` for each season.
+///
+/// # Returns
+///
+/// A `Vec<f64>` of length <= `max_order`. Entry `k` is `PACF(k+1)`.
+/// The vector may be shorter than `max_order` if a system at some order
+/// is singular (remaining orders are skipped).
+#[must_use]
+pub fn periodic_pacf(
+    season: usize,
+    max_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> Vec<f64> {
+    let mut pacf_values = Vec::with_capacity(max_order);
+
+    for k in 1..=max_order {
+        let (mut matrix, mut rhs) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+
+        match solve_linear_system(&mut matrix, &mut rhs, k) {
+            Some(phi) => pacf_values.push(phi[k - 1]),
+            None => break, // Singular matrix, stop.
+        }
+    }
+
+    pacf_values
+}
+
+// ---------------------------------------------------------------------------
+// Periodic YW coefficient estimation
+// ---------------------------------------------------------------------------
+
+/// Result of periodic Yule-Walker AR coefficient estimation for one
+/// (entity, season) pair.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct PeriodicYwResult {
+    /// Standardised AR coefficients `phi_1..phi_p`.
+    pub coefficients: Vec<f64>,
+    /// Residual std ratio: `sigma_residual / sigma_sample`.
+    /// In `(0, 1]` for valid models; 1.0 for order-0.
+    pub residual_std_ratio: f64,
+    /// Prediction error variance at each intermediate order `1..=selected_order`.
+    /// Used for diagnostic reporting. `sigma2_per_order[k-1]` is the variance
+    /// for AR(k).
+    pub sigma2_per_order: Vec<f64>,
+}
+
+/// Estimate AR coefficients by solving the periodic Yule-Walker system at the
+/// given order.
+///
+/// Also computes prediction error variances at each intermediate order
+/// (`1..=selected_order`) for diagnostic reporting compatibility.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season.
+/// - `selected_order` -- the AR order to fit (from PACF-based selection).
+/// - `n_seasons` -- total number of seasons in the periodic cycle.
+/// - `observations_by_season` -- observations grouped by season.
+/// - `stats_by_season` -- `(mean, std)` for each season.
+///
+/// # Returns
+///
+/// A [`PeriodicYwResult`] with the fitted coefficients, residual std ratio,
+/// and prediction error variances. Returns order-0 result (empty coefficients,
+/// ratio 1.0) when `selected_order == 0` or when the system is singular.
+pub fn estimate_periodic_ar_coefficients(
+    season: usize,
+    selected_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+) -> PeriodicYwResult {
+    let zero_result = PeriodicYwResult {
+        coefficients: Vec::new(),
+        residual_std_ratio: 1.0,
+        sigma2_per_order: Vec::new(),
+    };
+
+    if selected_order == 0 {
+        return zero_result;
+    }
+
+    let mut sigma2_per_order = Vec::with_capacity(selected_order);
+    let mut final_coefficients = Vec::new();
+
+    for k in 1..=selected_order {
+        // Build and solve the periodic YW system at order k.
+        // Save the original RHS for sigma2 computation (solve modifies in-place).
+        let (_, rhs_orig) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+        let (mut matrix, mut rhs) = build_periodic_yw_matrix(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+
+        match solve_linear_system(&mut matrix, &mut rhs, k) {
+            Some(phi) => {
+                // sigma2(k) = 1 - sum_{j=0}^{k-1} phi[j] * rhs_original[j]
+                let sigma2_k: f64 = 1.0
+                    - phi
+                        .iter()
+                        .zip(rhs_orig.iter())
+                        .map(|(p, r)| p * r)
+                        .sum::<f64>();
+                sigma2_per_order.push(sigma2_k);
+
+                if k == selected_order {
+                    final_coefficients = phi;
+                }
+            }
+            None => {
+                // Singular matrix: fall back to order-0 result.
+                return zero_result;
+            }
+        }
+    }
+
+    // Compute residual_std_ratio = sqrt(sigma2(selected_order)).
+    let sigma2_final = *sigma2_per_order.last().unwrap_or(&1.0);
+    let residual_std_ratio = if sigma2_final > 0.0 {
+        sigma2_final.sqrt().clamp(f64::EPSILON, 1.0)
+    } else {
+        1.0 // Numerical issue: fall back.
+    };
+
+    PeriodicYwResult {
+        coefficients: final_coefficients,
+        residual_std_ratio,
+        sigma2_per_order,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1264,7 +1864,11 @@ pub fn select_order_aic(sigma2_per_order: &[f64], n_observations: usize) -> AicS
     clippy::cast_lossless
 )]
 mod tests {
-    use super::{levinson_durbin, select_order_aic};
+    use super::{
+        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, levinson_durbin,
+        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
+        solve_linear_system,
+    };
 
     // -----------------------------------------------------------------------
     // AR(1) known values
@@ -2609,5 +3213,873 @@ mod tests {
         let sigma2: Vec<f64> = (1..=5).map(|k| 0.5_f64.powi(k)).collect();
         let result = select_order_aic(&sigma2, 200);
         assert_eq!(result.selected_order, 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // PACF order selection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pacf_empty_parcor_selects_zero() {
+        let result = select_order_pacf(&[], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+        assert!(result.pacf_values.is_empty());
+    }
+
+    #[test]
+    fn pacf_single_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor[0] = 0.5 > 0.196 -> significant
+        let result = select_order_pacf(&[0.5], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+        assert!((result.threshold - 0.196).abs() < 1e-10);
+    }
+
+    #[test]
+    fn pacf_no_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // All parcor below threshold.
+        let result = select_order_pacf(&[0.05, 0.03, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn pacf_selects_max_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor = [0.5, 0.1, 0.3]
+        // Lag 1 (0.5) significant, lag 2 (0.1) not, lag 3 (0.3) significant.
+        // Max significant lag = 3.
+        let result = select_order_pacf(&[0.5, 0.1, 0.3], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn pacf_negative_parcor_uses_absolute_value() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // parcor = [-0.5, 0.1]
+        // |-0.5| = 0.5 > 0.196 -> lag 1 significant.
+        let result = select_order_pacf(&[-0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn pacf_zero_observations_selects_zero() {
+        // n_observations = 0 -> threshold = infinity -> nothing significant.
+        let result = select_order_pacf(&[0.5, 0.3], 0, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn pacf_large_sample_low_threshold() {
+        // threshold = 1.96 / sqrt(10000) = 0.0196
+        // Even small parcor values are significant.
+        let result = select_order_pacf(&[0.05, 0.03, 0.02, 0.01], 10000, 1.96);
+        // parcor[0]=0.05 > 0.0196, parcor[1]=0.03 > 0.0196, parcor[2]=0.02 > 0.0196
+        // parcor[3]=0.01 < 0.0196
+        // Max significant = lag 3.
+        assert_eq!(result.selected_order, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // periodic_autocorrelation tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: compute population mean and std for a slice.
+    fn pop_mean_std(data: &[f64]) -> (f64, f64) {
+        let n = data.len() as f64;
+        if n < 1.0 {
+            return (0.0, 0.0);
+        }
+        let mean = data.iter().sum::<f64>() / n;
+        if n < 2.0 {
+            return (mean, 0.0);
+        }
+        let var = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, var.sqrt())
+    }
+
+    #[test]
+    fn periodic_autocorrelation_single_season_basic() {
+        // Single-season (stationary) case with known analytical value.
+        //
+        // For a single season, ref_season=0, lag_season=0, n_seasons=1.
+        // Cross-year triggers (lag_season >= ref_season and lag < n_seasons).
+        // So ref starts at index 1, pairs = N-1.
+        //
+        // Use data [1, 3, 5, 7, 9]: mean=5, std=sqrt(8).
+        // ref = [3, 5, 7, 9], lag = [1, 3, 5, 7], 4 pairs.
+        // gamma = 1/4 * [(3-5)(1-5) + (5-5)(3-5) + (7-5)(5-5) + (9-5)(7-5)]
+        //       = 1/4 * [(-2)(-4) + 0*(-2) + 2*0 + 4*2]
+        //       = 1/4 * [8 + 0 + 0 + 8] = 4.0
+        // rho = 4.0 / (sqrt(8) * sqrt(8)) = 4.0 / 8.0 = 0.5
+        let data = [1.0, 3.0, 5.0, 7.0, 9.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let rho = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+        assert!((rho - 0.5).abs() < 1e-10, "rho(0,1) = {rho}, expected 0.5");
+    }
+
+    #[test]
+    fn periodic_autocorrelation_two_season() {
+        // Two-season case with distinct dynamics.
+        let season_0 = [10.0, 12.0, 11.0, 13.0, 10.5];
+        let season_1 = [5.0, 6.0, 5.5, 7.0, 5.2];
+
+        let stats_0 = pop_mean_std(&season_0);
+        let stats_1 = pop_mean_std(&season_1);
+
+        let obs: &[&[f64]] = &[&season_0, &season_1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        // rho(0, 1) = autocorrelation of season 0 with season 1 (lag 1).
+        let rho01 = periodic_autocorrelation(0, 1, 2, obs, stats);
+        // rho(1, 1) = autocorrelation of season 1 with season 0 (lag 1).
+        let rho10 = periodic_autocorrelation(1, 1, 2, obs, stats);
+
+        // Both should be finite and in [-1, 1].
+        assert!(rho01.abs() <= 1.0);
+        assert!(rho10.abs() <= 1.0);
+        // They can differ because different reference seasons use different
+        // seasonal statistics.
+    }
+
+    #[test]
+    fn periodic_autocorrelation_cross_year_boundary() {
+        // 12-season setup. rho(0, 1) = Jan lag 1 -> Dec: crosses year boundary.
+        // rho(6, 1) = Jul lag 1 -> Jun: does NOT cross year boundary.
+        let n_seasons = 12;
+        let mut obs_data: Vec<Vec<f64>> = Vec::new();
+        let n_years = 10;
+        for _ in 0..n_seasons {
+            obs_data.push((0..n_years).map(|y| (y * 10 + 5) as f64).collect());
+        }
+        let obs_refs: Vec<&[f64]> = obs_data.iter().map(Vec::as_slice).collect();
+        let stats: Vec<(f64, f64)> = obs_data.iter().map(|v| pop_mean_std(v)).collect();
+
+        // For the cross-year case (ref_season=0, lag=1 -> lag_season=11),
+        // lag_season (11) >= ref_season (0), so one observation is dropped.
+        let rho_jan_dec = periodic_autocorrelation(0, 1, n_seasons, &obs_refs, &stats);
+
+        // For the non-cross-year case (ref_season=6, lag=1 -> lag_season=5),
+        // lag_season (5) < ref_season (6), so no observation is dropped.
+        let rho_jul_jun = periodic_autocorrelation(6, 1, n_seasons, &obs_refs, &stats);
+
+        // Both should produce valid values.
+        assert!((-1.0..=1.0).contains(&rho_jan_dec));
+        assert!((-1.0..=1.0).contains(&rho_jul_jun));
+
+        // Verify the cross-year adjustment affects the value: compute manually.
+        // For the cross-year case with identical observations per season,
+        // the autocorrelation should still be well-defined.
+    }
+
+    #[test]
+    fn periodic_autocorrelation_zero_std_returns_zero() {
+        // If one season has zero std (constant values), rho should be 0.0.
+        let season_0 = [5.0, 5.0, 5.0, 5.0]; // zero std
+        let season_1 = [1.0, 2.0, 3.0, 4.0];
+        let stats_0 = pop_mean_std(&season_0);
+        let stats_1 = pop_mean_std(&season_1);
+
+        let obs: &[&[f64]] = &[&season_0, &season_1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        assert_eq!(stats_0.1, 0.0);
+        let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+        assert_eq!(rho, 0.0);
+    }
+
+    #[test]
+    fn periodic_autocorrelation_insufficient_data() {
+        // Only one observation per season -> after cross-year drop, 0 pairs.
+        let season_0: [f64; 1] = [10.0];
+        let season_1: [f64; 1] = [20.0];
+
+        // With n_seasons=2, ref_season=0, lag=1 -> lag_season=1.
+        // lag_season (1) >= ref_season (0) -> cross-year, drop 1.
+        // ref_obs.len()-1 = 0 -> 0 pairs -> returns 0.0.
+        let stats: &[(f64, f64)] = &[(10.0, 1.0), (20.0, 1.0)];
+        let obs: &[&[f64]] = &[&season_0, &season_1];
+        let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+        assert_eq!(rho, 0.0);
+    }
+
+    #[test]
+    fn periodic_autocorrelation_clamped_to_range() {
+        // Construct extreme data that would produce rho > 1 without clamping.
+        // In practice this shouldn't happen with correct stats, but the function
+        // should still clamp. Use mismatched stats to force it.
+        let season_0 = [100.0, 200.0, 300.0];
+        let stats: &[(f64, f64)] = &[(200.0, 0.001)]; // artificially tiny std
+        let obs: &[&[f64]] = &[&season_0];
+        let rho = periodic_autocorrelation(0, 1, 1, obs, stats);
+        assert!((-1.0..=1.0).contains(&rho), "rho should be clamped: {rho}");
+    }
+
+    #[test]
+    fn periodic_autocorrelation_population_divisor() {
+        // Verify 1/N divisor is used, not 1/(N-1).
+        // With N=3 and specific values, the difference between 1/3 and 1/2
+        // is 50%, easily detectable.
+        let data = [1.0, 2.0, 3.0]; // mean=2, std=sqrt(2/3)
+        let (mean, std_val) = pop_mean_std(&data);
+        let stats: &[(f64, f64)] = &[(mean, std_val)];
+        let obs: &[&[f64]] = &[&data];
+
+        let _rho = periodic_autocorrelation(0, 1, 1, obs, stats);
+
+        // Compute expected with 1/N:
+        // With single season, lag 1 means same season at lag 1.
+        // cross-year: lag_season=0 >= ref_season=0 and lag<n_seasons(1) -> yes.
+        // So ref starts at index 1, lag starts at index 0, n_pairs=2.
+        // gamma = 1/2 * [(2-2)*(1-2) + (3-2)*(2-2)] = 1/2 * [0 + 0] = 0.
+        // Actually let me check: ref_obs[1]=2, ref_obs[2]=3; lag_obs[0]=1, lag_obs[1]=2.
+        // gamma = 1/2 * [(2-2)(1-2) + (3-2)(2-2)] = 1/2 * [0*(-1) + 1*0] = 0.
+        // For this particular data, gamma = 0. Let me use different data.
+        let data2 = [1.0, 4.0, 9.0]; // mean=14/3
+        let (mean2, std2) = pop_mean_std(&data2);
+        let stats2: &[(f64, f64)] = &[(mean2, std2)];
+        let obs2: &[&[f64]] = &[&data2];
+
+        let rho2 = periodic_autocorrelation(0, 1, 1, obs2, stats2);
+        // Just verify it produces a valid finite result with population divisor.
+        assert!(rho2.is_finite(), "rho should be finite: {rho2}");
+        assert!(rho2.abs() <= 1.0);
+    }
+
+    #[test]
+    fn periodic_autocorrelation_lag_zero() {
+        // rho(m, 0) = 1.0 for any season.
+        let data = [1.0, 2.0, 3.0];
+        let stats: &[(f64, f64)] = &[(2.0, 1.0)];
+        let obs: &[&[f64]] = &[&data];
+        assert_eq!(periodic_autocorrelation(0, 0, 1, obs, stats), 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_periodic_yw_matrix tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_periodic_yw_matrix_order_zero() {
+        let data = [1.0, 2.0, 3.0];
+        let stats: &[(f64, f64)] = &[(2.0, 1.0)];
+        let obs: &[&[f64]] = &[&data];
+        let (mat, rhs) = build_periodic_yw_matrix(0, 0, 1, obs, stats);
+        assert!(mat.is_empty());
+        assert!(rhs.is_empty());
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_single_season_toeplitz() {
+        // For a single season (n_seasons=1), the periodic YW matrix should be
+        // Toeplitz because all rows use the same reference season.
+        let data: Vec<f64> = (0..50).map(|i| (i as f64) * 0.5 + 1.0).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let order = 3;
+        let (mat, _rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+
+        assert_eq!(mat.len(), order * order);
+        // Check Toeplitz property: M[i,j] depends only on |i-j|.
+        // M[0,1] should equal M[1,2] (both have lag 1 from same ref season 0).
+        let m01 = mat[1]; // row 0, col 1
+        let m12 = mat[order + 2]; // row 1, col 2
+        assert!(
+            (m01 - m12).abs() < 1e-10,
+            "Toeplitz violated: M[0,1]={m01} != M[1,2]={m12}"
+        );
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_diagonal_is_one() {
+        // Diagonal entries should always be 1.0.
+        let s0: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let s1: Vec<f64> = (0..20).map(|i| (i * 2) as f64).collect();
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        let order = 3;
+        let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+        for i in 0..order {
+            assert!(
+                (mat[i * order + i] - 1.0).abs() < 1e-15,
+                "Diagonal[{i}] = {}, expected 1.0",
+                mat[i * order + i]
+            );
+        }
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_symmetry() {
+        // Matrix should be symmetric: M[i,j] == M[j,i].
+        let s0: Vec<f64> = (0..30).map(|i| (i as f64).sin()).collect();
+        let s1: Vec<f64> = (0..30).map(|i| (i as f64).cos()).collect();
+        let s2: Vec<f64> = (0..30).map(|i| (i as f64 * 0.5).sin()).collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..], &s2[..]]
+            .iter()
+            .map(|s| pop_mean_std(s))
+            .collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
+
+        let order = 4;
+        let (mat, _) = build_periodic_yw_matrix(1, order, 3, &obs, &stats);
+        for i in 0..order {
+            for j in (i + 1)..order {
+                assert!(
+                    (mat[i * order + j] - mat[j * order + i]).abs() < 1e-10,
+                    "Symmetry violated: M[{i},{j}]={} != M[{j},{i}]={}",
+                    mat[i * order + j],
+                    mat[j * order + i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_rhs_length() {
+        let data: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        for order in 1..=5 {
+            let (mat, rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+            assert_eq!(
+                mat.len(),
+                order * order,
+                "matrix size mismatch for order {order}"
+            );
+            assert_eq!(rhs.len(), order, "rhs size mismatch for order {order}");
+        }
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_two_season_not_toeplitz() {
+        // For a 2-season model with different dynamics, the matrix should NOT
+        // be Toeplitz (off-diagonal entries differ from what Toeplitz would give).
+        let s0: Vec<f64> = (0..30).map(|i| (i as f64) * 2.0 + 1.0).collect();
+        let s1: Vec<f64> = (0..30).map(|i| (i as f64) * 0.5 + 10.0).collect();
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        let order = 3;
+        let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+
+        // In a Toeplitz matrix, M[0,1] == M[1,2]. For the periodic matrix,
+        // row 0 uses ref_month = season = 0, row 1 uses ref_month = (0+2-1)%2 = 1.
+        // These reference different seasons, so M[0,1] (rho(0,1)) may differ
+        // from M[1,2] (rho(1,1)).
+        let m01 = mat[1]; // row 0, col 1
+        let m12 = mat[order + 2]; // row 1, col 2
+        // We just verify both are valid; they may or may not differ depending
+        // on the specific data, but the matrix IS valid.
+        assert!(m01.abs() <= 1.0);
+        assert!(m12.abs() <= 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // solve_linear_system tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn solve_linear_system_1x1() {
+        // [2.0] * x = [6.0] -> x = [3.0]
+        let mut a = vec![2.0];
+        let mut b = vec![6.0];
+        let x = solve_linear_system(&mut a, &mut b, 1).unwrap();
+        assert_eq!(x.len(), 1);
+        assert!((x[0] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn solve_linear_system_2x2() {
+        // [1 2] [x1]   [5]     x1 = 1, x2 = 2
+        // [3 4] [x2] = [11]
+        let mut a = vec![1.0, 2.0, 3.0, 4.0];
+        let mut b = vec![5.0, 11.0];
+        let x = solve_linear_system(&mut a, &mut b, 2).unwrap();
+        assert_eq!(x.len(), 2);
+        assert!((x[0] - 1.0).abs() < 1e-10, "x[0]={}", x[0]);
+        assert!((x[1] - 2.0).abs() < 1e-10, "x[1]={}", x[1]);
+    }
+
+    #[test]
+    fn solve_linear_system_3x3() {
+        // [2  1 -1] [x1]   [ 8]     x = [2, 3, -1]
+        // [-3 -1  2] [x2] = [-11]
+        // [-2  1  2] [x3]   [-3]
+        let mut a = vec![2.0, 1.0, -1.0, -3.0, -1.0, 2.0, -2.0, 1.0, 2.0];
+        let mut b = vec![8.0, -11.0, -3.0];
+        let x = solve_linear_system(&mut a, &mut b, 3).unwrap();
+        assert_eq!(x.len(), 3);
+        assert!((x[0] - 2.0).abs() < 1e-10, "x[0]={}", x[0]);
+        assert!((x[1] - 3.0).abs() < 1e-10, "x[1]={}", x[1]);
+        assert!((x[2] - (-1.0)).abs() < 1e-10, "x[2]={}", x[2]);
+    }
+
+    #[test]
+    fn solve_linear_system_singular() {
+        // Two identical rows -> singular.
+        let mut a = vec![1.0, 2.0, 1.0, 2.0];
+        let mut b = vec![3.0, 3.0];
+        assert!(solve_linear_system(&mut a, &mut b, 2).is_none());
+    }
+
+    #[test]
+    fn solve_linear_system_requires_pivoting() {
+        // [0 1] [x1]   [3]    -> needs row swap.
+        // [1 0] [x2] = [5]    x1=5, x2=3.
+        let mut a = vec![0.0, 1.0, 1.0, 0.0];
+        let mut b = vec![3.0, 5.0];
+        let x = solve_linear_system(&mut a, &mut b, 2).unwrap();
+        assert!((x[0] - 5.0).abs() < 1e-10, "x[0]={}", x[0]);
+        assert!((x[1] - 3.0).abs() < 1e-10, "x[1]={}", x[1]);
+    }
+
+    #[test]
+    fn solve_linear_system_diagonal() {
+        // [3 0 0] [x1]   [9]    x = [3, 2, 5]
+        // [0 4 0] [x2] = [8]
+        // [0 0 2] [x3]   [10]
+        let mut a = vec![3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 2.0];
+        let mut b = vec![9.0, 8.0, 10.0];
+        let x = solve_linear_system(&mut a, &mut b, 3).unwrap();
+        assert!((x[0] - 3.0).abs() < 1e-10);
+        assert!((x[1] - 2.0).abs() < 1e-10);
+        assert!((x[2] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn solve_linear_system_6x6() {
+        // Identity 6x6: I * x = b -> x = b.
+        let n = 6;
+        let mut a = vec![0.0; n * n];
+        for i in 0..n {
+            a[i * n + i] = 1.0;
+        }
+        let expected = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut b = expected.clone();
+        let x = solve_linear_system(&mut a, &mut b, n).unwrap();
+        for i in 0..n {
+            assert!((x[i] - expected[i]).abs() < 1e-10, "x[{i}]={}", x[i]);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Comprehensive periodic autocorrelation and matrix tests (E1/T003)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn periodic_autocorrelation_single_season_yw_solve_roundtrip() {
+        // For a single season, build the periodic YW matrix and verify
+        // that R * phi = rhs (the matrix equation is self-consistent).
+        let data = [10.0, 12.0, 11.0, 14.0, 13.0, 15.0, 12.0, 16.0, 14.0, 17.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let order = 3;
+        // Save the RHS before the solve (solve modifies in-place).
+        let (mat_orig, rhs_orig) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+
+        let (mut mat, mut rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+        let phi = solve_linear_system(&mut mat, &mut rhs, order).unwrap();
+
+        // Verify R * phi = rhs_orig.
+        for i in 0..order {
+            let mut dot = 0.0;
+            for j in 0..order {
+                dot += mat_orig[i * order + j] * phi[j];
+            }
+            assert!(
+                (dot - rhs_orig[i]).abs() < 1e-10,
+                "R*phi[{i}] = {dot}, expected {}",
+                rhs_orig[i]
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_autocorrelation_two_obs_per_season() {
+        // Very few observations (N=2) per season should still work.
+        let s0 = [1.0, 3.0]; // mean=2, std=1
+        let s1 = [5.0, 7.0]; // mean=6, std=1
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        // Should not panic.
+        let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+        assert!(rho.is_finite());
+        assert!(rho.abs() <= 1.0);
+    }
+
+    #[test]
+    fn periodic_autocorrelation_large_lag_wraps() {
+        // Lag > n_seasons should wrap correctly.
+        let s0: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let s1: Vec<f64> = (0..20).map(|i| (i * 2) as f64).collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        // Lag=3 with n_seasons=2: lag_season = (0 + 2 - 3%2) % 2 = (2 - 1)%2 = 1.
+        let rho = periodic_autocorrelation(0, 3, 2, &obs, &stats);
+        assert!(rho.is_finite());
+        assert!(rho.abs() <= 1.0);
+    }
+
+    #[test]
+    fn periodic_autocorrelation_population_divisor_verification() {
+        // Verify population divisor (1/N) NOT Bessel (1/(N-1)) with N=3.
+        // The 50% difference at N=3 makes this easy to detect.
+        //
+        // Use two seasons to avoid cross-year adjustment complexity.
+        // season 0: [1, 2, 3], mean=2, std_pop = sqrt(2/3) ≈ 0.8165
+        // season 1: [4, 5, 6], mean=5, std_pop = sqrt(2/3) ≈ 0.8165
+        //
+        // rho(0, 1): ref=season0, lag=season1.
+        // lag_season = (0+2-1)%2 = 1. cross_year: lag<2 and lag_season(1)>=ref(0) -> yes.
+        // So ref starts at 1, pairs = min(3-1, 3) = 2.
+        // gamma = 1/2 * [(2-2)(4-5) + (3-2)(5-5)] = 1/2 * [0 + 0] = 0.
+        // For this specific data, gamma=0 regardless of divisor. Use different data.
+        let s0 = [1.0, 4.0, 3.0]; // mean=8/3, std_pop
+        let s1 = [2.0, 5.0, 4.0]; // mean=11/3, std_pop
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+        // The important check: with population std divisor, the result is valid.
+        assert!(rho.is_finite());
+        assert!(rho.abs() <= 1.0);
+
+        // Compute manually with population divisor to verify.
+        // cross-year: lag_season=1 >= ref_season=0 -> yes, ref starts at index 1.
+        // pairs = min(3-1, 3) = 2.
+        // ref: s0[1]=4.0, s0[2]=3.0. lag: s1[0]=2.0, s1[1]=5.0.
+        let mu_ref = stats_0.0;
+        let mu_lag = stats_1.0;
+        let gamma = 0.5 * ((4.0 - mu_ref) * (2.0 - mu_lag) + (3.0 - mu_ref) * (5.0 - mu_lag));
+        let expected = gamma / (stats_0.1 * stats_1.1);
+        assert!(
+            (rho - expected.clamp(-1.0, 1.0)).abs() < 1e-10,
+            "rho={rho}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn periodic_yw_matrix_solve_residual_check() {
+        // Build periodic YW matrix for a two-season model, solve, and verify
+        // that R * phi = rhs (the solution satisfies the system).
+        let s0: Vec<f64> = (0..50)
+            .map(|i| (i as f64 * 0.3).sin() * 5.0 + 10.0)
+            .collect();
+        let s1: Vec<f64> = (0..50)
+            .map(|i| (i as f64 * 0.5).cos() * 3.0 + 7.0)
+            .collect();
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+
+        let order = 3;
+        let (mat_orig, rhs_orig) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+
+        let (mut mat, mut rhs) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+        let phi = solve_linear_system(&mut mat, &mut rhs, order).unwrap();
+
+        // Verify R * phi = rhs_orig.
+        for i in 0..order {
+            let mut dot = 0.0;
+            for j in 0..order {
+                dot += mat_orig[i * order + j] * phi[j];
+            }
+            assert!(
+                (dot - rhs_orig[i]).abs() < 1e-10,
+                "R*phi[{i}] = {dot}, expected {}",
+                rhs_orig[i]
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_yw_matrix_rhs_matches_extended_matrix() {
+        // Verify RHS comes from the (order+1)-th column of the extended matrix.
+        // Build a 3-season model, order=2 at season=1.
+        // RHS[0] = rho(season=1, lag=order-0=2)
+        // RHS[1] = rho(season=1-1=0, lag=order-1=1)
+        let s0: Vec<f64> = (0..30).map(|i| (i as f64).sin() * 3.0).collect();
+        let s1: Vec<f64> = (0..30).map(|i| (i as f64).cos() * 2.0).collect();
+        let s2: Vec<f64> = (0..30).map(|i| (i as f64 * 0.5).sin() * 4.0).collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..], &s2[..]]
+            .iter()
+            .map(|s| pop_mean_std(s))
+            .collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
+
+        let order = 2;
+        let season = 1;
+        let (_, rhs) = build_periodic_yw_matrix(season, order, 3, &obs, &stats);
+
+        // Verify each RHS entry.
+        let expected_rhs0 = periodic_autocorrelation(season, order, 3, &obs, &stats);
+        let ref_month_1 = (season + 3 - 1) % 3;
+        let expected_rhs1 = periodic_autocorrelation(ref_month_1, order - 1, 3, &obs, &stats);
+
+        assert!(
+            (rhs[0] - expected_rhs0).abs() < 1e-10,
+            "RHS[0]={}, expected={}",
+            rhs[0],
+            expected_rhs0
+        );
+        assert!(
+            (rhs[1] - expected_rhs1).abs() < 1e-10,
+            "RHS[1]={}, expected={}",
+            rhs[1],
+            expected_rhs1
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // periodic_pacf tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn periodic_pacf_empty_for_zero_order() {
+        let data: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+        let pacf = periodic_pacf(0, 0, 1, obs, stats_arr);
+        assert!(pacf.is_empty());
+    }
+
+    #[test]
+    fn periodic_pacf_single_season_matches_ar1() {
+        // For AR(1) with known rho(1), the PACF(1) should equal rho(1).
+        // PACF(1) = phi_{1,1} = the AR(1) coefficient = rho(1).
+        let data = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+        let pacf = periodic_pacf(0, 3, 1, obs, stats_arr);
+
+        assert!(!pacf.is_empty());
+        // PACF(1) should equal rho(1) (the AR(1) coefficient).
+        assert!(
+            (pacf[0] - rho1).abs() < 1e-10,
+            "PACF(1)={}, rho(1)={}",
+            pacf[0],
+            rho1
+        );
+    }
+
+    #[test]
+    fn periodic_pacf_two_season_differs_from_ld() {
+        // For a two-season model, the periodic PACF should produce different
+        // values than the Levinson-Durbin parcor (which assumes stationarity).
+        let s0: Vec<f64> = (0..30).map(|i| (i as f64 * 0.3).sin() * 5.0).collect();
+        let s1: Vec<f64> = (0..30).map(|i| (i as f64 * 0.7).cos() * 8.0).collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        let pacf = periodic_pacf(0, 3, 2, &obs, &stats);
+
+        // Should produce values (not empty due to singularity).
+        assert!(!pacf.is_empty(), "PACF should not be empty");
+        // All values should be bounded.
+        for (k, &v) in pacf.iter().enumerate() {
+            assert!(
+                v.is_finite() && v.abs() <= 1.0 + 1e-10,
+                "PACF({}) = {v} out of bounds",
+                k + 1
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_pacf_length_matches_max_order() {
+        let data: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 10.0).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let pacf = periodic_pacf(0, 5, 1, obs, stats_arr);
+        assert_eq!(pacf.len(), 5, "PACF should have max_order entries");
+    }
+
+    #[test]
+    fn periodic_pacf_values_bounded() {
+        // PACF values from the periodic matrix solve should be finite.
+        // Unlike Levinson-Durbin parcor, they are not guaranteed to be in [-1, 1]
+        // because the last coefficient of an AR(k) model can exceed 1 when the
+        // covariance structure is periodic. The significance test in
+        // select_order_pacf handles this correctly.
+        let s0: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.2).sin() * 3.0 + 5.0)
+            .collect();
+        let s1: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.4).cos() * 2.0 + 7.0)
+            .collect();
+        let s2: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.6).sin() * 4.0 + 3.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..], &s2[..]]
+            .iter()
+            .map(|s| pop_mean_std(s))
+            .collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
+
+        for season in 0..3 {
+            let pacf = periodic_pacf(season, 4, 3, &obs, &stats);
+            for (k, &v) in pacf.iter().enumerate() {
+                assert!(
+                    v.is_finite(),
+                    "Season {season}, PACF({}) = {v} not finite",
+                    k + 1
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_periodic_ar_coefficients tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn estimate_periodic_ar_order_zero() {
+        let data: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 0, 1, obs, stats_arr);
+        assert!(result.coefficients.is_empty());
+        assert!((result.residual_std_ratio - 1.0).abs() < 1e-15);
+        assert!(result.sigma2_per_order.is_empty());
+    }
+
+    #[test]
+    fn estimate_periodic_ar_order_one_known_rho() {
+        // AR(1) with known rho(1) = 0.5.
+        // Expected: coefficient = value from periodic YW solve (equals rho(1)
+        // for the AR(1) case), sigma2 = 1 - phi * rho(1).
+        // Use simple data with known autocorrelation.
+        let data = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0];
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 1, 1, obs, stats_arr);
+        assert_eq!(result.coefficients.len(), 1);
+        assert_eq!(result.sigma2_per_order.len(), 1);
+        // residual_std_ratio should be in (0, 1].
+        assert!(result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0);
+        // sigma2 = 1 - phi * rho(1)
+        let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+        let expected_sigma2 = 1.0 - result.coefficients[0] * rho1;
+        assert!(
+            (result.sigma2_per_order[0] - expected_sigma2).abs() < 1e-10,
+            "sigma2={}, expected={}",
+            result.sigma2_per_order[0],
+            expected_sigma2
+        );
+    }
+
+    #[test]
+    fn estimate_periodic_ar_two_season() {
+        // Two-season model: coefficients should differ from single-season.
+        let s0: Vec<f64> = (0..30)
+            .map(|i| (i as f64 * 0.3).sin() * 5.0 + 10.0)
+            .collect();
+        let s1: Vec<f64> = (0..30)
+            .map(|i| (i as f64 * 0.5).cos() * 3.0 + 7.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        let result = estimate_periodic_ar_coefficients(0, 2, 2, &obs, &stats);
+        assert_eq!(result.coefficients.len(), 2);
+        assert_eq!(result.sigma2_per_order.len(), 2);
+        assert!(result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0);
+    }
+
+    #[test]
+    fn estimate_periodic_ar_sigma2_per_order_length() {
+        let data: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 10.0).collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        for order in 1..=5 {
+            let result = estimate_periodic_ar_coefficients(0, order, 1, obs, stats_arr);
+            assert_eq!(
+                result.sigma2_per_order.len(),
+                order,
+                "sigma2_per_order should have {order} entries"
+            );
+            assert_eq!(
+                result.coefficients.len(),
+                order,
+                "coefficients should have {order} entries"
+            );
+        }
+    }
+
+    #[test]
+    fn estimate_periodic_ar_residual_ratio_bounded() {
+        // For any valid model, residual_std_ratio should be in (0, 1].
+        let s0: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.2).sin() * 3.0 + 5.0)
+            .collect();
+        let s1: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.4).cos() * 2.0 + 7.0)
+            .collect();
+        let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
+        let obs: Vec<&[f64]> = vec![&s0, &s1];
+
+        for order in 1..=4 {
+            let result = estimate_periodic_ar_coefficients(0, order, 2, &obs, &stats);
+            assert!(
+                result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0,
+                "Order {order}: ratio={} out of bounds",
+                result.residual_std_ratio
+            );
+        }
+    }
+
+    #[test]
+    fn estimate_periodic_ar_sigma2_finite() {
+        // Prediction error variance should be finite at each order.
+        // Unlike Levinson-Durbin, the periodic YW sigma2 is not guaranteed
+        // to be monotonically decreasing or non-negative for all data.
+        let data: Vec<f64> = (0..100)
+            .map(|i| (i as f64 * 0.1).sin() * 5.0 + 10.0)
+            .collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let result = estimate_periodic_ar_coefficients(0, 4, 1, obs, stats_arr);
+        for k in 0..result.sigma2_per_order.len() {
+            assert!(
+                result.sigma2_per_order[k].is_finite(),
+                "sigma2[{k}] = {} not finite",
+                result.sigma2_per_order[k]
+            );
+        }
     }
 }

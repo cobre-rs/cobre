@@ -13,7 +13,7 @@
 //!
 //! Source: `stages.json`. See `internal-structures.md` SS12.
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 // ---------------------------------------------------------------------------
 // Supporting enums
@@ -358,6 +358,55 @@ pub struct SeasonMap {
     /// Season entries sorted by `id`. Length depends on `cycle_type`:
     /// 12 for `Monthly`, 52 for `Weekly`, user-defined for `Custom`.
     pub seasons: Vec<SeasonDefinition>,
+}
+
+impl SeasonMap {
+    /// Resolve a calendar date to a season ID using the cycle definition.
+    ///
+    /// This mapping is purely calendar-based and does not depend on the study
+    /// horizon — a date from 1931 maps to the same season as a date from 2026
+    /// if they share the same calendar position. This is essential for PAR
+    /// model estimation from historical inflow data that predates the study.
+    ///
+    /// Returns `None` only for `Custom` cycle types where the date does not
+    /// fall within any defined season range.
+    #[must_use]
+    pub fn season_for_date(&self, date: NaiveDate) -> Option<usize> {
+        match self.cycle_type {
+            SeasonCycleType::Monthly => {
+                let month = date.month();
+                self.seasons
+                    .iter()
+                    .find(|s| s.month_start == month)
+                    .map(|s| s.id)
+            }
+            SeasonCycleType::Weekly => {
+                let iso_week = date.iso_week().week();
+                let week_idx = (iso_week.saturating_sub(1)).min(51) as usize;
+                self.seasons.iter().find(|s| s.id == week_idx).map(|s| s.id)
+            }
+            SeasonCycleType::Custom => {
+                let (m, d) = (date.month(), date.day());
+                self.seasons
+                    .iter()
+                    .find(|s| {
+                        let ms = s.month_start;
+                        let ds = s.day_start.unwrap_or(1);
+                        let me = s.month_end.unwrap_or(ms);
+                        let de = s.day_end.unwrap_or(31);
+                        let start = (ms, ds);
+                        let end = (me, de);
+                        let cur = (m, d);
+                        if start <= end {
+                            cur >= start && cur <= end
+                        } else {
+                            cur >= start || cur <= end
+                        }
+                    })
+                    .map(|s| s.id)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -322,6 +322,7 @@ mod tests {
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
+            solve_time_ms: 0.0,
         }
     }
 

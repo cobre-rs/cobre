@@ -29,7 +29,7 @@ use std::ops::Range;
 use cobre_core::ConstraintSense;
 
 use crate::StageIndexer;
-use crate::lp_builder::GenericConstraintRowEntry;
+use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
@@ -219,7 +219,8 @@ fn extract_hydro_no_turbine(
     } else {
         0.0
     };
-    let water_value = view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0);
+    let water_value =
+        view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0) * COST_SCALE_FACTOR;
 
     // Determine if hydro `h` is FPHA. FPHA identification comes from
     // StageIndexer, not from EntityCounts.hydro_productivities.
@@ -301,7 +302,8 @@ fn extract_hydro_per_block<'a>(
     } else {
         0.0
     };
-    let water_value = view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0);
+    let water_value =
+        view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0) * COST_SCALE_FACTOR;
 
     // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
     // can read generation from the LP `g_{h,k}` column rather than computing
@@ -355,7 +357,7 @@ fn extract_hydro_per_block<'a>(
             storage_final_hm3: storage_final,
             generation_mw,
             productivity_mw_per_m3s,
-            spillage_cost: spillage * view.objective_coeffs[s_col],
+            spillage_cost: spillage * view.objective_coeffs[s_col] * COST_SCALE_FACTOR,
             water_value_per_hm3: water_value,
             storage_binding_code: 0,
             operative_state_code: 1,
@@ -434,7 +436,7 @@ fn extract_thermals(
                         block_id: Some(b as u32),
                         thermal_id,
                         generation_mw: gen_mw,
-                        generation_cost: gen_mw * view.objective_coeffs[col],
+                        generation_cost: gen_mw * view.objective_coeffs[col] * COST_SCALE_FACTOR,
                         is_gnl: false,
                         gnl_committed_mw: None,
                         gnl_decision_mw: None,
@@ -486,8 +488,9 @@ fn extract_exchanges(
                         line_id,
                         direct_flow_mw: fwd,
                         reverse_flow_mw: rev,
-                        exchange_cost: fwd * view.objective_coeffs[fwd_col]
-                            + rev * view.objective_coeffs[rev_col],
+                        exchange_cost: (fwd * view.objective_coeffs[fwd_col]
+                            + rev * view.objective_coeffs[rev_col])
+                            * COST_SCALE_FACTOR,
                         operative_state_code: 2,
                     }
                 })
@@ -548,7 +551,11 @@ fn extract_buses(
                         load_mw: view.row_lower[load_row],
                         deficit_mw,
                         excess_mw: view.primal[excess_col],
-                        spot_price: if hrs > 0.0 { raw_dual / hrs } else { 0.0 },
+                        spot_price: if hrs > 0.0 {
+                            raw_dual * COST_SCALE_FACTOR / hrs
+                        } else {
+                            0.0
+                        },
                     }
                 })
             })
@@ -644,6 +651,11 @@ pub fn extract_stage_result(
 }
 
 /// Compute the single-stage cost breakdown from an LP solution view.
+///
+/// All cost fields are returned in original monetary units. The LP operates
+/// in scaled cost space (objective coefficients divided by [`COST_SCALE_FACTOR`]);
+/// this function multiplies back by [`COST_SCALE_FACTOR`] at the reporting
+/// boundary to recover original units.
 fn compute_cost_result(
     view: &SolutionView<'_>,
     indexer: &StageIndexer,
@@ -651,20 +663,21 @@ fn compute_cost_result(
     ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
+    // col_cost yields a scaled cost; multiply by COST_SCALE_FACTOR at the end.
     let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col];
     let range_sum = |r: std::ops::Range<usize>| -> f64 { r.map(col_cost).sum() };
 
-    let future_cost = view.primal[indexer.theta];
-    let immediate_cost = view.objective - future_cost;
+    let future_cost = view.primal[indexer.theta] * COST_SCALE_FACTOR;
+    let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
     let thermal_cost = if indexer.thermal.is_empty() {
         0.0
     } else {
-        range_sum(indexer.thermal.clone())
+        range_sum(indexer.thermal.clone()) * COST_SCALE_FACTOR
     };
     let spillage_cost = if indexer.spillage.is_empty() {
         0.0
     } else {
-        range_sum(indexer.spillage.clone())
+        range_sum(indexer.spillage.clone()) * COST_SCALE_FACTOR
     };
     let exchange_cost = if indexer.line_fwd.is_empty() {
         0.0
@@ -674,17 +687,18 @@ fn compute_cost_result(
             .clone()
             .chain(indexer.line_rev.clone())
             .map(col_cost)
-            .sum()
+            .sum::<f64>()
+            * COST_SCALE_FACTOR
     };
     let deficit_cost = if indexer.deficit.is_empty() {
         0.0
     } else {
-        range_sum(indexer.deficit.clone())
+        range_sum(indexer.deficit.clone()) * COST_SCALE_FACTOR
     };
     let excess_cost = if indexer.excess.is_empty() {
         0.0
     } else {
-        range_sum(indexer.excess.clone())
+        range_sum(indexer.excess.clone()) * COST_SCALE_FACTOR
     };
 
     // FPHA turbined cost: sum primal[col] * objective[col] over all FPHA turbine
@@ -702,13 +716,14 @@ fn compute_cost_result(
                 (0..n_blks).map(move |b| indexer.generation.start + local_fpha_idx * n_blks + b)
             })
             .map(col_cost)
-            .sum()
+            .sum::<f64>()
+            * COST_SCALE_FACTOR
     };
 
     SimulationCostResult {
         stage_id,
         block_id: None,
-        total_cost: view.objective,
+        total_cost: view.objective * COST_SCALE_FACTOR,
         immediate_cost,
         future_cost,
         discount_factor: 1.0,
@@ -847,8 +862,9 @@ fn extract_non_controllables(
             let curtailment_mw = available_mw - generation_mw;
             // NCS objective coefficient is negative (-curtailment_cost * block_hours),
             // so primal * obj_coeff is negative when generating.  The cost breakdown
-            // uses positive values, so negate.
-            let col_cost = -(view.primal[col] * view.objective_coeffs[col]);
+            // uses positive values, so negate. Multiply by COST_SCALE_FACTOR to recover
+            // original monetary units from the scaled LP objective coefficients.
+            let col_cost = -(view.primal[col] * view.objective_coeffs[col]) * COST_SCALE_FACTOR;
             total_curtailment_cost += col_cost;
 
             #[allow(clippy::cast_possible_truncation)]
@@ -1156,7 +1172,8 @@ mod tests {
 
         assert_eq!(result.costs.len(), 1);
         assert_eq!(result.costs[0].stage_id, 3);
-        assert_eq!(result.costs[0].future_cost, 999.5); // primal[theta]
+        // future_cost = primal[theta] * COST_SCALE_FACTOR = 999.5 * 1000 = 999_500.0
+        assert_eq!(result.costs[0].future_cost, 999_500.0);
     }
 
     #[test]
@@ -1191,9 +1208,10 @@ mod tests {
         );
 
         let cost = &result.costs[0];
-        assert_eq!(cost.future_cost, theta_val);
-        assert_eq!(cost.immediate_cost, objective - theta_val);
-        assert_eq!(cost.total_cost, objective);
+        // All cost fields are in original units: multiply by COST_SCALE_FACTOR.
+        assert_eq!(cost.future_cost, theta_val * 1000.0);
+        assert_eq!(cost.immediate_cost, (objective - theta_val) * 1000.0);
+        assert_eq!(cost.total_cost, objective * 1000.0);
     }
 
     #[test]
@@ -1517,7 +1535,8 @@ mod tests {
         assert_eq!(result.hydros[0].block_id, Some(0));
         assert_eq!(result.hydros[0].turbined_m3s, 30.0);
         assert_eq!(result.hydros[0].spillage_m3s, 5.0);
-        assert!((result.hydros[0].spillage_cost - 0.5).abs() < 1e-12); // 5.0 * 0.1
+        // spillage_cost = 5.0 * 0.1 * COST_SCALE_FACTOR = 500.0
+        assert!((result.hydros[0].spillage_cost - 500.0).abs() < 1e-12); // 5.0 * 0.1 * 1000
 
         // Hydro generation = turbined * productivity (1.0)
         assert_eq!(result.hydros[0].generation_mw, 30.0); // 30 * 1.0
@@ -1531,14 +1550,16 @@ mod tests {
         // Thermal: one entry per (thermal, block), block_id = Some(0)
         assert_eq!(result.thermals.len(), 1);
         assert_eq!(result.thermals[0].generation_mw, 80.0);
-        assert!((result.thermals[0].generation_cost - 4000.0).abs() < 1e-12); // 80 * 50
+        // generation_cost = 80 * 50 * COST_SCALE_FACTOR = 4_000_000.0
+        assert!((result.thermals[0].generation_cost - 4_000_000.0).abs() < 1e-9); // 80 * 50 * 1000
         assert_eq!(result.thermals[0].block_id, Some(0));
 
         // Exchange: one entry per (line, block)
         assert_eq!(result.exchanges.len(), 1);
         assert_eq!(result.exchanges[0].direct_flow_mw, 15.0);
         assert_eq!(result.exchanges[0].reverse_flow_mw, 0.0);
-        assert!((result.exchanges[0].exchange_cost - 75.0).abs() < 1e-12); // 15 * 5
+        // exchange_cost = 15 * 5 * COST_SCALE_FACTOR = 75_000.0
+        assert!((result.exchanges[0].exchange_cost - 75_000.0).abs() < 1e-9); // 15 * 5 * 1000
         assert_eq!(result.exchanges[0].block_id, Some(0));
 
         // Bus: one entry per (bus, block)
@@ -1547,19 +1568,21 @@ mod tests {
         assert_eq!(result.buses[0].deficit_mw, 10.0);
         assert_eq!(result.buses[0].excess_mw, 2.0);
         assert_eq!(result.buses[0].block_id, Some(0));
-        assert!((result.buses[0].spot_price - 150.0).abs() < 1e-12); // 108_000 / 720 = 150 $/MWh
+        // spot_price = dual * COST_SCALE_FACTOR / hrs = 108_000 * 1000 / 720 = 150_000.0 $/MWh
+        assert!((result.buses[0].spot_price - 150_000.0).abs() < 1e-9); // 108_000 * 1000 / 720
 
         // Water value from dual of water balance rows
-        assert!((result.hydros[0].water_value_per_hm3 - (-120.0)).abs() < 1e-12);
-        assert!((result.hydros[1].water_value_per_hm3 - (-95.0)).abs() < 1e-12);
+        // water_value = dual * COST_SCALE_FACTOR: -120 * 1000 = -120_000, -95 * 1000 = -95_000
+        assert!((result.hydros[0].water_value_per_hm3 - (-120_000.0)).abs() < 1e-9);
+        assert!((result.hydros[1].water_value_per_hm3 - (-95_000.0)).abs() < 1e-9);
 
-        // Cost breakdown
+        // Cost breakdown — all values multiplied by COST_SCALE_FACTOR = 1000.
         let cost = &result.costs[0];
-        assert!((cost.thermal_cost - 4000.0).abs() < 1e-12); // 80 * 50
-        assert!((cost.spillage_cost - 0.5).abs() < 1e-12); // 5 * 0.1
-        assert!((cost.deficit_cost - 10_000.0).abs() < 1e-12); // 10 * 1000
-        assert!((cost.excess_cost - 100.0).abs() < 1e-12); // 2 * 50
-        assert!((cost.exchange_cost - 75.0).abs() < 1e-12); // 15 * 5
+        assert!((cost.thermal_cost - 4_000_000.0).abs() < 1e-9); // 80 * 50 * 1000
+        assert!((cost.spillage_cost - 500.0).abs() < 1e-12); // 5 * 0.1 * 1000
+        assert!((cost.deficit_cost - 10_000_000.0).abs() < 1e-9); // 10 * 1000 * 1000
+        assert!((cost.excess_cost - 100_000.0).abs() < 1e-9); // 2 * 50 * 1000
+        assert!((cost.exchange_cost - 75_000.0).abs() < 1e-9); // 15 * 5 * 1000
     }
 
     #[test]
@@ -2296,10 +2319,10 @@ mod tests {
     }
 
     /// Acceptance criterion: `fpha_turbined_cost` equals the sum of primal * obj\_coeff
-    /// over FPHA generation columns.
+    /// over FPHA generation columns, multiplied by `COST_SCALE_FACTOR`.
     ///
     /// Setup: 1 FPHA hydro (h0), 1 constant-productivity hydro (h1), 1 block.
-    /// FPHA generation column: primal=30.0, `objective_coeff`=0.01 → cost=0.3
+    /// FPHA generation column: primal=30.0, `objective_coeff`=0.01 → `scaled_cost`=0.3 → unscaled=300.0
     #[test]
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
@@ -2353,8 +2376,8 @@ mod tests {
 
         let cost = &result.costs[0];
         assert!(
-            (cost.fpha_turbined_cost - 0.3).abs() < 1e-12,
-            "fpha_turbined_cost should be 0.3 (30.0 * 0.01), got {}",
+            (cost.fpha_turbined_cost - 300.0).abs() < 1e-9,
+            "fpha_turbined_cost should be 300.0 (30.0 * 0.01 * COST_SCALE_FACTOR), got {}",
             cost.fpha_turbined_cost
         );
     }

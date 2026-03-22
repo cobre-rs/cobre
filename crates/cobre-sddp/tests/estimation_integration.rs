@@ -351,11 +351,12 @@ fn test_estimate_from_history_fixed_order() {
             m.stage_id
         );
 
-        // Fixed order = 2: every model must have exactly 2 AR coefficients.
-        assert_eq!(
-            m.ar_order(),
-            2,
-            "fixed-order=2 should produce ar_order()==2, got {} for stage {}",
+        // Fixed order = 2 with contribution validation: every model must have
+        // at most 2 AR coefficients. Some may be reduced to lower order if the
+        // contribution analysis detects explosive behavior.
+        assert!(
+            m.ar_order() <= 2,
+            "fixed-order=2 should produce ar_order()<=2, got {} for stage {}",
             m.ar_order(),
             m.stage_id
         );
@@ -377,7 +378,7 @@ fn test_estimate_from_history_aic_order() {
     let dir = TempDir::new().unwrap();
     let case_dir = dir.path();
 
-    create_minimal_case_skeleton(case_dir, "aic", MAX_ORDER);
+    create_minimal_case_skeleton(case_dir, "pacf", MAX_ORDER);
     write_inflow_history(&case_dir.join("scenarios/inflow_history.parquet"));
 
     let system = build_system_with_one_hydro();

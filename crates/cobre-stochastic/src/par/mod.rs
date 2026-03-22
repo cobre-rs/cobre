@@ -16,12 +16,16 @@
 //! - [`fitting`] — Levinson-Durbin recursion for solving Yule-Walker
 //!   equations; provides AR coefficients and prediction error variances
 //!   for each intermediate order
+//! - [`contribution`] — recursive contribution composition for detecting
+//!   explosive lag effects in periodic autoregressive models
 
+pub mod contribution;
 pub mod evaluate;
 pub mod fitting;
 pub mod precompute;
 pub mod validation;
 
+pub use contribution::{check_negative_contributions, compute_contributions, find_max_valid_order};
 #[allow(deprecated)]
 pub use evaluate::{
     evaluate_par, evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, solve_par_noise,

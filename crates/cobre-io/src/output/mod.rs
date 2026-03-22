@@ -33,9 +33,9 @@ pub use manifest::{
 pub use parquet_config::ParquetWriterConfig;
 pub use simulation_writer::SimulationParquetWriter;
 pub use stochastic::{
-    FittingReport, HydroFittingEntry, write_correlation_json, write_fitting_report,
-    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
-    write_noise_openings,
+    FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
+    write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
+    write_load_seasonal_stats, write_noise_openings,
 };
 pub use training_writer::TrainingParquetWriter;
 

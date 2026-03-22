@@ -452,6 +452,16 @@ pub struct EstimationConfig {
     /// Minimum number of observations required per (entity, season) group
     /// to proceed with estimation. Groups below this threshold are skipped.
     pub min_observations_per_season: u32,
+
+    /// Maximum allowed absolute magnitude for any AR coefficient.
+    ///
+    /// When set, any (entity, season) pair with `|coefficient| > threshold`
+    /// is immediately reduced to order 0 before the contribution analysis
+    /// runs. This acts as a fast-path safety net for the most extreme
+    /// explosive models. Defaults to `None` (disabled; contribution analysis
+    /// is the primary guard).
+    #[serde(default)]
+    pub max_coefficient_magnitude: Option<f64>,
 }
 
 impl Default for EstimationConfig {
@@ -460,6 +470,7 @@ impl Default for EstimationConfig {
             max_order: 6,
             order_selection: OrderSelectionMethod::Aic,
             min_observations_per_season: 30,
+            max_coefficient_magnitude: None,
         }
     }
 }

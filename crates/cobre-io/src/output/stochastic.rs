@@ -630,6 +630,30 @@ pub struct HydroFittingEntry {
     /// `coefficients[s]` contains the AR lag coefficients for season `s`,
     /// with `coefficients[s][k]` being the coefficient for lag `k + 1`.
     pub coefficients: Vec<Vec<f64>>,
+    /// Contribution-based order reductions applied during fitting.
+    ///
+    /// Each entry documents a season where the initial order was reduced
+    /// due to negative contributions from the recursive composition analysis.
+    /// Empty when no reductions were needed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contribution_reductions: Vec<FittingReductionEntry>,
+}
+
+/// A single contribution-based order reduction in the fitting report.
+///
+/// Records that a season's AR order was reduced because contribution analysis
+/// detected negative entries indicating potential model instability.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct FittingReductionEntry {
+    /// Season where the reduction occurred.
+    pub season_id: usize,
+    /// Order before reduction.
+    pub original_order: usize,
+    /// Order after reduction.
+    pub reduced_order: usize,
+    /// Contribution values at the original order that triggered the reduction.
+    pub contributions: Vec<f64>,
 }
 
 /// Diagnostic fitting report produced after the AR order selection step.
@@ -678,6 +702,7 @@ pub struct FittingReport {
 ///     selected_order: 3,
 ///     aic_scores: vec![12.4, 11.1, 10.8, 11.3],
 ///     coefficients: vec![vec![0.42, -0.11, 0.07]],
+///     contribution_reductions: Vec::new(),
 /// });
 /// let report = FittingReport { hydros };
 /// write_fitting_report(Path::new("/tmp/out/stochastic/fitting_report.json"), &report)?;
@@ -1709,6 +1734,7 @@ mod tests {
                 selected_order: 3,
                 aic_scores: vec![12.4, 11.1, 10.8, 11.3],
                 coefficients: vec![vec![0.42, -0.11, 0.07], vec![0.35, -0.08, 0.05]],
+                contribution_reductions: Vec::new(),
             },
         );
         hydros.insert(
@@ -1717,6 +1743,7 @@ mod tests {
                 selected_order: 1,
                 aic_scores: vec![8.2, 8.9],
                 coefficients: vec![vec![0.60], vec![0.55]],
+                contribution_reductions: Vec::new(),
             },
         );
         FittingReport { hydros }
@@ -1855,6 +1882,7 @@ mod tests {
                 selected_order: 3,
                 aic_scores: aic_scores.clone(),
                 coefficients: coefficients.clone(),
+                contribution_reductions: Vec::new(),
             },
         );
         let report = FittingReport { hydros };

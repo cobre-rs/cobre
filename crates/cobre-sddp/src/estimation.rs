@@ -276,6 +276,7 @@ fn run_estimation(
         stages,
         &hydro_ids,
         max_order,
+        config.estimation.max_coefficient_magnitude,
         &config.estimation.order_selection,
         season_map,
     )?;
@@ -320,6 +321,7 @@ fn estimate_ar_coefficients_with_selection(
     stages: &[cobre_core::temporal::Stage],
     hydro_ids: &[EntityId],
     max_order: usize,
+    max_coeff_magnitude: Option<f64>,
     method: &OrderSelectionMethod,
     season_map: Option<&cobre_core::temporal::SeasonMap>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
@@ -354,8 +356,13 @@ fn estimate_ar_coefficients_with_selection(
                 .collect();
             let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
-            let reductions =
-                apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+            let reductions = apply_contribution_validation(
+                &mut estimates,
+                n_seasons,
+                &stats_map,
+                &sigma2_map,
+                None, // max_coeff_magnitude
+            );
 
             let aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
             let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
@@ -368,6 +375,7 @@ fn estimate_ar_coefficients_with_selection(
             hydro_ids,
             max_order,
             season_map,
+            None, // max_coeff_magnitude
         ),
         OrderSelectionMethod::Pacf => estimate_ar_with_pacf(
             observations,
@@ -376,6 +384,7 @@ fn estimate_ar_coefficients_with_selection(
             hydro_ids,
             max_order,
             season_map,
+            None, // max_coeff_magnitude
         ),
     }
 }
@@ -397,6 +406,7 @@ fn estimate_ar_with_aic(
     hydro_ids: &[EntityId],
     max_order: usize,
     season_map: Option<&cobre_core::temporal::SeasonMap>,
+    max_coeff_magnitude: Option<f64>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     // Get full-order estimates first.
     let mut estimates = estimate_ar_coefficients_with_season_map(
@@ -549,8 +559,13 @@ fn estimate_ar_with_aic(
     }
 
     // === Contribution-based order validation ===
-    let reductions =
-        apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+    let reductions = apply_contribution_validation(
+        &mut estimates,
+        n_seasons,
+        &stats_map,
+        &sigma2_map,
+        max_coeff_magnitude,
+    );
 
     let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
     Ok((estimates, report))
@@ -570,6 +585,7 @@ fn estimate_ar_with_pacf(
     hydro_ids: &[EntityId],
     max_order: usize,
     season_map: Option<&cobre_core::temporal::SeasonMap>,
+    max_coeff_magnitude: Option<f64>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
     // Get full-order estimates first.
     let mut estimates = estimate_ar_coefficients_with_season_map(
@@ -712,20 +728,31 @@ fn estimate_ar_with_pacf(
     }
 
     // === Contribution-based order validation ===
-    let reductions =
-        apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+    let reductions = apply_contribution_validation(
+        &mut estimates,
+        n_seasons,
+        &stats_map,
+        &sigma2_map,
+        max_coeff_magnitude,
+    );
 
     let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
     Ok((estimates, report))
 }
 
-/// Apply contribution-based order validation to all AR estimates.
+/// Apply coefficient magnitude bound and contribution-based order validation
+/// to all AR estimates.
 ///
-/// For each entity, groups all season coefficients and standard deviations,
-/// then iterates per season: if negative contributions are found, the order
-/// is reduced to the maximum valid order and the coefficient vector truncated.
-/// The loop repeats until all contributions are non-negative or the order
-/// reaches zero.
+/// When `max_coeff_magnitude` is `Some(threshold)`, any (entity, season)
+/// with `|coefficient| > threshold` is immediately reduced to order 0
+/// before the contribution analysis runs. This acts as a fast-path safety
+/// net for the most extreme explosive models.
+///
+/// Then for each entity, groups all season coefficients and standard
+/// deviations, iterates per season: if negative contributions are found,
+/// the order is reduced to the maximum valid order and the coefficient
+/// vector truncated. The loop repeats until all contributions are
+/// non-negative or the order reaches zero.
 ///
 /// Returns a map of `EntityId` -> list of `ContributionReduction` events.
 fn apply_contribution_validation(
@@ -733,8 +760,30 @@ fn apply_contribution_validation(
     n_seasons: usize,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     sigma2_map: &HashMap<(EntityId, usize), Vec<f64>>,
+    max_coeff_magnitude: Option<f64>,
 ) -> HashMap<EntityId, Vec<ContributionReduction>> {
     let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+
+    // Pre-pass: magnitude bound safety check.
+    if let Some(threshold) = max_coeff_magnitude {
+        for est in estimates.iter_mut() {
+            let has_explosive = est.coefficients.iter().any(|c| c.abs() > threshold);
+            if has_explosive {
+                let original_order = est.coefficients.len();
+                all_reductions
+                    .entry(est.hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id: est.season_id,
+                        original_order,
+                        reduced_order: 0,
+                        contributions: Vec::new(), // magnitude-based, no contributions computed
+                    });
+                est.coefficients.clear();
+                est.residual_std_ratio = 1.0;
+            }
+        }
+    }
 
     // Group estimate indices by hydro_id for per-entity processing.
     let mut hydro_indices: BTreeMap<EntityId, Vec<usize>> = BTreeMap::new();
@@ -1231,6 +1280,7 @@ mod tests {
             max_order: 2,
             order_selection: OrderSelectionMethod::Fixed,
             min_observations_per_season: 2,
+            max_coefficient_magnitude: None,
         };
         cfg
     }
@@ -1348,8 +1398,9 @@ mod tests {
             &stages,
             &hydro_ids,
             max_order,
+            None, // max_coeff_magnitude
             &method,
-            None,
+            None, // season_map
         )
         .unwrap();
 
@@ -1473,8 +1524,13 @@ mod tests {
         let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
         sigma2_map.insert((hydro_id, 0), vec![0.81, 0.75]);
 
-        let reductions =
-            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+        let reductions = apply_contribution_validation(
+            &mut estimates,
+            n_seasons,
+            &stats_map,
+            &sigma2_map,
+            None, // max_coeff_magnitude
+        );
 
         // After validation, the order should be reduced: [0.3, -0.8] -> [0.3]
         assert_eq!(
@@ -1541,8 +1597,13 @@ mod tests {
 
         let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
-        let reductions =
-            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+        let reductions = apply_contribution_validation(
+            &mut estimates,
+            n_seasons,
+            &stats_map,
+            &sigma2_map,
+            None, // max_coeff_magnitude
+        );
 
         // August (season 7) should have been reduced from AR(2).
         // The contribution of lag 2 through the periodic chain may or may not be negative
@@ -1594,8 +1655,13 @@ mod tests {
             stats.iter().map(|s| ((s.entity_id, 0_usize), s)).collect();
         let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
-        let _reductions =
-            apply_contribution_validation(&mut estimates, n_seasons, &stats_map, &sigma2_map);
+        let _reductions = apply_contribution_validation(
+            &mut estimates,
+            n_seasons,
+            &stats_map,
+            &sigma2_map,
+            None, // max_coeff_magnitude
+        );
 
         assert!(
             estimates[0].coefficients.is_empty(),

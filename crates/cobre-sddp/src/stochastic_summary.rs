@@ -10,7 +10,7 @@
 //! methods that use `console::style` remain in `cobre-cli`.
 
 use cobre_core::System;
-use cobre_io::output::{FittingReport, HydroFittingEntry};
+use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
 use cobre_stochastic::{ComponentProvenance, StochasticContext};
 
@@ -297,6 +297,16 @@ pub fn estimation_report_to_fitting_report(report: &EstimationReport) -> Fitting
                         selected_order: entry.selected_order,
                         aic_scores: entry.aic_scores.clone(),
                         coefficients: entry.coefficients.clone(),
+                        contribution_reductions: entry
+                            .contribution_reductions
+                            .iter()
+                            .map(|r| FittingReductionEntry {
+                                season_id: r.season_id,
+                                original_order: r.original_order,
+                                reduced_order: r.reduced_order,
+                                contributions: r.contributions.clone(),
+                            })
+                            .collect(),
                     },
                 )
             },

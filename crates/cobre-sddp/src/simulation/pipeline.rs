@@ -566,6 +566,7 @@ fn process_scenario_stages<S: SolverInterface>(
 fn emit_sim_progress(
     sender: Option<&Sender<TrainingEvent>>,
     scenario_cost: f64,
+    solve_time_ms: f64,
     completed: u32,
     total: u32,
     elapsed_ms: u64,
@@ -576,6 +577,7 @@ fn emit_sim_progress(
             scenarios_total: total,
             elapsed_ms,
             scenario_cost,
+            solve_time_ms,
         });
     }
 }
@@ -736,10 +738,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     },
                 )?;
                 let stats_after = ws.solver.statistics();
-                worker_stats.push((
-                    scenario_id,
-                    SolverStatsDelta::from_snapshots(&stats_before, &stats_after),
-                ));
+                let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
+                let scenario_solve_time_ms = scenario_delta.solve_time_ms;
+                worker_stats.push((scenario_id, scenario_delta));
 
                 worker_costs.push(dispatch_scenario_result(
                     &output,
@@ -752,6 +753,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 emit_sim_progress(
                     worker_sender.as_ref(),
                     total_cost,
+                    scenario_solve_time_ms,
                     completed,
                     config.n_scenarios,
                     sim_start.elapsed().as_millis() as u64,

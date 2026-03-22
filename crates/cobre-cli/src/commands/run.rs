@@ -536,6 +536,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             message: format!("post-simulation barrier error: {e}"),
         })?;
 
+        // Aggregate solver stats from per-scenario deltas for the summary display.
+        let sim_solver_agg = cobre_sddp::SolverStatsDelta::aggregate(
+            &sim_run_result
+                .solver_stats
+                .iter()
+                .map(|(_, delta)| delta.clone())
+                .collect::<Vec<_>>(),
+        );
+
         // Print the simulation summary now — before I/O starts.
         if !quiet && is_root {
             crate::summary::print_simulation_summary(
@@ -545,6 +554,16 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     completed: n_scenarios,
                     failed: 0,
                     total_time_ms: sim_time_ms,
+                    total_lp_solves: sim_solver_agg.lp_solves,
+                    total_first_try: sim_solver_agg.first_try_successes,
+                    total_retried: sim_solver_agg
+                        .lp_successes
+                        .saturating_sub(sim_solver_agg.first_try_successes),
+                    total_failed_solves: sim_solver_agg.lp_failures,
+                    total_solve_time_seconds: sim_solver_agg.solve_time_ms / 1000.0,
+                    total_basis_offered: sim_solver_agg.basis_offered,
+                    total_basis_rejections: sim_solver_agg.basis_rejections,
+                    total_simplex_iterations: sim_solver_agg.simplex_iterations,
                 },
             );
         }

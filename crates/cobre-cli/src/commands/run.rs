@@ -406,6 +406,43 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-training barrier error: {e}"),
     })?;
 
+    // Aggregate solver stats from the stats log for the summary display.
+    let (
+        total_first_try,
+        total_retried,
+        total_failed,
+        total_solve_time_s,
+        total_basis_offered,
+        total_basis_rejections,
+        total_simplex_iter,
+    ) = {
+        let mut first_try = 0u64;
+        let mut retried = 0u64;
+        let mut failed = 0u64;
+        let mut solve_time = 0.0_f64;
+        let mut basis_offered = 0u64;
+        let mut basis_rejections = 0u64;
+        let mut simplex = 0u64;
+        for (_, _, _, delta) in &training_result.solver_stats_log {
+            first_try += delta.first_try_successes;
+            retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
+            failed += delta.lp_failures;
+            solve_time += delta.solve_time_ms;
+            basis_offered += delta.basis_offered;
+            basis_rejections += delta.basis_rejections;
+            simplex += delta.simplex_iterations;
+        }
+        (
+            first_try,
+            retried,
+            failed,
+            solve_time / 1000.0,
+            basis_offered,
+            basis_rejections,
+            simplex,
+        )
+    };
+
     // Print training summary immediately after training completes.
     let training_summary = TrainingSummary {
         iterations: training_result.iterations,
@@ -424,6 +461,13 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         total_cuts_generated: training_output.cut_stats.total_generated,
         total_lp_solves: global_lp_solves,
         total_time_ms: training_result.total_time_ms,
+        total_first_try,
+        total_retried,
+        total_failed,
+        total_solve_time_seconds: total_solve_time_s,
+        total_basis_offered,
+        total_basis_rejections,
+        total_simplex_iterations: total_simplex_iter,
     };
     if !quiet && is_root {
         crate::summary::print_training_summary(&stderr, &training_summary);

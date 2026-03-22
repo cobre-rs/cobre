@@ -128,7 +128,7 @@ pub fn write_solver_stats(output_dir: &Path, rows: &[SolverStatsRow]) -> Result<
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, Float64Array, UInt32Array, UInt64Array};
+    use arrow::array::{Float64Array, UInt32Array, UInt64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     fn make_rows() -> Vec<SolverStatsRow> {

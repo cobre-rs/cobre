@@ -35,7 +35,8 @@ use cobre_core::{TrainingEvent, WelfordAccumulator};
 use console::Term;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 
-const TRAINING_TEMPLATE: &str = "Training   {bar:40} {pos}/{len} iter  {msg}";
+const TRAINING_TEMPLATE: &str =
+    "Training   {bar:40} {pos}/{len} iter  {msg}  [{elapsed_precise} < {eta_precise}]";
 const SIMULATION_TEMPLATE: &str =
     "Simulation {bar:40} {pos}/{len} scenarios  {msg}  [{elapsed_precise} < {eta_precise}]";
 
@@ -163,14 +164,22 @@ pub fn run_progress_thread(
                         lower_bound,
                         upper_bound,
                         gap,
+                        lp_solves,
+                        solve_time_ms,
                         ..
                     } => {
                         let bar = training_bar
                             .get_or_insert_with(|| create_training_bar(max_iterations, term_width));
                         let gap_pct = gap * 100.0;
                         bar.set_position(iteration);
+                        #[allow(clippy::cast_precision_loss)]
+                        let avg_lp = if lp_solves > 0 {
+                            format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
+                        } else {
+                            "LP: --".to_string()
+                        };
                         bar.set_message(format!(
-                            "LB: {}  UB: {}  gap: {gap_pct:.1}%",
+                            "LB: {}  UB: {}  gap: {gap_pct:.1}%  {avg_lp}",
                             fmt_sci(lower_bound),
                             fmt_sci(upper_bound)
                         ));

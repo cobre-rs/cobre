@@ -12,7 +12,7 @@ use super::error::OutputError;
 /// Write a scaling report as pretty-printed JSON.
 ///
 /// Accepts any `Serialize`-implementing value to avoid cross-crate type
-/// dependencies (the `ScalingReport` struct lives in `cobre-sddp`).
+/// dependencies (the report struct is defined in the calling algorithm crate).
 ///
 /// Uses atomic write: writes to a `.json.tmp` file first, then renames.
 ///

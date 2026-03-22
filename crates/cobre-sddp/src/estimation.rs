@@ -61,6 +61,33 @@ pub enum EstimationError {
     Stochastic(#[from] StochasticError),
 }
 
+/// Reason for an AR order reduction.
+///
+/// Distinguishes the three mechanisms that can reduce a season's AR order
+/// during the estimation pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReductionReason {
+    /// Coefficient exceeds the magnitude-bound safety threshold.
+    MagnitudeBound,
+    /// First AR coefficient (`phi_1`) is negative, contradicting
+    /// hydrological persistence.
+    Phi1Negative,
+    /// Contribution analysis detected negative entries at one or more lags.
+    NegativeContribution,
+}
+
+impl ReductionReason {
+    /// Convert to a stable string representation for diagnostic output.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MagnitudeBound => "magnitude_bound",
+            Self::Phi1Negative => "phi1_negative",
+            Self::NegativeContribution => "negative_contribution",
+        }
+    }
+}
+
 /// A single contribution-based order reduction event.
 ///
 /// Records that a season's AR order was reduced because the contribution
@@ -75,6 +102,8 @@ pub struct ContributionReduction {
     pub reduced_order: usize,
     /// Contribution values at the original order that triggered the reduction.
     pub contributions: Vec<f64>,
+    /// The mechanism that triggered this reduction.
+    pub reason: ReductionReason,
 }
 
 /// Per-hydro AIC diagnostic data captured during AIC-based AR order selection.
@@ -594,6 +623,7 @@ fn iterative_pacf_reduction(
                         original_order,
                         reduced_order: 0,
                         contributions: Vec::new(),
+                        reason: ReductionReason::MagnitudeBound,
                     });
                 est.coefficients.clear();
                 est.residual_std_ratio = 1.0;
@@ -613,6 +643,7 @@ fn iterative_pacf_reduction(
                     original_order,
                     reduced_order: 0,
                     contributions: Vec::new(),
+                    reason: ReductionReason::Phi1Negative,
                 });
             est.coefficients.clear();
             est.residual_std_ratio = 1.0;
@@ -705,6 +736,7 @@ fn iterative_pacf_reduction(
                             original_order: current_order,
                             reduced_order: result.max_valid_order,
                             contributions: result.contributions,
+                            reason: ReductionReason::NegativeContribution,
                         });
                     failing_seasons.push(season_id);
                 }
@@ -784,6 +816,7 @@ fn iterative_pacf_reduction(
                             original_order,
                             reduced_order: 0,
                             contributions: Vec::new(),
+                            reason: ReductionReason::Phi1Negative,
                         });
                     for &idx in indices {
                         if estimates[idx].season_id == season_id {
@@ -845,6 +878,7 @@ fn apply_contribution_validation(
                         original_order,
                         reduced_order: 0,
                         contributions: Vec::new(), // magnitude-based, no contributions computed
+                        reason: ReductionReason::MagnitudeBound,
                     });
                 est.coefficients.clear();
                 est.residual_std_ratio = 1.0;
@@ -867,6 +901,7 @@ fn apply_contribution_validation(
                     original_order,
                     reduced_order: 0,
                     contributions: Vec::new(),
+                    reason: ReductionReason::Phi1Negative,
                 });
             est.coefficients.clear();
             est.residual_std_ratio = 1.0;
@@ -923,6 +958,7 @@ fn apply_contribution_validation(
                         original_order,
                         reduced_order,
                         contributions: result.contributions,
+                        reason: ReductionReason::NegativeContribution,
                     });
 
                 // Truncate coefficients to the reduced order.
@@ -954,7 +990,7 @@ fn apply_contribution_validation(
 /// For each hydro plant the selected order is the **maximum** across all
 /// seasons. These choices align with how the I/O layer (`FittingReport`)
 /// expects a single order per hydro.
-fn build_estimation_report(
+pub(crate) fn build_estimation_report(
     estimates: &[ArCoefficientEstimate],
     n_seasons: usize,
     contribution_reductions: &HashMap<EntityId, Vec<ContributionReduction>>,
@@ -2072,5 +2108,117 @@ mod tests {
         assert_eq!(r.original_order, 3);
         // The reduced order should be from find_max_valid_order (truncation).
         assert!(r.reduced_order <= 2, "truncation should produce order <= 2");
+    }
+
+    // ── Combined strategy and reduction reason tests ─────────────────────────
+
+    #[test]
+    fn combined_strategies_produce_correct_reduction_reasons() {
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let n_seasons = 2;
+
+        let mut estimates = vec![
+            // H1 S0: negative phi_1 -> Phi1Negative
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 0,
+                coefficients: vec![-0.3, 0.5],
+                residual_std_ratio: 0.8,
+            },
+            // H1 S1: negative contribution at lag 3 -> NegativeContribution
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 1,
+                coefficients: vec![0.5, 0.2, -0.8],
+                residual_std_ratio: 0.7,
+            },
+            // H2 S0: magnitude bound -> MagnitudeBound
+            ArCoefficientEstimate {
+                hydro_id: h2,
+                season_id: 0,
+                coefficients: vec![50.0],
+                residual_std_ratio: 0.9,
+            },
+            // H2 S1: passes -> no reduction
+            ArCoefficientEstimate {
+                hydro_id: h2,
+                season_id: 1,
+                coefficients: vec![0.4, 0.2],
+                residual_std_ratio: 0.7,
+            },
+        ];
+
+        let stats = vec![
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 0,
+                mean: 50.0,
+                std: 10.0,
+            },
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 1,
+                mean: 60.0,
+                std: 10.0,
+            },
+            SeasonalStats {
+                entity_id: h2,
+                stage_id: 0,
+                mean: 70.0,
+                std: 15.0,
+            },
+            SeasonalStats {
+                entity_id: h2,
+                stage_id: 1,
+                mean: 80.0,
+                std: 12.0,
+            },
+        ];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = stats
+            .iter()
+            .enumerate()
+            .map(|(i, s)| ((s.entity_id, i % 2), s))
+            .collect();
+        let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+        let reductions = apply_contribution_validation(
+            &mut estimates,
+            n_seasons,
+            &stats_map,
+            &sigma2_map,
+            Some(10.0),
+        );
+
+        // H1 S0: phi_1 negative -> Phi1Negative, order 0
+        let h1_reductions = &reductions[&h1];
+        let h1_s0 = h1_reductions
+            .iter()
+            .find(|r| r.season_id == 0)
+            .expect("should have reduction for H1 S0");
+        assert_eq!(h1_s0.reason, ReductionReason::Phi1Negative);
+        assert_eq!(h1_s0.reduced_order, 0);
+
+        // H1 S1: negative contribution -> NegativeContribution
+        let h1_s1 = h1_reductions
+            .iter()
+            .find(|r| r.season_id == 1)
+            .expect("should have reduction for H1 S1");
+        assert_eq!(h1_s1.reason, ReductionReason::NegativeContribution);
+
+        // H2 S0: magnitude bound -> MagnitudeBound, order 0
+        let h2_reductions = &reductions[&h2];
+        let h2_s0 = h2_reductions
+            .iter()
+            .find(|r| r.season_id == 0)
+            .expect("should have reduction for H2 S0");
+        assert_eq!(h2_s0.reason, ReductionReason::MagnitudeBound);
+        assert_eq!(h2_s0.reduced_order, 0);
+
+        // H2 S1: no reduction
+        assert!(
+            !h2_reductions.iter().any(|r| r.season_id == 1),
+            "H2 S1 should have no reduction"
+        );
     }
 }

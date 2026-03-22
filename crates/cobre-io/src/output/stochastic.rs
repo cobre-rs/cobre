@@ -634,10 +634,11 @@ pub struct HydroFittingEntry {
     pub contribution_reductions: Vec<FittingReductionEntry>,
 }
 
-/// A single contribution-based order reduction in the fitting report.
+/// A single order reduction event in the fitting report.
 ///
-/// Records that a season's AR order was reduced because contribution analysis
-/// detected negative entries indicating potential model instability.
+/// Records that a season's AR order was reduced during the estimation
+/// pipeline. The `reason` field identifies the mechanism that triggered
+/// the reduction.
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
 pub struct FittingReductionEntry {
@@ -649,6 +650,11 @@ pub struct FittingReductionEntry {
     pub reduced_order: usize,
     /// Contribution values at the original order that triggered the reduction.
     pub contributions: Vec<f64>,
+    /// The mechanism that triggered this reduction.
+    ///
+    /// One of: `"magnitude_bound"`, `"phi1_negative"`, `"negative_contribution"`.
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Diagnostic fitting report produced after the AR order selection step.

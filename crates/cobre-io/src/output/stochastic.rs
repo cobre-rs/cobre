@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        use crate::scenarios::{assemble_opening_tree, parse_noise_openings, NoiseOpeningRow};
+        use crate::scenarios::{NoiseOpeningRow, assemble_opening_tree, parse_noise_openings};
 
         let tree = make_tree_2s_2d();
         let tmp = tempfile::tempdir().expect("tempdir must succeed");

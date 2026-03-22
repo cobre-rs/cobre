@@ -139,6 +139,9 @@ pub struct IterationRecord {
 
     /// Total number of LP solves (across all stages and passes) in this iteration.
     pub lp_solves: u32,
+
+    /// Cumulative LP solve wall-clock time for this iteration, in milliseconds.
+    pub solve_time_ms: f64,
 }
 
 /// Summary statistics for the cut pool at the end of a training run.
@@ -457,6 +460,7 @@ mod tests {
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
             time_overhead_ms: 0,
+            solve_time_ms: 0.0,
         }
     }
 
@@ -594,6 +598,7 @@ mod tests {
             time_mpi_broadcast_ms: 2,
             time_io_write_ms: 0,
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 2),
+            solve_time_ms: 0.0,
         };
 
         assert_eq!(record.iteration, 7);

@@ -218,6 +218,8 @@ pub enum TrainingEvent {
         backward_ms: u64,
         /// Total number of LP solves in this iteration (forward + backward stages).
         lp_solves: u64,
+        /// Cumulative LP solve wall-clock time for this iteration, in milliseconds.
+        solve_time_ms: f64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -356,6 +358,7 @@ mod tests {
                 forward_ms: 80,
                 backward_ms: 100,
                 lp_solves: 240,
+                solve_time_ms: 45.2,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),

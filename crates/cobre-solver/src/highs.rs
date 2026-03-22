@@ -675,6 +675,7 @@ impl SolverInterface for HighsSolver {
             let iterations =
                 unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
             self.stats.success_count += 1;
+            self.stats.first_try_successes += 1;
             self.stats.total_iterations += iterations;
             self.stats.total_solve_time_seconds += solve_time;
             return Ok(self.extract_solution_view(solve_time));
@@ -1109,6 +1110,9 @@ impl SolverInterface for HighsSolver {
             basis.col_status.len(),
             self.num_cols
         );
+
+        // Track every call as a basis offer for diagnostics.
+        self.stats.basis_offered += 1;
 
         // Copy raw i32 codes directly into the pre-allocated buffers — no enum
         // translation. Zero-copy warm-start path.

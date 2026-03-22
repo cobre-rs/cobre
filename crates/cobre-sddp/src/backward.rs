@@ -80,6 +80,7 @@ use crate::{
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
+    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
 };
@@ -96,6 +97,14 @@ pub struct BackwardResult {
 
     /// Number of LP solves performed during this backward pass.
     pub lp_solves: u64,
+
+    /// Per-stage solver statistics deltas.
+    ///
+    /// Each entry is `(successor_stage_index, delta)` where the stage index
+    /// identifies which stage's LP was solved (the successor), not the stage
+    /// where cuts are added. Entries are in reverse stage order (matching
+    /// the backward iteration direction).
+    pub stage_stats: Vec<(usize, SolverStatsDelta)>,
 }
 
 /// Per-thread staging buffer for one aggregated cut produced at a single trial
@@ -512,6 +521,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         .map(|ws| ws.solver.statistics().solve_count)
         .sum();
     let mut cuts_generated: usize = 0;
+    let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
     let tree_view = stochastic.tree_view();
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
@@ -524,6 +534,13 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         }
 
         let successor = t + 1;
+
+        // Snapshot pool stats before this stage's solves.
+        let stage_stats_before = {
+            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
+            aggregate_solver_statistics(&pool_stats)
+        };
+
         let n_openings = tree_view.n_openings(successor);
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
@@ -578,6 +595,14 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
             }
         }
+
+        // Snapshot pool stats after this stage's solves and compute delta.
+        let stage_stats_after = {
+            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
+            aggregate_solver_statistics(&pool_stats)
+        };
+        let stage_delta = SolverStatsDelta::from_snapshots(&stage_stats_before, &stage_stats_after);
+        stage_stats.push((successor, stage_delta));
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -591,6 +616,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         cuts_generated,
         elapsed_ms,
         lp_solves: solves_after - solves_before,
+        stage_stats,
     })
 }
 
@@ -1010,9 +1036,11 @@ mod tests {
             cuts_generated: 6,
             elapsed_ms: 42,
             lp_solves: 0,
+            stage_stats: Vec::new(),
         };
         assert_eq!(r.cuts_generated, 6);
         assert_eq!(r.elapsed_ms, 42);
+        assert!(r.stage_stats.is_empty());
     }
 
     #[test]
@@ -1021,6 +1049,7 @@ mod tests {
             cuts_generated: 3,
             elapsed_ms: 100,
             lp_solves: 0,
+            stage_stats: Vec::new(),
         };
         let c = r.clone();
         assert_eq!(c.cuts_generated, 3);

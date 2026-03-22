@@ -325,6 +325,7 @@ mod tests {
             forward_ms: 80,
             backward_ms: 100,
             lp_solves: 240,
+            solve_time_ms: 0.0,
         }
     }
 

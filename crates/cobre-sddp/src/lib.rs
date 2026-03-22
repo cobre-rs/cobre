@@ -57,6 +57,7 @@ pub(crate) mod noise;
 pub mod risk_measure;
 pub mod setup;
 pub mod simulation;
+pub mod solver_stats;
 pub mod state_exchange;
 pub mod stochastic_summary;
 pub mod stopping_rule;
@@ -106,6 +107,7 @@ pub use simulation::{
     StageSummaryStats, accumulate_category_costs, aggregate_simulation, assign_scenarios,
     extract_stage_result, simulate,
 };
+pub use solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics};
 pub use state_exchange::ExchangeBuffers;
 pub use stochastic_summary::{
     ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,

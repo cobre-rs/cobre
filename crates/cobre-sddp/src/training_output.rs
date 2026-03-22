@@ -45,6 +45,8 @@ struct PartialRecord {
     cut_selection_ms: u64,
     /// Allgatherv time from [`TrainingEvent::CutSelectionComplete`] (ms).
     cut_selection_allgatherv_ms: u64,
+    /// Cumulative LP solve wall-clock time for this iteration (ms).
+    solve_time_ms: f64,
 }
 
 /// Accumulate per-iteration partial records from the event log.
@@ -69,6 +71,7 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 forward_ms,
                 backward_ms,
                 lp_solves,
+                solve_time_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
@@ -79,6 +82,7 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.forward_ms = *forward_ms;
                 record.backward_ms = *backward_ms;
                 record.lp_solves = *lp_solves;
+                record.solve_time_ms = *solve_time_ms;
             }
 
             TrainingEvent::ForwardSyncComplete {
@@ -193,6 +197,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
         time_mpi_broadcast_ms: partial.cut_sync_ms,
         time_io_write_ms: 0,
         time_overhead_ms: overhead_ms,
+        solve_time_ms: partial.solve_time_ms,
     }
 }
 
@@ -218,6 +223,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     reason: "iteration_limit".to_string(),
 ///     total_time_ms: 500,
 ///     basis_cache: Vec::new(),
+///     solver_stats_log: Vec::new(),
 /// };
 ///
 /// let events = vec![TrainingEvent::IterationSummary {
@@ -230,6 +236,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     forward_ms: 200,
 ///     backward_ms: 250,
 ///     lp_solves: 60,
+///     solve_time_ms: 0.0,
 /// }];
 ///
 /// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
@@ -313,6 +320,7 @@ mod tests {
             reason: reason.to_string(),
             total_time_ms: 1_000,
             basis_cache: Vec::new(),
+            solver_stats_log: Vec::new(),
         }
     }
 
@@ -327,6 +335,7 @@ mod tests {
             forward_ms: 40,
             backward_ms: 50,
             lp_solves: 60,
+            solve_time_ms: 0.0,
         }
     }
 
@@ -618,6 +627,7 @@ mod tests {
                 forward_ms: 40,
                 backward_ms: 50,
                 lp_solves: 60,
+                solve_time_ms: 0.0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -692,6 +702,7 @@ mod tests {
                 forward_ms: 40,
                 backward_ms: 50,
                 lp_solves: 60,
+                solve_time_ms: 0.0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -747,6 +758,7 @@ mod tests {
             forward_ms: 50,
             backward_ms: 50,
             lp_solves: 5,
+            solve_time_ms: 0.0,
         }];
         let fcf = make_empty_fcf();
 

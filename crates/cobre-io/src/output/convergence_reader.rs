@@ -225,6 +225,7 @@ mod tests {
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
             time_overhead_ms: 0,
+            solve_time_ms: 0.0,
         }
     }
 

@@ -30,23 +30,22 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
-    validate_structure,
+    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
     },
     par::fitting::{
-        AicSelectionResult, ArCoefficientEstimate, SeasonalStats,
         estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, levinson_durbin,
-        select_order_aic, select_order_pacf,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, levinson_durbin, periodic_pacf, select_order_aic, select_order_pacf,
+        AicSelectionResult, ArCoefficientEstimate, SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -116,8 +115,10 @@ pub struct HydroEstimationEntry {
 #[must_use]
 #[derive(Debug, Clone)]
 pub struct EstimationReport {
-    /// Per-hydro AIC diagnostic entries, keyed by entity ID.
+    /// Per-hydro diagnostic entries, keyed by entity ID.
     pub entries: BTreeMap<EntityId, HydroEstimationEntry>,
+    /// The order selection method used (e.g., `"AIC"`, `"PACF"`, `"fixed"`).
+    pub method: String,
 }
 
 /// Result of validating an AR order via contribution analysis.
@@ -178,6 +179,26 @@ fn validate_order_contributions(
         valid,
         max_valid_order,
         contributions,
+    }
+}
+
+/// Compute `residual_std_ratio` from a normalised prediction error variance (`sigma2`).
+///
+/// The Levinson-Durbin recursion can produce negative `sigma2` values when the
+/// estimated autocorrelation sequence does not form a positive-definite Toeplitz
+/// matrix. In Rust, `f64::sqrt()` of a negative number returns `NaN`, and
+/// `NaN.clamp(a, b)` propagates `NaN` (IEEE 754 semantics). A `NaN`
+/// `residual_std_ratio` would then poison the noise scale and eventually cause
+/// the HiGHS solver to reject row-bound patches.
+///
+/// This helper treats non-positive `sigma2` as evidence that the AR model at the
+/// given order is numerically unstable and falls back to the white-noise baseline
+/// (`residual_std_ratio = 1.0`).
+fn residual_std_ratio_from_sigma2(sigma2: f64) -> f64 {
+    if sigma2 <= 0.0 {
+        1.0
+    } else {
+        sigma2.sqrt().clamp(f64::EPSILON, 1.0)
     }
 }
 
@@ -361,11 +382,12 @@ fn estimate_ar_coefficients_with_selection(
                 n_seasons,
                 &stats_map,
                 &sigma2_map,
-                None, // max_coeff_magnitude
+                max_coeff_magnitude,
             );
 
             let aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
-            let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
+            let report =
+                build_estimation_report(&estimates, &aic_results, n_seasons, &reductions, "fixed");
             Ok((estimates, report))
         }
         OrderSelectionMethod::Aic => estimate_ar_with_aic(
@@ -375,7 +397,7 @@ fn estimate_ar_coefficients_with_selection(
             hydro_ids,
             max_order,
             season_map,
-            None, // max_coeff_magnitude
+            max_coeff_magnitude,
         ),
         OrderSelectionMethod::Pacf => estimate_ar_with_pacf(
             observations,
@@ -384,7 +406,7 @@ fn estimate_ar_coefficients_with_selection(
             hydro_ids,
             max_order,
             season_map,
-            None, // max_coeff_magnitude
+            max_coeff_magnitude,
         ),
     }
 }
@@ -421,6 +443,7 @@ fn estimate_ar_with_aic(
     if max_order == 0 {
         let report = EstimationReport {
             entries: BTreeMap::new(),
+            method: "AIC".to_string(),
         };
         return Ok((estimates, report));
     }
@@ -549,9 +572,7 @@ fn estimate_ar_with_aic(
             } else {
                 ld.sigma2_per_order[selected - 1]
             };
-            // sigma2 is the normalised prediction error variance (relative to seasonal variance).
-            // residual_std_ratio = sqrt(sigma2_selected), clamped to (0, 1].
-            est.residual_std_ratio = sigma2_selected.sqrt().clamp(f64::EPSILON, 1.0);
+            est.residual_std_ratio = residual_std_ratio_from_sigma2(sigma2_selected);
         }
 
         // Store sigma2_per_order for contribution-based reduction (reuses LD results).
@@ -567,7 +588,7 @@ fn estimate_ar_with_aic(
         max_coeff_magnitude,
     );
 
-    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
+    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions, "AIC");
     Ok((estimates, report))
 }
 
@@ -577,6 +598,10 @@ fn estimate_ar_with_aic(
 /// order using the partial autocorrelation function (PACF) significance test
 /// instead of AIC minimisation. The PACF threshold uses a 95% confidence
 /// interval (`z_alpha = 1.96`).
+///
+/// Uses the periodic Yule-Walker matrix method for PACF computation and
+/// coefficient estimation, which correctly accounts for the non-Toeplitz
+/// covariance structure of periodic autoregressive processes.
 #[allow(clippy::too_many_lines)]
 fn estimate_ar_with_pacf(
     observations: &[(EntityId, NaiveDate, f64)],
@@ -587,24 +612,24 @@ fn estimate_ar_with_pacf(
     season_map: Option<&cobre_core::temporal::SeasonMap>,
     max_coeff_magnitude: Option<f64>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
-    // Get full-order estimates first.
-    let mut estimates = estimate_ar_coefficients_with_season_map(
-        observations,
-        seasonal_stats,
-        stages,
-        hydro_ids,
-        max_order,
-        season_map,
-    )?;
-
     if max_order == 0 {
+        // Order-0: produce white-noise estimates for all (entity, season) pairs.
+        let estimates = estimate_ar_coefficients_with_season_map(
+            observations,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            0,
+            season_map,
+        )?;
         let report = EstimationReport {
             entries: BTreeMap::new(),
+            method: "PACF".to_string(),
         };
         return Ok((estimates, report));
     }
 
-    // Build stage and stats lookups (same as AIC path).
+    // Build stage and stats lookups.
     let mut stage_index = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
@@ -624,6 +649,17 @@ fn estimate_ar_with_pacf(
         })
         .collect();
 
+    let n_seasons: usize = {
+        let mut max_season = 0usize;
+        for &(_, _, _, season_id) in &stage_index {
+            if season_id >= max_season {
+                max_season = season_id + 1;
+            }
+        }
+        max_season
+    };
+
+    // Group observations by (entity_id, season_id).
     let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
     let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
     for &(entity_id, date, value) in observations {
@@ -641,90 +677,81 @@ fn estimate_ar_with_pacf(
             .push(value);
     }
 
-    let n_seasons: usize = {
-        let mut max_season = 0usize;
-        for &(_, _, _, season_id) in &stage_index {
-            if season_id >= max_season {
-                max_season = season_id + 1;
-            }
-        }
-        max_season
-    };
-
-    // Capture AIC-compatible results for the report builder.
-    let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
-    let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
-
     // 95% confidence z-score for the PACF significance threshold.
     let z_alpha = 1.96_f64;
 
-    for est in &mut estimates {
-        let key = (est.hydro_id, est.season_id);
+    // Build estimates using periodic PACF and YW coefficient estimation.
+    let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();
+    let mut aic_results: HashMap<(EntityId, usize), AicSelectionResult> = HashMap::new();
+    let mut sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
-        let Some(stats_m) = stats_map.get(&key) else {
-            continue;
-        };
+    for &hydro_id in hydro_ids {
+        // Build observations_by_season and stats_by_season for this entity.
+        let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+        let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
 
-        if stats_m.std == 0.0 {
-            continue;
+        for season in 0..n_seasons {
+            if let Some(obs) = group_obs.get(&(hydro_id, season)) {
+                obs_by_season[season].clone_from(obs);
+            }
+            if let Some(stats) = stats_map.get(&(hydro_id, season)) {
+                stats_by_season[season] = (stats.mean, stats.std);
+            }
         }
 
-        let Some(pair_obs) = group_obs.get(&key) else {
-            continue;
-        };
+        let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
 
-        let n_obs = pair_obs.len();
-        if n_obs < 2 {
-            continue;
+        for season in 0..n_seasons {
+            let key = (hydro_id, season);
+            let stats_s = stats_by_season[season];
+
+            // Skip seasons with zero std or insufficient data.
+            if stats_s.1 == 0.0 || obs_by_season[season].len() < 2 {
+                estimates.push(ArCoefficientEstimate {
+                    hydro_id,
+                    season_id: season,
+                    coefficients: Vec::new(),
+                    residual_std_ratio: 1.0,
+                });
+                continue;
+            }
+
+            let n_obs = obs_by_season[season].len();
+
+            // Compute periodic PACF for order selection.
+            let pacf_values =
+                periodic_pacf(season, max_order, n_seasons, &obs_refs, &stats_by_season);
+
+            // Select order via significance test.
+            let pacf_result = select_order_pacf(&pacf_values, n_obs, z_alpha);
+            let selected_order = pacf_result.selected_order;
+
+            // Estimate AR coefficients at the selected order using periodic YW.
+            let yw_result = estimate_periodic_ar_coefficients(
+                season,
+                selected_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+            );
+
+            estimates.push(ArCoefficientEstimate {
+                hydro_id,
+                season_id: season,
+                coefficients: yw_result.coefficients,
+                residual_std_ratio: yw_result.residual_std_ratio,
+            });
+
+            // Store sigma2 for contribution validation compatibility.
+            sigma2_map.insert(key, yw_result.sigma2_per_order.clone());
+
+            // Store AIC-compatible result for the report builder.
+            if !yw_result.sigma2_per_order.is_empty() {
+                let effective_n = n_obs.saturating_sub(max_order);
+                let aic_result = select_order_aic(&yw_result.sigma2_per_order, effective_n);
+                aic_results.insert(key, aic_result);
+            }
         }
-
-        let actual_order = est.coefficients.len();
-        if actual_order == 0 {
-            continue;
-        }
-
-        let autocorrelations = compute_autocorrelations(
-            est.hydro_id,
-            est.season_id,
-            actual_order,
-            n_seasons,
-            pair_obs,
-            &stats_map,
-            &group_obs,
-        );
-
-        if autocorrelations.len() < actual_order {
-            continue;
-        }
-
-        let ld = levinson_durbin(&autocorrelations, actual_order);
-
-        if ld.sigma2_per_order.is_empty() {
-            continue;
-        }
-
-        // PACF-based order selection.
-        let pacf_result = select_order_pacf(&ld.parcor, n_obs, z_alpha);
-        let selected = pacf_result.selected_order;
-
-        // Store an AIC-compatible result for the report builder.
-        // Use the sigma2_per_order to compute AIC values for diagnostic purposes.
-        let effective_n = n_obs.saturating_sub(actual_order);
-        let aic_result = select_order_aic(&ld.sigma2_per_order, effective_n);
-        aic_results.insert(key, aic_result);
-
-        if selected < actual_order {
-            est.coefficients.truncate(selected);
-
-            let sigma2_selected = if selected == 0 {
-                1.0
-            } else {
-                ld.sigma2_per_order[selected - 1]
-            };
-            est.residual_std_ratio = sigma2_selected.sqrt().clamp(f64::EPSILON, 1.0);
-        }
-
-        sigma2_map.insert(key, ld.sigma2_per_order);
     }
 
     // === Contribution-based order validation ===
@@ -736,7 +763,7 @@ fn estimate_ar_with_pacf(
         max_coeff_magnitude,
     );
 
-    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions);
+    let report = build_estimation_report(&estimates, &aic_results, n_seasons, &reductions, "PACF");
     Ok((estimates, report))
 }
 
@@ -846,7 +873,7 @@ fn apply_contribution_validation(
                 } else if let Some(sigma2_vec) = sigma2_map.get(&(hydro_id, season_id)) {
                     if reduced_order <= sigma2_vec.len() {
                         let sigma2 = sigma2_vec[reduced_order - 1];
-                        estimates[idx].residual_std_ratio = sigma2.sqrt().clamp(f64::EPSILON, 1.0);
+                        estimates[idx].residual_std_ratio = residual_std_ratio_from_sigma2(sigma2);
                     }
                 }
 
@@ -873,6 +900,7 @@ fn build_estimation_report(
     aic_results: &HashMap<(EntityId, usize), AicSelectionResult>,
     n_seasons: usize,
     contribution_reductions: &HashMap<EntityId, Vec<ContributionReduction>>,
+    method: &str,
 ) -> EstimationReport {
     // Group coefficient vectors by hydro_id (estimates are already sorted by
     // (hydro_id, season_id) from estimate_ar_coefficients).
@@ -890,14 +918,11 @@ fn build_estimation_report(
         // Sort by season_id ascending (should already be sorted, but ensure it).
         season_coeffs.sort_by_key(|(season_id, _)| *season_id);
 
-        // Compute max selected_order across all seasons for this hydro.
+        // Compute max selected_order as the maximum actual coefficient length
+        // across all seasons for this hydro (after all truncations).
         let selected_order = season_coeffs
             .iter()
-            .map(|(season_id, _)| {
-                aic_results
-                    .get(&(hydro_id, *season_id))
-                    .map_or(0, |r| r.selected_order)
-            })
+            .map(|(_, coeffs)| coeffs.len())
             .max()
             .unwrap_or(0);
 
@@ -931,7 +956,10 @@ fn build_estimation_report(
         );
     }
 
-    EstimationReport { entries }
+    EstimationReport {
+        entries,
+        method: method.to_string(),
+    }
 }
 
 /// Compute normalised cross-seasonal autocorrelations `ρ_m(1)..ρ_m(max_order)` for
@@ -1101,8 +1129,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {
@@ -1357,6 +1385,7 @@ mod tests {
             &aic_results,
             n_seasons,
             &contribution_reductions,
+            "AIC",
         );
 
         assert_eq!(report.entries.len(), 2, "expected 2 hydro entries");
@@ -1440,6 +1469,7 @@ mod tests {
             &aic_results,
             n_seasons,
             &contribution_reductions,
+            "AIC",
         );
 
         let entry = report.entries.get(&hydro_id).expect("entry must exist");

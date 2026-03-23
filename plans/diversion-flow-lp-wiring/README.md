@@ -35,7 +35,7 @@ constraint resolver, and extracts diversion values for simulation output.
 | ticket-001 | Wire HydroDiversion in generic constraint resolver | epic-03 | completed | refined | -- | -- | -- |
 | ticket-002 | Extract diversion from simulation LP primal | epic-03 | completed | refined | -- | -- | -- |
 | ticket-001 | Add D17 diversion deterministic test | epic-04 | pending | Outline | -- | -- | -- |
-| ticket-002 | Verify existing D01-D16 regression suite | epic-04 | pending | Outline | -- | -- | -- |
+| ticket-002 | Verify existing D01-D16 regression suite | epic-04 | completed | refined | -- | -- | -- |
 
 ## Dependency Graph
 

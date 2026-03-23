@@ -1,6 +1,6 @@
 {
   "plan": "diversion-flow-lp-wiring",
-  "last_updated": "2026-03-23T11:48:04Z",
+  "last_updated": "2026-03-23T11:48:59Z",
   "progressive": true,
   "tickets": {
     "epic-01/ticket-001-add-diversion-range-to-stage-indexer.md": {
@@ -95,11 +95,12 @@
     },
     "epic-04/ticket-001-add-d17-diversion-deterministic-test.md": {
       "status": "pending",
-      "detail_level": "outline"
+      "detail_level": "refined"
     },
     "epic-04/ticket-002-verify-existing-regression-suite.md": {
-      "status": "pending",
-      "detail_level": "outline"
+      "status": "completed",
+      "detail_level": "refined",
+      "workflow_step": null
     }
   },
   "epics": {
@@ -116,7 +117,7 @@
       "learning_extracted": false
     },
     "epic-04-integration-testing": {
-      "phase": "outline",
+      "phase": "executing",
       "learning_extracted": false
     }
   }

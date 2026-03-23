@@ -193,10 +193,17 @@ pub struct PatchBuffer {
     ///
     /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
     active_load_patches: usize,
+
+    /// Number of z-inflow patches written by the most recent [`fill_z_inflow_patches`] call.
+    ///
+    /// Equals `hydro_count` when z-inflow patches are active, zero otherwise.
+    ///
+    /// [`fill_z_inflow_patches`]: PatchBuffer::fill_z_inflow_patches
+    active_z_inflow_patches: usize,
 }
 
 impl PatchBuffer {
-    /// Construct a [`PatchBuffer`] pre-allocated for `N*(2+L) + M*B` patches.
+    /// Construct a [`PatchBuffer`] pre-allocated for `N*(2+L) + M*B + N` patches.
     ///
     /// - `hydro_count` — number of operating hydro plants (N).
     /// - `max_par_order` — maximum PAR order across all operating hydros (L).
@@ -216,20 +223,24 @@ impl PatchBuffer {
     /// use cobre_sddp::PatchBuffer;
     ///
     /// // 3-hydro AR(2) system, no stochastic load
+    /// // Capacity = N*(2+L) + M*B + N = 3*(2+2) + 0 + 3 = 15
     /// let buf = PatchBuffer::new(3, 2, 0, 0);
-    /// assert_eq!(buf.indices.len(), 12); // 3*(2+2) + 0*0
+    /// assert_eq!(buf.indices.len(), 15);
     ///
     /// // 3-hydro AR(2) system with 2 stochastic load buses, up to 3 blocks
+    /// // Capacity = 3*(2+2) + 2*3 + 3 = 12 + 6 + 3 = 21
     /// let buf_load = PatchBuffer::new(3, 2, 2, 3);
-    /// assert_eq!(buf_load.indices.len(), 18); // 3*(2+2) + 2*3
+    /// assert_eq!(buf_load.indices.len(), 21);
     ///
     /// // Production scale: N = 160, L = 12, no stochastic load
+    /// // Capacity = 160*(2+12) + 160 = 2240 + 160 = 2400
     /// let big = PatchBuffer::new(160, 12, 0, 0);
-    /// assert_eq!(big.indices.len(), 2240); // 160*(2+12)
+    /// assert_eq!(big.indices.len(), 2400);
     ///
-    /// // Edge case: no lags (L = 0) — only storage + noise patches
+    /// // Edge case: no lags (L = 0) — only storage + noise + z-inflow patches
+    /// // Capacity = 5*(2+0) + 5 = 15
     /// let no_lag = PatchBuffer::new(5, 0, 0, 0);
-    /// assert_eq!(no_lag.indices.len(), 10); // 5*(2+0)
+    /// assert_eq!(no_lag.indices.len(), 15);
     /// ```
     ///
     /// [`fill_forward_patches`]: PatchBuffer::fill_forward_patches
@@ -242,7 +253,8 @@ impl PatchBuffer {
         n_load_buses: usize,
         max_blocks: usize,
     ) -> Self {
-        let capacity = hydro_count * (2 + max_par_order) + n_load_buses * max_blocks;
+        // Category 5 (z-inflow) adds N entries after Category 4 (load patches).
+        let capacity = hydro_count * (2 + max_par_order) + n_load_buses * max_blocks + hydro_count;
         Self {
             indices: vec![0; capacity],
             lower: vec![0.0; capacity],
@@ -252,6 +264,7 @@ impl PatchBuffer {
             load_bus_count: n_load_buses,
             max_blocks,
             active_load_patches: 0,
+            active_z_inflow_patches: 0,
         }
     }
 
@@ -532,21 +545,74 @@ impl PatchBuffer {
         self.active_load_patches = self.load_bus_count * n_blocks;
     }
 
-    /// Number of active patches after [`fill_forward_patches`] and (optionally)
-    /// [`fill_load_patches`]: `N*(2+L) + active_load_patches`.
+    /// Fill Category 5 patches: z-inflow definition row RHS.
     ///
-    /// When no [`fill_load_patches`] call has been made (or `n_load_buses == 0`),
-    /// `active_load_patches` is zero and this returns `N*(2+L)`, preserving the
-    /// behaviour from before Category 4 was added.
+    /// Updates N rows starting at `z_inflow_row_start` with the realized-inflow
+    /// RHS values from `z_inflow_rhs`. Each row is an equality constraint:
+    /// `lower[i] = upper[i] = z_inflow_rhs[h]`.
+    ///
+    /// This method must be called after `fill_forward_patches` (which fills
+    /// categories 1-3) and [`fill_load_patches`] (category 4), before
+    /// `solver.set_row_bounds`.
+    ///
+    /// When `row_scale` is non-empty, each patch value is prescaled by
+    /// `row_scale[row]`.  Pass `&[]` when no row scaling is active.
+    ///
+    /// # Arguments
+    ///
+    /// - `z_inflow_row_start` - first row index of the z-inflow definition rows.
+    /// - `z_inflow_rhs` - per-hydro RHS values (length >= `hydro_count`).
+    /// - `row_scale` - per-row scaling factors. Pass `&[]` when no scaling.
+    ///
+    /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
+    pub fn fill_z_inflow_patches(
+        &mut self,
+        z_inflow_row_start: usize,
+        z_inflow_rhs: &[f64],
+        row_scale: &[f64],
+    ) {
+        let n = self.hydro_count;
+        if n == 0 || z_inflow_rhs.is_empty() {
+            self.active_z_inflow_patches = 0;
+            return;
+        }
+
+        // Place z-inflow patches immediately after active load patches
+        // (not at the fixed Category 5 capacity offset) so they're included
+        // in the forward_patch_count slice.
+        let cat5_start = self.hydro_count * (2 + self.max_par_order) + self.active_load_patches;
+
+        for (h, &rhs) in z_inflow_rhs.iter().enumerate().take(n) {
+            let slot = cat5_start + h;
+            let row = z_inflow_row_start + h;
+            let scaled = if row_scale.is_empty() {
+                rhs
+            } else {
+                rhs * row_scale[row]
+            };
+            self.indices[slot] = row;
+            self.lower[slot] = scaled;
+            self.upper[slot] = scaled;
+        }
+
+        self.active_z_inflow_patches = n;
+    }
+
+    /// Number of active patches after [`fill_forward_patches`], (optionally)
+    /// [`fill_load_patches`], and (optionally) [`fill_z_inflow_patches`]:
+    /// `N*(2+L) + active_load_patches + active_z_inflow_patches`.
     ///
     /// Use this to pass the full forward-pass buffer to `set_row_bounds`.
     ///
     /// [`fill_forward_patches`]: PatchBuffer::fill_forward_patches
     /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
+    /// [`fill_z_inflow_patches`]: PatchBuffer::fill_z_inflow_patches
     #[must_use]
     #[inline]
     pub fn forward_patch_count(&self) -> usize {
-        self.hydro_count * (2 + self.max_par_order) + self.active_load_patches
+        self.hydro_count * (2 + self.max_par_order)
+            + self.active_load_patches
+            + self.active_z_inflow_patches
     }
 
     /// Number of active patches after [`fill_state_patches`]: `N*(1+L)`.
@@ -680,6 +746,17 @@ pub struct StageTemplates {
     /// `active_ncs_indices[stage_idx]` lists the system-level NCS indices active at
     /// that stage, in entity-ID order.
     pub active_ncs_indices: Vec<Vec<usize>>,
+    /// Per-stage row index of the first z-inflow definition constraint.
+    ///
+    /// `z_inflow_row_starts[s]` is the row index of the first z-inflow equality
+    /// constraint at stage `s`.  Used by `PatchBuffer::fill_z_inflow_patches`
+    /// (Category 5) and wired into `StageIndexer.z_inflow_row_start` by setup.
+    pub z_inflow_row_starts: Vec<usize>,
+    /// Per-stage column index of the first z-inflow variable.
+    ///
+    /// `z_inflow_col_starts[s]` is the column index of the first realized-inflow
+    /// variable `z_h` at stage `s`.  Wired into `StageIndexer.z_inflow` by setup.
+    pub z_inflow_col_starts: Vec<usize>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -856,6 +933,14 @@ struct StageLayout {
     ///
     /// Zero when no generic constraints are active.
     n_generic_rows: usize,
+    /// Start of z-inflow definition rows (after generic constraint rows).
+    ///
+    /// One equality row per hydro, defining `z_h = base_h + sigma_h * eta_h + sum_l[psi_l * lag_in[h,l]]`.
+    row_z_inflow_start: usize,
+    /// Start of z-inflow columns (after generic constraint slack columns).
+    ///
+    /// One free column per hydro (`z_h`, lower = -inf, upper = +inf, cost = 0.0).
+    col_z_inflow_start: usize,
     // Template metadata
     n_state: usize,
     n_dual_relevant: usize,
@@ -1065,8 +1150,16 @@ impl StageLayout {
             }
         }
 
-        let num_cols = col_generic_slack_start + n_generic_slack_cols;
-        let num_rows = row_generic_start + n_generic_rows;
+        let pre_z_cols = col_generic_slack_start + n_generic_slack_cols;
+        let pre_z_rows = row_generic_start + n_generic_rows;
+
+        // z-inflow columns: one free column per hydro, placed after all other columns.
+        let col_z_inflow_start = pre_z_cols;
+        let num_cols = pre_z_cols + ctx.n_hydros;
+
+        // z-inflow rows: one equality row per hydro, placed after all other rows.
+        let row_z_inflow_start = pre_z_rows;
+        let num_rows = pre_z_rows + ctx.n_hydros;
 
         let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let zeta = total_stage_hours * M3S_TO_HM3;
@@ -1098,6 +1191,8 @@ impl StageLayout {
             row_generic_start,
             num_rows,
             n_generic_rows,
+            row_z_inflow_start,
+            col_z_inflow_start,
             n_state,
             n_dual_relevant,
             zeta,
@@ -1324,6 +1419,15 @@ fn fill_stage_columns(
         }
     }
 
+    // Z-inflow columns: free variables for realized total inflow per hydro.
+    // col_lower = -inf, col_upper = +inf, objective = 0.0 (no direct cost).
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_z_inflow_start + h_idx;
+        col_lower[col] = f64::NEG_INFINITY;
+        col_upper[col] = f64::INFINITY;
+        // objective[col] = 0.0 — already zero from vec initialisation.
+    }
+
     (col_lower, col_upper, objective)
 }
 
@@ -1424,6 +1528,21 @@ fn fill_stage_rows(
             row_lower[row] = k_evap0;
             row_upper[row] = k_evap0;
         }
+    }
+
+    // Z-inflow definition rows: equality constraints with RHS = base_h (m3/s).
+    // The base is the deterministic PAR base inflow (before noise), NOT multiplied
+    // by zeta and NOT reduced by withdrawal. The noise component (sigma * eta) is
+    // added at solve time via PatchBuffer Category 5.
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_z_inflow_start + h_idx;
+        let base = if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h {
+            ctx.par_lp.deterministic_base(stage_idx, h_idx)
+        } else {
+            0.0
+        };
+        row_lower[row] = base;
+        row_upper[row] = base;
     }
 
     (row_lower, row_upper)
@@ -1964,6 +2083,50 @@ fn fill_ncs_load_balance_entries(
     }
 }
 
+/// Fill z-inflow definition constraint entries into `col_entries`.
+///
+/// For each hydro h, the z-inflow constraint is:
+///   `z_h - sum_l[psi_l * lag_in[h,l]] = base_h + sigma_h * eta_h`
+///
+/// Matrix entries:
+/// - Column `z_h`: coefficient `+1.0` in row `row_z_inflow_start + h`
+/// - For each lag l with nonzero `psi_l`: column `inflow_lags.start + lag * n_h + h`
+///   gets coefficient `-psi_l` in row `row_z_inflow_start + h`
+///
+/// Note: the lag column layout matches the LP builder convention (lag-major):
+/// the column at `inflow_lags.start + lag * n_h + h` stores lag `l` of hydro `h`.
+fn fill_z_inflow_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let n_h = layout.n_h;
+    let lag_order = layout.lag_order;
+    let idx = StageIndexer::new(n_h, lag_order);
+
+    for h_idx in 0..n_h {
+        let row = layout.row_z_inflow_start + h_idx;
+
+        // z_h column: coefficient +1.0
+        let col_z = layout.col_z_inflow_start + h_idx;
+        col_entries[col_z].push((row, 1.0));
+
+        // Lag columns: coefficient -psi_l for each nonzero psi.
+        // Uses lag-major layout (lag * n_h + h) matching the water-balance
+        // AR dynamics entries in fill_state_and_water_entries.
+        if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == n_h {
+            let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
+            for (lag, &psi_val) in psi.iter().enumerate() {
+                if psi_val != 0.0 && lag < lag_order {
+                    let col = idx.inflow_lags.start + lag * n_h + h_idx;
+                    col_entries[col].push((row, -psi_val));
+                }
+            }
+        }
+    }
+}
+
 /// Build the unsorted CSC matrix entries for one stage.
 ///
 /// Returns one `Vec<(row, value)>` per column. Entries are in insertion
@@ -1982,6 +2145,7 @@ fn build_stage_matrix_entries(
     fill_ncs_load_balance_entries(ctx, layout, &mut col_entries);
     fill_fpha_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_evaporation_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_z_inflow_entries(ctx, stage_idx, layout, &mut col_entries);
 
     col_entries
 }
@@ -2020,8 +2184,9 @@ fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<i32>, Vec<f
 /// Returns the template, the row index of the water-balance block
 /// (used as `base_row` by the [`PatchBuffer`] noise injection), the
 /// row index of the load-balance block (used for load-noise patches),
-/// the generic constraint row entries for this stage, and NCS metadata
-/// (column start, count, and active system indices).
+/// the generic constraint row entries for this stage, NCS metadata
+/// (column start, count, and active system indices), and z-inflow
+/// metadata (row start, column start).
 #[allow(clippy::type_complexity)]
 fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
@@ -2035,6 +2200,8 @@ fn build_single_stage_template(
     usize,
     usize,
     Vec<usize>,
+    usize,
+    usize,
 ) {
     let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
@@ -2095,6 +2262,8 @@ fn build_single_stage_template(
     let ncs_col_start = layout.col_ncs_start;
     let n_ncs = layout.n_ncs;
     let ncs_active = layout.active_ncs_indices;
+    let z_inflow_row_start = layout.row_z_inflow_start;
+    let z_inflow_col_start = layout.col_z_inflow_start;
 
     let template = StageTemplate {
         num_cols: layout.num_cols,
@@ -2125,6 +2294,8 @@ fn build_single_stage_template(
         ncs_col_start,
         n_ncs,
         ncs_active,
+        z_inflow_row_start,
+        z_inflow_col_start,
     )
 }
 
@@ -2493,6 +2664,8 @@ pub fn build_stage_templates(
             ncs_col_starts: Vec::new(),
             n_ncs_per_stage: Vec::new(),
             active_ncs_indices: Vec::new(),
+            z_inflow_row_starts: Vec::new(),
+            z_inflow_col_starts: Vec::new(),
         });
     }
 
@@ -2573,6 +2746,8 @@ pub fn build_stage_templates(
     let mut ncs_col_starts = Vec::with_capacity(n_study);
     let mut n_ncs_per_stage = Vec::with_capacity(n_study);
     let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
+    let mut z_inflow_row_starts = Vec::with_capacity(n_study);
+    let mut z_inflow_col_starts = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
         let (
             template,
@@ -2582,6 +2757,8 @@ pub fn build_stage_templates(
             ncs_col_start,
             ncs_count,
             ncs_active,
+            z_inflow_row_start,
+            z_inflow_col_start,
         ) = build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
@@ -2590,6 +2767,8 @@ pub fn build_stage_templates(
         ncs_col_starts.push(ncs_col_start);
         n_ncs_per_stage.push(ncs_count);
         active_ncs_indices_per_stage.push(ncs_active);
+        z_inflow_row_starts.push(z_inflow_row_start);
+        z_inflow_col_starts.push(z_inflow_col_start);
     }
 
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
@@ -2609,6 +2788,8 @@ pub fn build_stage_templates(
         ncs_col_starts,
         n_ncs_per_stage,
         active_ncs_indices: active_ncs_indices_per_stage,
+        z_inflow_row_starts,
+        z_inflow_col_starts,
     })
 }
 
@@ -2620,7 +2801,7 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer, COST_SCALE_FACTOR};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -2629,28 +2810,28 @@ mod tests {
     }
 
     #[test]
-    fn new_3_2_sizes_to_12() {
-        // Spec acceptance criterion: PatchBuffer::new(3, 2, 0, 0) → 12 = 3*(2+2)
+    fn new_3_2_sizes_to_15() {
+        // N*(2+L) + N = 3*(2+2) + 3 = 15 (includes z-inflow capacity)
         let buf = PatchBuffer::new(3, 2, 0, 0);
-        assert_eq!(buf.indices.len(), 12);
-        assert_eq!(buf.lower.len(), 12);
-        assert_eq!(buf.upper.len(), 12);
+        assert_eq!(buf.indices.len(), 15);
+        assert_eq!(buf.lower.len(), 15);
+        assert_eq!(buf.upper.len(), 15);
     }
 
     #[test]
-    fn new_160_12_sizes_to_2240() {
-        // Spec acceptance criterion: PatchBuffer::new(160, 12, 0, 0) → 2240 = 160*(2+12)
+    fn new_160_12_sizes_to_2400() {
+        // N*(2+L) + N = 160*(2+12) + 160 = 2240 + 160 = 2400
         let buf = PatchBuffer::new(160, 12, 0, 0);
-        assert_eq!(buf.indices.len(), 2240);
-        assert_eq!(buf.lower.len(), 2240);
-        assert_eq!(buf.upper.len(), 2240);
+        assert_eq!(buf.indices.len(), 2400);
+        assert_eq!(buf.lower.len(), 2400);
+        assert_eq!(buf.upper.len(), 2400);
     }
 
     #[test]
-    fn new_zero_lags_sizes_to_2n() {
-        // Edge case: L = 0 → N*(2+0) = 2*N patches
+    fn new_zero_lags_sizes_to_3n() {
+        // N*(2+0) + N = 3*N patches (categories 1-3 + z-inflow)
         let buf = PatchBuffer::new(5, 0, 0, 0);
-        assert_eq!(buf.indices.len(), 10); // 5*(2+0)
+        assert_eq!(buf.indices.len(), 15); // 5*3 = 15
     }
 
     #[test]
@@ -2660,9 +2841,10 @@ mod tests {
     }
 
     #[test]
-    fn forward_patch_count_matches_buffer_len() {
+    fn forward_patch_count_without_z_inflow_fill() {
+        // Without calling fill_z_inflow_patches, active_z_inflow_patches=0.
         let buf = PatchBuffer::new(3, 2, 0, 0);
-        assert_eq!(buf.forward_patch_count(), buf.indices.len());
+        // forward_patch_count = N*(2+L) + 0 + 0 = 12
         assert_eq!(buf.forward_patch_count(), 12);
     }
 
@@ -2921,10 +3103,11 @@ mod tests {
 
     #[test]
     fn production_scale_forward_patch_count() {
-        // Spec acceptance criterion: 160*(2+12) = 2240
+        // Without fill_z_inflow_patches, forward_patch_count = 160*(2+12) = 2240.
+        // Buffer capacity = 2240 + 160 (z-inflow) = 2400.
         let buf = PatchBuffer::new(160, 12, 0, 0);
         assert_eq!(buf.forward_patch_count(), 2240);
-        assert_eq!(buf.indices.len(), 2240);
+        assert_eq!(buf.indices.len(), 2400);
     }
 
     #[test]
@@ -2968,13 +3151,14 @@ mod tests {
     // Category 4 (load balance) unit tests
     // -------------------------------------------------------------------------
 
-    /// AC: `PatchBuffer::new(2, 1, 1, 3)` → capacity = 2*(2+1) + 1*3 = 9.
+    /// AC: `PatchBuffer::new(2, 1, 1, 3)` → capacity = 2*(2+1) + 1*3 + 2 = 11.
     #[test]
     fn new_with_load_allocates_correct_capacity() {
         let buf = PatchBuffer::new(2, 1, 1, 3);
-        assert_eq!(buf.indices.len(), 9); // 2*(2+1) + 1*3
-        assert_eq!(buf.lower.len(), 9);
-        assert_eq!(buf.upper.len(), 9);
+        // 2*(2+1) + 1*3 + 2 (z-inflow) = 6 + 3 + 2 = 11
+        assert_eq!(buf.indices.len(), 11);
+        assert_eq!(buf.lower.len(), 11);
+        assert_eq!(buf.upper.len(), 11);
     }
 
     /// Category 4 row indices follow `row = load_row_start + bus_positions[i] * n_blocks + blk`.
@@ -3505,7 +3689,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 7 + 1 = 8.
-        assert_eq!(t.num_cols, 8, "num_cols mismatch for N=1 L=0");
+        // N=1 z-inflow column adds 1: 8 + 1 = 9.
+        assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=0");
     }
 
     #[test]
@@ -3526,7 +3711,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 9 + 1 = 10.
-        assert_eq!(t.num_cols, 10, "num_cols mismatch for N=1 L=2");
+        // N=1 z-inflow column adds 1: 10 + 1 = 11.
+        assert_eq!(t.num_cols, 11, "num_cols mismatch for N=1 L=2");
     }
 
     #[test]
@@ -3565,7 +3751,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        assert_eq!(t.num_rows, 3, "num_rows mismatch for N=1 L=0");
+        // + 1 z-inflow row for N=1.
+        assert_eq!(t.num_rows, 4, "num_rows mismatch for N=1 L=0");
     }
 
     #[test]
@@ -3585,7 +3772,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        assert_eq!(t.num_rows, 5, "num_rows mismatch for N=1 L=2");
+        // + 1 z-inflow row for N=1.
+        assert_eq!(t.num_rows, 6, "num_rows mismatch for N=1 L=2");
     }
 
     #[test]
@@ -4533,7 +4721,7 @@ mod tests {
         let t = &result.templates[0];
         // N=1, L=0: theta=2, decision_start=3, turbine=3, spillage=4, deficit=5, excess=6,
         // inflow_slack=7, withdrawal_slack=8. Inflow slack is now second-to-last.
-        let slack_col = t.num_cols - 2; // inflow_slack (withdrawal_slack is last)
+        let slack_col = t.num_cols - 2 - t.n_hydro; // inflow_slack (before withdrawal + z_inflow)
         let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
         assert!(
             (t.objective[slack_col] - expected_obj).abs() < 1e-12,
@@ -4558,10 +4746,13 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4;
-        // withdrawal slack = 1; total = 10.
-        assert_eq!(t.num_cols, 10, "method=none must not add extra columns");
-        // num_rows = N*(1+L)+N+B*K = 3+1+1 = 5
-        assert_eq!(t.num_rows, 5, "method=none must not add extra rows");
+        // withdrawal slack = 1; z_inflow = 1; total = 11.
+        assert_eq!(
+            t.num_cols, 11,
+            "method=none must not add extra penalty columns"
+        );
+        // num_rows = N*(1+L)+N+B*K + z_inflow = 3+1+1+1 = 6
+        assert_eq!(t.num_rows, 6, "method=none must not add extra penalty rows");
     }
 
     // test_penalty_slack_in_water_balance:
@@ -4582,9 +4773,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        // Locate the inflow slack column. For N=1, L=0: it is at num_cols - 2
-        // (withdrawal_slack occupies the last column, num_cols - 1).
-        let slack_col = t.num_cols - 2;
+        // Locate the inflow slack column. For N=1, L=0: it is before withdrawal and z_inflow.
+        let slack_col = t.num_cols - 2 - t.n_hydro;
 
         // Iterate the CSC to find the entry for slack_col in the water balance row.
         // Water balance row for hydro 0: row_water_balance_start = n_state = N*(1+L) = 1.
@@ -4619,10 +4809,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // The inflow slack is the second-to-last column for N=1 (withdrawal_slack is last).
-        // Since water_withdrawal_m3s == 0, the withdrawal slack is pinned at [0,0] and
-        // presolve-eliminated; the inflow slack at num_cols-2 must be [0, +inf).
-        let slack_col = t.num_cols - 2;
+        // The inflow slack is before withdrawal and z_inflow columns for N=1.
+        let slack_col = t.num_cols - 2 - t.n_hydro;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
         assert!(
             t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
@@ -4656,8 +4844,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        // For N=1, L=0: inflow_slack is at num_cols - 2 (withdrawal_slack is last).
-        let slack_col = t.num_cols - 2;
+        // For N=1, L=0: inflow_slack is before withdrawal and z_inflow columns.
+        let slack_col = t.num_cols - 2 - t.n_hydro;
         let water_balance_row = 1_usize; // N*(1+L) = 1
         let zeta = 744.0 * (3_600.0 / 1_000_000.0);
         let expected_coeff = -zeta; // slack enters LHS with -ζ (virtual inflow)
@@ -4738,8 +4926,8 @@ mod tests {
         .expect("constant productivity ok");
         let template = &result.templates[0];
 
-        // The inflow slack is the second-to-last column for N=1 (withdrawal_slack is last).
-        let col_inflow_slack_start = template.num_cols - 2;
+        // The inflow slack is before withdrawal and z_inflow columns for N=1.
+        let col_inflow_slack_start = template.num_cols - 2 - template.n_hydro;
 
         // base_row for stage 0 is n_dual_relevant = n_state = 1 (for N=1, L=0).
         let base_row = result.base_rows[0];
@@ -5723,15 +5911,17 @@ mod tests {
         // Base (constant) num_cols = 9 + 4*1*2 + 0 + 0 + 1*1*2 = 9 + 8 + 2 = 19.
         // With FPHA: 19 + 2 = 21.
         // With withdrawal slack (N=4): 21 + 4 = 25.
+        // With z-inflow (N=4): 25 + 4 = 29.
         // Base num_rows = n_state + 4 water balance + 1*1 load balance = 4 + 4 + 1 = 9.
         // With FPHA: 9 + 2*1*3 = 9 + 6 = 15.
+        // With z-inflow rows (N=4): 15 + 4 = 19.
         assert_eq!(
-            tmpl.num_cols, 25,
-            "4-hydro mixed system: num_cols should be 25 (includes 4 withdrawal slack columns)"
+            tmpl.num_cols, 29,
+            "4-hydro mixed system: num_cols should be 29 (includes withdrawal + z_inflow)"
         );
         assert_eq!(
-            tmpl.num_rows, 15,
-            "4-hydro mixed system: num_rows should be 15"
+            tmpl.num_rows, 19,
+            "4-hydro mixed system: num_rows should be 19 (includes z_inflow rows)"
         );
 
         // Load balance row for the single bus, block 0: row = 8.
@@ -6345,8 +6535,8 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // Evaporation row is the last row (placed after all other rows).
-        let evap_row = t.num_rows - 1;
+        // Evaporation row is placed after all other structural rows, but before z-inflow rows.
+        let evap_row = t.num_rows - 1 - t.n_hydro;
         assert_eq!(
             t.row_lower[evap_row], k_evap0,
             "evaporation row_lower must equal k_evap0 = {k_evap0}, got {}",
@@ -6380,9 +6570,10 @@ mod tests {
         // The 3 evaporation columns are followed by 1 withdrawal slack column (N=1).
         // Since water_withdrawal_m3s == 0, the withdrawal slack at num_cols-1 is pinned at [0,0].
         // The evaporation columns are at num_cols-4, num_cols-3, num_cols-2.
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
+        // Evaporation columns are before withdrawal slack and z_inflow columns.
+        let col_q_ev = t.num_cols - 4 - t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - t.n_hydro;
 
         for &col in &[col_q_ev, col_f_plus, col_f_minus] {
             assert_eq!(
@@ -6492,10 +6683,11 @@ mod tests {
         // Evaporation columns come before withdrawal slack (N=1 column).
         // col_q_ev = col_evap_start + 0, col_f_plus = +1, col_f_minus = +2,
         // followed by 1 withdrawal_slack column.
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
-        let evap_row = t.num_rows - 1;
+        // Evaporation columns are before withdrawal slack and z_inflow columns.
+        let col_q_ev = t.num_cols - 4 - t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - t.n_hydro;
+        let evap_row = t.num_rows - 1 - t.n_hydro;
         let water_balance_row = 1_usize; // row_water_balance_start = n_state = 1
 
         // After ticket-012, Q_ev has 2 entries: water balance row (+zeta) and
@@ -6602,7 +6794,7 @@ mod tests {
         .expect("evaporation system ok");
 
         let t = &result.templates[0];
-        let evap_row = t.num_rows - 1;
+        let evap_row = t.num_rows - 1 - t.n_hydro;
         let expected_coeff = -k_evap_v / 2.0; // -0.02
 
         let entry_v = entries_for_col(t, 0)
@@ -6704,8 +6896,9 @@ mod tests {
         .expect("2-evap-hydro system ok");
 
         let t = &result.templates[0];
-        let evap_row_0 = t.num_rows - 2;
-        let evap_row_1 = t.num_rows - 1;
+        // 2 evap hydros: evap rows are before z_inflow rows (n_hydro = 2).
+        let evap_row_0 = t.num_rows - 2 - t.n_hydro;
+        let evap_row_1 = t.num_rows - 1 - t.n_hydro;
 
         // Hydro 0 (k_evap_v=0.02): v coefficient = -0.01.
         let entry_v_h0 = entries_for_col(t, 0)
@@ -6752,7 +6945,7 @@ mod tests {
         .expect("evaporation system ok");
 
         let t = &result.templates[0];
-        let evap_row = t.num_rows - 1;
+        let evap_row = t.num_rows - 1 - t.n_hydro;
 
         let entry_v = entries_for_col(t, 0)
             .into_iter()
@@ -6806,9 +6999,8 @@ mod tests {
         // Hydro 0's water balance row = 1.
         let water_balance_row = 1_usize;
 
-        // Q_ev is the first of the 3 evaporation columns; followed by 1 withdrawal slack (N=1).
-        // col_evap_start = num_cols - 4.
-        let col_q_ev = t.num_cols - 4;
+        // Q_ev is the first of the 3 evaporation columns; before withdrawal slack + z_inflow.
+        let col_q_ev = t.num_cols - 4 - t.n_hydro;
 
         let entries = entries_for_col(t, col_q_ev);
         let entry = entries
@@ -7004,8 +7196,8 @@ mod tests {
         let water_balance_row_h1 = 3_usize;
 
         // Q_ev for hydro 1 (local_idx=0, since only hydro 1 is evap): col_evap_start + 0*3.
-        // N=2 withdrawal slack columns follow evap, so col_evap_start = num_cols - 2 - 3.
-        let col_q_ev_h1 = t.num_cols - 5;
+        // N=2 withdrawal + z_inflow columns follow evap.
+        let col_q_ev_h1 = t.num_cols - 5 - t.n_hydro;
 
         // Q_ev (h1) must have an entry at water balance row 3.
         let entries_h1 = entries_for_col(t, col_q_ev_h1);
@@ -7289,9 +7481,10 @@ mod tests {
         let t = &result.templates[0];
 
         // Evaporation columns (Q_ev, f_plus, f_minus) are followed by 1 withdrawal slack (N=1).
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
+        // Evaporation columns are before withdrawal slack and z_inflow columns.
+        let col_q_ev = t.num_cols - 4 - t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - t.n_hydro;
 
         let expected = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
@@ -7330,8 +7523,8 @@ mod tests {
         .expect("evap system with zero k_evap builds ok");
 
         let t = &result.templates[0];
-        // N=1 withdrawal slack follows the 3 evap columns, so col_evap_start = num_cols - 4.
-        let col_q_ev = t.num_cols - 4;
+        // N=1 withdrawal slack follows the 3 evap columns; z_inflow cols are at the end.
+        let col_q_ev = t.num_cols - 4 - t.n_hydro;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7386,8 +7579,8 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        // Q_ev is the first evaporation column (num_cols - 3).
-        let col_q_ev = template.num_cols - 3;
+        // Q_ev is the first evaporation column (before withdrawal + z_inflow).
+        let col_q_ev = template.num_cols - 3 - template.n_hydro;
         let q_ev = view.primal[col_q_ev];
 
         assert!(
@@ -7441,8 +7634,9 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        let col_f_plus = template.num_cols - 2;
-        let col_f_minus = template.num_cols - 1;
+        // Evaporation violation slack columns are before z_inflow columns.
+        let col_f_plus = template.num_cols - 2 - template.n_hydro;
+        let col_f_minus = template.num_cols - 1 - template.n_hydro;
         let f_plus = view.primal[col_f_plus];
         let f_minus = view.primal[col_f_minus];
 
@@ -8324,8 +8518,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        // Withdrawal slack column is the last column (num_cols - 1) for N=1.
-        let col_w = t.num_cols - 1;
+        // Withdrawal slack column is before z_inflow columns (num_cols - 1 - n_hydro) for N=1.
+        let col_w = t.num_cols - 1 - t.n_hydro;
         // Water balance row for hydro 0: N=1, L=0 → row_water = N*(1+L) = 1.
         let row_water = 1_usize;
 
@@ -8369,7 +8563,7 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1;
+        let col_w = t.num_cols - 1 - t.n_hydro;
         let expected_obj = violation_cost * total_hours / COST_SCALE_FACTOR;
         assert!(
             (t.objective[col_w] - expected_obj).abs() < 1e-12,
@@ -8393,7 +8587,7 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1;
+        let col_w = t.num_cols - 1 - t.n_hydro;
         assert!(
             t.objective[col_w].abs() < 1e-15,
             "withdrawal slack objective must be 0 when cost=0, got {}",
@@ -8418,7 +8612,7 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1;
+        let col_w = t.num_cols - 1 - t.n_hydro;
         assert!(
             (t.col_lower[col_w] - 0.0).abs() < 1e-15,
             "withdrawal slack lower bound must be 0.0, got {}",
@@ -8646,8 +8840,9 @@ mod tests {
         // col_turbine_start = 5, col_spillage_start = 7, col_deficit_start = 9,
         // col_excess_start = 10, col_inflow_slack_start = 11 (no penalty → 0 inflow slacks),
         // col_withdrawal_slack_start = 11, num_cols = 13.
-        let col_w0 = t.num_cols - 2;
-        let col_w1 = t.num_cols - 1;
+        // N=2: withdrawal slacks are before z_inflow columns.
+        let col_w0 = t.num_cols - 2 - t.n_hydro;
+        let col_w1 = t.num_cols - 1 - t.n_hydro;
 
         // N=2, L=0: row_water_balance_start = N*(1+L) = 2.
         let row_w0 = 2_usize; // water balance for hydro 0
@@ -8890,27 +9085,29 @@ mod tests {
         // withdrawal slack: 3
         // Total without withdrawal: 6 + 1 + 3 + 3 + 1 + 1 = 15
         // Total with withdrawal: 15 + 3 = 18
+        // + 3 z-inflow columns: 18 + 3 = 21
         let expected_without_withdrawal = 15_usize;
-        let expected_with_withdrawal = expected_without_withdrawal + 3;
+        let expected_with_withdrawal = expected_without_withdrawal + 3 + 3; // + withdrawal + z_inflow
         assert_eq!(
             t.num_cols, expected_with_withdrawal,
-            "3-hydro system: num_cols should be {expected_without_withdrawal} + 3 withdrawal slacks = {expected_with_withdrawal}, got {}",
+            "3-hydro system: num_cols should include withdrawal slacks and z_inflow columns = {expected_with_withdrawal}, got {}",
             t.num_cols
         );
 
-        // Verify the last 3 columns are the withdrawal slack columns.
+        // Verify the withdrawal slack columns (before z_inflow columns).
+        let n_h = t.n_hydro;
         assert_eq!(
-            t.col_upper[t.num_cols - 3],
+            t.col_upper[t.num_cols - n_h - 3],
             f64::INFINITY,
             "withdrawal slack column for hydro 0 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - 2],
+            t.col_upper[t.num_cols - n_h - 2],
             f64::INFINITY,
             "withdrawal slack column for hydro 1 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - 1],
+            t.col_upper[t.num_cols - n_h - 1],
             f64::INFINITY,
             "withdrawal slack column for hydro 2 should be unbounded above"
         );
@@ -9722,13 +9919,13 @@ mod tests {
     #[allow(clippy::cast_possible_wrap)]
     fn generic_constraint_two_hydros_sum_csc_entries() {
         use chrono::NaiveDate;
-        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::{InflowModel, LoadModel};
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         };
+        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::{
             ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
             VariableRef,
@@ -9942,8 +10139,8 @@ mod tests {
 
         // For constant-productivity hydros, HydroGeneration maps to the turbine
         // column with multiplier = productivity.
-        // Find the generic constraint row (last row).
-        let generic_row = t.num_rows - 1;
+        // Generic constraint row is before z_inflow rows.
+        let generic_row = t.num_rows - 1 - t.n_hydro;
 
         // Find turbine columns for H1 and H2. We know storage takes first
         // 2*n_hydro cols (storage + storage_in), then theta, then turbine.

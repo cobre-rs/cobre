@@ -449,7 +449,7 @@ fn build_fixture() -> Fixture {
     let first_tmpl = stage_templates.templates.first().expect("at least 1 stage");
     let n_blks = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
     let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
-    let indexer = StageIndexer::with_equipment(
+    let mut indexer = StageIndexer::with_equipment(
         first_tmpl.n_hydro,
         first_tmpl.max_par_order,
         system.thermals().len(),
@@ -460,6 +460,15 @@ fn build_fixture() -> Fixture {
         vec![],
         &[],
     );
+    // Wire z-inflow column and row ranges from the LP builder.
+    if !stage_templates.z_inflow_col_starts.is_empty() {
+        let n_hydros = indexer.hydro_count;
+        let z_col_start = stage_templates.z_inflow_col_starts[0];
+        indexer.z_inflow = z_col_start..(z_col_start + n_hydros);
+        let z_row_start = stage_templates.z_inflow_row_starts[0];
+        indexer.z_inflow_rows = z_row_start..(z_row_start + n_hydros);
+        indexer.z_inflow_row_start = z_row_start;
+    }
 
     let initial_state = vec![0.0_f64; indexer.n_state];
     let horizon = HorizonMode::Finite {

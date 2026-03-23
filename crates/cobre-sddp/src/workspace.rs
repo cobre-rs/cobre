@@ -47,6 +47,11 @@ pub(crate) struct ScratchBuffers {
     /// buffer and overwrites load balance rows with stochastic realizations
     /// before passing to [`extract_stage_result`].
     pub(crate) row_lower_buf: Vec<f64>,
+    /// Scratch buffer for z-inflow definition row RHS values (m3/s).
+    ///
+    /// Filled by `transform_inflow_noise` with `base_h + sigma_h * eta_effective_h`
+    /// for each hydro. Used by `PatchBuffer::fill_z_inflow_patches` (Category 5).
+    pub(crate) z_inflow_rhs_buf: Vec<f64>,
     /// Scratch buffer for unscaled primal values.
     ///
     /// When column scaling is active, solver primal values are in scaled
@@ -111,6 +116,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -166,6 +172,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -223,6 +230,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -438,11 +446,11 @@ mod tests {
 
     #[test]
     fn test_workspace_buffer_dimensions() {
-        // N=3, L=2 → patch_buf length = 3*(2+2) = 12
+        // N=3, L=2 → patch_buf length = 3*(2+2) + 3 (z-inflow) = 15
         // n_state=9 → current_state capacity = 9
         let pool = WorkspacePool::new(4, 3, 2, 9, 0, 0, || MockSolver);
         for ws in &pool.workspaces {
-            assert_eq!(ws.patch_buf.indices.len(), 12, "patch_buf length");
+            assert_eq!(ws.patch_buf.indices.len(), 15, "patch_buf length");
             assert_eq!(ws.current_state.capacity(), 9, "current_state capacity");
             assert_eq!(ws.current_state.len(), 0, "current_state starts empty");
         }

@@ -384,6 +384,34 @@ pub struct StageIndexer {
     /// Index for NCS `r`, block `b`: `ncs_generation.start + r * n_blks + b`.
     /// Empty when built via [`StageIndexer::new`] or when no NCS entities are active.
     pub ncs_generation: Range<usize>,
+
+    // ── Z-inflow column and row ranges ────────────────────────────────────
+    // Populated by all constructors.  The z_inflow columns are auxiliary
+    // (NOT state variables); their primal values give the realized total
+    // inflow Z_t per hydro after solving.
+    /// Column range for realized-inflow variables `z_h`, one per hydro.
+    ///
+    /// These free columns (lower = -inf, upper = +inf, zero cost) represent the
+    /// total natural inflow `Z_t_h` at each hydro, defined by the z-inflow
+    /// equality constraints. After solving, `primal[z_inflow.start + h]` gives
+    /// the realized inflow for hydro h.
+    ///
+    /// Empty when `hydro_count == 0`.
+    pub z_inflow: Range<usize>,
+
+    /// Row range for z-inflow definition constraints, one per hydro.
+    ///
+    /// Each row defines: `z_h - sum_l[psi_l * lag_in[h,l]] = base_h + sigma_h * eta_h`
+    /// The RHS is noise-patched (Category 5 in `PatchBuffer`).
+    ///
+    /// Empty when `hydro_count == 0`.
+    pub z_inflow_rows: Range<usize>,
+
+    /// Row index of the first z-inflow definition constraint.
+    ///
+    /// Used by `PatchBuffer::fill_z_inflow_patches` as the base offset for
+    /// Category 5 patches. Equal to `z_inflow_rows.start`.
+    pub z_inflow_row_start: usize,
 }
 
 impl StageIndexer {
@@ -415,6 +443,8 @@ impl StageIndexer {
     /// // Equipment ranges are empty when built via `new`.
     /// assert!(idx.turbine.is_empty());
     /// assert_eq!(idx.n_blks, 0);
+    /// // z_inflow is placed immediately after theta.
+    /// assert_eq!(idx.z_inflow, 13..16);
     /// ```
     #[must_use]
     pub fn new(hydro_count: usize, max_par_order: usize) -> Self {
@@ -430,6 +460,12 @@ impl StageIndexer {
         // Row layout mirrors the column layout for the state-relevant rows.
         let storage_fixing = 0..n;
         let lag_fixing = n..n * (1 + l);
+
+        // z_inflow columns are placed after theta for the simple constructor.
+        // z_inflow rows are unknown at this point (computed during LP build),
+        // so default to empty.
+        let z_inflow_start = theta + 1;
+        let z_inflow = z_inflow_start..z_inflow_start + n;
 
         Self {
             storage,
@@ -471,6 +507,9 @@ impl StageIndexer {
             generic_constraint_slack: 0..0,
             n_generic_constraints_active: 0,
             ncs_generation: 0..0,
+            z_inflow,
+            z_inflow_rows: 0..0,
+            z_inflow_row_start: 0,
         }
     }
 
@@ -689,6 +728,17 @@ impl StageIndexer {
             (0..0, false)
         };
 
+        // z_inflow columns go after the last known column range (withdrawal_slack).
+        // NCS and generic constraint columns are wired later by StageLayout / setup.rs,
+        // and the z_inflow range will be repositioned by the LP builder (ticket-002).
+        // For now, place it after withdrawal_slack as a provisional position.
+        let z_inflow_col_start = if has_withdrawal {
+            withdrawal_slack.end
+        } else {
+            evap_col_end
+        };
+        let z_inflow = z_inflow_col_start..z_inflow_col_start + hydro_count;
+
         Self {
             turbine: turbine_start..spillage_start,
             spillage: spillage_start..thermal_start,
@@ -715,6 +765,9 @@ impl StageIndexer {
             evap_indices: evap_indices_vec,
             withdrawal_slack,
             has_withdrawal,
+            z_inflow,
+            z_inflow_rows: 0..0,
+            z_inflow_row_start: 0,
             ..base
         }
     }
@@ -1653,5 +1706,55 @@ mod tests {
         // generation follows excess (no penalty)
         assert_eq!(idx.generation.start, idx.excess.end);
         assert_eq!(idx.generation.len(), 1);
+    }
+
+    // ── z_inflow field tests ───────────────────────────────────────────────
+
+    // z_inflow starts after theta for the simple constructor and has length hydro_count.
+    #[test]
+    fn z_inflow_range_new_constructor() {
+        let idx = StageIndexer::new(3, 2);
+        // theta = N*(2+L) = 3*(2+2) = 12
+        // z_inflow starts at theta + 1 = 13
+        assert_eq!(idx.z_inflow, 13..16);
+        assert_eq!(idx.z_inflow.len(), idx.hydro_count);
+    }
+
+    // z_inflow is empty when hydro_count == 0.
+    #[test]
+    fn z_inflow_range_zero_hydros() {
+        let idx = StageIndexer::new(0, 0);
+        assert!(idx.z_inflow.is_empty());
+        assert!(idx.z_inflow_rows.is_empty());
+        assert_eq!(idx.z_inflow_row_start, 0);
+    }
+
+    // z_inflow_rows and z_inflow_row_start default to empty/0 for the simple constructor.
+    #[test]
+    fn z_inflow_row_start_default() {
+        let idx = StageIndexer::new(5, 1);
+        assert!(idx.z_inflow_rows.is_empty());
+        assert_eq!(idx.z_inflow_row_start, 0);
+        // But z_inflow columns should exist
+        assert_eq!(idx.z_inflow.len(), 5);
+    }
+
+    // z_inflow has correct length for with_equipment constructor.
+    #[test]
+    fn z_inflow_range_with_equipment() {
+        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
+        assert_eq!(idx.z_inflow.len(), 2);
+        // z_inflow rows default to empty for with_equipment (set by LP builder)
+        assert!(idx.z_inflow_rows.is_empty());
+        assert_eq!(idx.z_inflow_row_start, 0);
+    }
+
+    // z_inflow placed correctly for single hydro, no lags case.
+    #[test]
+    fn z_inflow_single_hydro_no_lags() {
+        let idx = StageIndexer::new(1, 0);
+        // theta = 1*(2+0) = 2, z_inflow starts at 3
+        assert_eq!(idx.z_inflow, 3..4);
+        assert_eq!(idx.z_inflow.len(), 1);
     }
 }

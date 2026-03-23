@@ -287,6 +287,11 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
             &ctx.templates[s].row_scale,
         );
     }
+    ws.patch_buf.fill_z_inflow_patches(
+        training_ctx.indexer.z_inflow_row_start,
+        &ws.scratch.z_inflow_rhs_buf,
+        &ctx.templates[s].row_scale,
+    );
     let pc = ws.patch_buf.forward_patch_count();
     ws.solver.set_row_bounds(
         &ws.patch_buf.indices[..pc],
@@ -857,6 +862,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2271,6 +2277,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2330,6 +2337,7 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -2629,6 +2637,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2757,6 +2766,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2799,11 +2809,11 @@ mod tests {
         )
         .unwrap();
 
-        // With n_load_buses=0, forward_patch_count must equal N*(2+L)=1*(2+0)=2.
+        // With n_load_buses=0, forward_patch_count = N*(2+L) + z_inflow = 1*(2+0)+1 = 3.
         assert_eq!(
             workspaces[0].patch_buf.forward_patch_count(),
-            2,
-            "forward_patch_count must be N*(2+L)=2 when n_load_buses=0, got {}",
+            3,
+            "forward_patch_count must be N*(2+L)+N=3 when n_load_buses=0, got {}",
             workspaces[0].patch_buf.forward_patch_count()
         );
         // load_rhs_buf must remain empty.
@@ -2880,6 +2890,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },

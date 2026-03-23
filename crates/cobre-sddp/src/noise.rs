@@ -67,6 +67,12 @@ pub(crate) fn transform_inflow_noise(
     let indexer = training_ctx.indexer;
 
     scratch.noise_buf.clear();
+    scratch.z_inflow_rhs_buf.clear();
+
+    // Pre-fetch PAR parameters for z-inflow RHS computation.
+    let par_lp = stochastic.par();
+    let has_par = par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros;
+
     match inflow_method {
         InflowNonNegativityMethod::Truncation => {
             let max_order = indexer.max_par_order;
@@ -80,7 +86,6 @@ pub(crate) fn transform_inflow_noise(
                 }
             }
 
-            let par_lp = stochastic.par();
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
             evaluate_par_batch(
@@ -115,6 +120,15 @@ pub(crate) fn transform_inflow_noise(
                 scratch
                     .noise_buf
                     .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
+
+                // Z-inflow RHS: base + sigma * eta_effective (m3/s, no zeta, no withdrawal).
+                if has_par {
+                    let base = par_lp.deterministic_base(stage, h);
+                    let sigma = par_lp.sigma(stage, h);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * clamped_eta);
+                } else {
+                    scratch.z_inflow_rhs_buf.push(0.0);
+                }
             }
         }
         InflowNonNegativityMethod::None | InflowNonNegativityMethod::Penalty { .. } => {
@@ -123,6 +137,15 @@ pub(crate) fn transform_inflow_noise(
                 scratch
                     .noise_buf
                     .push(base_rhs + noise_scale[stage_offset + h] * eta);
+
+                // Z-inflow RHS: base + sigma * eta (m3/s, no zeta, no withdrawal).
+                if has_par {
+                    let base = par_lp.deterministic_base(stage, h);
+                    let sigma = par_lp.sigma(stage, h);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * eta);
+                } else {
+                    scratch.z_inflow_rhs_buf.push(0.0);
+                }
             }
         }
     }
@@ -291,6 +314,7 @@ mod tests {
             ncs_col_indices_buf: Vec::new(),
             load_rhs_buf: Vec::new(),
             row_lower_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::new(),
             unscaled_primal: Vec::new(),
             unscaled_dual: Vec::new(),
         }

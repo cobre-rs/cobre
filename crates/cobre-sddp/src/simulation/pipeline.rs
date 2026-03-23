@@ -37,12 +37,13 @@
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::TrainingEvent;
+use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -136,6 +137,12 @@ pub struct SimulationOutputSpec<'a> {
     /// `ncs_entity_ids_per_stage[stage]` lists the entity IDs of NCS sources
     /// active at that stage.
     pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
+
+    /// Mapping from target hydro ID to source hydro indices that divert to it.
+    ///
+    /// Used by the extraction pipeline to compute `diverted_inflow_m3s`.
+    /// Empty when no hydros have diversion.
+    pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
 
     /// Optional event sender for streaming progress events to the CLI/UI.
     pub event_sender: Option<Sender<TrainingEvent>>,
@@ -488,6 +495,7 @@ fn extract_sim_stage_result(
                 .get(t)
                 .map_or(&[], Vec::as_slice),
             ncs_col_upper,
+            diversion_upstream: output.diversion_upstream,
         },
         ids.stage_id_u32,
     );

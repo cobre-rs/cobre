@@ -766,6 +766,11 @@ pub struct StageTemplates {
     /// `active_ncs_indices[stage_idx]` lists the system-level NCS indices active at
     /// that stage, in entity-ID order.
     pub active_ncs_indices: Vec<Vec<usize>>,
+    /// Mapping from target hydro ID to source hydro indices that divert to it.
+    ///
+    /// Used by the simulation extraction pipeline to compute `diverted_inflow_m3s`.
+    /// Empty when no hydros have diversion.
+    pub diversion_upstream: HashMap<EntityId, Vec<usize>>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -2719,6 +2724,7 @@ pub fn build_stage_templates(
             ncs_col_starts: Vec::new(),
             n_ncs_per_stage: Vec::new(),
             active_ncs_indices: Vec::new(),
+            diversion_upstream: HashMap::new(),
         });
     }
 
@@ -2761,6 +2767,8 @@ pub fn build_stage_templates(
 
     // Precompute diversion upstream map: maps target hydro ID -> list of source
     // hydro indices that divert water to it. O(1) lookup in water balance loop.
+    // Cloned so the map is available both for LP construction (ctx) and for the
+    // simulation extraction pipeline (StageTemplates output).
     let mut diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
     for (h_idx, hydro) in hydros.iter().enumerate() {
         if let Some(ref div) = hydro.diversion {
@@ -2770,6 +2778,7 @@ pub fn build_stage_templates(
                 .push(h_idx);
         }
     }
+    let diversion_upstream_output = diversion_upstream.clone();
 
     let ctx = TemplateBuildCtx {
         hydros,
@@ -2848,6 +2857,7 @@ pub fn build_stage_templates(
         ncs_col_starts,
         n_ncs_per_stage,
         active_ncs_indices: active_ncs_indices_per_stage,
+        diversion_upstream: diversion_upstream_output,
     })
 }
 

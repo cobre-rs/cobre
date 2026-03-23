@@ -270,18 +270,26 @@ pub fn resolve_variable_ref<S: BuildHasher>(
             1.0,
         ),
 
+        VariableRef::HydroDiversion { hydro_id, block_id } => resolve_block_variable(
+            *hydro_id,
+            *block_id,
+            block_idx,
+            n_blks,
+            indexer.diversion.start,
+            hydro_pos,
+            1.0,
+        ),
+
         // ── Stub entities with no LP columns ──────────────────────────────
         // The following entity types are registered in the data model but do not
         // contribute LP decision variables in this implementation:
-        // - HydroDiversion: no dedicated diversion column in the LP.
         // - HydroWithdrawal: withdrawal is a schedule fixed by bounds, not a
         //   decision variable.
         // - PumpingFlow, PumpingPower: pumping stations are NO-OP stubs.
         // - ContractImport, ContractExport: contracts are NO-OP stubs.
         // - NonControllableGeneration, NonControllableCurtailment: non-controllable
         //   sources are NO-OP stubs.
-        VariableRef::HydroDiversion { .. }
-        | VariableRef::HydroWithdrawal { .. }
+        VariableRef::HydroWithdrawal { .. }
         | VariableRef::PumpingFlow { .. }
         | VariableRef::PumpingPower { .. }
         | VariableRef::ContractImport { .. }

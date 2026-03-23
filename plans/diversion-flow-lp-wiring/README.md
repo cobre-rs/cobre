@@ -32,8 +32,8 @@ constraint resolver, and extracts diversion values for simulation output.
 | ticket-001 | Set diversion column bounds and objective | epic-02 | completed | Detailed | 0.92 | -- | -- |
 | ticket-002 | Precompute diversion upstream map | epic-02 | completed | Detailed | 0.92 | -- | -- |
 | ticket-003 | Add diversion water balance entries | epic-02 | completed | Detailed | 0.90 | -- | -- |
-| ticket-001 | Wire HydroDiversion in generic constraint resolver | epic-03 | pending | Outline | -- | -- | -- |
-| ticket-002 | Extract diversion from simulation LP primal | epic-03 | pending | Outline | -- | -- | -- |
+| ticket-001 | Wire HydroDiversion in generic constraint resolver | epic-03 | completed | refined | -- | -- | -- |
+| ticket-002 | Extract diversion from simulation LP primal | epic-03 | completed | refined | -- | -- | -- |
 | ticket-001 | Add D17 diversion deterministic test | epic-04 | pending | Outline | -- | -- | -- |
 | ticket-002 | Verify existing D01-D16 regression suite | epic-04 | pending | Outline | -- | -- | -- |
 

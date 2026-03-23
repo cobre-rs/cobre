@@ -20,11 +20,12 @@
 //! ### Column layout (contiguous regions)
 //!
 //! ```text
-//! [0,  N)            outgoing storage      (N = n_hydros)
-//! [N,  N*(1+L))      AR lag variables      (N*L lags, hydro-major)
-//! [N*(1+L), N*(2+L)) incoming storage      (fixed by storage-fixing rows)
-//! N*(2+L)            theta                 (future cost, scalar)
-//! N*(2+L)+1 ..       decision variables:
+//! [0,  N)              outgoing storage      (N = n_hydros)
+//! [N,  N*(1+L))        AR lag variables      (N*L lags, hydro-major)
+//! [N*(1+L), N*(2+L))   z_inflow              (realized inflow, free, not state)
+//! [N*(2+L), N*(3+L))   incoming storage      (fixed by storage-fixing rows)
+//! N*(3+L)              theta                 (future cost, scalar)
+//! N*(3+L)+1 ..         decision variables:
 //!   hydro turbine:   N*K columns
 //!   hydro spillage:  N*K columns
 //!   thermal gen:     T*K columns
@@ -36,42 +37,52 @@
 //!   FPHA generation: N_fpha*K columns (one per FPHA hydro per block)
 //!   evaporation:     N_evap*3 columns (Q_ev, f_evap_plus, f_evap_minus per evap hydro)
 //!   withdrawal slack: N columns (sigma^r_h, one per hydro when hydro_count > 0)
+//!   NCS generation:  n_active_ncs*K columns  (VARIES per stage)
+//!   generic slack:   n_generic_slack columns  (VARIES per stage)
 //! ```
 //!
 //! ### Row layout (contiguous regions)
 //!
 //! ```text
-//! [0,  N)            storage-fixing constraints
-//! [N,  N*(1+L))      AR lag-fixing constraints
-//! N*(1+L) ..         structural constraints (non-dual region):
+//! [0,  N)              storage-fixing constraints
+//! [N,  N*(1+L))        AR lag-fixing constraints
+//! [N*(1+L), N*(2+L))   z_inflow definition constraints (structural, equality)
+//! N*(2+L) ..           structural constraints (non-dual region):
 //!   water balance:   N rows   (one per hydro)
 //!   load balance:    B*K rows (one per bus per block)
+//!   FPHA:            n_fpha_rows
+//!   evaporation:     n_evap rows
+//!   generic:         n_generic_rows  (VARIES per stage)
 //! ```
 //!
 //! The AR dynamics (noise patch target) rows are the water balance constraints
-//! beginning at row `n_dual_relevant` (= `N*(1+L)`).  The `base_rows` value
-//! returned alongside the templates encodes this offset for each stage so
-//! that [`PatchBuffer`] can update the correct RHS during forward-pass solves.
+//! beginning at row `base_rows[stage]` (= `N*(2+L)` for stages without extra
+//! variable-offset rows). The `base_rows` value returned alongside the templates
+//! encodes this offset for each stage so that [`PatchBuffer`] can update the
+//! correct RHS during forward-pass solves.
 //!
 //! ## Patch sequence (Training Loop SS4.2a)
 //!
-//! Each forward-pass solve requires up to `N*(2+L) + M*K` row-bound patches
+//! Each forward-pass solve requires up to `N*(2+L) + N + M*K` row-bound patches
 //! (where M is the number of stochastic load buses and K is the block count):
 //!
 //! ```text
-//! Category 1 — storage fixing    rows [0, N)
+//! Category 1 -- storage fixing    rows [0, N)
 //!     patch row h = state[h]   for h in [0, N)
 //!
-//! Category 2 — AR lag fixing     rows [N, N*(1+L))
-//!     patch row N + ℓ·N + h = state[N + ℓ·N + h]
-//!     for h in [0, N), ℓ in [0, L)
+//! Category 2 -- AR lag fixing     rows [N, N*(1+L))
+//!     patch row N + l*N + h = state[N + l*N + h]
+//!     for h in [0, N), l in [0, L)
 //!
-//! Category 3 — noise innovation   N rows in the static non-dual region
-//!     patch ar_dynamics_row(base_row, h) = noise[h]   for h in [0, N)
+//! Category 3 -- noise innovation   N rows at base_rows[stage] (= N*(2+L))
+//!     patch water_balance_row(base_row, h) = noise[h]   for h in [0, N)
 //!
-//! Category 4 — load balance patches   M*K rows (optional, stochastic load)
+//! Category 4 -- load balance patches   M*K rows (optional, stochastic load)
 //!     patch load_row_start + bus_pos[i]*K + blk = load_rhs[i*K + blk]
 //!     for i in [0, M), blk in [0, K)
+//!
+//! Category 5 -- z-inflow RHS      N rows at N*(1+L)
+//!     patch z_inflow_row(h) = base_h + noise_scale_h * eta_h   for h in [0, N)
 //! ```
 //!
 //! The backward pass uses only categories 1 and 2 (`N*(1+L)` patches); noise
@@ -90,18 +101,21 @@
 //!     0  storage-fix    0                      state[0]  (H0)
 //!     1  storage-fix    1                      state[1]  (H1)
 //!     2  storage-fix    2                      state[2]  (H2)
-//!     3  lag-fix        N + 0·N + 0 = 3        state[3]  (H0 lag 0)
-//!     4  lag-fix        N + 0·N + 1 = 4        state[4]  (H1 lag 0)
-//!     5  lag-fix        N + 0·N + 2 = 5        state[5]  (H2 lag 0)
-//!     6  lag-fix        N + 1·N + 0 = 6        state[6]  (H0 lag 1)
-//!     7  lag-fix        N + 1·N + 1 = 7        state[7]  (H1 lag 1)
-//!     8  lag-fix        N + 1·N + 2 = 8        state[8]  (H2 lag 1)
-//!     9  noise-fix      ar_dynamics_row(br, 0) noise[0]  (H0)
-//!    10  noise-fix      ar_dynamics_row(br, 1) noise[1]  (H1)
-//!    11  noise-fix      ar_dynamics_row(br, 2) noise[2]  (H2)
+//!     3  lag-fix        N + 0*N + 0 = 3        state[3]  (H0 lag 0)
+//!     4  lag-fix        N + 0*N + 1 = 4        state[4]  (H1 lag 0)
+//!     5  lag-fix        N + 0*N + 2 = 5        state[5]  (H2 lag 0)
+//!     6  lag-fix        N + 1*N + 0 = 6        state[6]  (H0 lag 1)
+//!     7  lag-fix        N + 1*N + 1 = 7        state[7]  (H1 lag 1)
+//!     8  lag-fix        N + 1*N + 2 = 8        state[8]  (H2 lag 1)
+//!     9  noise-fix      N*(2+L) + 0 = 12       noise[0]  (H0)
+//!    10  noise-fix      N*(2+L) + 1 = 13       noise[1]  (H1)
+//!    11  noise-fix      N*(2+L) + 2 = 14       noise[2]  (H2)
+//!    12  z-inflow       N*(1+L) + 0 = 9        z_rhs[0]  (H0)
+//!    13  z-inflow       N*(1+L) + 1 = 10       z_rhs[1]  (H1)
+//!    14  z-inflow       N*(1+L) + 2 = 11       z_rhs[2]  (H2)
 //! ```
 //!
-//! Total: 12 = 3*(2+2) patches.
+//! Total: 15 = 3*(2+2) + 3 patches.
 
 use std::collections::HashMap;
 
@@ -129,20 +143,26 @@ use crate::inflow_method::InflowNonNegativityMethod;
 ///
 /// Holds three parallel `Vec`s of equal length ready for a single
 /// `SolverInterface::set_row_bounds` call.  The buffer is sized for
-/// `N*(2+L) + M*B` patches at construction and reused across all iterations,
-/// where `M` is the number of stochastic load buses and `B` is the maximum
-/// block count across stages.
+/// `N*(2+L) + N + M*B` patches at construction and reused across all
+/// iterations, where `M` is the number of stochastic load buses and `B` is
+/// the maximum block count across stages.
 ///
 /// # Memory layout
 ///
 /// Entries are written in category order:
 ///
-/// | Entry range                         | Category                                |
-/// | ----------------------------------- | --------------------------------------- |
-/// | `[0, N)`                            | Storage-fixing (Category 1)             |
-/// | `[N, N*(1+L))`                      | AR lag-fixing (Category 2)              |
-/// | `[N*(1+L), N*(2+L))`               | AR dynamics / noise (Category 3)        |
-/// | `[N*(2+L), N*(2+L) + M*B_active)`  | Load balance row patches (Category 4)   |
+/// | Entry range                         | Category                                | LP row indices              |
+/// | ----------------------------------- | --------------------------------------- | --------------------------- |
+/// | `[0, N)`                            | Storage-fixing (Category 1)             | `[0, N)`                    |
+/// | `[N, N*(1+L))`                      | AR lag-fixing (Category 2)              | `[N, N*(1+L))`              |
+/// | `[N*(1+L), N*(2+L))`               | AR dynamics / noise (Category 3)        | `base_rows[s]` = `N*(2+L)`  |
+/// | `[N*(2+L), N*(2+L) + M*B_active)`  | Load balance row patches (Category 4)   | per-stage                   |
+/// | `[N*(2+L)+M*B, N*(2+L)+M*B+N)`     | Z-inflow definition (Category 5)        | `N*(1+L)` (fixed)           |
+///
+/// Note: Category 3 patches LP rows at `base_rows[stage]` = `N*(2+L)` (water
+/// balance rows, shifted by `+N` from the old layout where they started at
+/// `N*(1+L)`). Category 5 patches LP rows at `N*(1+L)` (z-inflow definition
+/// rows, now at a fixed offset between lag-fixing and water balance).
 ///
 /// [`fill_state_patches`](PatchBuffer::fill_state_patches) writes only
 /// `[0, N*(1+L))` (Categories 1 and 2).  Category 3 is left from the
@@ -746,17 +766,6 @@ pub struct StageTemplates {
     /// `active_ncs_indices[stage_idx]` lists the system-level NCS indices active at
     /// that stage, in entity-ID order.
     pub active_ncs_indices: Vec<Vec<usize>>,
-    /// Per-stage row index of the first z-inflow definition constraint.
-    ///
-    /// `z_inflow_row_starts[s]` is the row index of the first z-inflow equality
-    /// constraint at stage `s`.  Used by `PatchBuffer::fill_z_inflow_patches`
-    /// (Category 5) and wired into `StageIndexer.z_inflow_row_start` by setup.
-    pub z_inflow_row_starts: Vec<usize>,
-    /// Per-stage column index of the first z-inflow variable.
-    ///
-    /// `z_inflow_col_starts[s]` is the column index of the first realized-inflow
-    /// variable `z_h` at stage `s`.  Wired into `StageIndexer.z_inflow` by setup.
-    pub z_inflow_col_starts: Vec<usize>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -1027,7 +1036,9 @@ impl StageLayout {
 
         let n_state = idx.n_state;
         let n_dual_relevant = n_state;
-        let row_water_balance_start = n_dual_relevant;
+        // z_inflow rows occupy [n_dual_relevant, n_dual_relevant + n_hydros),
+        // so water balance rows start after them.
+        let row_water_balance_start = n_dual_relevant + ctx.n_hydros;
         let row_load_balance_start = row_water_balance_start + ctx.n_hydros;
         let row_load_balance_end = row_load_balance_start + ctx.n_buses * n_blks;
 
@@ -1150,16 +1161,15 @@ impl StageLayout {
             }
         }
 
-        let pre_z_cols = col_generic_slack_start + n_generic_slack_cols;
-        let pre_z_rows = row_generic_start + n_generic_rows;
+        // z-inflow columns and rows are at fixed offset N*(1+L), from the indexer.
+        // They are embedded inside the layout (between lags and storage_in for columns,
+        // between lag-fixing and water balance for rows), NOT at the end.
+        let col_z_inflow_start = idx.z_inflow.start; // = N*(1+L)
+        let row_z_inflow_start = idx.z_inflow_row_start; // = N*(1+L)
 
-        // z-inflow columns: one free column per hydro, placed after all other columns.
-        let col_z_inflow_start = pre_z_cols;
-        let num_cols = pre_z_cols + ctx.n_hydros;
-
-        // z-inflow rows: one equality row per hydro, placed after all other rows.
-        let row_z_inflow_start = pre_z_rows;
-        let num_rows = pre_z_rows + ctx.n_hydros;
+        // num_cols and num_rows: generic slack/rows are now the last variable-size regions.
+        let num_cols = col_generic_slack_start + n_generic_slack_cols;
+        let num_rows = row_generic_start + n_generic_rows;
 
         let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let zeta = total_stage_hours * M3S_TO_HM3;
@@ -2200,8 +2210,6 @@ fn build_single_stage_template(
     usize,
     usize,
     Vec<usize>,
-    usize,
-    usize,
 ) {
     let layout = StageLayout::new(ctx, stage, stage_idx);
     let stage_base_row = layout.row_water_balance_start;
@@ -2262,8 +2270,6 @@ fn build_single_stage_template(
     let ncs_col_start = layout.col_ncs_start;
     let n_ncs = layout.n_ncs;
     let ncs_active = layout.active_ncs_indices;
-    let z_inflow_row_start = layout.row_z_inflow_start;
-    let z_inflow_col_start = layout.col_z_inflow_start;
 
     let template = StageTemplate {
         num_cols: layout.num_cols,
@@ -2294,8 +2300,6 @@ fn build_single_stage_template(
         ncs_col_start,
         n_ncs,
         ncs_active,
-        z_inflow_row_start,
-        z_inflow_col_start,
     )
 }
 
@@ -2664,8 +2668,6 @@ pub fn build_stage_templates(
             ncs_col_starts: Vec::new(),
             n_ncs_per_stage: Vec::new(),
             active_ncs_indices: Vec::new(),
-            z_inflow_row_starts: Vec::new(),
-            z_inflow_col_starts: Vec::new(),
         });
     }
 
@@ -2746,8 +2748,6 @@ pub fn build_stage_templates(
     let mut ncs_col_starts = Vec::with_capacity(n_study);
     let mut n_ncs_per_stage = Vec::with_capacity(n_study);
     let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
-    let mut z_inflow_row_starts = Vec::with_capacity(n_study);
-    let mut z_inflow_col_starts = Vec::with_capacity(n_study);
     for (stage_idx, stage) in study_stages.iter().enumerate() {
         let (
             template,
@@ -2757,8 +2757,6 @@ pub fn build_stage_templates(
             ncs_col_start,
             ncs_count,
             ncs_active,
-            z_inflow_row_start,
-            z_inflow_col_start,
         ) = build_single_stage_template(&ctx, stage, stage_idx);
         templates.push(template);
         base_rows.push(stage_base_row);
@@ -2767,8 +2765,6 @@ pub fn build_stage_templates(
         ncs_col_starts.push(ncs_col_start);
         n_ncs_per_stage.push(ncs_count);
         active_ncs_indices_per_stage.push(ncs_active);
-        z_inflow_row_starts.push(z_inflow_row_start);
-        z_inflow_col_starts.push(z_inflow_col_start);
     }
 
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
@@ -2788,8 +2784,6 @@ pub fn build_stage_templates(
         ncs_col_starts,
         n_ncs_per_stage,
         active_ncs_indices: active_ncs_indices_per_stage,
-        z_inflow_row_starts,
-        z_inflow_col_starts,
     })
 }
 
@@ -3832,8 +3826,9 @@ mod tests {
     }
 
     #[test]
-    fn base_row_is_n_dual_relevant() {
-        // base_rows[s] = n_dual_relevant = n_state for the no-FPHA case.
+    fn base_row_is_n_dual_relevant_plus_n_hydros() {
+        // base_rows[s] = n_dual_relevant + n_hydro = N*(1+L) + N = N*(2+L).
+        // z-inflow rows occupy [n_dual_relevant, n_dual_relevant + N).
         let system = one_hydro_system(2, 2);
         let result = build_stage_templates(
             &system,
@@ -3846,8 +3841,9 @@ mod tests {
         .expect("constant productivity ok");
         for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
             assert_eq!(
-                br, t.n_dual_relevant,
-                "base_rows[{s}] must equal n_dual_relevant"
+                br,
+                t.n_dual_relevant + t.n_hydro,
+                "base_rows[{s}] must equal n_dual_relevant + n_hydro"
             );
         }
     }

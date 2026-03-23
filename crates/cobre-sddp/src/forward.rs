@@ -985,20 +985,23 @@ mod tests {
         //   n_transfer   = 0
         //   n_dual_relevant = 1
         //
+        // Column layout for N=1, L=0:
+        //   col 0: storage_out, col 1: z_inflow, col 2: storage_in, col 3: theta
+        //
         // LP: min theta  s.t. storage_in = ? (patched)  x >= 0
         //
         // CSC matrix has 1 non-zero: storage_in coefficient in storage_fixing row.
         // Simplified to a structurally valid but otherwise no-op LP for testing.
         StageTemplate {
-            num_cols: 3,
+            num_cols: 4,
             num_rows: 1,
             num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1], // col 1 (storage_in) has NZ at row 0
+            col_starts: vec![0_i32, 0, 0, 1, 1], // col 2 (storage_in) has NZ at row 0
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-            objective: vec![0.0, 0.0, 1.0], // minimise theta
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0], // minimise theta (at col 3)
             row_lower: vec![0.0],
             row_upper: vec![0.0],
             n_state: 1,
@@ -1216,7 +1219,7 @@ mod tests {
 
         assert_eq!(batch.num_rows, 1);
         assert_eq!(batch.row_starts, vec![0, 2]);
-        assert_eq!(batch.col_indices, vec![0, 2]);
+        assert_eq!(batch.col_indices, vec![0, 3]); // theta at col N*(3+L) = 3
         assert_eq!(batch.values, vec![-2.0, 1.0]);
         assert_eq!(batch.row_lower, vec![5.0]);
         assert!(batch.row_upper[0].is_infinite() && batch.row_upper[0] > 0.0);
@@ -1234,13 +1237,13 @@ mod tests {
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
         assert_eq!(batch.col_indices[0], 0);
         assert_eq!(batch.col_indices[1], 1);
-        assert_eq!(batch.col_indices[2], 3);
+        assert_eq!(batch.col_indices[2], 4); // theta at N*(3+L) = 1*(3+1) = 4
         assert_eq!(batch.values[0], -1.0);
         assert_eq!(batch.values[1], -3.0);
         assert_eq!(batch.values[2], 1.0);
         assert_eq!(batch.col_indices[3], 0);
         assert_eq!(batch.col_indices[4], 1);
-        assert_eq!(batch.col_indices[5], 3);
+        assert_eq!(batch.col_indices[5], 4); // theta at N*(3+L) = 4
         assert_eq!(batch.values[3], -2.0);
         assert_eq!(batch.values[4], -4.0);
         assert_eq!(batch.values[5], 1.0);
@@ -1257,7 +1260,7 @@ mod tests {
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
-        assert_eq!(batch.col_indices, vec![0, 1, 3]);
+        assert_eq!(batch.col_indices, vec![0, 1, 4]); // theta at N*(3+L) = 4
         assert_eq!(batch.values, vec![0.0, -7.0, 1.0]);
         assert_eq!(batch.row_lower, vec![3.0]);
     }
@@ -1298,9 +1301,9 @@ mod tests {
     /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70_000`.
     #[test]
     fn ac_two_scenarios_three_stages_fixed_solution() {
-        // StageIndexer: N=1, L=0 → n_state=1, theta=2, num_cols=3
+        // StageIndexer: N=1, L=0 → n_state=1, theta=3, num_cols=4
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
@@ -1317,7 +1320,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -1378,7 +1381,7 @@ mod tests {
     #[test]
     fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         // The 2nd solve call (index 1) is stage 1 of scenario 0.
         let solver = MockSolver::infeasible_on(solution, 1);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
@@ -1396,7 +1399,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -1466,7 +1469,7 @@ mod tests {
     #[test]
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
@@ -1483,7 +1486,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -1855,7 +1858,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -1903,7 +1906,7 @@ mod tests {
     #[test]
     fn warm_start_first_iteration_cold_second_iteration_warm() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
         // Single workspace and a shared basis store (1 scenario × 3 stages).
         let mut ws = single_workspace(solver, &indexer);
@@ -1944,7 +1947,7 @@ mod tests {
     #[test]
     fn basis_invalidated_on_solver_error() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         // Call 4 = second iteration, stage 1 (calls 0-2 = first iteration
         // stages 0,1,2; calls 3,4,5 = second iteration stages 0,1,2).
         let solver = MockSolver::infeasible_on(solution, 4);
@@ -1990,7 +1993,7 @@ mod tests {
     #[test]
     fn test_forward_pass_parallel_cost_agreement() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1999,7 +2002,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let n_scenarios = 10;
 
@@ -2101,7 +2104,7 @@ mod tests {
     #[test]
     fn test_forward_pass_work_distribution() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2111,7 +2114,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let n_scenarios = 10usize;
         let n_workers = 4usize;
@@ -2325,24 +2328,25 @@ mod tests {
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
     /// row at position `base_row_idx`.
     ///
-    /// This is a two-row template:
-    /// - Row 0: storage fixing row (not used as water-balance)
-    /// - Row 1: water-balance row (`base_rows`[t] = 1)
+    /// This is a three-row template:
+    /// - Row 0: storage fixing row
+    /// - Row 1: z-inflow definition row (at N*(1+L) = 1)
+    /// - Row 2: water-balance row (`base_rows`[t] = 2)
     ///
-    /// `row_lower[1]` encodes the deterministic inflow base (ζ * `mean_m3s`).
+    /// `row_lower[2]` encodes the deterministic inflow base (ζ * `mean_m3s`).
     fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
         StageTemplate {
-            num_cols: 3,
-            num_rows: 2,
+            num_cols: 4,
+            num_rows: 3,
             num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1],
+            col_starts: vec![0_i32, 0, 0, 1, 1],
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-            objective: vec![0.0, 0.0, 1.0],
-            row_lower: vec![0.0, base_rhs],
-            row_upper: vec![0.0, base_rhs],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 0.0, base_rhs],
+            row_upper: vec![0.0, 0.0, base_rhs],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -2362,14 +2366,14 @@ mod tests {
         noise_scale_val: f64,
     ) -> Vec<f64> {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 0.0, indexer.theta, 0.0);
+        let solution = fixed_solution(4, 0.0, indexer.theta, 0.0);
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let template = minimal_template_1_0_with_base(base_rhs);
         let templates = vec![template];
         // base_rows[t] = 1: the water-balance row is at row index 1.
-        let base_rows = vec![1usize];
+        let base_rows = vec![2usize];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(1);
         let mut ws = single_workspace(solver, &indexer);
@@ -2503,7 +2507,7 @@ mod tests {
     #[test]
     fn none_method_unchanged_with_truncation_code_present() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
@@ -2519,7 +2523,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -2701,7 +2705,7 @@ mod tests {
     #[test]
     fn test_forward_pass_parallel_infeasibility() {
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2711,7 +2715,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let n_scenarios = 10usize;
         let n_workers = 4usize;
@@ -2808,7 +2812,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
         let mut ws = SolverWorkspace {
-            solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
+            solver: MockSolver::always_ok(fixed_solution(4, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),
             scratch: crate::workspace::ScratchBuffers {
@@ -2830,7 +2834,7 @@ mod tests {
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
-        let base_rows = vec![1usize];
+        let base_rows = vec![2usize];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(1);
         let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
@@ -2910,7 +2914,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
         let mut ws = SolverWorkspace {
-            solver: MockSolver::always_ok(fixed_solution(3, 100.0, indexer.theta, 30.0)),
+            solver: MockSolver::always_ok(fixed_solution(4, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),
             scratch: crate::workspace::ScratchBuffers {
@@ -2932,7 +2936,7 @@ mod tests {
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
-        let base_rows = vec![1usize];
+        let base_rows = vec![2usize];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(1);
         let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
@@ -3006,7 +3010,7 @@ mod tests {
         // Use the existing 1-hydro-3-stage context that has no load buses.
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(3, 100.0, indexer.theta, 30.0);
+        let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let mut ws = single_workspace(MockSolver::always_ok(solution), &indexer);
 
         let templates = vec![
@@ -3014,7 +3018,7 @@ mod tests {
             minimal_template_1_0(),
             minimal_template_1_0(),
         ];
-        let base_rows = vec![1usize, 1, 1];
+        let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(3); // 1 scenario * 3 stages
         let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 10, 0);

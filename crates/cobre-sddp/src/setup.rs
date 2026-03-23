@@ -479,16 +479,8 @@ impl StudySetup {
             }
         }
 
-        // Wire z-inflow column and row ranges from the LP builder.
-        if !stage_templates.z_inflow_col_starts.is_empty() {
-            let n_hydros = indexer.hydro_count;
-            let z_col_start = stage_templates.z_inflow_col_starts[0];
-            indexer.z_inflow = z_col_start..(z_col_start + n_hydros);
-
-            let z_row_start = stage_templates.z_inflow_row_starts[0];
-            indexer.z_inflow_rows = z_row_start..(z_row_start + n_hydros);
-            indexer.z_inflow_row_start = z_row_start;
-        }
+        // z-inflow column and row ranges are set by StageIndexer::new at
+        // fixed offset N*(1+L), no per-stage wiring needed.
 
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);

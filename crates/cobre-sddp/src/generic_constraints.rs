@@ -339,18 +339,18 @@ mod tests {
     /// S=2 max deficit segments.
     ///
     /// Column layout:
-    ///   theta = N*(2+L) = 4*(2+0) = 8
-    ///   decision_start = 9
-    ///   turbine:   [9,  9+4*3)  = 9..21    (4 hydros * 3 blocks)
-    ///   spillage: [21, 21+4*3)  = 21..33
-    ///   thermal:  [33, 33+2*3)  = 33..39   (2 thermals * 3 blocks)
-    ///   line_fwd: [39, 39+1*3)  = 39..42   (1 line * 3 blocks)
-    ///   line_rev: [42, 42+1*3)  = 42..45
-    ///   deficit:  [45, 45+2*2*3) = 45..57  (2 buses * 2 segs * 3 blocks)
-    ///   excess:   [57, 57+2*3)  = 57..63   (2 buses * 3 blocks)
-    ///   generation: [63, 63+2*3) = 63..69  (2 FPHA hydros * 3 blocks)
+    ///   theta = N*(3+L) = 4*(3+0) = 12
+    ///   decision_start = 13
+    ///   turbine:   [13, 13+4*3) = 13..25   (4 hydros * 3 blocks)
+    ///   spillage:  [25, 25+4*3) = 25..37
+    ///   thermal:   [37, 37+2*3) = 37..43   (2 thermals * 3 blocks)
+    ///   line_fwd:  [43, 43+1*3) = 43..46   (1 line * 3 blocks)
+    ///   line_rev:  [46, 46+1*3) = 46..49
+    ///   deficit:   [49, 49+2*2*3) = 49..61 (2 buses * 2 segs * 3 blocks)
+    ///   excess:    [61, 61+2*3) = 61..67   (2 buses * 3 blocks)
+    ///   generation: [67, 67+2*3) = 67..73  (2 FPHA hydros * 3 blocks)
     ///   evap: none
-    ///   withdrawal_slack: [69, 73) (4 hydros, since hydro_count > 0)
+    ///   withdrawal_slack: [73, 77) (4 hydros, since hydro_count > 0)
     ///
     /// Storage: 0..4
     fn make_indexer() -> StageIndexer {

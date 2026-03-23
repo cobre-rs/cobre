@@ -29,12 +29,12 @@
 use std::ops::Range;
 
 use cobre_comm::Communicator;
-use cobre_solver::{SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::{OpeningTree, StochasticContext};
 
 use crate::{
     FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch, lp_builder::COST_SCALE_FACTOR, noise::transform_ncs_noise,
+    forward::build_cut_row_batch_into, lp_builder::COST_SCALE_FACTOR, noise::transform_ncs_noise,
 };
 use cobre_solver::StageTemplate;
 
@@ -104,13 +104,14 @@ pub struct LbEvalSpec<'a> {
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,
     initial_state: &[f64],
     indexer: &StageIndexer,
     patch_buf: &mut PatchBuffer,
+    lb_cut_batch: &mut RowBatch,
     spec: &LbEvalSpec<'_>,
     comm: &C,
 ) -> Result<f64, SddpError> {
@@ -138,7 +139,8 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        let cut_batch = build_cut_row_batch(fcf, 0, indexer, &template.col_scale);
+        build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &template.col_scale);
+        let cut_batch = &*lb_cut_batch;
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
         let mut z_inflow_rhs_buf = Vec::with_capacity(n_hydros);
@@ -166,7 +168,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         // patch bounds via set_row_bounds / set_col_bounds.
         solver.load_model(template);
         if cut_batch.num_rows > 0 {
-            solver.add_rows(&cut_batch);
+            solver.add_rows(cut_batch);
         }
 
         for opening_idx in 0..n_openings {
@@ -271,6 +273,17 @@ mod tests {
         Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::OpeningTree;
+
+    fn empty_row_batch() -> RowBatch {
+        RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        }
+    }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR order.
     ///
@@ -583,6 +596,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -628,6 +642,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -680,6 +695,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -729,6 +745,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -774,6 +791,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         );
@@ -817,6 +835,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         );
@@ -867,6 +886,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -917,6 +937,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )
@@ -930,6 +951,7 @@ mod tests {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut empty_row_batch(),
             &spec,
             &comm,
         )

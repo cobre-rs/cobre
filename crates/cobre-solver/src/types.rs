@@ -333,6 +333,21 @@ pub struct RowBatch {
     pub row_upper: Vec<f64>,
 }
 
+impl RowBatch {
+    /// Reset all buffers to empty without deallocating.
+    ///
+    /// After `clear()`, `num_rows` is 0 and all `Vec` fields have length 0
+    /// but retain their allocated capacity for reuse.
+    pub fn clear(&mut self) {
+        self.num_rows = 0;
+        self.row_starts.clear();
+        self.col_indices.clear();
+        self.values.clear();
+        self.row_lower.clear();
+        self.row_upper.clear();
+    }
+}
+
 /// Terminal LP solve error returned after all retry attempts are exhausted.
 ///
 /// The calling algorithm uses the variant to determine its response:

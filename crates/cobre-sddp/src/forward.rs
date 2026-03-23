@@ -265,37 +265,34 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
-#[must_use]
-pub fn build_cut_row_batch(
+/// Fill a pre-allocated [`RowBatch`] with Benders cut rows from the FCF.
+///
+/// Clears `batch` and repopulates it with active cuts from `fcf` at the
+/// given `stage`. The buffers inside `batch` retain their allocated capacity
+/// across calls, eliminating heap allocation on the hot path.
+///
+/// This is the allocation-free core used by [`build_cut_row_batch`].
+pub fn build_cut_row_batch_into(
+    batch: &mut RowBatch,
     fcf: &FutureCostFunction,
     stage: usize,
     indexer: &StageIndexer,
     col_scale: &[f64],
-) -> RowBatch {
+) {
+    batch.clear();
+
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
 
     let num_cuts: usize = fcf.active_cuts(stage).count();
 
     if num_cuts == 0 {
-        return RowBatch {
-            num_rows: 0,
-            row_starts: vec![0_i32],
-            col_indices: vec![],
-            values: vec![],
-            row_lower: vec![],
-            row_upper: vec![],
-        };
+        batch.row_starts.push(0_i32);
+        return;
     }
 
     let nnz_per_cut = n_state + 1;
     let total_nnz = num_cuts * nnz_per_cut;
-
-    let mut row_starts: Vec<i32> = Vec::with_capacity(num_cuts + 1);
-    let mut col_indices: Vec<i32> = Vec::with_capacity(total_nnz);
-    let mut values = Vec::with_capacity(total_nnz);
-    let mut row_lower = Vec::with_capacity(num_cuts);
-    let mut row_upper = Vec::with_capacity(num_cuts);
 
     let mut nz_offset = 0;
 
@@ -309,7 +306,7 @@ pub fn build_cut_row_batch(
         );
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        row_starts.push(nz_offset as i32);
+        batch.row_starts.push(nz_offset as i32);
 
         for (j, &c) in coefficients.iter().enumerate() {
             debug_assert!(
@@ -317,16 +314,13 @@ pub fn build_cut_row_batch(
                 "column index j={j} exceeds i32::MAX"
             );
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            col_indices.push(j as i32);
-            // When column scaling is active, cut row entries must be in the
-            // scaled LP's coordinate system: multiply by d_j so that the
-            // constraint reads -c_j * d_j * x_tilde_j = -c_j * x_j.
+            batch.col_indices.push(j as i32);
             let d = if col_scale.is_empty() {
                 1.0
             } else {
                 col_scale[j]
             };
-            values.push(-c * d);
+            batch.values.push(-c * d);
         }
 
         debug_assert!(
@@ -334,34 +328,50 @@ pub fn build_cut_row_batch(
             "theta_col={theta_col} exceeds i32::MAX"
         );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        col_indices.push(theta_col as i32);
-        // Theta column also needs scaling.
+        batch.col_indices.push(theta_col as i32);
         let d_theta = if col_scale.is_empty() {
             1.0
         } else {
             col_scale[theta_col]
         };
-        values.push(d_theta);
+        batch.values.push(d_theta);
 
-        row_lower.push(intercept);
-        row_upper.push(f64::INFINITY);
+        batch.row_lower.push(intercept);
+        batch.row_upper.push(f64::INFINITY);
 
         nz_offset += nnz_per_cut;
     }
 
     #[allow(clippy::expect_used)]
-    row_starts.push(
+    batch.row_starts.push(
         i32::try_from(total_nnz).expect("total_nnz exceeds i32::MAX; LP exceeds HiGHS API limit"),
     );
 
-    RowBatch {
-        num_rows: num_cuts,
-        row_starts,
-        col_indices,
-        values,
-        row_lower,
-        row_upper,
-    }
+    batch.num_rows = num_cuts;
+}
+
+/// Build a fresh [`RowBatch`] of Benders cut rows from the FCF.
+///
+/// Convenience wrapper around [`build_cut_row_batch_into`] that allocates a
+/// new `RowBatch`. For allocation-free usage on the hot path, prefer calling
+/// [`build_cut_row_batch_into`] with a pre-allocated batch.
+#[must_use]
+pub fn build_cut_row_batch(
+    fcf: &FutureCostFunction,
+    stage: usize,
+    indexer: &StageIndexer,
+    col_scale: &[f64],
+) -> RowBatch {
+    let mut batch = RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+    build_cut_row_batch_into(&mut batch, fcf, stage, indexer, col_scale);
+    batch
 }
 
 /// Bundled scalar parameters for one forward pass invocation.
@@ -693,11 +703,13 @@ fn run_forward_stage<S: SolverInterface + Send>(
 /// - `initial_state.len() != indexer.n_state`
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
+#[allow(clippy::too_many_arguments)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
     ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
+    cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
     batch: &ForwardPassBatch,
     records: &mut [TrajectoryRecord],
@@ -723,9 +735,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     debug_assert_eq!(ctx.base_rows.len(), num_stages);
 
     let start = Instant::now();
-    let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
-        .collect();
+    for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
+        build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
+    }
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
     let n_workers = workspaces.len().max(1);
@@ -854,6 +866,20 @@ mod tests {
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
     };
+
+    /// Create a `Vec<RowBatch>` of empty batches, one per stage.
+    fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
+        (0..n_stages)
+            .map(|_| RowBatch {
+                num_rows: 0,
+                row_starts: Vec::new(),
+                col_indices: Vec::new(),
+                values: Vec::new(),
+                row_lower: Vec::new(),
+                row_upper: Vec::new(),
+            })
+            .collect()
+    }
 
     // ── Mock solver ──────────────────────────────────────────────────────────
 
@@ -1349,6 +1375,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1430,6 +1457,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1517,6 +1545,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1887,6 +1916,7 @@ mod tests {
             basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2035,6 +2065,7 @@ mod tests {
             &mut basis_store1,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2062,6 +2093,7 @@ mod tests {
             &mut basis_store4,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2149,6 +2181,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2404,6 +2437,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2554,6 +2588,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2761,6 +2796,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2868,6 +2904,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2970,6 +3007,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3049,6 +3087,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,

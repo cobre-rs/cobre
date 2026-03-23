@@ -34,6 +34,7 @@ use std::time::Instant;
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
 use cobre_solver::Basis;
+use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
 use cobre_stochastic::OpeningTree;
 
@@ -339,6 +340,29 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
     let mut solver_stats_log: Vec<SolverStatsEntry> = Vec::new();
 
+    // Pre-allocate RowBatch buffers for cut row construction. Reused across
+    // iterations via build_cut_row_batch_into to eliminate per-iteration
+    // heap allocation (S3 optimization).
+    let mut cut_batches: Vec<RowBatch> = (0..num_stages)
+        .map(|_| RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        })
+        .collect();
+    // Extra batch for lower-bound evaluation (stage 0).
+    let mut lb_cut_batch = RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
@@ -371,6 +395,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &mut basis_store,
             stage_ctx,
             fcf,
+            &mut cut_batches,
             training_ctx,
             &fwd_batch,
             &mut records[..fwd_record_len],
@@ -433,6 +458,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &basis_store,
             stage_ctx,
             fcf,
+            &mut cut_batches,
             training_ctx,
             &mut bwd_spec,
             comm,
@@ -548,6 +574,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             initial_state,
             indexer,
             &mut patch_buf,
+            &mut lb_cut_batch,
             &lb_spec,
             comm,
         )?;

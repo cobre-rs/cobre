@@ -1,6 +1,6 @@
 {
   "plan": "diversion-flow-lp-wiring",
-  "last_updated": "2026-03-23T11:35:05Z",
+  "last_updated": "2026-03-23T11:42:19Z",
   "progressive": true,
   "tickets": {
     "epic-01/ticket-001-add-diversion-range-to-stage-indexer.md": {
@@ -36,7 +36,7 @@
       "agent": "hpc-rust-developer"
     },
     "epic-02/ticket-001-set-diversion-column-bounds-and-objective.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
         "readiness": 0.92,
@@ -52,7 +52,7 @@
       "agent": "hpc-rust-developer"
     },
     "epic-02/ticket-002-precompute-diversion-upstream-map.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
         "readiness": 0.92,
@@ -68,7 +68,7 @@
       "agent": "hpc-rust-developer"
     },
     "epic-02/ticket-003-add-diversion-water-balance-entries.md": {
-      "status": "pending",
+      "status": "completed",
       "detail_level": "detailed",
       "scores": {
         "readiness": 0.90,
@@ -106,7 +106,7 @@
       "learning_extracted": false
     },
     "epic-02-lp-builder-columns-and-water-balance": {
-      "phase": "pending",
+      "phase": "completed",
       "learning_extracted": false
     },
     "epic-03-extraction-and-generic-constraints": {

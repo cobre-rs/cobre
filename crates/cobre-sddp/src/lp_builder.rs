@@ -865,6 +865,12 @@ struct TemplateBuildCtx<'a> {
     resolved_ncs_bounds: &'a ResolvedNcsBounds,
     /// Pre-resolved per-block NCS generation scaling factors.
     resolved_ncs_factors: &'a ResolvedNcsFactors,
+    /// Mapping from target hydro ID to source hydro indices that divert to it.
+    ///
+    /// For each hydro `d` with `diversion.downstream_id == target_id`, the map
+    /// contains `d`'s system-level hydro index in the vec for `target_id`.
+    /// Built once in `build_stage_templates()`.
+    diversion_upstream: HashMap<EntityId, Vec<usize>>,
     n_hydros: usize,
     n_thermals: usize,
     n_lines: usize,
@@ -1296,14 +1302,19 @@ fn fill_stage_columns(
     }
 
     // Diversion columns per hydro per block.
-    // All hydros get diversion columns; those without diversion have bounds [0, 0]
-    // and the LP presolve eliminates them. Column bounds and objective will be
-    // populated in a subsequent ticket when diversion wiring is added.
-    for h_idx in 0..ctx.n_hydros {
+    // Dense allocation: all hydros get columns; those without diversion have
+    // bounds [0, 0] and are eliminated by presolve.
+    for (h_idx, hydro) in ctx.hydros.iter().enumerate() {
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        let max_div = hydro.diversion.as_ref().map_or(0.0, |d| d.max_flow_m3s);
         for blk in 0..layout.n_blks {
             let col = layout.col_diversion_start + h_idx * layout.n_blks + blk;
             col_lower[col] = 0.0;
-            col_upper[col] = 0.0;
+            col_upper[col] = max_div;
+            if max_div > 0.0 {
+                let block_hours = stage.blocks[blk].duration_hours;
+                objective[col] = hp.diversion_cost * block_hours;
+            }
         }
     }
 
@@ -1637,12 +1648,25 @@ fn fill_state_and_water_entries(
             col_entries[col_turbine].push((row, tau_h));
             let col_spillage = layout.col_spillage_start + h_idx * n_blks + blk;
             col_entries[col_spillage].push((row, tau_h));
+            // Diversion outflow: this hydro's diversion column enters its own
+            // water balance with +tau (outflow), same sign as turbine/spillage.
+            let col_diversion = layout.col_diversion_start + h_idx * n_blks + blk;
+            col_entries[col_diversion].push((row, tau_h));
+            // Cascade inflow: upstream turbine/spillage enter with -tau.
             for &up_id in ctx.cascade.upstream(hydro.id) {
                 if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
                     col_entries[layout.col_turbine_start + u_idx * n_blks + blk]
                         .push((row, -tau_h));
                     col_entries[layout.col_spillage_start + u_idx * n_blks + blk]
                         .push((row, -tau_h));
+                }
+            }
+            // Diversion inflow: for each hydro that diverts TO this hydro, its
+            // diversion column enters this hydro's water balance with -tau.
+            if let Some(sources) = ctx.diversion_upstream.get(&hydro.id) {
+                for &d_idx in sources {
+                    let col_div = layout.col_diversion_start + d_idx * n_blks + blk;
+                    col_entries[col_div].push((row, -tau_h));
                 }
             }
         }
@@ -2735,6 +2759,18 @@ pub fn build_stage_templates(
         .max()
         .unwrap_or(0);
 
+    // Precompute diversion upstream map: maps target hydro ID -> list of source
+    // hydro indices that divert water to it. O(1) lookup in water balance loop.
+    let mut diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
+    for (h_idx, hydro) in hydros.iter().enumerate() {
+        if let Some(ref div) = hydro.diversion {
+            diversion_upstream
+                .entry(div.downstream_id)
+                .or_default()
+                .push(h_idx);
+        }
+    }
+
     let ctx = TemplateBuildCtx {
         hydros,
         thermals: system.thermals(),
@@ -2759,6 +2795,7 @@ pub fn build_stage_templates(
         non_controllable_sources: system.non_controllable_sources(),
         resolved_ncs_bounds: system.resolved_ncs_bounds(),
         resolved_ncs_factors: system.resolved_ncs_factors(),
+        diversion_upstream,
         n_hydros,
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),

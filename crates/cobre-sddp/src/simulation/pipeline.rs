@@ -165,14 +165,19 @@ struct ScenarioIds {
     num_stages: usize,
 }
 
-/// Rebuild the `row_lower` slice for a stage, incorporating stochastic load patches.
+/// Rebuild the `row_lower` slice for a stage with full unscaling.
 ///
-/// When load noise is active (`n_load_buses > 0`) and the load RHS buffer is
-/// populated, this function patches the template's `row_lower` in `scratch_buf`
-/// and returns a reference to the patched slice. Otherwise it returns the
-/// template's unmodified `row_lower` directly.
-fn build_row_lower_ref<'a>(
-    template_row_lower: &'a [f64],
+/// Always copies `template_row_lower` into `scratch_buf` and divides each element
+/// by its corresponding `row_scale` factor.  Stochastic load rows are then
+/// overwritten with the unscaled values from `load_rhs_buf` (which are already
+/// in MW).  The result is a slice where every element is in original units.
+///
+/// When `row_scale` is empty (no prescaling), the function does a bulk memcpy
+/// without per-element division, matching the old fast path.
+#[allow(clippy::too_many_arguments)]
+fn build_row_lower_unscaled<'a>(
+    template_row_lower: &[f64],
+    row_scale: &[f64],
     load_rhs_buf: &[f64],
     scratch_buf: &'a mut Vec<f64>,
     n_load_buses: usize,
@@ -180,9 +185,25 @@ fn build_row_lower_ref<'a>(
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
-    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
-        scratch_buf.clear();
+    scratch_buf.clear();
+    scratch_buf.reserve(template_row_lower.len());
+
+    // Unscale all template rows.
+    if row_scale.is_empty() {
         scratch_buf.extend_from_slice(template_row_lower);
+    } else {
+        for (i, &val) in template_row_lower.iter().enumerate() {
+            let scale = if i < row_scale.len() && row_scale[i] != 0.0 {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            scratch_buf.push(val / scale);
+        }
+    }
+
+    // Overwrite stochastic load rows (already in unscaled MW).
+    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
         let mut rhs_idx = 0;
         for &bus_pos in load_bus_indices {
             for blk in 0..n_blks {
@@ -191,10 +212,9 @@ fn build_row_lower_ref<'a>(
                 rhs_idx += 1;
             }
         }
-        &scratch_buf[..template_row_lower.len()]
-    } else {
-        template_row_lower
     }
+
+    &scratch_buf[..template_row_lower.len()]
 }
 
 /// Process all stages for one simulation scenario, updating workspace state in place.
@@ -446,8 +466,9 @@ fn extract_sim_stage_result(
     } else {
         (0, 0)
     };
-    let row_lower_ref = build_row_lower_ref(
+    let row_lower_ref = build_row_lower_unscaled(
         &ctx.templates[t].row_lower,
+        &ctx.templates[t].row_scale,
         &scratch.load_rhs_buf,
         &mut scratch.row_lower_buf,
         ctx.n_load_buses,
@@ -507,6 +528,8 @@ fn extract_sim_stage_result(
                 .hydro_productivities_per_stage
                 .get(t)
                 .map_or(&[], Vec::as_slice),
+            col_scale: &ctx.templates[t].col_scale,
+            row_scale: &ctx.templates[t].row_scale,
         },
         ids.stage_id_u32,
     );

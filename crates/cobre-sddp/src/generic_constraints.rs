@@ -338,19 +338,23 @@ mod tests {
     /// N=4 hydros (2 FPHA at positions 0, 2), L=0, T=2 thermals, Ln=1 line, B=2 buses, K=3 blocks.
     /// S=2 max deficit segments.
     ///
-    /// Column layout:
-    ///   theta = N*(2+L) = 4*(2+0) = 8
-    ///   decision_start = 9
-    ///   turbine:   [9,  9+4*3)  = 9..21    (4 hydros * 3 blocks)
-    ///   spillage: [21, 21+4*3)  = 21..33
-    ///   thermal:  [33, 33+2*3)  = 33..39   (2 thermals * 3 blocks)
-    ///   line_fwd: [39, 39+1*3)  = 39..42   (1 line * 3 blocks)
-    ///   line_rev: [42, 42+1*3)  = 42..45
-    ///   deficit:  [45, 45+2*2*3) = 45..57  (2 buses * 2 segs * 3 blocks)
-    ///   excess:   [57, 57+2*3)  = 57..63   (2 buses * 3 blocks)
-    ///   generation: [63, 63+2*3) = 63..69  (2 FPHA hydros * 3 blocks)
+    /// Column layout (NEW: z_inflow at [N*(1+L), N*(2+L)) shifts storage_in and theta by +N):
+    ///   storage:   [0, 4)         = 0..4
+    ///   lags:      [4, 4*(1+0))   = 4..4   (L=0, empty)
+    ///   z_inflow:  [4*(1+0), 4*(2+0)) = 4..8
+    ///   storage_in:[4*(2+0), 4*(3+0)) = 8..12
+    ///   theta = N*(3+L) = 4*(3+0) = 12
+    ///   decision_start = 13
+    ///   turbine:   [13, 13+4*3) = 13..25   (4 hydros * 3 blocks)
+    ///   spillage:  [25, 25+4*3) = 25..37
+    ///   thermal:   [37, 37+2*3) = 37..43   (2 thermals * 3 blocks)
+    ///   line_fwd:  [43, 43+1*3) = 43..46   (1 line * 3 blocks)
+    ///   line_rev:  [46, 46+1*3) = 46..49
+    ///   deficit:   [49, 49+2*2*3) = 49..61 (2 buses * 2 segs * 3 blocks)
+    ///   excess:    [61, 61+2*3) = 61..67   (2 buses * 3 blocks)
+    ///   generation: [67, 67+2*3) = 67..73  (2 FPHA hydros * 3 blocks)
     ///   evap: none
-    ///   withdrawal_slack: [69, 73) (4 hydros, since hydro_count > 0)
+    ///   withdrawal_slack: [73, 77) (4 hydros, since hydro_count > 0)
     ///
     /// Storage: 0..4
     fn make_indexer() -> StageIndexer {
@@ -460,8 +464,8 @@ mod tests {
 
     /// AC from ticket: ThermalGeneration block_id=None at block 1 of 3.
     ///
-    /// thermal.start = 33, thermal_pos[5] = 0, n_blks = 3, block_idx = 1
-    /// Expected column = 33 + 0 * 3 + 1 = 34
+    /// thermal.start = 37, thermal_pos[5] = 0, n_blks = 3, block_idx = 1
+    /// Expected column = 37 + 0 * 3 + 1 = 38
     #[test]
     fn thermal_generation_block_id_none_at_block_1() {
         let indexer = make_indexer();
@@ -485,14 +489,14 @@ mod tests {
             &lpos,
         );
 
-        // thermal.start = 33, pos_5 = 0, n_blks = 3, block = 1
-        assert_eq!(result, vec![(33 + 0 * 3 + 1, 1.0)]);
+        // thermal.start = 37, pos_5 = 0, n_blks = 3, block = 1
+        assert_eq!(result, vec![(37 + 0 * 3 + 1, 1.0)]);
     }
 
     /// ThermalGeneration with block_id=Some(2) at block 2: should use the explicit block.
     ///
-    /// thermal.start = 33, thermal_pos[5] = 0, n_blks = 3, block_id = Some(2)
-    /// Expected column = 33 + 0 * 3 + 2 = 35
+    /// thermal.start = 37, thermal_pos[5] = 0, n_blks = 3, block_id = Some(2)
+    /// Expected column = 37 + 0 * 3 + 2 = 39
     #[test]
     fn thermal_generation_block_id_some_at_block_2() {
         let indexer = make_indexer();
@@ -516,13 +520,13 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(33 + 0 * 3 + 2, 1.0)]);
+        assert_eq!(result, vec![(37 + 0 * 3 + 2, 1.0)]);
     }
 
     /// ThermalGeneration for thermal at position 1.
     ///
-    /// thermal.start = 33, thermal_pos[6] = 1, n_blks = 3, block = 0
-    /// Expected column = 33 + 1 * 3 + 0 = 36
+    /// thermal.start = 37, thermal_pos[6] = 1, n_blks = 3, block = 0
+    /// Expected column = 37 + 1 * 3 + 0 = 40
     #[test]
     fn thermal_generation_second_thermal() {
         let indexer = make_indexer();
@@ -546,7 +550,7 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(33 + 1 * 3 + 0, 1.0)]);
+        assert_eq!(result, vec![(37 + 1 * 3 + 0, 1.0)]);
     }
 
     // ── HydroStorage tests ────────────────────────────────────────────────────
@@ -603,8 +607,8 @@ mod tests {
     /// AC from ticket: HydroOutflow returns 2 entries (turbine + spillage).
     ///
     /// hydro_pos[EntityId(40)] = 3 (position 3), block_id=None, block_idx=0
-    /// turbine.start = 9, spillage.start = 21, n_blks = 3
-    /// Expected: [(9 + 3*3 + 0, 1.0), (21 + 3*3 + 0, 1.0)] = [(18, 1.0), (30, 1.0)]
+    /// turbine.start = 13, spillage.start = 25, n_blks = 3
+    /// Expected: [(13 + 3*3 + 0, 1.0), (25 + 3*3 + 0, 1.0)] = [(22, 1.0), (34, 1.0)]
     #[test]
     fn hydro_outflow_expands_to_turbine_and_spillage() {
         let indexer = make_indexer();
@@ -628,8 +632,8 @@ mod tests {
             &lpos,
         );
 
-        let turbine_col = 9 + 3 * 3 + 0; // 18
-        let spillage_col = 21 + 3 * 3 + 0; // 30
+        let turbine_col = 13 + 3 * 3 + 0; // 22
+        let spillage_col = 25 + 3 * 3 + 0; // 34
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], (turbine_col, 1.0));
         assert_eq!(result[1], (spillage_col, 1.0));
@@ -659,8 +663,8 @@ mod tests {
             &lpos,
         );
 
-        // hydro pos=0, turbine.start=9, spillage.start=21, block=1, n_blks=3
-        assert_eq!(result, vec![(9 + 0 * 3 + 1, 1.0), (21 + 0 * 3 + 1, 1.0)]);
+        // hydro pos=0, turbine.start=13, spillage.start=25, block=1, n_blks=3
+        assert_eq!(result, vec![(13 + 0 * 3 + 1, 1.0), (25 + 0 * 3 + 1, 1.0)]);
     }
 
     // ── HydroGeneration tests ─────────────────────────────────────────────────
@@ -669,8 +673,8 @@ mod tests {
     /// turbine column with productivity multiplier.
     ///
     /// hydro_pos[EntityId(20)] = 1 → constant productivity 2.5
-    /// turbine.start = 9, n_blks = 3, block_idx = 0
-    /// Expected: [(9 + 1*3 + 0, 2.5)] = [(12, 2.5)]
+    /// turbine.start = 13, n_blks = 3, block_idx = 0
+    /// Expected: [(13 + 1*3 + 0, 2.5)] = [(16, 2.5)]
     #[test]
     fn hydro_generation_constant_productivity_maps_to_turbine() {
         let indexer = make_indexer();
@@ -694,15 +698,15 @@ mod tests {
             &lpos,
         );
 
-        // hydro pos=1, turbine.start=9, n_blks=3, block=0, productivity=2.5
-        assert_eq!(result, vec![(9 + 1 * 3 + 0, 2.5)]);
+        // hydro pos=1, turbine.start=13, n_blks=3, block=0, productivity=2.5
+        assert_eq!(result, vec![(13 + 1 * 3 + 0, 2.5)]);
     }
 
     /// AC from ticket: HydroGeneration for FPHA hydro returns generation column.
     ///
     /// hydro_pos[EntityId(10)] = 0 → FPHA (local FPHA index = 0)
-    /// generation.start = 63, n_blks = 3, block_idx = 0
-    /// Expected: [(63 + 0*3 + 0, 1.0)] = [(63, 1.0)]
+    /// generation.start = 67, n_blks = 3, block_idx = 0
+    /// Expected: [(67 + 0*3 + 0, 1.0)] = [(67, 1.0)]
     #[test]
     fn hydro_generation_fpha_maps_to_generation_column() {
         let indexer = make_indexer();
@@ -726,15 +730,15 @@ mod tests {
             &lpos,
         );
 
-        // FPHA local index 0, generation.start=63, n_blks=3, block=0
-        assert_eq!(result, vec![(63 + 0 * 3 + 0, 1.0)]);
+        // FPHA local index 0, generation.start=67, n_blks=3, block=0
+        assert_eq!(result, vec![(67 + 0 * 3 + 0, 1.0)]);
     }
 
     /// HydroGeneration for FPHA hydro at position 2 (second FPHA hydro, local index 1).
     ///
     /// hydro_pos[EntityId(30)] = 2 → FPHA (local FPHA index = 1)
-    /// generation.start = 63, n_blks = 3, block_idx = 2
-    /// Expected: [(63 + 1*3 + 2, 1.0)] = [(68, 1.0)]
+    /// generation.start = 67, n_blks = 3, block_idx = 2
+    /// Expected: [(67 + 1*3 + 2, 1.0)] = [(72, 1.0)]
     #[test]
     fn hydro_generation_fpha_second_hydro_block_2() {
         let indexer = make_indexer();
@@ -758,8 +762,8 @@ mod tests {
             &lpos,
         );
 
-        // FPHA local index 1, generation.start=63, n_blks=3, block=2
-        assert_eq!(result, vec![(63 + 1 * 3 + 2, 1.0)]);
+        // FPHA local index 1, generation.start=67, n_blks=3, block=2
+        assert_eq!(result, vec![(67 + 1 * 3 + 2, 1.0)]);
     }
 
     // ── HydroEvaporation tests ────────────────────────────────────────────────
@@ -769,12 +773,12 @@ mod tests {
     /// Use a dedicated indexer with evaporation hydros to test this path.
     ///
     /// N=2, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, evap hydro at pos 0.
-    /// theta = 2*(2+0) = 4
-    /// turbine:  [5, 7)
-    /// spillage: [7, 9)
-    /// deficit:  [9, 10)
-    /// excess:   [10, 11)
-    /// evap cols: [11, 14)  → Q_ev=11, f_evap_plus=12, f_evap_minus=13
+    /// theta = 2*(3+0) = 6
+    /// turbine:  [7, 9)
+    /// spillage: [9, 11)
+    /// deficit:  [11, 12)
+    /// excess:   [12, 13)
+    /// evap cols: [13, 16)  → Q_ev=13, f_evap_plus=14, f_evap_minus=15
     #[test]
     fn hydro_evaporation_maps_to_q_ev_col() {
         let evap_indexer = StageIndexer::with_equipment_and_evaporation(
@@ -821,7 +825,7 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(11, 1.0)]);
+        assert_eq!(result, vec![(13, 1.0)]);
     }
 
     /// HydroEvaporation for hydro that has no evaporation model returns empty vec.
@@ -1019,10 +1023,10 @@ mod tests {
 
     /// AC from ticket: BusDeficit with S=2 deficit segments returns 2 column entries.
     ///
-    /// bus_pos[EntityId(100)] = 0, deficit.start = 45, max_deficit_segments = 2,
+    /// bus_pos[EntityId(100)] = 0, deficit.start = 49, max_deficit_segments = 2,
     /// n_blks = 3, block_idx = 0
-    /// Expected: [(45 + 0*2*3 + 0*3 + 0, 1.0), (45 + 0*2*3 + 1*3 + 0, 1.0)]
-    ///         = [(45, 1.0), (48, 1.0)]
+    /// Expected: [(49 + 0*2*3 + 0*3 + 0, 1.0), (49 + 0*2*3 + 1*3 + 0, 1.0)]
+    ///         = [(49, 1.0), (52, 1.0)]
     #[test]
     fn bus_deficit_returns_one_entry_per_segment() {
         let indexer = make_indexer();
@@ -1046,19 +1050,19 @@ mod tests {
             &lpos,
         );
 
-        // deficit.start=45, b_pos=0, S=2, n_blks=3, blk=0
-        // seg0: 45 + 0*2*3 + 0*3 + 0 = 45
-        // seg1: 45 + 0*2*3 + 1*3 + 0 = 48
+        // deficit.start=49, b_pos=0, S=2, n_blks=3, blk=0
+        // seg0: 49 + 0*2*3 + 0*3 + 0 = 49
+        // seg1: 49 + 0*2*3 + 1*3 + 0 = 52
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], (45, 1.0));
-        assert_eq!(result[1], (48, 1.0));
+        assert_eq!(result[0], (49, 1.0));
+        assert_eq!(result[1], (52, 1.0));
     }
 
     /// BusDeficit for second bus (position 1) at block 1.
     ///
-    /// bus_pos[EntityId(200)] = 1, deficit.start = 45, S = 2, n_blks = 3, blk = 1
-    /// seg0: 45 + 1*2*3 + 0*3 + 1 = 45 + 6 + 0 + 1 = 52
-    /// seg1: 45 + 1*2*3 + 1*3 + 1 = 45 + 6 + 3 + 1 = 55
+    /// bus_pos[EntityId(200)] = 1, deficit.start = 49, S = 2, n_blks = 3, blk = 1
+    /// seg0: 49 + 1*2*3 + 0*3 + 1 = 49 + 6 + 0 + 1 = 56
+    /// seg1: 49 + 1*2*3 + 1*3 + 1 = 49 + 6 + 3 + 1 = 59
     #[test]
     fn bus_deficit_second_bus_block_1() {
         let indexer = make_indexer();
@@ -1083,16 +1087,16 @@ mod tests {
         );
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], (52, 1.0));
-        assert_eq!(result[1], (55, 1.0));
+        assert_eq!(result[0], (56, 1.0));
+        assert_eq!(result[1], (59, 1.0));
     }
 
     // ── BusExcess tests ───────────────────────────────────────────────────────
 
     /// BusExcess maps to the excess column for the bus.
     ///
-    /// bus_pos[EntityId(100)] = 0, excess.start = 57, n_blks = 3, block = 2
-    /// Expected: [(57 + 0*3 + 2, 1.0)] = [(59, 1.0)]
+    /// bus_pos[EntityId(100)] = 0, excess.start = 61, n_blks = 3, block = 2
+    /// Expected: [(61 + 0*3 + 2, 1.0)] = [(63, 1.0)]
     #[test]
     fn bus_excess_maps_to_excess_column() {
         let indexer = make_indexer();
@@ -1116,15 +1120,15 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(57 + 0 * 3 + 2, 1.0)]);
+        assert_eq!(result, vec![(61 + 0 * 3 + 2, 1.0)]);
     }
 
     // ── LineDirect / LineReverse tests ────────────────────────────────────────
 
     /// LineDirect maps to line_fwd column.
     ///
-    /// line_pos[EntityId(50)] = 0, line_fwd.start = 39, n_blks = 3, block = 1
-    /// Expected: [(39 + 0*3 + 1, 1.0)] = [(40, 1.0)]
+    /// line_pos[EntityId(50)] = 0, line_fwd.start = 43, n_blks = 3, block = 1
+    /// Expected: [(43 + 0*3 + 1, 1.0)] = [(44, 1.0)]
     #[test]
     fn line_direct_maps_to_fwd_column() {
         let indexer = make_indexer();
@@ -1148,13 +1152,13 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(39 + 0 * 3 + 1, 1.0)]);
+        assert_eq!(result, vec![(43 + 0 * 3 + 1, 1.0)]);
     }
 
     /// LineReverse maps to line_rev column.
     ///
-    /// line_pos[EntityId(50)] = 0, line_rev.start = 42, n_blks = 3, block = 0
-    /// Expected: [(42 + 0*3 + 0, 1.0)] = [(42, 1.0)]
+    /// line_pos[EntityId(50)] = 0, line_rev.start = 46, n_blks = 3, block = 0
+    /// Expected: [(46 + 0*3 + 0, 1.0)] = [(46, 1.0)]
     #[test]
     fn line_reverse_maps_to_rev_column() {
         let indexer = make_indexer();
@@ -1178,16 +1182,16 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(42, 1.0)]);
+        assert_eq!(result, vec![(46, 1.0)]);
     }
 
     // ── LineExchange tests ──────────────────────────────────────────────────────
 
     /// LineExchange maps to both line_fwd and line_rev columns with opposite signs.
     ///
-    /// line_pos[EntityId(50)] = 0, line_fwd.start = 39, line_rev.start = 42,
+    /// line_pos[EntityId(50)] = 0, line_fwd.start = 43, line_rev.start = 46,
     /// n_blks = 3, block = 1
-    /// Expected: [(39 + 0*3 + 1, 1.0), (42 + 0*3 + 1, -1.0)] = [(40, 1.0), (43, -1.0)]
+    /// Expected: [(43 + 0*3 + 1, 1.0), (46 + 0*3 + 1, -1.0)] = [(44, 1.0), (47, -1.0)]
     #[test]
     fn line_exchange_maps_to_fwd_and_rev_columns() {
         let indexer = make_indexer();
@@ -1211,13 +1215,13 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(40, 1.0), (43, -1.0)]);
+        assert_eq!(result, vec![(44, 1.0), (47, -1.0)]);
     }
 
     /// LineExchange with explicit block_id overrides current block_idx.
     ///
     /// block_idx = 2 but block_id = Some(0)
-    /// Expected: [(39, 1.0), (42, -1.0)]
+    /// Expected: [(43, 1.0), (46, -1.0)]
     #[test]
     fn line_exchange_with_explicit_block() {
         let indexer = make_indexer();
@@ -1241,7 +1245,7 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(39, 1.0), (42, -1.0)]);
+        assert_eq!(result, vec![(43, 1.0), (46, -1.0)]);
     }
 
     /// LineExchange with unknown line ID returns empty vec.
@@ -1283,7 +1287,7 @@ mod tests {
         let bpos = make_bus_pos();
         let lpos = make_line_pos();
 
-        // hydro pos=1 (EntityId 20), turbine.start=9, n_blks=3, block=2
+        // hydro pos=1 (EntityId 20), turbine.start=13, n_blks=3, block=2
         let result = call(
             VariableRef::HydroTurbined {
                 hydro_id: EntityId(20),
@@ -1298,7 +1302,7 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(9 + 1 * 3 + 2, 1.0)]);
+        assert_eq!(result, vec![(13 + 1 * 3 + 2, 1.0)]);
     }
 
     /// HydroSpillage maps to spillage column.
@@ -1311,7 +1315,7 @@ mod tests {
         let bpos = make_bus_pos();
         let lpos = make_line_pos();
 
-        // hydro pos=3 (EntityId 40), spillage.start=21, n_blks=3, block=1
+        // hydro pos=3 (EntityId 40), spillage.start=25, n_blks=3, block=1
         let result = call(
             VariableRef::HydroSpillage {
                 hydro_id: EntityId(40),
@@ -1326,6 +1330,6 @@ mod tests {
             &lpos,
         );
 
-        assert_eq!(result, vec![(21 + 3 * 3 + 1, 1.0)]);
+        assert_eq!(result, vec![(25 + 3 * 3 + 1, 1.0)]);
     }
 }

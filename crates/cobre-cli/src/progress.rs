@@ -156,7 +156,6 @@ pub fn run_progress_thread(
         let mut sim_acc: Option<WelfordAccumulator> = None;
         let mut sim_solve_time_ms: f64 = 0.0;
         let mut sim_lp_count: u64 = 0;
-
         loop {
             if let Ok(event) = receiver.recv() {
                 events.push(event.clone());

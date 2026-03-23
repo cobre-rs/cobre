@@ -479,6 +479,9 @@ impl StudySetup {
             }
         }
 
+        // z-inflow column and row ranges are set by StageIndexer::new at
+        // fixed offset N*(1+L), no per-stage wiring needed.
+
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
 

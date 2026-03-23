@@ -67,6 +67,12 @@ pub(crate) fn transform_inflow_noise(
     let indexer = training_ctx.indexer;
 
     scratch.noise_buf.clear();
+    scratch.z_inflow_rhs_buf.clear();
+
+    // Pre-fetch PAR parameters for z-inflow RHS computation.
+    let par_lp = stochastic.par();
+    let has_par = par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros;
+
     match inflow_method {
         InflowNonNegativityMethod::Truncation => {
             let max_order = indexer.max_par_order;
@@ -80,7 +86,6 @@ pub(crate) fn transform_inflow_noise(
                 }
             }
 
-            let par_lp = stochastic.par();
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
             evaluate_par_batch(
@@ -115,6 +120,15 @@ pub(crate) fn transform_inflow_noise(
                 scratch
                     .noise_buf
                     .push(base_rhs + noise_scale[stage_offset + h] * clamped_eta);
+
+                // Z-inflow RHS: base + sigma * eta_effective (m3/s, no zeta, no withdrawal).
+                if has_par {
+                    let base = par_lp.deterministic_base(stage, h);
+                    let sigma = par_lp.sigma(stage, h);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * clamped_eta);
+                } else {
+                    scratch.z_inflow_rhs_buf.push(0.0);
+                }
             }
         }
         InflowNonNegativityMethod::None | InflowNonNegativityMethod::Penalty { .. } => {
@@ -123,8 +137,67 @@ pub(crate) fn transform_inflow_noise(
                 scratch
                     .noise_buf
                     .push(base_rhs + noise_scale[stage_offset + h] * eta);
+
+                // Z-inflow RHS: base + sigma * eta (m3/s, no zeta, no withdrawal).
+                if has_par {
+                    let base = par_lp.deterministic_base(stage, h);
+                    let sigma = par_lp.sigma(stage, h);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * eta);
+                } else {
+                    scratch.z_inflow_rhs_buf.push(0.0);
+                }
             }
         }
+    }
+}
+
+/// Shift the lag portion of the outgoing state vector using realized inflow
+/// from the LP primal solution.
+///
+/// After solving a stage LP, reads `Z_t_h = unscaled_primal[z_inflow.start + h]`
+/// for each hydro and writes:
+///
+/// ```text
+/// state[lag_start + lag * n_h + 0 + h] = Z_t_h           (newest = realized inflow)
+/// state[lag_start + lag * n_h + h]      = incoming[lag_start + (lag-1) * n_h + h]  for lag in 1..L
+/// ```
+///
+/// When `max_par_order == 0`, this is a no-op.
+///
+/// ## Allocation discipline
+///
+/// Zero heap allocations. Pure in-place mutation of `state` from read-only
+/// `incoming_lags` and `unscaled_primal` sources.
+///
+/// ## Arguments
+///
+/// - `state` -- outgoing state vector (already has `v_out` from primal copy).
+/// - `incoming_lags` -- incoming lag values (read-only snapshot taken before
+///   primal copy overwrote `current_state`). Layout is lag-major:
+///   `incoming_lags[lag * n_h + h]` for lag `lag`, hydro `h`.
+/// - `unscaled_primal` -- full LP primal solution (read-only).
+/// - `indexer` -- LP layout providing `z_inflow` range and lag layout.
+pub(crate) fn shift_lag_state(
+    state: &mut [f64],
+    incoming_lags: &[f64],
+    unscaled_primal: &[f64],
+    indexer: &crate::indexer::StageIndexer,
+) {
+    let n_h = indexer.hydro_count;
+    let l_max = indexer.max_par_order;
+    if l_max == 0 || n_h == 0 {
+        return; // No lags to shift
+    }
+    let lag_start = indexer.inflow_lags.start;
+    for h in 0..n_h {
+        let z_t_h = unscaled_primal[indexer.z_inflow.start + h];
+        // Shift older lags down (read from incoming_lags to avoid aliasing).
+        // incoming_lags is in lag-major layout: incoming_lags[lag * n_h + h].
+        for lag in (1..l_max).rev() {
+            state[lag_start + lag * n_h + h] = incoming_lags[(lag - 1) * n_h + h];
+        }
+        // Newest lag = realized inflow from z_h primal.
+        state[lag_start + h] = z_t_h;
     }
 }
 
@@ -243,7 +316,7 @@ mod tests {
         HorizonMode, InflowNonNegativityMethod,
         context::{StageContext, TrainingContext},
         indexer::StageIndexer,
-        noise::{transform_inflow_noise, transform_load_noise},
+        noise::{shift_lag_state, transform_inflow_noise, transform_load_noise},
         workspace::ScratchBuffers,
     };
 
@@ -291,6 +364,7 @@ mod tests {
             ncs_col_indices_buf: Vec::new(),
             load_rhs_buf: Vec::new(),
             row_lower_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::new(),
             unscaled_primal: Vec::new(),
             unscaled_dual: Vec::new(),
         }
@@ -770,5 +844,79 @@ mod tests {
             "expected 0.0, got {}",
             load_rhs_buf[0]
         );
+    }
+
+    // ── shift_lag_state tests ────────────────────────────────────────────────
+
+    #[test]
+    fn shift_lag_state_par0_is_noop() {
+        let indexer = StageIndexer::new(2, 0);
+        let mut state = vec![100.0, 200.0]; // storage only, no lags
+        let incoming_lags: Vec<f64> = vec![];
+        let primal = vec![0.0; 10];
+        shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);
+        assert_eq!(
+            state,
+            vec![100.0, 200.0],
+            "state must be unchanged for PAR(0)"
+        );
+    }
+
+    #[test]
+    fn shift_lag_state_par1_single_hydro() {
+        // N=1, L=1: state = [v_out, lag0], inflow_lags.start = 1
+        let indexer = StageIndexer::new(1, 1);
+        let mut state = vec![500.0, 99.0]; // v_out, stale lag
+        let incoming_lags = vec![42.0]; // lag0 (lag-major: lag * n_h + h = 0*1+0 = 0)
+        // z_inflow starts at theta+1 = 1*(2+1)+1 = 4
+        let mut primal = vec![0.0; 10];
+        primal[indexer.z_inflow.start] = 77.0; // Z_t for hydro 0
+        shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);
+        assert_eq!(state[1], 77.0, "lag[0] must be Z_t = 77.0");
+    }
+
+    #[test]
+    fn shift_lag_state_par3_single_hydro() {
+        // N=1, L=3: state = [v_out, lag0, lag1, lag2]
+        let indexer = StageIndexer::new(1, 3);
+        let mut state = vec![500.0, 0.0, 0.0, 0.0];
+        // incoming_lags in lag-major: [lag0, lag1, lag2] = [10.0, 20.0, 30.0]
+        let incoming_lags = vec![10.0, 20.0, 30.0];
+        let mut primal = vec![0.0; 20];
+        primal[indexer.z_inflow.start] = 55.0;
+        shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);
+        // After shift: lag[0]=Z_t=55, lag[1]=incoming[0]=10, lag[2]=incoming[1]=20
+        assert_eq!(state[1], 55.0, "lag[0] must be Z_t");
+        assert_eq!(state[2], 10.0, "lag[1] must be incoming lag[0]");
+        assert_eq!(state[3], 20.0, "lag[2] must be incoming lag[1]");
+    }
+
+    #[test]
+    fn shift_lag_state_par1_two_hydros() {
+        // N=2, L=1: state = [v0, v1, lag0_h0, lag0_h1]
+        // inflow_lags.start = 2, lag-major: lag0 * 2 + 0 = 0, lag0 * 2 + 1 = 1
+        let indexer = StageIndexer::new(2, 1);
+        let mut state = vec![100.0, 200.0, 0.0, 0.0];
+        let incoming_lags = vec![10.0, 20.0]; // lag0_h0=10, lag0_h1=20
+        let mut primal = vec![0.0; 20];
+        primal[indexer.z_inflow.start] = 33.0; // Z_t for hydro 0
+        primal[indexer.z_inflow.start + 1] = 44.0; // Z_t for hydro 1
+        shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);
+        assert_eq!(state[2], 33.0, "lag[0] for h0 must be Z_t_h0");
+        assert_eq!(state[3], 44.0, "lag[0] for h1 must be Z_t_h1");
+    }
+
+    #[test]
+    fn shift_lag_state_preserves_storage() {
+        // Verify storage portion [0..N] is unchanged after shift.
+        let indexer = StageIndexer::new(2, 2);
+        let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
+        let incoming_lags = vec![1.0, 2.0, 3.0, 4.0];
+        let mut primal = vec![0.0; 20];
+        primal[indexer.z_inflow.start] = 50.0;
+        primal[indexer.z_inflow.start + 1] = 60.0;
+        shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);
+        assert_eq!(state[0], 100.0, "storage[0] must be preserved");
+        assert_eq!(state[1], 200.0, "storage[1] must be preserved");
     }
 }

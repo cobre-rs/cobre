@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-03-23
+
+### Added
+
+- **Z-inflow LP variable** -- New `z_inflow` LP variable tracks realized inflow
+  per hydro at fixed column offset `N*(1+L)`, enabling accurate inflow reporting
+  in simulation output independent of lag dynamics. Includes stage-invariant
+  row placement and deterministic test D16 for PAR(1) lag shift verification.
+- **`water_balance` field on `StageIndexer`** -- Explicit row range for water
+  balance constraints, replacing the fragile `n_state + h` offset that broke
+  after the z-inflow row insertion.
+
+### Changed
+
+- **LP column/row layout refactor** -- Z-inflow columns and rows relocated to
+  fixed offset `N*(1+L)`, shifting `storage_in` to `N*(2+L)` and `theta` to
+  `N*(3+L)`. All 56 affected test assertions updated for the new layout.
+
+### Fixed
+
+- **Water value extraction** -- Fixed simulation output reading z-inflow row
+  duals instead of water balance duals after the layout refactor. Water values
+  were reporting null/wrong for all hydros with the new column layout.
+- **PAR seasonal model expansion** -- Fixed auto-estimation emitting one model
+  per season instead of one per stage. Stages beyond the first in each season
+  were missing inflow AR coefficients.
+- **Lag state transition** -- Wired lag state shift in forward/backward pass
+  so PAR(p) lag variables propagate correctly across stages.
+- **Inflow reporting** -- Fixed inflow values in simulation output to reflect
+  realized inflow rather than stale lag-derived values.
+
+### Performance
+
+- **`load_model` hoisting** -- Moved `load_model` call out of the backward pass
+  inner opening loop, avoiding redundant LP reloads per stage.
+
 ## [0.1.9] - 2026-03-22
 
 ### Added

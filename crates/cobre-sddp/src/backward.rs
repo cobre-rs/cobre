@@ -214,17 +214,35 @@ struct TrialAccumulators {
 /// noise into the scratch buffers, fills the patch buffer, and calls
 /// `set_row_bounds`. After this call the solver is ready for `solve` /
 /// `solve_with_basis`.
-fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
+/// Load the stage LP template and append cuts once per trial point.
+///
+/// Called once before the opening loop in [`process_trial_point_backward`].
+/// The LP structure (template + cuts) is identical across all openings for
+/// the same trial point — only the noise-dependent bounds change.
+fn load_backward_lp<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    ctx: &StageContext<'_>,
+    cut_batch: &RowBatch,
+    s: usize,
+) {
+    ws.solver.load_model(&ctx.templates[s]);
+    ws.solver.add_rows(cut_batch);
+}
+
+/// Transform opening noise and patch LP bounds for one backward opening.
+///
+/// Called once per opening inside [`process_trial_point_backward`].  The LP
+/// structure is already loaded by [`load_backward_lp`]; this function only
+/// updates noise-dependent row and column bounds via `set_row_bounds` /
+/// `set_col_bounds`.
+fn patch_opening_bounds<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    cut_batch: &RowBatch,
     raw_noise: &[f64],
     x_hat: &[f64],
     s: usize,
 ) {
-    // n_blks is zero when there are no load buses (avoids out-of-bounds access
-    // on block_counts_per_stage which may be empty in deterministic cases).
     let n_blks = if ctx.n_load_buses > 0 {
         ctx.block_counts_per_stage[s]
     } else {
@@ -253,8 +271,6 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
             &mut ws.scratch.ncs_col_upper_buf,
         );
     }
-    ws.solver.load_model(&ctx.templates[s]);
-    ws.solver.add_rows(cut_batch);
     ws.patch_buf.fill_forward_patches(
         training_ctx.indexer,
         x_hat,
@@ -271,18 +287,20 @@ fn apply_opening_noise_and_patch<S: SolverInterface + Send>(
             &ctx.templates[s].row_scale,
         );
     }
+    ws.patch_buf.fill_z_inflow_patches(
+        training_ctx.indexer.z_inflow_row_start,
+        &ws.scratch.z_inflow_rhs_buf,
+        &ctx.templates[s].row_scale,
+    );
     let pc = ws.patch_buf.forward_patch_count();
     ws.solver.set_row_bounds(
         &ws.patch_buf.indices[..pc],
         &ws.patch_buf.lower[..pc],
         &ws.patch_buf.upper[..pc],
     );
-    // Patch NCS column upper bounds with per-opening availability.
     if n_stochastic_ncs > 0 && !training_ctx.indexer.ncs_generation.is_empty() {
         let n_blks_stage = ctx.block_counts_per_stage[s];
         let expected_len = n_stochastic_ncs * n_blks_stage;
-        // Only rebuild index/lower buffers when the size changes (i.e., on a stage
-        // transition). Within a single stage the indices are constant across openings.
         if ws.scratch.ncs_col_indices_buf.len() != expected_len {
             ws.scratch.ncs_col_indices_buf.clear();
             ws.scratch.ncs_col_lower_buf.clear();
@@ -324,9 +342,12 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let mut working_basis: Option<Basis> = None;
     let s = succ.successor;
 
+    // Load the LP structure once per trial point; only bounds change per opening.
+    load_backward_lp(ws, ctx, succ.cut_batch, s);
+
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
-        apply_opening_noise_and_patch(ws, ctx, training_ctx, succ.cut_batch, raw_noise, x_hat, s);
+        patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
         let warm = if omega == 0 {
             succ.basis_store.get(m, s)
@@ -841,6 +862,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2255,6 +2277,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2314,6 +2337,7 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -2613,6 +2637,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2741,6 +2766,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2783,11 +2809,11 @@ mod tests {
         )
         .unwrap();
 
-        // With n_load_buses=0, forward_patch_count must equal N*(2+L)=1*(2+0)=2.
+        // With n_load_buses=0, forward_patch_count = N*(2+L) + z_inflow = 1*(2+0)+1 = 3.
         assert_eq!(
             workspaces[0].patch_buf.forward_patch_count(),
-            2,
-            "forward_patch_count must be N*(2+L)=2 when n_load_buses=0, got {}",
+            3,
+            "forward_patch_count must be N*(2+L)+N=3 when n_load_buses=0, got {}",
             workspaces[0].patch_buf.forward_patch_count()
         );
         // load_rhs_buf must remain empty.
@@ -2864,6 +2890,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },

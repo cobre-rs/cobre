@@ -141,6 +141,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         let cut_batch = build_cut_row_batch(fcf, 0, indexer, &template.col_scale);
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
+        let mut z_inflow_rhs_buf = Vec::with_capacity(n_hydros);
         let mut ncs_col_upper_buf: Vec<f64> = Vec::new();
         let mut ncs_col_indices_buf: Vec<usize> = Vec::new();
         let mut ncs_col_lower_buf: Vec<f64> = Vec::new();
@@ -169,8 +170,22 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
 
             let raw_noise = opening_tree.opening(0, opening_idx);
             noise_buf.clear();
+            z_inflow_rhs_buf.clear();
             for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
                 noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta);
+                // Z-inflow RHS: base + sigma * eta (m3/s, no zeta, no withdrawal).
+                if let Some(stoch) = stochastic {
+                    let par_lp = stoch.par();
+                    if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
+                        let base = par_lp.deterministic_base(0, h);
+                        let sigma = par_lp.sigma(0, h);
+                        z_inflow_rhs_buf.push(base + sigma * eta);
+                    } else {
+                        z_inflow_rhs_buf.push(0.0);
+                    }
+                } else {
+                    z_inflow_rhs_buf.push(0.0);
+                }
             }
 
             patch_buf.fill_forward_patches(
@@ -178,6 +193,11 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 initial_state,
                 &noise_buf,
                 base_row,
+                &template.row_scale,
+            );
+            patch_buf.fill_z_inflow_patches(
+                indexer.z_inflow_row_start,
+                &z_inflow_rhs_buf,
                 &template.row_scale,
             );
             let n_patches = patch_buf.forward_patch_count();

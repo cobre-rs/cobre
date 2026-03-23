@@ -460,6 +460,8 @@ fn build_fixture() -> Fixture {
         vec![],
         &[],
     );
+    // z-inflow column and row ranges are set by StageIndexer::new at
+    // fixed offset N*(1+L), no per-stage wiring needed.
 
     let initial_state = vec![0.0_f64; indexer.n_state];
     let horizon = HorizonMode::Finite {

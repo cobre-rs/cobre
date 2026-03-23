@@ -115,9 +115,9 @@ impl SolverInterface for MockSolver {
         let obj = self.objectives[call % self.objectives.len()];
         Ok(cobre_solver::SolutionView {
             objective: obj,
-            primal: &[0.0, 0.0, 0.0],
-            dual: &[0.0],
-            reduced_costs: &[0.0, 0.0, 0.0],
+            primal: &[0.0, 0.0, 0.0, 0.0],
+            dual: &[0.0, 0.0],
+            reduced_costs: &[0.0, 0.0, 0.0, 0.0],
             iterations: 0,
             solve_time_seconds: 0.0,
         })
@@ -318,18 +318,20 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
 }
 
 fn minimal_template() -> StageTemplate {
+    // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
+    //             rows: storage_fixing(0), z_inflow(1)
     StageTemplate {
-        num_cols: 3,
-        num_rows: 1,
+        num_cols: 4,
+        num_rows: 2,
         num_nz: 1,
-        col_starts: vec![0, 0, 1, 1],
+        col_starts: vec![0, 0, 0, 1, 1],
         row_indices: vec![0],
         values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0],
-        row_upper: vec![0.0],
+        col_lower: vec![0.0; 4],
+        col_upper: vec![f64::INFINITY; 4],
+        objective: vec![0.0, 0.0, 0.0, 1.0],
+        row_lower: vec![0.0; 2],
+        row_upper: vec![0.0; 2],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,
@@ -371,7 +373,7 @@ impl Fixture {
         let indexer = StageIndexer::new(1, 0); // N=1, L=0
         let templates = vec![minimal_template(); n_stages];
         // base_row: the AR-dynamics row offset is 1 (1 dual-relevant row)
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);

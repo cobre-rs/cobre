@@ -271,6 +271,11 @@ fn solve_simulation_stage<S: SolverInterface>(
             &ctx.templates[t].row_scale,
         );
     }
+    ws.patch_buf.fill_z_inflow_patches(
+        indexer.z_inflow_row_start,
+        &ws.scratch.z_inflow_rhs_buf,
+        &ctx.templates[t].row_scale,
+    );
     let pc = ws.patch_buf.forward_patch_count();
     ws.solver.set_row_bounds(
         &ws.patch_buf.indices[..pc],
@@ -362,9 +367,26 @@ fn solve_simulation_stage<S: SolverInterface>(
         &unscaled_view,
         n_stochastic_ncs,
     );
+    // Save incoming lag values before overwriting state.
+    let lag_start = indexer.inflow_lags.start;
+    let lag_len = indexer.hydro_count * indexer.max_par_order;
+    ws.scratch.lag_matrix_buf.clear();
+    ws.scratch
+        .lag_matrix_buf
+        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+
+    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
+    crate::noise::shift_lag_state(
+        &mut ws.current_state,
+        &ws.scratch.lag_matrix_buf,
+        &unscaled_primal,
+        indexer,
+    );
+
     // Put the buffers back so they are reused on the next stage.
     ws.scratch.unscaled_primal = unscaled_primal;
     ws.scratch.unscaled_dual = unscaled_dual;
@@ -386,13 +408,16 @@ fn extract_sim_stage_result(
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
     let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
+    // Read realized inflow Z_t directly from the LP primal solution.
+    // The z_h variables are defined by the z-inflow constraint:
+    //   z_h = base_h + sum_l[psi_l * lag_in[h,l]] + sigma_h * eta_h
+    // This is the total natural inflow, including PAR lag contribution
+    // and gross of withdrawal.
     scratch.inflow_m3s_buf.clear();
-    if let Some(&zeta) = output.zeta_per_stage.get(t) {
-        if zeta > 0.0 {
-            for &rhs_hm3 in &scratch.noise_buf {
-                scratch.inflow_m3s_buf.push(rhs_hm3 / zeta);
-            }
-        }
+    for h in 0..ctx.n_hydros {
+        scratch
+            .inflow_m3s_buf
+            .push(view.primal[indexer.z_inflow.start + h]);
     }
     let blk_hrs = output
         .block_hours_per_stage
@@ -949,20 +974,33 @@ mod tests {
 
     /// Minimal valid stage template for N=1 hydro, L=0 PAR order.
     ///
-    /// Column layout: `[storage (0), storage_in (1), theta (2)]`
+    /// Column layout (N=1, L=0):
+    /// - col 0: `storage_out` (no NZ in structural rows)
+    /// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
+    /// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
+    /// - col 3: `theta` (no NZ)
+    ///
+    /// Row layout:
+    /// - row 0: storage-fixing (`storage_out` fixed to incoming state)
+    /// - row 1: `z_inflow` definition row
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
-            num_cols: 3,
-            num_rows: 1,
+            num_cols: 4,
+            num_rows: 2,
             num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1],
+            // CSC col_starts: 4 cols + 1 sentinel = 5 entries.
+            // col 0 (storage_out): 0 NZ
+            // col 1 (z_inflow):    0 NZ
+            // col 2 (storage_in):  1 NZ at row 0
+            // col 3 (theta):       0 NZ
+            col_starts: vec![0_i32, 0, 0, 1, 1],
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-            objective: vec![0.0, 0.0, 1.0],
-            row_lower: vec![0.0],
-            row_upper: vec![0.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 0.0],
+            row_upper: vec![0.0, 0.0],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -975,15 +1013,16 @@ mod tests {
 
     /// Build a fixed `LpSolution` for the minimal N=1 L=0 template.
     ///
-    /// `theta_col=2`, `primal[2]=theta_val`, `objective=objective`.
+    /// N=1 L=0 column layout: `storage`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
+    /// `primal[3] = theta_val`, `objective = objective`.
     fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-        let num_cols = 3; // storage(0), storage_in(1), theta(2)
+        let num_cols = 4; // storage(0), z_inflow(1), storage_in(2), theta(3)
         let mut primal = vec![0.0_f64; num_cols];
-        primal[2] = theta_val; // theta col
+        primal[3] = theta_val; // theta at col 3 (N=1, L=0 → theta = N*(3+L) = 3)
         LpSolution {
             objective,
             primal,
-            dual: vec![0.0_f64; 1],
+            dual: vec![0.0_f64; 2],
             reduced_costs: vec![0.0_f64; num_cols],
             iterations: 0,
             solve_time_seconds: 0.0,
@@ -1157,6 +1196,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -1804,6 +1844,7 @@ mod tests {
                     ncs_col_indices_buf: Vec::new(),
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -2642,6 +2683,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2902,6 +2944,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::with_capacity(n_load_buses),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -3153,6 +3196,7 @@ mod tests {
                 ncs_col_indices_buf: Vec::new(),
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
+                z_inflow_rhs_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },

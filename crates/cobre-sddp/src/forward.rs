@@ -596,12 +596,36 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     }
     rec.stage_cost = stage_cost;
+
+    // Save incoming lag values before overwriting state with primal.
+    // Uses the pre-allocated lag_matrix_buf scratch buffer (no allocation).
+    let lag_start = indexer.inflow_lags.start;
+    let lag_len = indexer.hydro_count * indexer.max_par_order;
+    ws.scratch.lag_matrix_buf.clear();
+    ws.scratch
+        .lag_matrix_buf
+        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+
     rec.state.clear();
     rec.state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+
+    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
+    crate::noise::shift_lag_state(
+        &mut rec.state,
+        &ws.scratch.lag_matrix_buf,
+        unscaled_primal,
+        indexer,
+    );
+    crate::noise::shift_lag_state(
+        &mut ws.current_state,
+        &ws.scratch.lag_matrix_buf,
+        unscaled_primal,
+        indexer,
+    );
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {

@@ -2801,7 +2801,7 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{ar_dynamics_row_offset, PatchBuffer, COST_SCALE_FACTOR};
+    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -9919,13 +9919,13 @@ mod tests {
     #[allow(clippy::cast_possible_wrap)]
     fn generic_constraint_two_hydros_sum_csc_entries() {
         use chrono::NaiveDate;
+        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::{InflowModel, LoadModel};
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         };
-        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::{
             ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
             VariableRef,

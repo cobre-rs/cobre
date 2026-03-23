@@ -367,9 +367,26 @@ fn solve_simulation_stage<S: SolverInterface>(
         &unscaled_view,
         n_stochastic_ncs,
     );
+    // Save incoming lag values before overwriting state.
+    let lag_start = indexer.inflow_lags.start;
+    let lag_len = indexer.hydro_count * indexer.max_par_order;
+    ws.scratch.lag_matrix_buf.clear();
+    ws.scratch
+        .lag_matrix_buf
+        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+
+    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
+    crate::noise::shift_lag_state(
+        &mut ws.current_state,
+        &ws.scratch.lag_matrix_buf,
+        &unscaled_primal,
+        indexer,
+    );
+
     // Put the buffers back so they are reused on the next stage.
     ws.scratch.unscaled_primal = unscaled_primal;
     ws.scratch.unscaled_dual = unscaled_dual;
@@ -391,13 +408,16 @@ fn extract_sim_stage_result(
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
     let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
+    // Read realized inflow Z_t directly from the LP primal solution.
+    // The z_h variables are defined by the z-inflow constraint:
+    //   z_h = base_h + sum_l[psi_l * lag_in[h,l]] + sigma_h * eta_h
+    // This is the total natural inflow, including PAR lag contribution
+    // and gross of withdrawal.
     scratch.inflow_m3s_buf.clear();
-    if let Some(&zeta) = output.zeta_per_stage.get(t) {
-        if zeta > 0.0 {
-            for &rhs_hm3 in &scratch.noise_buf {
-                scratch.inflow_m3s_buf.push(rhs_hm3 / zeta);
-            }
-        }
+    for h in 0..ctx.n_hydros {
+        scratch
+            .inflow_m3s_buf
+            .push(view.primal[indexer.z_inflow.start + h]);
     }
     let blk_hrs = output
         .block_hours_per_stage
@@ -982,9 +1002,10 @@ mod tests {
     ///
     /// `theta_col=2`, `primal[2]=theta_val`, `objective=objective`.
     fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-        let num_cols = 3; // storage(0), storage_in(1), theta(2)
+        let num_cols = 4; // storage(0), storage_in(1), theta(2), z_inflow(3)
         let mut primal = vec![0.0_f64; num_cols];
         primal[2] = theta_val; // theta col
+        // z_inflow[0] = 0.0 (default: mock solver has no real inflow data)
         LpSolution {
             objective,
             primal,

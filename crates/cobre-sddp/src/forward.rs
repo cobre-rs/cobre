@@ -929,7 +929,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             // then iterate over all scenarios patching bounds and solving.
             for t in 0..num_stages {
                 ws.solver.load_model(&ctx.templates[t]);
-                ws.solver.add_rows(&cut_batches[t]);
+                if cut_batches[t].num_rows > 0 {
+                    ws.solver.add_rows(&cut_batches[t]);
+                }
 
                 for (local_m, m) in (start_m..end_m).enumerate() {
                     // Restore per-scenario state for this stage.

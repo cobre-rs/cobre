@@ -830,6 +830,7 @@ mod lb_conformance {
             &mut lb_cut_batch,
             &spec,
             &comm,
+            None,
         )
         .expect("first evaluate_lower_bound must succeed");
 
@@ -851,6 +852,7 @@ mod lb_conformance {
             &mut lb_cut_batch,
             &spec,
             &comm,
+            None,
         )
         .expect("second evaluate_lower_bound must succeed");
 

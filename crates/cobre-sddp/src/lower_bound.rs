@@ -114,6 +114,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     lb_cut_batch: &mut RowBatch,
     spec: &LbEvalSpec<'_>,
     comm: &C,
+    lb_cut_row_map: Option<&mut crate::cut::CutRowMap>,
 ) -> Result<f64, SddpError> {
     let LbEvalSpec {
         template,
@@ -139,8 +140,6 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &template.col_scale);
-        let cut_batch = &*lb_cut_batch;
         let mut objectives = Vec::with_capacity(n_openings);
         let mut noise_buf = Vec::with_capacity(n_hydros);
         let mut z_inflow_rhs_buf = Vec::with_capacity(n_hydros);
@@ -164,11 +163,34 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             }
         }
 
-        // Load the LP structure once before the opening loop; openings only
-        // patch bounds via set_row_bounds / set_col_bounds.
-        solver.load_model(template);
-        if cut_batch.num_rows > 0 {
-            solver.add_rows(cut_batch);
+        // Incremental LP management for the lower bound solver.
+        //
+        // When a CutRowMap is provided, the solver persists across iterations:
+        //   - First call (row_map empty): load_model + append all active cuts.
+        //   - Subsequent calls: append only new cuts (row_map tracks existing).
+        // When no CutRowMap is provided, fall back to full rebuild each call.
+        if let Some(row_map) = lb_cut_row_map {
+            if row_map.total_cut_rows() == 0 {
+                // First call or post-rebuild: full load.
+                solver.load_model(template);
+            }
+            // Append only cuts not yet present in the LP.
+            crate::forward::append_new_cuts_to_lp(
+                solver,
+                fcf,
+                0,
+                indexer,
+                &template.col_scale,
+                row_map,
+                lb_cut_batch,
+            );
+        } else {
+            // Legacy path: full rebuild every call.
+            build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &template.col_scale);
+            solver.load_model(template);
+            if lb_cut_batch.num_rows > 0 {
+                solver.add_rows(lb_cut_batch);
+            }
         }
 
         for opening_idx in 0..n_openings {
@@ -599,6 +621,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -645,6 +668,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -698,6 +722,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -748,6 +773,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -794,6 +820,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         );
 
         assert!(
@@ -838,6 +865,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         );
 
         assert!(
@@ -889,6 +917,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -940,6 +969,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 
@@ -954,6 +984,7 @@ mod tests {
             &mut empty_row_batch(),
             &spec,
             &comm,
+            None,
         )
         .unwrap();
 

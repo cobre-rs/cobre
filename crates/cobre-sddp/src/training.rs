@@ -43,11 +43,12 @@ use crate::{
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
+    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    forward::{ForwardPassBatch, deactivate_cuts_in_lp, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
@@ -112,6 +113,19 @@ fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
     if let Some(s) = sender {
         let _ = s.send(event);
     }
+}
+
+/// Check if a full LP rebuild is needed to purge phantom (bound-zeroed) rows.
+///
+/// Returns true when the ratio of deactivated rows to total rows exceeds
+/// a threshold, or when a fixed iteration interval has elapsed since the
+/// last rebuild.
+fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) -> bool {
+    let total = row_map.total_cut_rows();
+    let active = row_map.active_count();
+    let phantom = total - active;
+    // Rebuild when phantom rows exceed 20% of total, or every 50 iterations.
+    (total > 0 && phantom * 5 > total) || iterations_since_rebuild >= 50
 }
 
 /// Collect the newly generated cuts from the FCF pool for a given stage and
@@ -363,6 +377,14 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         row_upper: Vec::new(),
     };
 
+    // CutRowMap for the lower bound solver's incremental cut management.
+    // The LB solver is dedicated to stage 0 and persists across iterations,
+    // so it benefits from incremental cut append (S2 optimization).
+    let mut lb_cut_row_map = CutRowMap::new(fcf.pools[0].capacity, stage_ctx.templates[0].num_rows);
+
+    // Track iterations since last full rebuild for the LB solver.
+    let mut lb_iterations_since_rebuild: u64 = 0;
+
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
@@ -532,6 +554,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     let deact =
                         strategy.select_for_stage(&fcf.pools[stage].metadata, iteration, stage_u32);
                     cuts_deactivated += deact.indices.len() as u32;
+
+                    // Deactivate cuts in the lower bound solver's LP (stage 0 only).
+                    if stage == 0 && comm.rank() == 0 {
+                        deactivate_cuts_in_lp(solver, &deact, &mut lb_cut_row_map);
+                    }
+
                     fcf.pools[stage].deactivate(&deact.indices);
                 }
 
@@ -552,6 +580,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 );
             }
         }
+
+        // Periodic rebuild check for the lower bound solver.
+        // When too many phantom (bound-zeroed) rows accumulate, reset the LP
+        // to purge them. This prevents unbounded row growth from deactivation.
+        lb_iterations_since_rebuild += 1;
+        if comm.rank() == 0 && needs_periodic_rebuild(&lb_cut_row_map, lb_iterations_since_rebuild)
+        {
+            lb_cut_row_map.reset(stage_ctx.templates[0].num_rows);
+            lb_iterations_since_rebuild = 0;
+            // The next evaluate_lower_bound call will see an empty row_map
+            // and do a full load_model + append_all_cuts.
+        }
+
         // Snapshot solver stats before lower bound evaluation.
         let lb_stats_before = solver.statistics();
 
@@ -577,6 +618,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &mut lb_cut_batch,
             &lb_spec,
             comm,
+            Some(&mut lb_cut_row_map),
         )?;
 
         // Snapshot solver stats after lower bound and compute delta.

@@ -771,6 +771,11 @@ pub struct StageTemplates {
     /// Used by the simulation extraction pipeline to compute `diverted_inflow_m3s`.
     /// Empty when no hydros have diversion.
     pub diversion_upstream: HashMap<EntityId, Vec<usize>>,
+    /// Per-stage hydro productivities (MW per m³/s) for simulation extraction.
+    ///
+    /// `hydro_productivities_per_stage[stage][h]` is the productivity of hydro `h`
+    /// at stage `stage`, accounting for per-stage overrides.  FPHA hydros have 0.0.
+    pub hydro_productivities_per_stage: Vec<Vec<f64>>,
 }
 
 /// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
@@ -2323,6 +2328,7 @@ fn build_single_stage_template(
     let total_nz = col_entries.iter().map(Vec::len).sum();
 
     let gc_row_entries = layout.generic_constraint_rows;
+
     let ncs_col_start = layout.col_ncs_start;
     let n_ncs = layout.n_ncs;
     let ncs_active = layout.active_ncs_indices;
@@ -2725,6 +2731,7 @@ pub fn build_stage_templates(
             n_ncs_per_stage: Vec::new(),
             active_ncs_indices: Vec::new(),
             diversion_upstream: HashMap::new(),
+            hydro_productivities_per_stage: Vec::new(),
         });
     }
 
@@ -2843,6 +2850,18 @@ pub fn build_stage_templates(
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
         compute_noise_scale(&study_stages, n_hydros, par_lp);
 
+    // Build per-stage productivity arrays for simulation extraction.
+    let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
+        .map(|s| {
+            (0..n_hydros)
+                .map(|h| match ctx.production_models.model(h, s) {
+                    ResolvedProductionModel::ConstantProductivity { productivity } => *productivity,
+                    ResolvedProductionModel::Fpha { .. } => 0.0,
+                })
+                .collect()
+        })
+        .collect();
+
     Ok(StageTemplates {
         templates,
         base_rows,
@@ -2858,6 +2877,7 @@ pub fn build_stage_templates(
         n_ncs_per_stage,
         active_ncs_indices: active_ncs_indices_per_stage,
         diversion_upstream: diversion_upstream_output,
+        hydro_productivities_per_stage,
     })
 }
 

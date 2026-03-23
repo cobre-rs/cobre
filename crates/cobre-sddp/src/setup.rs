@@ -894,6 +894,7 @@ impl StudySetup {
             n_ncs_per_stage: &self.stage_templates.n_ncs_per_stage,
             ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
             diversion_upstream: &self.stage_templates.diversion_upstream,
+            hydro_productivities_per_stage: &self.stage_templates.hydro_productivities_per_stage,
             event_sender,
         };
 

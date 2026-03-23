@@ -219,6 +219,9 @@ pub struct SimulationOutput {
     /// Number of scenarios that failed during simulation.
     pub failed: u32,
 
+    /// Total elapsed wall-clock time for the simulation run (ms).
+    pub total_time_ms: u64,
+
     /// Hive partition paths written by the simulation writer.
     ///
     /// Each element is a relative path string such as
@@ -408,6 +411,7 @@ pub fn write_results(
             status: "complete".to_string(),
             started_at: None,
             completed_at: None,
+            duration_seconds: Some(sim_output.total_time_ms as f64 / 1_000.0),
             scenarios: ManifestScenarios {
                 total: sim_output.n_scenarios,
                 completed: sim_output.completed,
@@ -529,6 +533,7 @@ mod tests {
             n_scenarios: 10,
             completed: 10,
             failed: 0,
+            total_time_ms: 1_500,
             partitions_written: vec!["simulation/costs/part-00.parquet".to_string()],
         };
 
@@ -634,6 +639,7 @@ mod tests {
             n_scenarios: 100,
             completed: 100,
             failed: 0,
+            total_time_ms: 3_200,
             partitions_written: vec![
                 "simulation/costs/year=2030/part-00.parquet".to_string(),
                 "simulation/costs/year=2031/part-00.parquet".to_string(),
@@ -643,6 +649,7 @@ mod tests {
         assert_eq!(output.n_scenarios, 100);
         assert_eq!(output.completed, 100);
         assert_eq!(output.failed, 0);
+        assert_eq!(output.total_time_ms, 3_200);
         assert_eq!(output.partitions_written.len(), 2);
     }
 
@@ -784,6 +791,7 @@ mod tests {
             n_scenarios: 10,
             completed: 10,
             failed: 0,
+            total_time_ms: 0,
             partitions_written: vec![],
         };
 
@@ -825,6 +833,7 @@ mod tests {
             n_scenarios: 10,
             completed: 10,
             failed: 0,
+            total_time_ms: 0,
             partitions_written: vec![],
         };
 

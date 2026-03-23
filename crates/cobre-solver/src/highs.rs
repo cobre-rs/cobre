@@ -516,6 +516,7 @@ impl SolverInterface for HighsSolver {
         self.basis_col_i32.resize(self.num_cols, 0);
         self.basis_row_i32.resize(self.num_rows, 0);
         self.stats.total_load_model_time_seconds += t0.elapsed().as_secs_f64();
+        self.stats.load_model_count += 1;
     }
 
     fn add_rows(&mut self, cuts: &RowBatch) {
@@ -571,6 +572,7 @@ impl SolverInterface for HighsSolver {
         // Grow basis row i32 buffer to cover the new rows.
         self.basis_row_i32.resize(self.num_rows, 0);
         self.stats.total_add_rows_time_seconds += t0.elapsed().as_secs_f64();
+        self.stats.add_rows_count += 1;
     }
 
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {

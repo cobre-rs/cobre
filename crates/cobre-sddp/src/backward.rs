@@ -76,7 +76,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelI
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
-    forward::{build_cut_row_batch, partition},
+    forward::{build_cut_row_batch_into, partition},
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
@@ -342,9 +342,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let mut working_basis: Option<Basis> = None;
     let s = succ.successor;
 
-    // Load the LP structure once per trial point; only bounds change per opening.
-    load_backward_lp(ws, ctx, succ.cut_batch, s);
-
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
@@ -457,6 +454,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
         .enumerate()
         .map(|(worker_id, ws)| {
             let (start_m, end_m) = partition(local_work, n_workers, worker_id);
+
+            // Load the LP structure once per worker per stage; trial points
+            // only patch bounds. Skip for workers with no assigned work.
+            if start_m < end_m {
+                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
+            }
+
             let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
             let mut accum = TrialAccumulators {
                 outcomes: Vec::with_capacity(n_openings),
@@ -514,11 +518,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `spec.risk_measures.len() != num_stages`
+#[allow(clippy::too_many_arguments)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &BasisStore,
     ctx: &StageContext<'_>,
     fcf: &mut FutureCostFunction,
+    cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
     spec: &mut BackwardPassSpec<'_>,
     comm: &C,
@@ -566,9 +572,14 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
-        let cut_batch =
-            build_cut_row_batch(fcf, successor, indexer, &ctx.templates[successor].col_scale);
-        let num_cuts_at_successor = cut_batch.num_rows;
+        build_cut_row_batch_into(
+            &mut cut_batches[successor],
+            fcf,
+            successor,
+            indexer,
+            &ctx.templates[successor].col_scale,
+        );
+        let num_cuts_at_successor = cut_batches[successor].num_rows;
         let template_num_rows = ctx.templates[successor].num_rows;
         let successor_active_slots: Vec<usize> = fcf
             .active_cuts(successor)
@@ -580,7 +591,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             successor,
             my_rank,
             probabilities: &probabilities,
-            cut_batch: &cut_batch,
+            cut_batch: &cut_batches[successor],
             num_cuts_at_successor,
             template_num_rows,
             successor_active_slots: &successor_active_slots,
@@ -655,6 +666,19 @@ mod tests {
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
     };
+
+    fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
+        (0..n_stages)
+            .map(|_| RowBatch {
+                num_rows: 0,
+                row_starts: Vec::new(),
+                col_indices: Vec::new(),
+                values: Vec::new(),
+                row_lower: Vec::new(),
+                row_upper: Vec::new(),
+            })
+            .collect()
+    }
 
     /// Stub communicator for tests (single-rank).
     struct StubComm;
@@ -1150,6 +1174,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1221,6 +1246,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1292,6 +1318,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1359,6 +1386,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1426,6 +1454,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1491,6 +1520,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1600,6 +1630,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1687,6 +1718,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1779,6 +1811,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1858,6 +1891,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1946,6 +1980,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2029,6 +2064,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2105,6 +2141,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2189,6 +2226,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2299,6 +2337,7 @@ mod tests {
             &basis_store_1,
             &ctx,
             &mut fcf_1,
+            &mut empty_cut_batches(n_stages),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2349,6 +2388,7 @@ mod tests {
             &basis_store_4,
             &ctx,
             &mut fcf_4,
+            &mut empty_cut_batches(n_stages),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2667,6 +2707,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2790,6 +2831,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2918,6 +2960,7 @@ mod tests {
                 ncs_max_gen: &[],
             },
             &mut fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,

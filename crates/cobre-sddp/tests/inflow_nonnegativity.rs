@@ -629,6 +629,7 @@ fn simulate_fixture(
             hydro_productivities_per_stage: &fx.stage_templates.hydro_productivities_per_stage,
             event_sender: None,
         },
+        &[],
         &comm,
     )?;
 

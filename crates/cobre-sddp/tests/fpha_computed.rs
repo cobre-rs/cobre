@@ -366,7 +366,13 @@ fn fpha_computed_case_converges() {
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
     let local_costs = setup
-        .simulate(&mut pool.workspaces, &comm, &result_tx, None)
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &result_tx,
+            None,
+            &training_result.basis_cache,
+        )
         .expect("simulate must succeed");
     drop(result_tx);
     drop(drain_handle.join().expect("drain thread must not panic"));

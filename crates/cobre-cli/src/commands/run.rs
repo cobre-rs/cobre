@@ -514,6 +514,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 &comm,
                 &result_tx,
                 Some(sim_event_tx),
+                &training_result.basis_cache,
             )
             .map_err(CliError::from);
         if let Some(handle) = sim_progress_handle {

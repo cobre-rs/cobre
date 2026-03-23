@@ -998,7 +998,13 @@ fn d12_checkpoint_round_trip() {
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
     let local_costs = setup
-        .simulate(&mut pool.workspaces, &comm, &result_tx, None)
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &result_tx,
+            None,
+            &result.basis_cache,
+        )
         .expect("simulate must return Ok");
 
     drop(result_tx);

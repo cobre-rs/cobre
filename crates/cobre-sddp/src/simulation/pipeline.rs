@@ -18,8 +18,10 @@
 //! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
 //! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
 //! distributes scenarios across [`SolverWorkspace`] instances. Each stage LP
-//! is cold-started to guarantee thread-count-independent determinism. Results are sorted
-//! by `scenario_id` for deterministic MPI aggregation.
+//! is optionally warm-started with a per-stage basis from the training checkpoint.
+//! The warm-start basis is read-only and shared across all threads, so it does
+//! not introduce any thread-count-dependent state — determinism is preserved.
+//! Results are sorted by `scenario_id` for deterministic MPI aggregation.
 //!
 //! ## Seed domain separation
 //!
@@ -44,12 +46,11 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
-use cobre_solver::{RowBatch, SolverError, SolverInterface};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -59,13 +60,14 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
+            StageExtractionSpec,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
+    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -267,8 +269,10 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// Solve one stage for one simulation scenario, updating workspace in-place.
 ///
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
-/// and returns `(immediate_cost, SimulationStageResult)`. Always cold-starts
-/// the LP to guarantee thread-count-independent determinism.
+/// and returns `(immediate_cost, SimulationStageResult)`. When a warm-start
+/// basis is provided, the LP is solved via `solve_with_basis`; otherwise it
+/// falls back to a cold-start `solve`. The warm-start basis is a read-only,
+/// per-stage artifact from training, so determinism is preserved.
 #[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
@@ -277,6 +281,7 @@ fn solve_simulation_stage<S: SolverInterface>(
     cut_batch: &RowBatch,
     output: &SimulationOutputSpec<'_>,
     ids: &SimStageIds,
+    warm_basis: Option<&Basis>,
 ) -> Result<(f64, SimulationStageResult), SimulationError> {
     // Precondition: ws.scratch.noise_buf, ws.scratch.load_rhs_buf, and
     // ws.scratch.ncs_col_upper_buf are populated by the caller
@@ -329,7 +334,12 @@ fn solve_simulation_stage<S: SolverInterface>(
         );
     }
 
-    let view = ws.solver.solve().map_err(|e| match e {
+    let view = if let Some(basis) = warm_basis {
+        ws.solver.solve_with_basis(basis)
+    } else {
+        ws.solver.solve()
+    }
+    .map_err(|e| match e {
         SolverError::Infeasible => SimulationError::LpInfeasible {
             scenario_id: ids.scenario_id,
             stage_id: ids.stage_id_u32,
@@ -543,6 +553,7 @@ fn process_scenario_stages<S: SolverInterface>(
     cut_batches: &[RowBatch],
     output: &SimulationOutputSpec<'_>,
     ids: &ScenarioIds,
+    stage_bases: &[Option<Basis>],
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
@@ -615,6 +626,7 @@ fn process_scenario_stages<S: SolverInterface>(
                 stage_id_u32,
                 scenario_id: ids.scenario_id,
             },
+            stage_bases.get(t).and_then(Option::as_ref),
         )?;
         // Advance state for next stage: already updated inside solve_simulation_stage, but
         // we need indexer.theta for cost accumulation (view already consumed). Cost is immediate only.
@@ -694,8 +706,11 @@ fn dispatch_scenario_result(
 /// Distributes locally assigned scenarios across worker threads using the same
 /// static partitioning as the training forward pass. Each [`SolverWorkspace`]
 /// owns its solver, patch buffer, and current-state buffer exclusively — there
-/// is no shared mutable state between workers. Each stage LP is cold-started
-/// to guarantee determinism regardless of thread count.
+/// is no shared mutable state between workers. When `stage_bases` provides a
+/// per-stage basis from the training checkpoint, each stage LP is warm-started
+/// via `solve_with_basis`; otherwise it falls back to a cold-start `solve`.
+/// The warm-start basis is read-only and shared across all threads, preserving
+/// determinism regardless of thread count.
 ///
 /// `SyncSender::send()` is thread-safe; each worker sends its
 /// [`SimulationScenarioResult`] through `result_tx` as it completes each
@@ -730,7 +745,11 @@ fn dispatch_scenario_result(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
-#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // owned Option<Sender> required for worker clone pattern
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,
@@ -738,6 +757,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     training_ctx: &TrainingContext<'_>,
     config: &SimulationConfig,
     output: SimulationOutputSpec<'_>,
+    stage_bases: &[Option<Basis>],
     comm: &C,
 ) -> Result<SimulationRunResult, SimulationError> {
     let TrainingContext {
@@ -806,6 +826,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         global_scenario,
                         num_stages,
                     },
+                    stage_bases,
                 )?;
                 let stats_after = ws.solver.statistics();
                 let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
@@ -871,12 +892,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::{simulate, SimulationOutputSpec};
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{ScratchBuffers, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1320,6 +1341,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1413,6 +1435,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1496,6 +1519,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1577,6 +1601,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1660,6 +1685,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1740,6 +1766,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1820,6 +1847,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1897,6 +1925,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1961,6 +1990,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2068,6 +2098,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         );
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -2169,6 +2200,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -2255,6 +2287,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2352,6 +2385,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2448,6 +2482,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2559,6 +2594,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2828,6 +2864,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2959,6 +2996,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -3093,6 +3131,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -3391,6 +3430,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -3486,6 +3526,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();

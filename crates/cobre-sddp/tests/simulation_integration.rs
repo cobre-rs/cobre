@@ -771,6 +771,7 @@ fn train_simulate_write_cycle() {
             hydro_productivities_per_stage: &vec![vec![1.0]; fx.n_stages],
             event_sender: None,
         },
+        &[],
         &sim_comm,
     )
     .expect("simulate must succeed");

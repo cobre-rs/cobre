@@ -2869,7 +2869,7 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer, COST_SCALE_FACTOR};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -4791,8 +4791,9 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // N=1, L=0: theta=3, decision_start=4, turbine=4, spillage=5, deficit=6, excess=7,
-        // inflow_slack=8, withdrawal_slack=9. Inflow slack is second-to-last.
+        // N=1, L=0: theta=3, decision_start=4, turbine=4, spillage=5, diversion=6,
+        // deficit=7, excess=8, inflow_slack=9, withdrawal_slack=10.
+        // Inflow slack is before withdrawal (N=1 withdrawal columns at end).
         let slack_col = t.num_cols - 1 - t.n_hydro; // inflow_slack (before withdrawal)
         let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
         assert!(
@@ -4817,14 +4818,13 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4;
-        // withdrawal slack = 1; z_inflow = 1; total = 11.
-        // +1 for diversion column: 11 + 1 = 12.
+        // N=1, L=2: state+aux = N*(3+L)+1 = 6 (storage, lags, z_inflow, storage_in, theta);
+        // decisions = turb+spill+diversion+def+exc = 5; withdrawal = 1; total = 12.
         assert_eq!(
             t.num_cols, 12,
             "method=none must not add extra penalty columns"
         );
-        // num_rows = N*(1+L)+N+B*K + z_inflow = 3+1+1+1 = 6
+        // num_rows = N*(1+L) fixing + N z_inflow + N water_balance + B*K load_balance = 3+1+1+1 = 6
         assert_eq!(t.num_rows, 6, "method=none must not add extra penalty rows");
     }
 
@@ -4975,8 +4975,8 @@ mod tests {
     // Column layout:
     //   col 0: storage_out    col 1: z_inflow      col 2: storage_in
     //   col 3: theta          col 4: turbine        col 5: spillage
-    //   col 6: deficit        col 7: excess         col 8: inflow_slack
-    //   col 9: withdrawal_slack
+    //   col 6: diversion      col 7: deficit        col 8: excess
+    //   col 9: inflow_slack   col 10: withdrawal_slack
     //
     // Row layout:
     //   row 0: storage_fixing  row 1: z_inflow_def  row 2: water_balance
@@ -6648,11 +6648,10 @@ mod tests {
 
         // The 3 evaporation columns are followed by 1 withdrawal slack column (N=1).
         // Since water_withdrawal_m3s == 0, the withdrawal slack at num_cols-1 is pinned at [0,0].
-        // The evaporation columns are at num_cols-4, num_cols-3, num_cols-2.
-        // Evaporation columns are before withdrawal slack and z_inflow columns.
-        let col_q_ev = t.num_cols - 4 - t.n_hydro;
-        let col_f_plus = t.num_cols - 3 - t.n_hydro;
-        let col_f_minus = t.num_cols - 2 - t.n_hydro;
+        // Evaporation columns are at num_cols-4, num_cols-3, num_cols-2 (before withdrawal slack).
+        let col_q_ev = t.num_cols - 4;
+        let col_f_plus = t.num_cols - 3;
+        let col_f_minus = t.num_cols - 2;
 
         for &col in &[col_q_ev, col_f_plus, col_f_minus] {
             assert_eq!(
@@ -6747,13 +6746,9 @@ mod tests {
         let t = &result.templates[0];
 
         // Column layout for 1-hydro system (N=1, L=0, T=0, B=1, K=1):
-        //   col 0      = v (outgoing storage, h_idx=0)
-        //   col 1      = z_inflow (realized inflow)          [z_inflow.start = N*(1+L) = 1]
-        //   col 2      = v_in (incoming storage, h_idx=0)   [storage_in.start = N*(2+L) = 2]
-        //   col 3      = theta (value function)              [theta = N*(3+L) = 3]
-        //   decision_start = 4
-        //   col 4      = turbine (h=0, blk=0)
-        //   col 5      = spillage (h=0, blk=0)
+        //   col 0 = v (storage_out)  col 1 = z_inflow  col 2 = v_in  col 3 = theta
+        //   col 4 = turbine  col 5 = spillage  col 6 = diversion
+        //   col 7 = deficit  col 8 = excess
         //   col_evap_start = num_cols - 4
         // Row layout for N=1, L=0, B=1, K=1, no FPHA:
         //   row 0: storage-fixing
@@ -7539,11 +7534,12 @@ mod tests {
     ///
     /// Column layout (`N=1`, `L=0`, `K=1`, no inflow penalty):
     ///   col 0: `v`, col 1: `z_inflow`, col 2: `v_in`, col 3: `theta`
-    ///   col 4: `turbine`, col 5: `spillage`
-    ///   `col_evap_start = 6`
-    ///   `col_q_ev = 6` (objective = `0.0`)
-    ///   `col_f_plus = 7` (objective = `365_000.0`)
-    ///   `col_f_minus = 8` (objective = `365_000.0`)
+    ///   col 4: `turbine`, col 5: `spillage`, col 6: `diversion`
+    ///   col 7: `deficit`, col 8: `excess`
+    ///   `col_evap_start = 9`
+    ///   `col_q_ev = 9` (objective = `0.0`)
+    ///   `col_f_plus = 10` (objective = `365_000.0`)
+    ///   `col_f_minus = 11` (objective = `365_000.0`)
     #[test]
     fn evap_violation_cost_applied_to_slack_columns() {
         let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
@@ -7604,8 +7600,8 @@ mod tests {
         .expect("evap system with zero k_evap builds ok");
 
         let t = &result.templates[0];
-        // N=1 withdrawal slack follows the 3 evap columns; z_inflow cols are at the end.
-        let col_q_ev = t.num_cols - 4 - t.n_hydro;
+        // N=1 withdrawal slack follows the 3 evap columns.
+        let col_q_ev = t.num_cols - 4;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7660,8 +7656,8 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        // Q_ev is the first evaporation column (before withdrawal + z_inflow).
-        let col_q_ev = template.num_cols - 3 - template.n_hydro;
+        // Q_ev is the first evaporation column (before withdrawal slack).
+        let col_q_ev = template.num_cols - 4;
         let q_ev = view.primal[col_q_ev];
 
         assert!(
@@ -7715,9 +7711,9 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        // Evaporation violation slack columns are before z_inflow columns.
-        let col_f_plus = template.num_cols - 2 - template.n_hydro;
-        let col_f_minus = template.num_cols - 1 - template.n_hydro;
+        // Evaporation violation slack columns are before withdrawal slack.
+        let col_f_plus = template.num_cols - 3;
+        let col_f_minus = template.num_cols - 2;
         let f_plus = view.primal[col_f_plus];
         let f_minus = view.primal[col_f_minus];
 
@@ -8581,8 +8577,8 @@ mod tests {
     ///
     /// Column layout for N=1, L=0, no penalty, no FPHA, no evaporation:
     ///   col 0: `v_out`, col 1: `z_inflow`, col 2: `v_in`, col 3: theta,
-    ///   col 4: turbine, col 5: spillage, col 6: deficit, col 7: excess,
-    ///   col 8: `withdrawal_slack` (= `num_cols` - 1)
+    ///   col 4: turbine, col 5: spillage, col 6: diversion, col 7: deficit,
+    ///   col 8: excess, col 9: `withdrawal_slack` (= `num_cols` - 1)
     /// Row layout for N=1, L=0:
     ///   row 0: storage-fixing, row 1: z_inflow-def, row 2: water-balance, row 3: load-balance
     #[test]
@@ -8668,7 +8664,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1 - t.n_hydro;
+        // Withdrawal slack is the last column for N=1 (no NCS, no generic constraints).
+        let col_w = t.num_cols - 1;
         assert!(
             t.objective[col_w].abs() < 1e-15,
             "withdrawal slack objective must be 0 when cost=0, got {}",
@@ -8693,7 +8690,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1 - t.n_hydro;
+        // Withdrawal slack is the last column for N=1 (no NCS, no generic constraints).
+        let col_w = t.num_cols - 1;
         assert!(
             (t.col_lower[col_w] - 0.0).abs() < 1e-15,
             "withdrawal slack lower bound must be 0.0, got {}",
@@ -8917,11 +8915,10 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // N=2, L=0: num_state_cols = N*(3+L) = 6; theta=6; decision+slack cols follow.
-        // col_turbine_start = 7, col_spillage_start = 9, col_deficit_start = 11,
-        // col_excess_start = 12, col_inflow_slack_start = 13 (no penalty → 0 inflow slacks),
-        // col_withdrawal_slack_start = 13, num_cols = 15.
-        // z_inflow is embedded in state region at [N*(1+L), N*(2+L)) = [2,4).
+        // N=2, L=0: state+aux = N*(3+L)+1 = 7 (storage, z_inflow, storage_in, theta).
+        // col_turbine_start = 7, col_spillage_start = 9, col_diversion_start = 11,
+        // col_deficit_start = 13, col_excess_start = 14,
+        // col_withdrawal_slack_start = 15, num_cols = 17.
         let col_w0 = t.num_cols - 2;
         let col_w1 = t.num_cols - 1;
 
@@ -9157,21 +9154,17 @@ mod tests {
         let t = &result.templates[0];
 
         // N=3, L=0, 1 block, no thermals/lines/evap/inflow-penalty:
-        // state cols: 3 outgoing + 3 incoming = 6
-        // theta: 1
+        // state+aux: 3 storage + 3 z_inflow + 3 storage_in + 1 theta = 10
         // turbine: 3, spillage: 3, diversion: 3
         // deficit: 1, excess: 1
         // inflow slack: 0 (no penalty config)
         // evap: 0
         // withdrawal slack: 3
-        // Total without withdrawal: 6 + 1 + 3 + 3 + 3 + 1 + 1 = 18
-        // Total with withdrawal: 18 + 3 = 21
-        // + 3 z-inflow columns: 21 + 3 = 24
-        let expected_without_withdrawal = 18_usize;
-        let expected_with_withdrawal = expected_without_withdrawal + 3 + 3; // + withdrawal + z_inflow
+        // Total = 10 + 3 + 3 + 3 + 1 + 1 + 3 = 24
+        let expected_cols = 24_usize;
         assert_eq!(
-            t.num_cols, expected_with_withdrawal,
-            "3-hydro system: num_cols should include withdrawal slacks and z_inflow columns = {expected_with_withdrawal}, got {}",
+            t.num_cols, expected_cols,
+            "3-hydro system: num_cols should be {expected_cols}, got {}",
             t.num_cols
         );
 
@@ -10001,13 +9994,13 @@ mod tests {
     #[allow(clippy::cast_possible_wrap)]
     fn generic_constraint_two_hydros_sum_csc_entries() {
         use chrono::NaiveDate;
-        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::{InflowModel, LoadModel};
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         };
+        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::{
             ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
             VariableRef,

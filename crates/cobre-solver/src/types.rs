@@ -169,6 +169,15 @@ pub struct SolverStatistics {
     /// Combined with `basis_rejections`, enables basis hit rate computation:
     /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
     pub basis_offered: u64,
+
+    /// Cumulative wall-clock time spent in `load_model` calls, in seconds.
+    pub total_load_model_time_seconds: f64,
+
+    /// Cumulative wall-clock time spent in `add_rows` calls, in seconds.
+    pub total_add_rows_time_seconds: f64,
+
+    /// Cumulative wall-clock time spent in `set_row_bounds` and `set_col_bounds` calls, in seconds.
+    pub total_set_bounds_time_seconds: f64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -488,6 +497,9 @@ mod tests {
         assert_eq!(stats.basis_rejections, 0);
         assert_eq!(stats.first_try_successes, 0);
         assert_eq!(stats.basis_offered, 0);
+        assert_eq!(stats.total_load_model_time_seconds, 0.0);
+        assert_eq!(stats.total_add_rows_time_seconds, 0.0);
+        assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

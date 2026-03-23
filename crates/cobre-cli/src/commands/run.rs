@@ -721,6 +721,9 @@ fn delta_to_stats_row(
         basis_rejections: delta.basis_rejections as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
+        load_model_time_ms: delta.load_model_time_ms,
+        add_rows_time_ms: delta.add_rows_time_ms,
+        set_bounds_time_ms: delta.set_bounds_time_ms,
     }
 }
 

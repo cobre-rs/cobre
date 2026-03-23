@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LP setup timing instrumentation** -- `SolverStatistics` now tracks cumulative
+  wall-clock time for `load_model`, `add_rows`, and `set_row_bounds`/`set_col_bounds`
+  separately from solve time. Three new columns (`load_model_time_ms`,
+  `add_rows_time_ms`, `set_bounds_time_ms`) in `training/solver/iterations.parquet`
+  enable diagnosing LP rebuild overhead vs simplex time.
+
+### Fixed
+
+- **Stale z_inflow column offset formulas** -- Corrected 8 test column offset
+  formulas and 10+ comments in `lp_builder.rs` and `noise.rs` that still
+  referenced the old z_inflow-at-end-of-columns layout after the N\*(1+L)
+  refactoring. Tests passed coincidentally because adjacent columns had
+  identical bounds and objective values.
+
 ## [0.1.10] - 2026-03-23
 
 ### Added

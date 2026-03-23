@@ -442,6 +442,7 @@ impl SolverInterface for HighsSolver {
     }
 
     fn load_model(&mut self, template: &StageTemplate) {
+        let t0 = Instant::now();
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer from `cobre_highs_create()`.
         // - All pointer arguments point into owned `Vec` data that remains alive for the
@@ -514,9 +515,11 @@ impl SolverInterface for HighsSolver {
         // any FFI call. These never shrink -- only grow -- to prevent reallocation on hot path.
         self.basis_col_i32.resize(self.num_cols, 0);
         self.basis_row_i32.resize(self.num_rows, 0);
+        self.stats.total_load_model_time_seconds += t0.elapsed().as_secs_f64();
     }
 
     fn add_rows(&mut self, cuts: &RowBatch) {
+        let t0 = Instant::now();
         assert!(
             i32::try_from(cuts.num_rows).is_ok(),
             "cuts.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
@@ -567,6 +570,7 @@ impl SolverInterface for HighsSolver {
 
         // Grow basis row i32 buffer to cover the new rows.
         self.basis_row_i32.resize(self.num_rows, 0);
+        self.stats.total_add_rows_time_seconds += t0.elapsed().as_secs_f64();
     }
 
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
@@ -589,6 +593,7 @@ impl SolverInterface for HighsSolver {
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = indices.len() as i32;
 
+        let t0 = Instant::now();
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - `convert_to_i32_scratch()` returns a slice pointing into `self.scratch_i32`,
@@ -610,6 +615,7 @@ impl SolverInterface for HighsSolver {
             ffi::HIGHS_STATUS_ERROR,
             "cobre_highs_change_rows_bounds_by_set failed with status {status}"
         );
+        self.stats.total_set_bounds_time_seconds += t0.elapsed().as_secs_f64();
     }
 
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
@@ -632,6 +638,7 @@ impl SolverInterface for HighsSolver {
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_entries = indices.len() as i32;
 
+        let t0 = Instant::now();
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - Converted indices point into `self.scratch_i32`, alive for `'self`.
@@ -652,6 +659,7 @@ impl SolverInterface for HighsSolver {
             ffi::HIGHS_STATUS_ERROR,
             "cobre_highs_change_cols_bounds_by_set failed with status {status}"
         );
+        self.stats.total_set_bounds_time_seconds += t0.elapsed().as_secs_f64();
     }
 
     #[allow(clippy::too_many_lines)]

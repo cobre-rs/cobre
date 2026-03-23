@@ -39,6 +39,15 @@ pub struct SolverStatsDelta {
 
     /// Cumulative wall-clock solve time in milliseconds.
     pub solve_time_ms: f64,
+
+    /// Cumulative wall-clock time spent in `load_model` calls, in milliseconds.
+    pub load_model_time_ms: f64,
+
+    /// Cumulative wall-clock time spent in `add_rows` calls, in milliseconds.
+    pub add_rows_time_ms: f64,
+
+    /// Cumulative wall-clock time spent in `set_row_bounds`/`set_col_bounds` calls, in milliseconds.
+    pub set_bounds_time_ms: f64,
 }
 
 impl SolverStatsDelta {
@@ -59,6 +68,15 @@ impl SolverStatsDelta {
             simplex_iterations: after.total_iterations - before.total_iterations,
             solve_time_ms: (after.total_solve_time_seconds - before.total_solve_time_seconds)
                 * 1000.0,
+            load_model_time_ms: (after.total_load_model_time_seconds
+                - before.total_load_model_time_seconds)
+                * 1000.0,
+            add_rows_time_ms: (after.total_add_rows_time_seconds
+                - before.total_add_rows_time_seconds)
+                * 1000.0,
+            set_bounds_time_ms: (after.total_set_bounds_time_seconds
+                - before.total_set_bounds_time_seconds)
+                * 1000.0,
         }
     }
 
@@ -78,6 +96,9 @@ impl SolverStatsDelta {
             result.basis_rejections += d.basis_rejections;
             result.simplex_iterations += d.simplex_iterations;
             result.solve_time_ms += d.solve_time_ms;
+            result.load_model_time_ms += d.load_model_time_ms;
+            result.add_rows_time_ms += d.add_rows_time_ms;
+            result.set_bounds_time_ms += d.set_bounds_time_ms;
         }
         result
     }
@@ -101,6 +122,9 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
         result.basis_rejections += s.basis_rejections;
         result.first_try_successes += s.first_try_successes;
         result.basis_offered += s.basis_offered;
+        result.total_load_model_time_seconds += s.total_load_model_time_seconds;
+        result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
+        result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
     }
     result
 }
@@ -129,6 +153,9 @@ mod tests {
             basis_rejections: 1,
             first_try_successes: 7,
             basis_offered: 8,
+            total_load_model_time_seconds: 1.0,
+            total_add_rows_time_seconds: 0.5,
+            total_set_bounds_time_seconds: 0.25,
         };
         let after = SolverStatistics {
             solve_count: 20,
@@ -140,6 +167,9 @@ mod tests {
             basis_rejections: 3,
             first_try_successes: 15,
             basis_offered: 17,
+            total_load_model_time_seconds: 3.0,
+            total_add_rows_time_seconds: 1.5,
+            total_set_bounds_time_seconds: 0.75,
         };
 
         let delta = SolverStatsDelta::from_snapshots(&before, &after);
@@ -152,6 +182,9 @@ mod tests {
         assert_eq!(delta.basis_rejections, 2);
         assert_eq!(delta.simplex_iterations, 600);
         assert!((delta.solve_time_ms - 2500.0).abs() < 1e-6);
+        assert!((delta.load_model_time_ms - 2000.0).abs() < 1e-6);
+        assert!((delta.add_rows_time_ms - 1000.0).abs() < 1e-6);
+        assert!((delta.set_bounds_time_ms - 500.0).abs() < 1e-6);
     }
 
     #[test]
@@ -166,6 +199,9 @@ mod tests {
             basis_rejections: 0,
             first_try_successes: 5,
             basis_offered: 3,
+            total_load_model_time_seconds: 0.1,
+            total_add_rows_time_seconds: 0.05,
+            total_set_bounds_time_seconds: 0.02,
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
         assert_eq!(delta.lp_solves, 0);
@@ -177,6 +213,9 @@ mod tests {
         assert_eq!(delta.basis_rejections, 0);
         assert_eq!(delta.simplex_iterations, 0);
         assert!((delta.solve_time_ms).abs() < 1e-10);
+        assert!((delta.load_model_time_ms).abs() < 1e-10);
+        assert!((delta.add_rows_time_ms).abs() < 1e-10);
+        assert!((delta.set_bounds_time_ms).abs() < 1e-10);
     }
 
     #[test]
@@ -198,6 +237,9 @@ mod tests {
             basis_rejections: 1,
             simplex_iterations: 500,
             solve_time_ms: 100.0,
+            load_model_time_ms: 10.0,
+            add_rows_time_ms: 5.0,
+            set_bounds_time_ms: 2.0,
         };
         let d2 = SolverStatsDelta {
             lp_solves: 20,
@@ -209,6 +251,9 @@ mod tests {
             basis_rejections: 2,
             simplex_iterations: 800,
             solve_time_ms: 200.0,
+            load_model_time_ms: 20.0,
+            add_rows_time_ms: 10.0,
+            set_bounds_time_ms: 4.0,
         };
 
         let agg = SolverStatsDelta::aggregate(&[d1, d2]);
@@ -221,6 +266,9 @@ mod tests {
         assert_eq!(agg.basis_rejections, 3);
         assert_eq!(agg.simplex_iterations, 1300);
         assert!((agg.solve_time_ms - 300.0).abs() < 1e-6);
+        assert!((agg.load_model_time_ms - 30.0).abs() < 1e-6);
+        assert!((agg.add_rows_time_ms - 15.0).abs() < 1e-6);
+        assert!((agg.set_bounds_time_ms - 6.0).abs() < 1e-6);
     }
 
     #[test]
@@ -235,6 +283,9 @@ mod tests {
             basis_rejections: 1,
             first_try_successes: 7,
             basis_offered: 8,
+            total_load_model_time_seconds: 1.0,
+            total_add_rows_time_seconds: 0.5,
+            total_set_bounds_time_seconds: 0.25,
         };
         let s2 = SolverStatistics {
             solve_count: 20,
@@ -246,6 +297,9 @@ mod tests {
             basis_rejections: 3,
             first_try_successes: 15,
             basis_offered: 17,
+            total_load_model_time_seconds: 3.0,
+            total_add_rows_time_seconds: 1.5,
+            total_set_bounds_time_seconds: 0.75,
         };
 
         let agg = aggregate_solver_statistics(&[s1, s2]);
@@ -258,5 +312,8 @@ mod tests {
         assert_eq!(agg.basis_rejections, 4);
         assert_eq!(agg.first_try_successes, 22);
         assert_eq!(agg.basis_offered, 25);
+        assert!((agg.total_load_model_time_seconds - 4.0).abs() < 1e-10);
+        assert!((agg.total_add_rows_time_seconds - 2.0).abs() < 1e-10);
+        assert!((agg.total_set_bounds_time_seconds - 1.0).abs() < 1e-10);
     }
 }

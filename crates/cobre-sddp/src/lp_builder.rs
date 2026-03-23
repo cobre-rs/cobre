@@ -1254,14 +1254,22 @@ fn fill_stage_columns(
     for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        let is_fpha = matches!(
-            ctx.production_models.model(h_idx, stage_idx),
-            ResolvedProductionModel::Fpha { .. }
-        );
+        let model = ctx.production_models.model(h_idx, stage_idx);
+        let is_fpha = matches!(model, ResolvedProductionModel::Fpha { .. });
+        // For constant-productivity hydros, cap turbine flow so that
+        // productivity * turbined <= max_generation_mw (derated capacity).
+        let turb_upper = match model {
+            ResolvedProductionModel::ConstantProductivity { productivity }
+                if *productivity > 0.0 =>
+            {
+                hb.max_turbined_m3s.min(hb.max_generation_mw / productivity)
+            }
+            _ => hb.max_turbined_m3s,
+        };
         for blk in 0..layout.n_blks {
             let col = layout.col_turbine_start + h_idx * layout.n_blks + blk;
             col_lower[col] = hb.min_turbined_m3s;
-            col_upper[col] = hb.max_turbined_m3s;
+            col_upper[col] = turb_upper;
             if is_fpha {
                 let block_hours = stage.blocks[blk].duration_hours;
                 objective[col] = hp.fpha_turbined_cost * block_hours;

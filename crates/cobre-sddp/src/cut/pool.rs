@@ -59,6 +59,13 @@ use crate::cut_selection::CutMetadata;
 /// Slots are addressed by a deterministic formula derived from the iteration
 /// counter and forward pass index. The pool tracks a `populated_count`
 /// high-water mark to avoid scanning unpopulated slots.
+///
+/// A `cached_active_count` field is maintained incrementally by [`add_cut`]
+/// and [`deactivate`], making [`active_count`] an O(1) query.
+///
+/// [`add_cut`]: CutPool::add_cut
+/// [`deactivate`]: CutPool::deactivate
+/// [`active_count`]: CutPool::active_count
 #[derive(Debug, Clone)]
 pub struct CutPool {
     /// Per-slot coefficient arrays. Each inner `Vec` has length `state_dimension`.
@@ -96,6 +103,15 @@ pub struct CutPool {
     /// Number of warm-start cuts loaded before training begins. Acts as a
     /// base offset in the slot assignment formula. Fixed after construction.
     pub warm_start_count: u32,
+
+    /// Cached count of active cuts, maintained incrementally by [`add_cut`]
+    /// (increment) and [`deactivate`] (decrement). Makes [`active_count`]
+    /// O(1) instead of O(`populated_count`).
+    ///
+    /// [`add_cut`]: CutPool::add_cut
+    /// [`deactivate`]: CutPool::deactivate
+    /// [`active_count`]: CutPool::active_count
+    pub cached_active_count: usize,
 }
 
 impl CutPool {
@@ -149,6 +165,7 @@ impl CutPool {
             state_dimension,
             forward_passes,
             warm_start_count,
+            cached_active_count: 0,
         }
     }
 
@@ -221,7 +238,12 @@ impl CutPool {
 
         self.intercepts[slot] = intercept;
         self.coefficients[slot].copy_from_slice(coefficients);
+        debug_assert!(
+            !self.active[slot],
+            "add_cut: slot {slot} is already active (double-insert)"
+        );
         self.active[slot] = true;
+        self.cached_active_count += 1;
         self.metadata[slot] = CutMetadata {
             iteration_generated: iteration,
             forward_pass_index,
@@ -263,6 +285,9 @@ impl CutPool {
 
     /// Count the number of active cuts.
     ///
+    /// Returns the cached count in O(1). A debug assertion verifies consistency
+    /// with the computed count in debug builds.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -275,10 +300,20 @@ impl CutPool {
     /// ```
     #[must_use]
     pub fn active_count(&self) -> usize {
-        self.active[..self.populated_count]
-            .iter()
-            .filter(|&&a| a)
-            .count()
+        debug_assert_eq!(
+            self.cached_active_count,
+            self.active[..self.populated_count]
+                .iter()
+                .filter(|&&a| a)
+                .count(),
+            "cached active_count {} != computed {}",
+            self.cached_active_count,
+            self.active[..self.populated_count]
+                .iter()
+                .filter(|&&a| a)
+                .count(),
+        );
+        self.cached_active_count
     }
 
     /// Deactivate the cuts at the given slot indices.
@@ -304,8 +339,9 @@ impl CutPool {
         for &idx in indices {
             let i = idx as usize;
             debug_assert!(i < self.capacity, "deactivate index {i} out of bounds");
-            if i < self.capacity {
+            if i < self.capacity && self.active[i] {
                 self.active[i] = false;
+                self.cached_active_count -= 1;
             }
         }
     }

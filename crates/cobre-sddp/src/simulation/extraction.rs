@@ -1061,6 +1061,8 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
         EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
         assign_scenarios, extract_stage_result,
@@ -1207,6 +1209,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             3,
         );
@@ -1244,6 +1247,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1281,6 +1285,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1320,6 +1325,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1371,6 +1377,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             2,
         );
@@ -1404,6 +1411,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             stage_id,
         );
@@ -1443,6 +1451,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1573,6 +1582,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1665,6 +1675,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1902,6 +1913,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -1969,6 +1981,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2047,6 +2060,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2138,6 +2152,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2201,6 +2216,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2297,6 +2313,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2361,6 +2378,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );
@@ -2424,6 +2442,7 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
             },
             0,
         );

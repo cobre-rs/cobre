@@ -162,12 +162,14 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             }
         }
 
-        for opening_idx in 0..n_openings {
-            solver.load_model(template);
-            if cut_batch.num_rows > 0 {
-                solver.add_rows(&cut_batch);
-            }
+        // Load the LP structure once before the opening loop; openings only
+        // patch bounds via set_row_bounds / set_col_bounds.
+        solver.load_model(template);
+        if cut_batch.num_rows > 0 {
+            solver.add_rows(&cut_batch);
+        }
 
+        for opening_idx in 0..n_openings {
             let raw_noise = opening_tree.opening(0, opening_idx);
             noise_buf.clear();
             z_inflow_rhs_buf.clear();

@@ -23,7 +23,7 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -685,6 +685,7 @@ fn run_simulation(
                     ncs_col_starts: &[],
                     n_ncs_per_stage: &[],
                     ncs_entity_ids_per_stage: &[],
+                    diversion_upstream: &HashMap::new(),
                     event_sender: None,
                 },
                 &comm,

@@ -1347,3 +1347,60 @@ fn d16_par1_lag_shift() {
     // (150, 125, 112.5), producing higher deficits than if the lag never shifted.
     assert_cost(result.final_lb, 5_475_000.0, 1.0, "D16");
 }
+
+/// Regression guard for the model-persistence optimization (S1).
+///
+/// Runs D01 (2 stages, 2 thermals, deterministic) and verifies that the
+/// solver's `load_model_count` is consistent with per-stage loading, NOT
+/// per-scenario loading. With model persistence, `load_model` is called
+/// once per stage per iteration (forward + backward + lower bound), not
+/// once per (scenario, stage) pair.
+///
+/// Numerical equivalence is verified by the `d01_thermal_dispatch` test;
+/// this test additionally checks the call count invariant.
+#[test]
+fn model_persistence_regression_d01() {
+    use cobre_solver::SolverInterface;
+
+    let case_dir = Path::new("../../examples/deterministic/d01-thermal-dispatch");
+    let (result, solver) = run_deterministic_with_solver(case_dir);
+
+    // D01 uses 2 forward passes and 2 stages. With model persistence, the
+    // forward pass calls load_model once per stage (not per scenario).
+    // Exact cost must match D01 expected value.
+    assert_cost(result.final_lb, 182_500.0, 1e-6, "D01-persistence");
+
+    // With persistence: load_model per-stage, not per-scenario.
+    // The exact count depends on iterations, but it MUST be less than
+    // n_stages * forward_passes * iterations (the per-scenario count).
+    let stats = solver.statistics();
+    let n_stages = 2_u64;
+    let forward_passes = 2_u64;
+    let iterations = result.iterations;
+
+    // Without persistence: forward would do n_stages * forward_passes * iterations
+    let without_persistence_forward = n_stages * forward_passes * iterations;
+    // With persistence: forward does n_stages * iterations (1 worker)
+    let with_persistence_forward = n_stages * iterations;
+
+    // load_model_count includes forward + backward + lower bound calls.
+    // It must be strictly less than the without-persistence forward-only count,
+    // confirming the optimization is active.
+    assert!(
+        stats.load_model_count < without_persistence_forward,
+        "model persistence regression: load_model_count ({}) should be < {} (per-scenario forward-only count), \
+         expected ~{} for persisted forward",
+        stats.load_model_count,
+        without_persistence_forward,
+        with_persistence_forward
+    );
+
+    // add_rows_count should track load_model_count (one add_rows per load_model
+    // when cuts exist, possibly fewer when pool is empty).
+    assert!(
+        stats.add_rows_count <= stats.load_model_count,
+        "add_rows_count ({}) should be <= load_model_count ({})",
+        stats.add_rows_count,
+        stats.load_model_count
+    );
+}

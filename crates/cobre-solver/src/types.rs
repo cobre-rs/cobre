@@ -170,6 +170,12 @@ pub struct SolverStatistics {
     /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
     pub basis_offered: u64,
 
+    /// Total number of `load_model` calls.
+    pub load_model_count: u64,
+
+    /// Total number of `add_rows` calls.
+    pub add_rows_count: u64,
+
     /// Cumulative wall-clock time spent in `load_model` calls, in seconds.
     pub total_load_model_time_seconds: f64,
 

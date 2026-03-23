@@ -342,9 +342,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let mut working_basis: Option<Basis> = None;
     let s = succ.successor;
 
-    // Load the LP structure once per trial point; only bounds change per opening.
-    load_backward_lp(ws, ctx, succ.cut_batch, s);
-
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
@@ -457,6 +454,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
         .enumerate()
         .map(|(worker_id, ws)| {
             let (start_m, end_m) = partition(local_work, n_workers, worker_id);
+
+            // Load the LP structure once per worker per stage; trial points
+            // only patch bounds. Skip for workers with no assigned work.
+            if start_m < end_m {
+                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
+            }
+
             let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
             let mut accum = TrialAccumulators {
                 outcomes: Vec::with_capacity(n_openings),

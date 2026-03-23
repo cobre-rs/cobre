@@ -436,7 +436,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
     basis_slice: &mut BasisStoreSliceMut<'_>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    cut_batches: &[RowBatch],
     key: &StageKey<'_>,
     worker_records: &mut [TrajectoryRecord],
 ) -> Result<f64, SddpError> {
@@ -485,8 +484,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
         );
     }
 
-    ws.solver.load_model(&ctx.templates[t]);
-    ws.solver.add_rows(&cut_batches[t]);
     ws.patch_buf.fill_forward_patches(
         indexer,
         &ws.current_state,
@@ -753,16 +750,28 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         .enumerate()
         .map(|(w, ((ws, worker_records), mut basis_slice))| {
             let (start_m, end_m) = partition(forward_passes, n_workers, w);
-            let mut local_costs = Vec::with_capacity(end_m - start_m);
+            let n_local = end_m - start_m;
+            let mut trajectory_costs = vec![0.0_f64; n_local];
             let local_solve_count_before = ws.solver.statistics().solve_count;
 
-            for (local_m, m) in (start_m..end_m).enumerate() {
-                let global_scenario = fwd_offset + m;
-                ws.current_state.clear();
-                ws.current_state.extend_from_slice(initial_state);
-                let mut trajectory_cost = 0.0_f64;
+            // Stage-first, scenario-second: load the LP model once per stage,
+            // then iterate over all scenarios patching bounds and solving.
+            for t in 0..num_stages {
+                ws.solver.load_model(&ctx.templates[t]);
+                ws.solver.add_rows(&cut_batches[t]);
 
-                for t in 0..num_stages {
+                for (local_m, m) in (start_m..end_m).enumerate() {
+                    // Restore per-scenario state for this stage.
+                    if t == 0 {
+                        ws.current_state.clear();
+                        ws.current_state.extend_from_slice(initial_state);
+                    } else {
+                        let prev_rec = &worker_records[local_m * num_stages + (t - 1)];
+                        ws.current_state.clear();
+                        ws.current_state.extend_from_slice(&prev_rec.state);
+                    }
+
+                    let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
                     let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
                     let (_, raw_noise) = sample_forward(&tree_view, base_seed, i32, s32, t32, t);
@@ -774,22 +783,19 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         iteration: *iteration,
                         raw_noise,
                     };
-                    trajectory_cost += run_forward_stage(
+                    trajectory_costs[local_m] += run_forward_stage(
                         ws,
                         &mut basis_slice,
                         ctx,
                         training_ctx,
-                        &cut_batches,
                         &key,
                         worker_records,
                     )?;
                 }
-
-                local_costs.push(trajectory_cost);
             }
 
             let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-            Ok((local_costs, local_solves))
+            Ok((trajectory_costs, local_solves))
         })
         .collect();
 
@@ -1382,8 +1388,10 @@ mod tests {
     fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
-        // The 2nd solve call (index 1) is stage 1 of scenario 0.
-        let solver = MockSolver::infeasible_on(solution, 1);
+        // Stage-first loop: with 2 scenarios and 3 stages, the solve order is
+        // (s0,t0), (s1,t0), (s0,t1), (s1,t1), ... — the 3rd call (index 2)
+        // is stage 1 of scenario 0.
+        let solver = MockSolver::infeasible_on(solution, 2);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
             forward_passes: 2,

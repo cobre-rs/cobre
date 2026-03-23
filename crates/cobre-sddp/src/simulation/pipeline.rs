@@ -975,14 +975,14 @@ mod tests {
     /// Minimal valid stage template for N=1 hydro, L=0 PAR order.
     ///
     /// Column layout (N=1, L=0):
-    /// - col 0: storage_out (no NZ in structural rows)
-    /// - col 1: z_inflow (no NZ — z_inflow row at row 1)
-    /// - col 2: storage_in (1 NZ: row 0, storage-fixing row)
-    /// - col 3: theta (no NZ)
+    /// - col 0: `storage_out` (no NZ in structural rows)
+    /// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
+    /// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
+    /// - col 3: `theta` (no NZ)
     ///
     /// Row layout:
     /// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-    /// - row 1: z_inflow definition row
+    /// - row 1: `z_inflow` definition row
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
@@ -1013,7 +1013,7 @@ mod tests {
 
     /// Build a fixed `LpSolution` for the minimal N=1 L=0 template.
     ///
-    /// N=1 L=0 column layout: storage(0), z_inflow(1), storage_in(2), theta(3).
+    /// N=1 L=0 column layout: `storage`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
     /// `primal[3] = theta_val`, `objective = objective`.
     fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
         let num_cols = 4; // storage(0), z_inflow(1), storage_in(2), theta(3)

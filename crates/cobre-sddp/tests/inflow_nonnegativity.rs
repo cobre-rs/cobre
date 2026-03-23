@@ -449,7 +449,7 @@ fn build_fixture() -> Fixture {
     let first_tmpl = stage_templates.templates.first().expect("at least 1 stage");
     let n_blks = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
     let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
-    let mut indexer = StageIndexer::with_equipment(
+    let indexer = StageIndexer::with_equipment(
         first_tmpl.n_hydro,
         first_tmpl.max_par_order,
         system.thermals().len(),

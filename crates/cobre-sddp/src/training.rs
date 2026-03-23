@@ -691,14 +691,14 @@ mod tests {
     /// Minimal LP for N=1 hydro, L=0 PAR order.
     ///
     /// Column layout (N=1, L=0):
-    /// - col 0: storage_out (no NZ in structural rows)
-    /// - col 1: z_inflow (no NZ — z_inflow row at row 1)
-    /// - col 2: storage_in (1 NZ: row 0, storage-fixing row)
-    /// - col 3: theta (no NZ)
+    /// - col 0: `storage_out` (no NZ in structural rows)
+    /// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
+    /// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
+    /// - col 3: `theta` (no NZ)
     ///
     /// Row layout:
     /// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-    /// - row 1: z_inflow definition row
+    /// - row 1: `z_inflow` definition row
     fn minimal_template(n_state: usize) -> StageTemplate {
         let _ = n_state;
         StageTemplate {

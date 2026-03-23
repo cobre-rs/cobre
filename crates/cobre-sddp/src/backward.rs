@@ -2337,6 +2337,7 @@ mod tests {
             &basis_store_1,
             &ctx,
             &mut fcf_1,
+            &mut empty_cut_batches(n_stages),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2387,6 +2388,7 @@ mod tests {
             &basis_store_4,
             &ctx,
             &mut fcf_4,
+            &mut empty_cut_batches(n_stages),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,

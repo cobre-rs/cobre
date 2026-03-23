@@ -774,6 +774,7 @@ mod lb_conformance {
         PatchBuffer, RiskMeasure, StageIndexer,
         lower_bound::{LbEvalSpec, evaluate_lower_bound},
     };
+    use cobre_solver::RowBatch;
 
     use super::{LocalComm, MockSolver, make_fcf, minimal_template, simple_opening_tree};
 
@@ -808,6 +809,15 @@ mod lb_conformance {
             ncs_generation: 0..0,
         };
 
+        let mut lb_cut_batch = RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        };
+
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
         // After unscaling by COST_SCALE_FACTOR (1000), LB = 75_000.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
@@ -817,6 +827,7 @@ mod lb_conformance {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut lb_cut_batch,
             &spec,
             &comm,
         )
@@ -837,6 +848,7 @@ mod lb_conformance {
             &initial_state,
             &indexer,
             &mut patch_buf,
+            &mut lb_cut_batch,
             &spec,
             &comm,
         )

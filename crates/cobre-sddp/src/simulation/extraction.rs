@@ -198,6 +198,12 @@ pub struct StageExtractionSpec<'a> {
     /// each hydro that receives diversion from upstream sources.
     /// Empty when no hydros have diversion.
     pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
+    /// Per-hydro productivity at this stage, accounting for per-stage overrides.
+    ///
+    /// Length equals `indexer.hydro_count`.  For constant-productivity hydros
+    /// this is the per-stage override (or base if no override), for FPHA hydros
+    /// this is 0.0 (generation is read from the LP column instead).
+    pub hydro_productivities: &'a [f64],
 }
 
 /// Extract hydro results from a raw LP solution view.
@@ -240,7 +246,7 @@ fn extract_hydro_no_turbine(
     let productivity_mw_per_m3s = if is_fpha {
         None
     } else {
-        Some(spec.entity_counts.hydro_productivities[h])
+        Some(spec.hydro_productivities[h])
     };
 
     // Evaporation: read from LP columns when present; fall back to 0.0.
@@ -329,7 +335,7 @@ fn extract_hydro_per_block<'a>(
     let productivity_mw_per_m3s = if fpha_local.is_some() {
         None
     } else {
-        Some(spec.entity_counts.hydro_productivities[h])
+        Some(spec.hydro_productivities[h])
     };
 
     // Evaporation: stage-level (one column per hydro, same for all blocks).
@@ -376,7 +382,7 @@ fn extract_hydro_per_block<'a>(
         let generation_mw = if let Some(local_fpha_idx) = fpha_local {
             view.primal[indexer.generation.start + local_fpha_idx * n_blks + b]
         } else {
-            turbined * spec.entity_counts.hydro_productivities[h]
+            turbined * spec.hydro_productivities[h]
         };
 
         #[allow(clippy::cast_possible_truncation)]
@@ -1210,6 +1216,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             3,
         );
@@ -1248,6 +1255,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1286,6 +1294,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1326,6 +1335,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1378,6 +1388,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             2,
         );
@@ -1412,6 +1423,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             stage_id,
         );
@@ -1452,6 +1464,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1583,6 +1596,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1676,6 +1690,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
             },
             0,
         );
@@ -1914,6 +1929,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -1982,6 +1998,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -2061,6 +2078,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
             },
             0,
         );
@@ -2153,6 +2171,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
             },
             0,
         );
@@ -2217,6 +2236,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
             },
             0,
         );
@@ -2314,6 +2334,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
             },
             0,
         );
@@ -2379,6 +2400,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
             },
             0,
         );
@@ -2443,6 +2465,7 @@ mod tests {
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
                 diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
             },
             0,
         );

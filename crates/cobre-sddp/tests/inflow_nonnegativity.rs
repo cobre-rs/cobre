@@ -626,6 +626,7 @@ fn simulate_fixture(
             n_ncs_per_stage: &[],
             ncs_entity_ids_per_stage: &[],
             diversion_upstream: &HashMap::new(),
+            hydro_productivities_per_stage: &fx.stage_templates.hydro_productivities_per_stage,
             event_sender: None,
         },
         &comm,

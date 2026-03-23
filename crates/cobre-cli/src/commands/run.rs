@@ -591,7 +591,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     failed += 1;
                 }
             }
-            let mut sim_output = sim_writer.finalize();
+            let mut sim_output = sim_writer.finalize(sim_time_ms);
             sim_output.failed = failed;
 
             write_outputs(

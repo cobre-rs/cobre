@@ -686,6 +686,7 @@ fn run_simulation(
                     n_ncs_per_stage: &[],
                     ncs_entity_ids_per_stage: &[],
                     diversion_upstream: &HashMap::new(),
+                    hydro_productivities_per_stage: &vec![vec![1.0, 1.0, 1.0]; fx.n_stages],
                     event_sender: None,
                 },
                 &comm,

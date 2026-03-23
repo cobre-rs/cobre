@@ -885,6 +885,11 @@ struct StageLayout {
     // Column regions
     col_turbine_start: usize,
     col_spillage_start: usize,
+    /// Start of diversion flow columns (one per hydro per block).
+    ///
+    /// Layout within this region: `col_diversion_start + h_idx * n_blks + blk`.
+    /// Hydros without diversion have bounds [0, 0]; presolve eliminates them.
+    col_diversion_start: usize,
     col_thermal_start: usize,
     col_line_fwd_start: usize,
     col_line_rev_start: usize,
@@ -980,7 +985,8 @@ impl StageLayout {
 
         let col_turbine_start = decision_start;
         let col_spillage_start = col_turbine_start + ctx.n_hydros * n_blks;
-        let col_thermal_start = col_spillage_start + ctx.n_hydros * n_blks;
+        let col_diversion_start = col_spillage_start + ctx.n_hydros * n_blks;
+        let col_thermal_start = col_diversion_start + ctx.n_hydros * n_blks;
         let col_line_fwd_start = col_thermal_start + ctx.n_thermals * n_blks;
         let col_line_rev_start = col_line_fwd_start + ctx.n_lines * n_blks;
         let max_deficit_segments = ctx
@@ -1180,6 +1186,7 @@ impl StageLayout {
             lag_order: ctx.max_par_order,
             col_turbine_start,
             col_spillage_start,
+            col_diversion_start,
             col_thermal_start,
             col_line_fwd_start,
             col_line_rev_start,
@@ -1285,6 +1292,18 @@ fn fill_stage_columns(
             col_upper[col] = f64::INFINITY;
             let block_hours = stage.blocks[blk].duration_hours;
             objective[col] = hp.spillage_cost * block_hours;
+        }
+    }
+
+    // Diversion columns per hydro per block.
+    // All hydros get diversion columns; those without diversion have bounds [0, 0]
+    // and the LP presolve eliminates them. Column bounds and objective will be
+    // populated in a subsequent ticket when diversion wiring is added.
+    for h_idx in 0..ctx.n_hydros {
+        for blk in 0..layout.n_blks {
+            let col = layout.col_diversion_start + h_idx * layout.n_blks + blk;
+            col_lower[col] = 0.0;
+            col_upper[col] = 0.0;
         }
     }
 
@@ -3692,7 +3711,8 @@ mod tests {
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 7 + 1 = 8.
         // N=1 z-inflow column adds 1: 8 + 1 = 9.
-        assert_eq!(t.num_cols, 9, "num_cols mismatch for N=1 L=0");
+        // N=1 diversion column adds 1: 9 + 1 = 10.
+        assert_eq!(t.num_cols, 10, "num_cols mismatch for N=1 L=0");
     }
 
     #[test]
@@ -3714,7 +3734,8 @@ mod tests {
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 9 + 1 = 10.
         // N=1 z-inflow column adds 1: 10 + 1 = 11.
-        assert_eq!(t.num_cols, 11, "num_cols mismatch for N=1 L=2");
+        // N=1 diversion column adds 1: 11 + 1 = 12.
+        assert_eq!(t.num_cols, 12, "num_cols mismatch for N=1 L=2");
     }
 
     #[test]
@@ -4751,8 +4772,9 @@ mod tests {
         let t = &result.templates[0];
         // N=1, L=2: state = 1*(2+2)+1 = 5; decisions = turb+spill+def+exc = 4;
         // withdrawal slack = 1; z_inflow = 1; total = 11.
+        // +1 for diversion column: 11 + 1 = 12.
         assert_eq!(
-            t.num_cols, 11,
+            t.num_cols, 12,
             "method=none must not add extra penalty columns"
         );
         // num_rows = N*(1+L)+N+B*K + z_inflow = 3+1+1+1 = 6
@@ -5781,8 +5803,9 @@ mod tests {
 
         let tmpl = &result.templates[0];
 
-        // N=1, L=0 → n_state = 1, decision_start = 4, col_generation_start = 8.
-        let col_g = 8_usize;
+        // N=1, L=0 → n_state = 1, decision_start = 4, col_generation_start = 9.
+        // (turbine[4..5], spillage[5..6], diversion[6..7], deficit[7..8], excess[8..9], generation[9])
+        let col_g = 9_usize;
 
         // row_fpha_start = 4 (= n_state + N z_inflow + N water balance + B*1 load balance)
         let row_fpha_start = 4_usize;
@@ -5916,15 +5939,16 @@ mod tests {
 
         // Verify overall dimensions: 2 FPHA hydros * 1 block * 3 planes = 6 extra rows,
         // 2 generation columns.
-        // Base (constant) num_cols = 13 + 4*1*2 + 0 + 0 + 1*1*2 = 13 + 8 + 2 = 23.
-        // With FPHA: 23 + 2 = 25.
-        // With withdrawal slack (N=4): 25 + 4 = 29.
+        // Base (constant) num_cols = 13 + 4*1*3 + 0 + 0 + 1*1*2 = 13 + 12 + 2 = 27.
+        // (3 = turbine + spillage + diversion per hydro per block)
+        // With FPHA: 27 + 2 = 29.
+        // With withdrawal slack (N=4): 29 + 4 = 33.
         // z-inflow is now embedded in state region (not appended at end).
         // Base num_rows = n_state + N z_inflow + 4 water balance + 1*1 load balance = 4 + 4 + 4 + 1 = 13.
         // With FPHA: 13 + 2*1*3 = 13 + 6 = 19.
         assert_eq!(
-            tmpl.num_cols, 29,
-            "4-hydro mixed system: num_cols should be 29 (includes withdrawal slack)"
+            tmpl.num_cols, 33,
+            "4-hydro mixed system: num_cols should be 33 (includes diversion and withdrawal slack)"
         );
         assert_eq!(
             tmpl.num_rows, 19,
@@ -5934,8 +5958,9 @@ mod tests {
         // Load balance row for the single bus, block 0: row = 12.
         let row_lb = 12_usize;
 
-        // FPHA hydro at h_idx=2 (local_idx=0): generation col = 23.
-        let col_g_fpha0 = 23_usize;
+        // FPHA hydro at h_idx=2 (local_idx=0): generation col = 27.
+        // (shifted +4 from 23 due to diversion columns for 4 hydros)
+        let col_g_fpha0 = 27_usize;
         let g0_lb_coeff = csc_entry(tmpl, col_g_fpha0, row_lb).unwrap_or_else(|| {
             panic!("FPHA hydro 0 generation column missing entry in load balance row {row_lb}")
         });
@@ -5944,8 +5969,8 @@ mod tests {
             "FPHA hydro 0 load balance: expected +1.0, got {g0_lb_coeff}"
         );
 
-        // FPHA hydro at h_idx=3 (local_idx=1): generation col = 24.
-        let col_g_fpha1 = 24_usize;
+        // FPHA hydro at h_idx=3 (local_idx=1): generation col = 28.
+        let col_g_fpha1 = 28_usize;
         let g1_lb_coeff = csc_entry(tmpl, col_g_fpha1, row_lb).unwrap_or_else(|| {
             panic!("FPHA hydro 1 generation column missing entry in load balance row {row_lb}")
         });
@@ -6079,8 +6104,8 @@ mod tests {
             .solve()
             .expect("FPHA LP must be feasible and optimal");
 
-        // col 8 is g (generation variable).
-        let col_g = 8_usize;
+        // col 9 is g (generation variable, shifted by +1 for diversion).
+        let col_g = 9_usize;
         let generation = view.primal[col_g];
         assert!(
             generation > 0.0,
@@ -6095,7 +6120,7 @@ mod tests {
     /// where `v_avg = (v + v_in) / 2`.
     ///
     /// Column indices (N=1, L=0, no penalty, 3 planes):
-    ///   col 0: `v`, col 1: `v_in`, col 3: `q`, col 4: `s`, col 7: `g`
+    ///   col 0: `v`, col 1: `v_in`, col 3: `q`, col 4: `s`, col 8: `g`
     #[test]
     fn fpha_solve_hyperplane_constraints_hold() {
         use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
@@ -6144,7 +6169,7 @@ mod tests {
         let col_v_in = 1_usize;
         let col_q = 3_usize;
         let col_s = 4_usize;
-        let col_g = 7_usize;
+        let col_g = 9_usize;
 
         let g = primal[col_g];
         let v = primal[col_v];
@@ -9087,15 +9112,15 @@ mod tests {
         // N=3, L=0, 1 block, no thermals/lines/evap/inflow-penalty:
         // state cols: 3 outgoing + 3 incoming = 6
         // theta: 1
-        // turbine: 3, spillage: 3
+        // turbine: 3, spillage: 3, diversion: 3
         // deficit: 1, excess: 1
         // inflow slack: 0 (no penalty config)
         // evap: 0
         // withdrawal slack: 3
-        // Total without withdrawal: 6 + 1 + 3 + 3 + 1 + 1 = 15
-        // Total with withdrawal: 15 + 3 = 18
-        // + 3 z-inflow columns: 18 + 3 = 21
-        let expected_without_withdrawal = 15_usize;
+        // Total without withdrawal: 6 + 1 + 3 + 3 + 3 + 1 + 1 = 18
+        // Total with withdrawal: 18 + 3 = 21
+        // + 3 z-inflow columns: 21 + 3 = 24
+        let expected_without_withdrawal = 18_usize;
         let expected_with_withdrawal = expected_without_withdrawal + 3 + 3; // + withdrawal + z_inflow
         assert_eq!(
             t.num_cols, expected_with_withdrawal,
@@ -9103,20 +9128,21 @@ mod tests {
             t.num_cols
         );
 
-        // Verify the withdrawal slack columns (before z_inflow columns).
+        // Verify the withdrawal slack columns (the last N columns in the layout).
+        // withdrawal_slack is at [num_cols - n_h, num_cols).
         let n_h = t.n_hydro;
         assert_eq!(
-            t.col_upper[t.num_cols - n_h - 3],
+            t.col_upper[t.num_cols - n_h],
             f64::INFINITY,
             "withdrawal slack column for hydro 0 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - n_h - 2],
+            t.col_upper[t.num_cols - n_h + 1],
             f64::INFINITY,
             "withdrawal slack column for hydro 1 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - n_h - 1],
+            t.col_upper[t.num_cols - n_h + 2],
             f64::INFINITY,
             "withdrawal slack column for hydro 2 should be unbounded above"
         );

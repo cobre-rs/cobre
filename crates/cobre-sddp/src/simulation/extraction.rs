@@ -1442,13 +1442,14 @@ mod tests {
     ///
     /// ```text
     /// theta = N*(3+L) = 2*(3+1) = 8
-    /// turbine:  [9, 11)   h0→9, h1→10
-    /// spillage: [11, 13)  h0→11, h1→12
-    /// thermal: [13, 14)   t0→13
-    /// line_fwd:[14, 15)   l0→14
-    /// line_rev:[15, 16)   l0→15
-    /// deficit: [16, 17)   b0→16
-    /// excess:  [17, 18)   b0→17
+    /// turbine:   [9, 11)   h0→9, h1→10
+    /// spillage:  [11, 13)  h0→11, h1→12
+    /// diversion: [13, 15)  h0→13, h1→14
+    /// thermal:   [15, 16)  t0→15
+    /// line_fwd:  [16, 17)  l0→16
+    /// line_rev:  [17, 18)  l0→17
+    /// deficit:   [18, 19)  b0→18
+    /// excess:    [19, 20)  b0→19
     /// ```
     #[test]
     fn extract_equipment_reads_primal_when_with_equipment() {
@@ -1458,18 +1459,20 @@ mod tests {
         assert_eq!(indexer.theta, 8);
         assert_eq!(indexer.turbine, 9..11);
         assert_eq!(indexer.spillage, 11..13);
-        assert_eq!(indexer.thermal, 13..14);
-        assert_eq!(indexer.line_fwd, 14..15);
-        assert_eq!(indexer.line_rev, 15..16);
-        assert_eq!(indexer.deficit, 16..17);
-        assert_eq!(indexer.excess, 17..18);
+        assert_eq!(indexer.diversion, 13..15);
+        assert_eq!(indexer.thermal, 15..16);
+        assert_eq!(indexer.line_fwd, 16..17);
+        assert_eq!(indexer.line_rev, 17..18);
+        assert_eq!(indexer.deficit, 18..19);
+        assert_eq!(indexer.excess, 19..20);
 
         // Build a primal vector sized to include withdrawal_slack columns.
         // storage[0..2]=100,200  inflow_lags[2..4]=50,60  z_inflow[4..6]=0,0
         // storage_in[6..8]=90,180  theta[8]=500
         // turbine[9..11]=30.0,40.0   spillage[11..13]=5.0,0.0
-        // thermal[13]=80.0   line_fwd[14]=15.0   line_rev[15]=0.0
-        // deficit[16]=10.0   excess[17]=2.0   withdrawal_slack[18..20]=0.0,0.0
+        // diversion[13..15]=0.0,0.0
+        // thermal[15]=80.0   line_fwd[16]=15.0   line_rev[17]=0.0
+        // deficit[18]=10.0   excess[19]=2.0   withdrawal_slack[20..22]=0.0,0.0
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 100.0; // storage h0
@@ -1484,20 +1487,21 @@ mod tests {
         primal[10] = 40.0; // turbine h1 b0
         primal[11] = 5.0; // spillage h0 b0
         primal[12] = 0.0; // spillage h1 b0
-        primal[13] = 80.0; // thermal t0 b0
-        primal[14] = 15.0; // line_fwd l0 b0
-        primal[15] = 0.0; // line_rev l0 b0
-        primal[16] = 10.0; // deficit b0 b0
-        primal[17] = 2.0; // excess b0 b0
+        // primal[13..15] = diversion (zeros)
+        primal[15] = 80.0; // thermal t0 b0
+        primal[16] = 15.0; // line_fwd l0 b0
+        primal[17] = 0.0; // line_rev l0 b0
+        primal[18] = 10.0; // deficit b0 b0
+        primal[19] = 2.0; // excess b0 b0
 
         // Objective coefficients: thermal cost=50/MWh, spillage cost=0.1, deficit=1000, excess=50
         let mut obj = vec![0.0_f64; n_cols];
         obj[8] = 1.0; // theta (objective = 1)
         obj[11] = 0.1; // spillage h0 penalty
-        obj[13] = 50.0; // thermal cost per MW
-        obj[14] = 5.0; // line_fwd cost per MW
-        obj[16] = 1000.0; // deficit cost per MW
-        obj[17] = 50.0; // excess cost per MW
+        obj[15] = 50.0; // thermal cost per MW
+        obj[16] = 5.0; // line_fwd cost per MW
+        obj[18] = 1000.0; // deficit cost per MW
+        obj[19] = 50.0; // excess cost per MW
 
         let counts = EntityCounts {
             hydro_ids: vec![10, 20],
@@ -2036,9 +2040,10 @@ mod tests {
     /// ```text
     /// N=2, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[0], planes=[2]
     /// theta = N*(3+L) = 2*(3+0) = 6
-    /// turbine:   [7, 9)    h0→7, h1→8
-    /// spillage:  [9, 11)   h0→9, h1→10
-    /// generation:[11, 12)  fpha h0 b0 → 11
+    /// turbine:    [7, 9)    h0→7, h1→8
+    /// spillage:   [9, 11)   h0→9, h1→10
+    /// diversion: [11, 13)   h0→11, h1→12
+    /// generation:[13, 14)   fpha h0 b0 → 13
     /// ```
     fn make_indexer_2h_1fpha_1blk() -> StageIndexer {
         // h0 is FPHA (system index 0), h1 is constant-productivity (system index 1)
@@ -2050,9 +2055,9 @@ mod tests {
     #[test]
     fn fpha_generation_read_from_lp_column() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        // generation.start should be at turbine(7..9) + spillage(9..11) end = 11
-        // generation[0] = generation.start + 0 * 1 + 0 = 11
-        assert_eq!(indexer.generation.start, 11, "generation starts at 11");
+        // generation.start should be after turbine(7..9) + spillage(9..11) + diversion(11..13) = 13
+        // generation[0] = generation.start + 0 * 1 + 0 = 13
+        assert_eq!(indexer.generation.start, 13, "generation starts at 13");
         assert_eq!(indexer.fpha_hydro_indices, vec![0]);
 
         let n_cols = indexer.withdrawal_slack.end;
@@ -2067,7 +2072,8 @@ mod tests {
         primal[8] = 30.0; // turbine h1 b0
         primal[9] = 0.0; // spillage h0 b0
         primal[10] = 0.0; // spillage h1 b0
-        primal[11] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
+        // primal[11..13] = diversion (zeros)
+        primal[13] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 2];
@@ -2109,7 +2115,7 @@ mod tests {
         // 2 hydros × 1 block = 2 entries
         assert_eq!(result.hydros.len(), 2);
 
-        // FPHA hydro (h0, block 0): generation from LP column 11 = 75.0
+        // FPHA hydro (h0, block 0): generation from LP column 13 = 75.0
         assert!(
             (result.hydros[0].generation_mw - 75.0).abs() < 1e-12,
             "FPHA generation_mw should be 75.0, got {}",
@@ -2186,9 +2192,10 @@ mod tests {
     /// ```text
     /// N=1, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[], evap=[0]
     /// theta = 1*(3+0) = 3
-    /// turbine:  [4, 5)   h0→4
-    /// spillage: [5, 6)   h0→5
-    /// evap:     [6, 9)   Q_ev→6, f_plus→7, f_minus→8
+    /// turbine:    [4, 5)   h0→4
+    /// spillage:   [5, 6)   h0→5
+    /// diversion:  [6, 7)   h0→6
+    /// evap:       [7, 10)  Q_ev→7, f_plus→8, f_minus→9
     /// ```
     fn make_indexer_1h_evap_1blk() -> StageIndexer {
         StageIndexer::with_equipment_and_evaporation(
@@ -2212,9 +2219,9 @@ mod tests {
         let indexer = make_indexer_1h_evap_1blk();
         assert_eq!(indexer.evap_hydro_indices, vec![0]);
         let ei = &indexer.evap_indices[0];
-        assert_eq!(ei.q_ev_col, 6);
-        assert_eq!(ei.f_evap_plus_col, 7);
-        assert_eq!(ei.f_evap_minus_col, 8);
+        assert_eq!(ei.q_ev_col, 7);
+        assert_eq!(ei.f_evap_plus_col, 8);
+        assert_eq!(ei.f_evap_minus_col, 9);
 
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
@@ -2224,7 +2231,8 @@ mod tests {
         primal[3] = 0.0; // theta
         primal[4] = 10.0; // turbine h0 b0
         primal[5] = 0.0; // spillage h0 b0
-        primal[6] = 3.5; // Q_ev — acceptance criterion value
+        // primal[6] = diversion h0 b0 (zero)
+        primal[7] = 3.5; // Q_ev — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2285,9 +2293,10 @@ mod tests {
         // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
         // primal[3] = theta = 0
-        primal[6] = 2.0; // Q_ev
-        primal[7] = 0.5; // f_evap_plus — acceptance criterion value
-        primal[8] = 0.0; // f_evap_minus
+        // primal[6] = diversion h0 b0 (zero)
+        primal[7] = 2.0; // Q_ev
+        primal[8] = 0.5; // f_evap_plus — acceptance criterion value
+        primal[9] = 0.0; // f_evap_minus
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2341,17 +2350,17 @@ mod tests {
     #[test]
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        // generation.start = 11 (fpha h0 b0)
+        // generation.start = 13 (fpha h0 b0)
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta (at N*(3+L) = 2*3 = 6)
 
-        // FPHA generation column 11: primal=30.0
-        primal[11] = 30.0;
+        // FPHA generation column 13: primal=30.0
+        primal[13] = 30.0;
 
         let mut obj = vec![0.0_f64; n_cols];
-        // FPHA generation column 11: objective_coeff=0.01
-        obj[11] = 0.01;
+        // FPHA generation column 13: objective_coeff=0.01
+        obj[13] = 0.01;
 
         let dual = vec![0.0_f64; 2];
         let row_lower = vec![0.0_f64; 1];

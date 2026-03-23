@@ -29,24 +29,23 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
-    validate_structure,
+    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, ArCoefficientEstimate,
+        SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -1050,69 +1049,93 @@ pub(crate) fn build_estimation_report(
     }
 }
 
-/// Convert [`SeasonalStats`] to [`InflowSeasonalStatsRow`].
+/// Convert [`SeasonalStats`] to [`InflowSeasonalStatsRow`], expanding
+/// per-season estimates to every stage that shares the same `season_id`.
 ///
-/// The `stage_id` in `SeasonalStats` already stores the ID of the first stage
-/// with the matching season (as documented in `estimate_seasonal_stats`).
+/// The `stage_id` in `SeasonalStats` stores the ID of the first stage with
+/// the matching season.  This function looks up that stage's `season_id` and
+/// emits one row for every stage with the same season, so that
+/// [`cobre_stochastic::PrecomputedPar`] finds a model at every stage index.
 fn seasonal_stats_to_rows(
     stats: &[SeasonalStats],
-    _stages: &[cobre_core::temporal::Stage],
+    stages: &[cobre_core::temporal::Stage],
 ) -> Vec<InflowSeasonalStatsRow> {
-    stats
+    let stage_to_season: HashMap<i32, usize> = stages
         .iter()
-        .map(|s| InflowSeasonalStatsRow {
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
+
+    let mut season_to_stages: HashMap<usize, Vec<i32>> = HashMap::new();
+    for stage in stages {
+        if let Some(sid) = stage.season_id {
+            season_to_stages.entry(sid).or_default().push(stage.id);
+        }
+    }
+
+    let mut rows = Vec::with_capacity(stats.len() * 10);
+    for s in stats {
+        if let Some(&season_id) = stage_to_season.get(&s.stage_id) {
+            if let Some(stage_ids) = season_to_stages.get(&season_id) {
+                for &stage_id in stage_ids {
+                    rows.push(InflowSeasonalStatsRow {
+                        hydro_id: s.entity_id,
+                        stage_id,
+                        mean_m3s: s.mean,
+                        std_m3s: s.std,
+                    });
+                }
+                continue;
+            }
+        }
+        // Fallback: emit just the original stage_id.
+        rows.push(InflowSeasonalStatsRow {
             hydro_id: s.entity_id,
             stage_id: s.stage_id,
             mean_m3s: s.mean,
             std_m3s: s.std,
-        })
-        .collect()
+        });
+    }
+
+    rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id));
+    rows
 }
 
-/// Convert [`ArCoefficientEstimate`] to [`InflowArCoefficientRow`].
+/// Convert [`ArCoefficientEstimate`] to [`InflowArCoefficientRow`], expanding
+/// per-season AR coefficients to every stage that shares the same `season_id`.
 ///
-/// The `season_id` in `ArCoefficientEstimate` is mapped to a `stage_id` by
-/// finding the first stage whose `season_id` matches. A single stats row is
-/// emitted per lag in the coefficient vector.
+/// The `season_id` in `ArCoefficientEstimate` is mapped to ALL stage IDs whose
+/// `season_id` matches, so the resulting coefficient rows cover the full study
+/// horizon (not just the first occurrence of each season).
 fn ar_estimates_to_rows(
     ar_estimates: &[ArCoefficientEstimate],
     stages: &[cobre_core::temporal::Stage],
 ) -> Vec<InflowArCoefficientRow> {
-    // Build season_id -> first stage_id mapping.
-    // "First" = stage with the smallest `stage.id` among those with that `season_id`.
-    let mut season_to_stage: HashMap<usize, i32> = HashMap::new();
-    for stage in stages
-        .iter()
-        .filter_map(|s| s.season_id.map(|sid| (sid, s.id)))
-    {
-        season_to_stage
-            .entry(stage.0)
-            .and_modify(|existing| {
-                if stage.1 < *existing {
-                    *existing = stage.1;
-                }
-            })
-            .or_insert(stage.1);
+    let mut season_to_stages: HashMap<usize, Vec<i32>> = HashMap::new();
+    for stage in stages {
+        if let Some(sid) = stage.season_id {
+            season_to_stages.entry(sid).or_default().push(stage.id);
+        }
     }
 
     let mut rows: Vec<InflowArCoefficientRow> = Vec::new();
 
     for est in ar_estimates {
-        let Some(&stage_id) = season_to_stage.get(&est.season_id) else {
+        let Some(stage_ids) = season_to_stages.get(&est.season_id) else {
             continue;
         };
 
-        for (lag_idx, &coeff) in est.coefficients.iter().enumerate() {
-            // lag_idx is bounded by max_order (typically ≤ 12); i32 cast is safe.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let lag = (lag_idx + 1) as i32;
-            rows.push(InflowArCoefficientRow {
-                hydro_id: est.hydro_id,
-                stage_id,
-                lag,
-                coefficient: coeff,
-                residual_std_ratio: est.residual_std_ratio,
-            });
+        for &stage_id in stage_ids {
+            for (lag_idx, &coeff) in est.coefficients.iter().enumerate() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let lag = (lag_idx + 1) as i32;
+                rows.push(InflowArCoefficientRow {
+                    hydro_id: est.hydro_id,
+                    stage_id,
+                    lag,
+                    coefficient: coeff,
+                    residual_std_ratio: est.residual_std_ratio,
+                });
+            }
         }
     }
 
@@ -1157,8 +1180,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {

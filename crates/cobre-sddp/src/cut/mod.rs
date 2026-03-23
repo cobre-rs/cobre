@@ -15,8 +15,10 @@
 
 pub mod fcf;
 pub mod pool;
+pub mod row_map;
 pub mod wire;
 
 pub use fcf::FutureCostFunction;
 pub use pool::CutPool;
+pub use row_map::CutRowMap;
 pub use wire::CutWireHeader;

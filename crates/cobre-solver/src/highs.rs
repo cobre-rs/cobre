@@ -82,9 +82,11 @@ impl DefaultOption {
 /// Performance-tuned default options (`HiGHS` Implementation SS4.1).
 ///
 /// These eight options are applied at construction and restored after each retry
-/// escalation. `simplex_scale_strategy` is explicitly set to 2 (equilibration,
-/// the `HiGHS` default) so that `restore_default_settings()` returns it to a known
-/// state after retry levels that override it.
+/// escalation. `simplex_scale_strategy` is set to 0 (off) because the calling
+/// algorithm's prescaler already normalizes matrix entries toward 1.0; the
+/// solver's internal equilibration scaling is redundant and can distort cost
+/// ordering for large-RHS rows. Retry escalation levels 5+ override this to
+/// more aggressive strategies as a fallback for hard problems.
 fn default_options() -> [DefaultOption; 8] {
     [
         DefaultOption {
@@ -97,7 +99,7 @@ fn default_options() -> [DefaultOption; 8] {
         },
         DefaultOption {
             name: c"simplex_scale_strategy",
-            value: OptionValue::Int(2), // Equilibration (HiGHS default)
+            value: OptionValue::Int(0), // Off (prescaler handles scaling)
         },
         DefaultOption {
             name: c"presolve",
@@ -196,7 +198,7 @@ impl HighsSolver {
     /// |--------------------------------|-------------|--------|
     /// | `solver`                       | `"simplex"` | string |
     /// | `simplex_strategy`             | `4`         | int    |
-    /// | `simplex_scale_strategy`       | `2`         | int    |
+    /// | `simplex_scale_strategy`       | `0`         | int    |
     /// | `presolve`                     | `"off"`     | string |
     /// | `parallel`                     | `"off"`     | string |
     /// | `output_flag`                  | `0`         | bool   |

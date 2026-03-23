@@ -16,9 +16,11 @@
 pub mod fcf;
 pub mod pool;
 pub mod row_map;
+pub mod sparse;
 pub mod wire;
 
 pub use fcf::FutureCostFunction;
-pub use pool::CutPool;
+pub use pool::{CutPool, SparsityReport};
 pub use row_map::CutRowMap;
+pub use sparse::SparseCut;
 pub use wire::CutWireHeader;

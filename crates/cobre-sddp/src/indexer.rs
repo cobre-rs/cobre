@@ -251,6 +251,13 @@ pub struct StageIndexer {
     /// Zero when built via [`StageIndexer::new`].
     pub n_buses: usize,
 
+    /// Row range for water balance constraints, one per operating hydro.
+    ///
+    /// Index for hydro `h`: `water_balance.start + h`.
+    /// The dual of this row gives the marginal value of water (water value).
+    /// Empty when built via [`StageIndexer::new`].
+    pub water_balance: Range<usize>,
+
     /// Row range for load balance constraints, one per (bus, block) pair.
     ///
     /// Index for bus `b_idx`, block `blk`: `load_balance.start + b_idx * n_blks + blk`.
@@ -498,6 +505,7 @@ impl StageIndexer {
             n_thermals: 0,
             n_lines: 0,
             n_buses: 0,
+            water_balance: 0..0,
             load_balance: 0..0,
             inflow_slack: 0..0,
             inflow_slack_rows: 0..0,
@@ -754,6 +762,7 @@ impl StageIndexer {
             n_thermals,
             n_lines,
             n_buses,
+            water_balance: water_balance_start..water_balance_start + hydro_count,
             load_balance: load_balance_start..load_balance_end,
             inflow_slack,
             inflow_slack_rows: 0..0,

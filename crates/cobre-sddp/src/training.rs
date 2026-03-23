@@ -688,25 +688,36 @@ mod tests {
         cut::fcf::FutureCostFunction,
     };
 
-    /// Minimal two-column LP: \[`storage_in` (0), theta (1)\].
-    /// One storage-fixing row \[0\]: `storage_in` is fixed to initial state.
+    /// Minimal LP for N=1 hydro, L=0 PAR order.
     ///
-    /// Column layout: `n_state=1` (N=1, L=0) — storage (0), `storage_in` (1), theta (2).
-    /// Row layout: `storage_fixing` (0).
+    /// Column layout (N=1, L=0):
+    /// - col 0: storage_out (no NZ in structural rows)
+    /// - col 1: z_inflow (no NZ — z_inflow row at row 1)
+    /// - col 2: storage_in (1 NZ: row 0, storage-fixing row)
+    /// - col 3: theta (no NZ)
+    ///
+    /// Row layout:
+    /// - row 0: storage-fixing (`storage_out` fixed to incoming state)
+    /// - row 1: z_inflow definition row
     fn minimal_template(n_state: usize) -> StageTemplate {
         let _ = n_state;
         StageTemplate {
-            num_cols: 3,
-            num_rows: 1,
+            num_cols: 4,
+            num_rows: 2,
             num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1],
+            // CSC col_starts: 4 cols + 1 sentinel = 5 entries.
+            // col 0 (storage_out): 0 NZ
+            // col 1 (z_inflow):    0 NZ
+            // col 2 (storage_in):  1 NZ at row 0
+            // col 3 (theta):       0 NZ
+            col_starts: vec![0_i32, 0, 0, 1, 1],
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-            objective: vec![0.0, 0.0, 1.0],
-            row_lower: vec![0.0],
-            row_upper: vec![0.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 0.0],
+            row_upper: vec![0.0, 0.0],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -720,9 +731,9 @@ mod tests {
     fn fixed_solution(objective: f64) -> LpSolution {
         LpSolution {
             objective,
-            primal: vec![0.0; 3],
-            dual: vec![0.0; 1],
-            reduced_costs: vec![0.0; 3],
+            primal: vec![0.0; 4],
+            dual: vec![0.0; 2],
+            reduced_costs: vec![0.0; 4],
             iterations: 0,
             solve_time_seconds: 0.0,
         }
@@ -770,9 +781,9 @@ mod tests {
                 return Err(SolverError::Infeasible);
             }
             let obj = self.objectives[call % self.objectives.len()];
-            // Return a view with primal[2] = 0.0 (theta = 0) so that the forward pass
-            // computes stage_cost = objective - primal[theta] = obj - 0 = obj.
-            // The fixed_solution helper provides compatible primal/dual arrays.
+            // Return a view with primal[3] = 0.0 (theta = 0, N=1 L=0 → theta at col 3)
+            // so that the forward pass computes stage_cost = objective - primal[theta]
+            // = obj - 0 = obj.  The fixed_solution helper provides compatible arrays.
             let sol = fixed_solution(obj);
             // We cannot borrow from a temporary, so we use static empty slices.
             // training.rs mock only needs to satisfy the SolverInterface bound;
@@ -780,9 +791,9 @@ mod tests {
             let _ = sol;
             Ok(cobre_solver::SolutionView {
                 objective: obj,
-                primal: &[0.0, 0.0, 0.0],
-                dual: &[0.0],
-                reduced_costs: &[0.0, 0.0, 0.0],
+                primal: &[0.0, 0.0, 0.0, 0.0],
+                dual: &[0.0, 0.0],
+                reduced_costs: &[0.0, 0.0, 0.0, 0.0],
                 iterations: 0,
                 solve_time_seconds: 0.0,
             })
@@ -1080,7 +1091,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0); // N=1, L=0
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1150,7 +1161,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1227,7 +1238,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1353,7 +1364,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1422,7 +1433,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1489,7 +1500,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1561,7 +1572,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1643,7 +1654,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1747,7 +1758,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
@@ -1851,7 +1862,7 @@ mod tests {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![1usize; n_stages];
+        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);

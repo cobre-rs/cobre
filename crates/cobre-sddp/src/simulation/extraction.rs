@@ -219,8 +219,12 @@ fn extract_hydro_no_turbine(
     } else {
         0.0
     };
-    let water_value =
-        view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0) * COST_SCALE_FACTOR;
+    let water_value = view
+        .dual
+        .get(indexer.water_balance.start + h)
+        .copied()
+        .unwrap_or(0.0)
+        * COST_SCALE_FACTOR;
 
     // Determine if hydro `h` is FPHA. FPHA identification comes from
     // StageIndexer, not from EntityCounts.hydro_productivities.
@@ -302,8 +306,12 @@ fn extract_hydro_per_block<'a>(
     } else {
         0.0
     };
-    let water_value =
-        view.dual.get(indexer.n_state + h).copied().unwrap_or(0.0) * COST_SCALE_FACTOR;
+    let water_value = view
+        .dual
+        .get(indexer.water_balance.start + h)
+        .copied()
+        .unwrap_or(0.0)
+        * COST_SCALE_FACTOR;
 
     // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
     // can read generation from the LP `g_{h,k}` column rather than computing
@@ -1501,19 +1509,15 @@ mod tests {
             contract_ids: vec![],
             non_controllable_ids: vec![],
         };
-        // Dual vector: water_value reads from dual[n_state + h], load balance from
-        // dual[load_balance.start + b*K + blk]. N=2, L=1 → n_state=4.
-        // load_balance = indexer.load_balance (with z_inflow rows, water_balance_start
-        // shifted to N*(2+L)=6, load_balance_start=6+2=8).
-        // water_value for h0 = dual[4], h1 = dual[5]  (n_state + h)
-        // spot_price for b0 = dual[8]  (load_balance.start)
+        // Dual vector: water_value reads from dual[water_balance.start + h],
+        // load balance from dual[load_balance.start + b*K + blk].
+        // N=2, L=1 → n_state=4, water_balance=[6,8), load_balance=[8,9).
         let mut dual = vec![0.0_f64; 9];
-        dual[4] = -120.0; // water value h0 ($/hm³) — at n_state+0
-        dual[5] = -95.0; // water value h1 ($/hm³) — at n_state+1
+        dual[6] = -120.0; // water value h0 ($/hm³) — at water_balance.start+0
+        dual[7] = -95.0; // water value h1 ($/hm³) — at water_balance.start+1
         dual[8] = 108_000.0; // raw load balance dual ($/MW); 150 $/MWh × 720 h
 
-        // Build row_lower for the load balance row. load_balance.start = 8.
-        // K=1, B=1 → one load balance row at index 8.
+        // Build row_lower for the load balance row. load_balance.start=8, K=1, B=1.
         let mut row_lower = vec![0.0_f64; 9]; // must be >= load_balance.end = 9
         row_lower[8] = 75.0; // load = 75 MW for bus 100
         let block_hours = [720.0_f64]; // one block, 30-day month
@@ -1580,8 +1584,7 @@ mod tests {
         // spot_price = dual * COST_SCALE_FACTOR / hrs = 108_000 * 1000 / 720 = 150_000.0 $/MWh
         assert!((result.buses[0].spot_price - 150_000.0).abs() < 1e-9); // 108_000 * 1000 / 720
 
-        // Water value from dual of water balance rows
-        // water_value = dual * COST_SCALE_FACTOR: -120 * 1000 = -120_000, -95 * 1000 = -95_000
+        // water_value = dual[water_balance.start+h] * COST_SCALE_FACTOR
         assert!((result.hydros[0].water_value_per_hm3 - (-120_000.0)).abs() < 1e-9);
         assert!((result.hydros[1].water_value_per_hm3 - (-95_000.0)).abs() < 1e-9);
 

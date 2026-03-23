@@ -101,20 +101,21 @@ impl Communicator for StubComm {
 // Column layout for StageIndexer::new(3, 0):
 //   storage      = 0..3
 //   inflow_lags  = 3..3  (empty, L=0)
-//   storage_in   = 3..6
-//   theta        = 6
-//   num_cols     = 7
+//   z_inflow     = 3..6
+//   storage_in   = 6..9
+//   theta        = 9
+//   num_cols     = 10
 //
-// The primal must have 7 entries so `view.primal[indexer.theta]` (index 6)
+// The primal must have 10 entries so `view.primal[indexer.theta]` (index 9)
 // is valid. The dual must have at least n_dual_relevant = 3 entries so the
 // backward pass can extract dual values for the 3 storage-fixing rows.
 // ===========================================================================
 
-const PRIMAL_3H: &[f64] = &[0.0; 7];
+const PRIMAL_3H: &[f64] = &[0.0; 10];
 // The dual must cover: n_dual_relevant (3) + max cuts per stage (10 iterations × 1 pass = 10).
 // Use 64 to cover any reasonable iteration count without tight sizing.
 const DUAL_3H: &[f64] = &[0.0; 64];
-const REDUCED_COSTS_3H: &[f64] = &[0.0; 7];
+const REDUCED_COSTS_3H: &[f64] = &[0.0; 10];
 
 /// Mock solver for a 3-hydro, PAR(0) stage LP.
 ///
@@ -397,48 +398,60 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
 ///
-/// Column layout:
+/// Column layout (N=3, L=0):
 /// ```text
-/// 0..3  storage (outgoing, N=3)
-/// 3..6  storage_in (incoming, N=3, L=0 → no lag cols)
-/// 6     theta
+/// 0..3  storage_out  (outgoing storage, N=3)
+/// 3..6  z_inflow     (realized inflow variables, N=3)
+/// 6..9  storage_in   (incoming storage, N=3, L=0 → no lag cols)
+/// 9     theta
 /// ```
 ///
-/// Rows: 3 storage-fixing constraints.
+/// Row layout (N=3, L=0):
+/// ```text
+/// 0..3  storage-fixing rows  (one per hydro)
+/// 3..6  z_inflow rows        (one per hydro, at N*(1+L)=3)
+/// ```
 ///
 /// The matrix has one nonzero per storage-fixing row (column = `storage_in[h]`,
 /// coefficient = 1.0) so the patch buffer has something to patch.
 fn template_3h() -> StageTemplate {
     // 3 storage-fixing rows, one NZ each → 3 NZ total.
-    // col_starts: CSC format. 7 columns + 1 sentinel = 8 entries.
+    // col_starts: CSC format. 10 columns + 1 sentinel = 11 entries.
     // Columns 0..3 (storage_out): no NZ
-    // Columns 3..6 (storage_in): one NZ each (row 0, 1, 2 respectively)
-    // Column 6 (theta): no NZ
+    // Columns 3..6 (z_inflow):    no NZ
+    // Columns 6..9 (storage_in):  one NZ each (rows 0, 1, 2 respectively)
+    // Column  9    (theta):       no NZ
     let col_starts = vec![
         0_i32, // col 0 (storage_out[0])
         0,     // col 1 (storage_out[1])
         0,     // col 2 (storage_out[2])
-        0,     // col 3 (storage_in[0]) — NZ starts here
-        1,     // col 4 (storage_in[1])
-        2,     // col 5 (storage_in[2])
-        3,     // col 6 (theta)
+        0,     // col 3 (z_inflow[0])
+        0,     // col 4 (z_inflow[1])
+        0,     // col 5 (z_inflow[2])
+        0,     // col 6 (storage_in[0]) — NZ starts here
+        1,     // col 7 (storage_in[1])
+        2,     // col 8 (storage_in[2])
+        3,     // col 9 (theta)
         3,     // sentinel
     ];
     let row_indices = vec![0_i32, 1, 2]; // row 0, 1, 2 for storage_in cols
     let values = vec![1.0_f64, 1.0, 1.0];
 
+    let mut objective = vec![0.0_f64; 10];
+    objective[9] = 1.0; // theta at col 9
+
     StageTemplate {
-        num_cols: 7,
-        num_rows: 3,
+        num_cols: 10,
+        num_rows: 6,
         num_nz: 3,
         col_starts,
         row_indices,
         values,
-        col_lower: vec![0.0; 7],
-        col_upper: vec![f64::INFINITY; 7],
-        objective: vec![0.0; 7],
-        row_lower: vec![0.0; 3],
-        row_upper: vec![0.0; 3],
+        col_lower: vec![0.0; 10],
+        col_upper: vec![f64::INFINITY; 10],
+        objective,
+        row_lower: vec![0.0; 6],
+        row_upper: vec![0.0; 6],
         n_state: 3,
         n_transfer: 0,
         n_dual_relevant: 3,
@@ -480,8 +493,8 @@ impl Fixture3H {
         // N=3 hydros, L=0 PAR order
         let indexer = StageIndexer::new(3, 0);
         let templates = vec![template_3h(); n_stages];
-        // base_row: the AR-dynamics row offset equals n_dual_relevant = 3.
-        let base_rows = vec![3usize; n_stages];
+        // base_row: water-balance rows start at row_water_balance_start = n_state + n_hydros = 3 + 3 = 6.
+        let base_rows = vec![6usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree_3h(1);
         let stochastic = make_stochastic_context_3h(n_stages);

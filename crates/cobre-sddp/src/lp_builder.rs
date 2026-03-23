@@ -796,6 +796,17 @@ const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 /// this factor at the reporting boundary to recover original units.
 pub(crate) const COST_SCALE_FACTOR: f64 = 1_000.0;
 
+/// Safety margin applied to the physical upper bound on the evaporation flow
+/// variable `Q_ev`.  The bound is `(k_evap0 + k_evap_v * v_max).max(0) * margin`.
+/// A 2x margin accounts for linearization approximation error (the actual
+/// area-volume curve may exceed the linear estimate near `v_max`).
+pub(crate) const Q_EV_SAFETY_MARGIN: f64 = 2.0;
+
+/// Multiplier applied to the over-evaporation violation slack (`f_minus`)
+/// objective coefficient.  Makes over-evaporation 100x more expensive than
+/// under-evaporation as defense-in-depth behind the physical `Q_ev` bound.
+pub(crate) const OVER_EVAPORATION_COST_MULTIPLIER: f64 = 100.0;
+
 // ---------------------------------------------------------------------------
 // Per-stage template builder internals
 // ---------------------------------------------------------------------------
@@ -1428,17 +1439,31 @@ fn fill_stage_columns(
         let col_f_plus = layout.col_evap_start + local_idx * 3 + 1;
         let col_f_minus = layout.col_evap_start + local_idx * 3 + 2;
         col_lower[col_q_ev] = 0.0;
-        col_upper[col_q_ev] = f64::INFINITY;
+        // Physical upper bound: linearized evaporation at maximum storage.
+        // Q_ev_max = max(0, k_evap0 + k_evap_v * v_max) * safety_margin.
+        // Negative coefficients (net condensation) are clamped to zero.
+        if let EvaporationModel::Linearized { coefficients, .. } =
+            ctx.evaporation_models.model(h_idx)
+        {
+            let coeff = &coefficients[stage_idx];
+            let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+            let q_ev_max = (coeff.k_evap0 + coeff.k_evap_v * hb.max_storage_hm3).max(0.0);
+            col_upper[col_q_ev] = q_ev_max * Q_EV_SAFETY_MARGIN;
+        } else {
+            col_upper[col_q_ev] = 0.0;
+        }
         col_lower[col_f_plus] = 0.0;
         col_upper[col_f_plus] = f64::INFINITY;
         col_lower[col_f_minus] = 0.0;
         col_upper[col_f_minus] = f64::INFINITY;
         // Violation cost: read from resolved penalties and scale by stage duration.
         // Q_ev (offset 0) keeps objective = 0.0 (already the vec initialisation default).
+        // f_minus (over-evaporation) is penalized asymmetrically at 100x the base cost
+        // to deter the solver from inflating evaporation beyond the linearized value.
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         let obj = hp.evaporation_violation_cost * total_stage_hours;
         objective[col_f_plus] = obj;
-        objective[col_f_minus] = obj;
+        objective[col_f_minus] = obj * OVER_EVAPORATION_COST_MULTIPLIER;
     }
 
     // Withdrawal violation slack columns (sigma^r_h), one per hydro.
@@ -2889,7 +2914,10 @@ pub fn build_stage_templates(
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{COST_SCALE_FACTOR, PatchBuffer, ar_dynamics_row_offset};
+    use super::{
+        COST_SCALE_FACTOR, OVER_EVAPORATION_COST_MULTIPLIER, PatchBuffer, Q_EV_SAFETY_MARGIN,
+        ar_dynamics_row_offset,
+    };
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.
@@ -6648,7 +6676,8 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): evaporation column bounds are [0, +inf) and objective is 0.0.
+    /// AC (ticket-010): evaporation column bounds are [0, bound) and objective is 0.0.
+    /// Q_ev has a physical upper bound; f_plus and f_minus are unbounded.
     #[test]
     fn evap_col_bounds_and_objective() {
         let system = one_hydro_system(1, 0);
@@ -6673,21 +6702,35 @@ mod tests {
         let col_f_plus = t.num_cols - 3;
         let col_f_minus = t.num_cols - 2;
 
+        // All three columns have lower bound 0.0.
         for &col in &[col_q_ev, col_f_plus, col_f_minus] {
             assert_eq!(
                 t.col_lower[col], 0.0,
                 "evap column {col} lower bound must be 0.0, got {}",
                 t.col_lower[col]
             );
-            assert!(
-                t.col_upper[col].is_infinite() && t.col_upper[col] > 0.0,
-                "evap column {col} upper bound must be +inf, got {}",
-                t.col_upper[col]
-            );
             assert_eq!(
                 t.objective[col], 0.0,
                 "evap column {col} objective must be 0.0 (ticket-013 sets violation cost), got {}",
                 t.objective[col]
+            );
+        }
+
+        // Q_ev has a physical upper bound: max(0, k_evap0 + k_evap_v * v_max) * 2.0.
+        // k_evap0 = 1.5, k_evap_v = 0.0, v_max = 200.0 → bound = 1.5 * 2.0 = 3.0.
+        let expected_q_ev_bound = 1.5 * Q_EV_SAFETY_MARGIN;
+        assert!(
+            (t.col_upper[col_q_ev] - expected_q_ev_bound).abs() < 1e-12,
+            "Q_ev upper bound must be {expected_q_ev_bound}, got {}",
+            t.col_upper[col_q_ev]
+        );
+
+        // Slack columns f_plus and f_minus remain unbounded.
+        for &col in &[col_f_plus, col_f_minus] {
+            assert!(
+                t.col_upper[col].is_infinite() && t.col_upper[col] > 0.0,
+                "evap slack column {col} upper bound must be +inf, got {}",
+                t.col_upper[col]
             );
         }
     }
@@ -7546,20 +7589,12 @@ mod tests {
             .expect("evap_hydro_system_with_violation_cost: valid")
     }
 
-    /// AC-1 (ticket-013): `f_evap_plus` and `f_evap_minus` carry
-    /// `evaporation_violation_cost * total_stage_hours`.
+    /// AC-1 (ticket-013): `f_evap_plus` carries base violation cost;
+    /// `f_evap_minus` carries 100x asymmetric over-evaporation penalty.
     ///
     /// System: 1 hydro with evaporation, `evaporation_violation_cost = 500.0`,
-    /// 1 block of 730 hours → expected objective = `500.0 * 730.0 = 365_000.0`.
-    ///
-    /// Column layout (`N=1`, `L=0`, `K=1`, no inflow penalty):
-    ///   col 0: `v`, col 1: `z_inflow`, col 2: `v_in`, col 3: `theta`
-    ///   col 4: `turbine`, col 5: `spillage`, col 6: `diversion`
-    ///   col 7: `deficit`, col 8: `excess`
-    ///   `col_evap_start = 9`
-    ///   `col_q_ev = 9` (objective = `0.0`)
-    ///   `col_f_plus = 10` (objective = `365_000.0`)
-    ///   `col_f_minus = 11` (objective = `365_000.0`)
+    /// 1 block of 730 hours → base objective = `500.0 * 730.0 / 1000 = 365.0`.
+    /// `f_minus` objective = `365.0 * 100 = 36_500.0`.
     #[test]
     fn evap_violation_cost_applied_to_slack_columns() {
         let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
@@ -7583,7 +7618,7 @@ mod tests {
         let col_f_plus = t.num_cols - 3;
         let col_f_minus = t.num_cols - 2;
 
-        let expected = 500.0 * 730.0 / COST_SCALE_FACTOR;
+        let expected_base = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -7591,13 +7626,14 @@ mod tests {
             t.objective[col_q_ev]
         );
         assert!(
-            (t.objective[col_f_plus] - expected).abs() < 1e-12,
-            "f_evap_plus objective: expected {expected}, got {}",
+            (t.objective[col_f_plus] - expected_base).abs() < 1e-12,
+            "f_evap_plus objective: expected {expected_base}, got {}",
             t.objective[col_f_plus]
         );
+        let expected_minus = expected_base * OVER_EVAPORATION_COST_MULTIPLIER;
         assert!(
-            (t.objective[col_f_minus] - expected).abs() < 1e-12,
-            "f_evap_minus objective: expected {expected}, got {}",
+            (t.objective[col_f_minus] - expected_minus).abs() < 1e-6,
+            "f_evap_minus objective: expected {expected_minus} (100x f_plus), got {}",
             t.objective[col_f_minus]
         );
     }
@@ -7814,6 +7850,94 @@ mod tests {
             (base_dual * 1e6).round(),
             "storage-fixing dual must differ between evaporation ({evap_dual}) and \
              no-evaporation ({base_dual}) configurations"
+        );
+    }
+
+    /// Q_ev physical bound prevents the LP from using evaporation as a dump
+    /// valve.  With high v_in and high inflow, the LP must use spillage (not
+    /// evaporation) to remove excess water.  The test confirms Q_ev <= Q_ev_max,
+    /// f_minus ~ 0, and spillage > 0.
+    #[test]
+    fn evap_bound_prevents_dump_valve() {
+        use cobre_solver::{HighsSolver, RowBatch, SolverInterface};
+
+        let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
+        let evap = evap_set_with_k_evap_v(&system, &[0], 2.0, 0.0001);
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &evap,
+        )
+        .expect("evap dump valve test: template build must succeed");
+
+        let template = &result.templates[0];
+        let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+        solver.load_model(template);
+
+        let empty_cuts = RowBatch {
+            num_rows: 0,
+            row_starts: vec![0_i32],
+            col_indices: vec![],
+            values: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+        };
+        solver.add_rows(&empty_cuts);
+
+        // Fix v_in at max_storage = 2000 hm3.
+        let v_in = 2_000.0_f64;
+        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+
+        // Patch water balance RHS (row 2 for N=1, L=0) to inject large inflow.
+        // Water balance: v + zeta*(turbine + spill + div) - v_in + zeta*Q_ev = RHS.
+        // The template RHS = zeta * base = 2.628 * 50 = 131.4.
+        // Set RHS to zeta * 500 = 1314 to simulate a 500 m3/s inflow.
+        // The LP must then satisfy: v + zeta*(turbine+spill+...) = v_in + 1314 = 3314.
+        // With v <= 2000 and max turbine = 262.8 hm3, surplus > 1000 hm3 must spill.
+        let zeta = 730.0 * 3600.0 / 1e6;
+        let high_inflow_rhs = zeta * 500.0;
+        solver.set_row_bounds(&[2], &[high_inflow_rhs], &[high_inflow_rhs]);
+
+        let view = solver
+            .solve()
+            .expect("evap dump valve LP must be feasible and optimal");
+
+        // Column layout: N=1, L=0, K=1.
+        // col 0: v, col 1: z_inflow, col 2: v_in, col 3: theta,
+        // col 4: turbine, col 5: spillage, col 6: diversion,
+        // col 7: deficit, col 8: excess.
+        // Evaporation columns: Q_ev, f_plus, f_minus, then withdrawal slack.
+        let col_spillage = 5;
+        let col_q_ev = template.num_cols - 4;
+        let col_f_minus = template.num_cols - 2;
+
+        let q_ev = view.primal[col_q_ev];
+        let f_minus = view.primal[col_f_minus];
+        let spillage = view.primal[col_spillage];
+
+        // Q_ev must respect the physical bound.
+        // k_evap0=2.0, k_evap_v=0.0001, max_storage_hm3=2000.0
+        // q_ev_max = max(0, 2.0 + 0.0001*2000) * 2.0 = 2.2 * 2.0 = 4.4
+        let q_ev_max = (2.0 + 0.0001 * 2_000.0) * Q_EV_SAFETY_MARGIN;
+        assert!(
+            q_ev <= q_ev_max + 1e-8,
+            "Q_ev must be bounded by physical limit {q_ev_max}, got {q_ev}"
+        );
+
+        // Over-evaporation violation must be near zero (the 100x penalty deters it).
+        assert!(
+            f_minus < 1e-6,
+            "f_minus (over-evaporation) must be near zero, got {f_minus}"
+        );
+
+        // With massive inflow, the LP must dump water through spillage.
+        assert!(
+            spillage > 1e-6,
+            "spillage must be positive when excess water needs dumping, got {spillage}"
         );
     }
 

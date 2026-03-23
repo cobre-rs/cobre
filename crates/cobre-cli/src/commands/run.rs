@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{create_communicator, Communicator, ReduceOp};
+use cobre_comm::{Communicator, ReduceOp, create_communicator};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
@@ -29,10 +29,10 @@ use cobre_io::output::{
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_io::write_results;
 use cobre_sddp::{
-    build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
-    inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
-    prepare_stochastic, EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult,
-    SimulationScenarioResult, StudySetup,
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, SimulationScenarioResult,
+    StudySetup, build_hydro_model_summary, build_stochastic_summary,
+    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    prepare_hydro_models, prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -43,8 +43,8 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
-    BroadcastOpeningTree,
+    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
+    stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.

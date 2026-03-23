@@ -325,13 +325,13 @@ fn test_estimate_from_history_fixed_order() {
     let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("estimation should succeed with 15 years of monthly data");
 
-    // One InflowModel per (hydro_id, stage_id) pair, but estimation groups by
-    // season: 1 hydro × 12 seasons = 12 models.
+    // One InflowModel per (hydro_id, stage_id) pair: 1 hydro × 180 stages = 180 models.
+    // Per-season estimates are expanded to every stage sharing the same season_id.
     let models = updated.inflow_models();
     assert_eq!(
         models.len(),
-        12,
-        "expected 12 inflow models (1 hydro × 12 seasons), got {}",
+        180,
+        "expected 180 inflow models (1 hydro × 180 stages), got {}",
         models.len()
     );
 
@@ -390,8 +390,8 @@ fn test_estimate_from_history_aic_order() {
     let models = updated.inflow_models();
     assert_eq!(
         models.len(),
-        12,
-        "expected 12 inflow models (1 hydro × 12 seasons), got {}",
+        180,
+        "expected 180 inflow models (1 hydro × 180 stages), got {}",
         models.len()
     );
 
@@ -705,13 +705,14 @@ fn test_estimation_round_trip_par1() {
     let (updated, _report) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with N=200 per season should succeed");
 
+    let n_stages_rt = N_OBS_PER_SEASON * N_SEASONS_RT;
     let models = updated.inflow_models();
     assert_eq!(
         models.len(),
-        N_SEASONS_RT,
-        "expected {} inflow models (1 hydro × {} seasons), got {}",
-        N_SEASONS_RT,
-        N_SEASONS_RT,
+        n_stages_rt,
+        "expected {} inflow models (1 hydro × {} stages), got {}",
+        n_stages_rt,
+        n_stages_rt,
         models.len()
     );
 
@@ -783,7 +784,8 @@ fn test_estimation_round_trip_par1() {
 #[test]
 fn test_estimation_round_trip_two_hydros() {
     const N_HYDROS: usize = 2;
-    let expected_models = N_HYDROS * N_SEASONS_RT;
+    let n_stages_rt = N_OBS_PER_SEASON * N_SEASONS_RT;
+    let expected_models = N_HYDROS * n_stages_rt;
 
     let dir = TempDir::new().unwrap();
     let case_dir = dir.path();
@@ -801,7 +803,7 @@ fn test_estimation_round_trip_two_hydros() {
     assert_eq!(
         models.len(),
         expected_models,
-        "expected {} inflow models ({N_HYDROS} hydros × {N_SEASONS_RT} seasons), got {}",
+        "expected {} inflow models ({N_HYDROS} hydros × {n_stages_rt} stages), got {}",
         expected_models,
         models.len()
     );

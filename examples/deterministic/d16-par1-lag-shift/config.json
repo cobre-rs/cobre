@@ -5,7 +5,7 @@
     "stopping_rules": [
       {
         "type": "iteration_limit",
-        "limit": 10
+        "limit": 50
       }
     ]
   },

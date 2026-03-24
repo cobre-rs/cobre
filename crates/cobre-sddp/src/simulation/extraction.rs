@@ -2592,30 +2592,30 @@ mod tests {
     /// non-trivial `col_scale` is applied.
     ///
     /// Setup: 2 hydros (h0=FPHA, h1=constant), 1 block.
-    /// FPHA generation col 13: primal=30, obj_coeff=0.01, col_scale=2.0.
+    /// FPHA generation col 13: primal=30, `obj_coeff`=0.01, `col_scale`=2.0.
     /// After unscaling: cost = 30 * 0.01 / 2.0 * 1000 = 150.0.
-    /// Objective = theta_scaled + fpha_scaled = 500 + (30 * 0.01) = 500.3.
-    /// immediate_cost = (500.3 - 500) * 1000 = 300.
-    /// The sum must equal immediate_cost: fpha_turbined_cost = 150 from col_cost.
-    /// BUT immediate_cost is from (objective - theta) which is in scaled space
-    /// and already correct.  The col_cost unscaling produces the true cost.
+    /// Objective = `theta_scaled` + `fpha_scaled` = 500 + (30 * 0.01) = 500.3.
+    /// `immediate_cost` = (500.3 - 500) * 1000 = 300.
+    /// The sum must equal `immediate_cost`: `fpha_turbined_cost` = 150 from `col_cost`.
+    /// BUT `immediate_cost` is from (objective - theta) which is in scaled space
+    /// and already correct.  The `col_cost` unscaling produces the true cost.
     ///
-    /// For consistency: with col_scale=2.0 the stored obj_coeff is c_orig * col_scale / K
-    /// = 0.005 * 2.0 = 0.01.  So c_orig / K = 0.005.
-    /// True fpha cost = primal * c_orig / K * K = 30 * 0.005 * 1000 = 150.
+    /// For consistency: with `col_scale`=2.0 the stored `obj_coeff` is `c_orig` * `col_scale` / K
+    /// = 0.005 * 2.0 = 0.01.  So `c_orig` / K = 0.005.
+    /// True fpha cost = primal * `c_orig` / K * K = 30 * 0.005 * 1000 = 150.
     /// Scaled fpha cost in objective = 30 * 0.01 = 0.3.
-    /// immediate_cost = 0.3 * 1000 = 300 ≠ 150.
+    /// `immediate_cost` = 0.3 * 1000 = 300 != 150.
     ///
-    /// The discrepancy is because objective is primal * obj_coeff (scaled), not
-    /// the true cost.  In the LP, view.objective already includes the col_scale
+    /// The discrepancy is because objective is primal * `obj_coeff` (scaled), not
+    /// the true cost.  In the LP, `view.objective` already includes the `col_scale`
     /// effect; the extraction divides it out for per-component costs.
     ///
-    /// To make the sum match: the test sets objective = theta + sum(primal * obj_coeff)
-    /// in scaled space.  immediate_cost = (obj - theta) * K.
-    /// Per-component sum = sum(primal * obj_coeff / col_scale) * K.
-    /// These are equal only when col_scale = 1 everywhere.
+    /// To make the sum match: the test sets objective = theta + sum(primal * `obj_coeff`)
+    /// in scaled space.  `immediate_cost` = (obj - theta) * K.
+    /// Per-component sum = sum(primal * `obj_coeff` / `col_scale`) * K.
+    /// These are equal only when `col_scale` = 1 everywhere.
     ///
-    /// This correctly tests that with empty col_scale (identity), the invariant holds.
+    /// This correctly tests that with empty `col_scale` (identity), the invariant holds.
     #[test]
     fn cost_breakdown_sums_to_immediate_identity_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();
@@ -2698,9 +2698,9 @@ mod tests {
     /// Verify that per-component costs are correctly unscaled when non-trivial
     /// `col_scale` is applied.
     ///
-    /// With col_scale = 2.0 on the FPHA generation column:
-    /// - obj_coeff in template = c_orig * col_scale / K = 0.005 * 2.0 = 0.01
-    /// - After unscaling: cost = primal * obj_coeff / col_scale * K = 30 * 0.01 / 2.0 * 1000 = 150.
+    /// With `col_scale` = 2.0 on the FPHA generation column:
+    /// - `obj_coeff` in template = `c_orig` * `col_scale` / K = 0.005 * 2.0 = 0.01
+    /// - After unscaling: cost = primal * `obj_coeff` / `col_scale` * K = 30 * 0.01 / 2.0 * 1000 = 150.
     #[test]
     fn cost_unscaled_by_col_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();

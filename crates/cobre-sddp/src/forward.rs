@@ -3521,7 +3521,7 @@ mod tests {
 
     // ── Tests for deactivate_cuts_in_lp ────────────────────────────────
 
-    /// Mock solver that records set_row_bounds calls.
+    /// Mock solver that records `set_row_bounds` calls.
     struct BoundRecordingMockSolver {
         last_indices: Vec<usize>,
         last_lower: Vec<f64>,

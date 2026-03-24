@@ -56,7 +56,7 @@
 //! No allocations occur per scenario or per stage during the inner loops.
 //! The [`TrajectoryRecord`] slice is pre-allocated by the caller. The only
 //! allocation inside the function is the [`RowBatch`] built by
-//! [`build_cut_row_batch`], which runs once per stage template (before the
+//! `build_cut_row_batch`, which runs once per stage template (before the
 //! scenario loop) — not once per scenario.
 
 use std::time::Instant;
@@ -271,7 +271,7 @@ pub fn sync_forward<C: Communicator>(
 /// given `stage`. The buffers inside `batch` retain their allocated capacity
 /// across calls, eliminating heap allocation on the hot path.
 ///
-/// This is the allocation-free core used by [`build_cut_row_batch`].
+/// This is the allocation-free core used by `build_cut_row_batch`.
 pub fn build_cut_row_batch_into(
     batch: &mut RowBatch,
     fcf: &FutureCostFunction,

@@ -406,7 +406,7 @@ fn run_inner(
                 failed += 1;
             }
         }
-        let mut sim_out = sim_writer.finalize();
+        let mut sim_out = sim_writer.finalize(0);
         sim_out.failed = failed;
         let sim_summary = SimSummary {
             n_scenarios: sim_out.n_scenarios,

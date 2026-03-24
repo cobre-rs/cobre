@@ -59,7 +59,7 @@
 //!   point loop).
 //! - One `Vec<BackwardOutcome>` per worker thread, allocated once per stage
 //!   in the parallel region and reused via `clear()` per trial point.
-//! - One `RowBatch` per stage built by [`build_cut_row_batch`] (outside the
+//! - One `RowBatch` per stage built by `build_cut_row_batch` (outside the
 //!   trial point loop, before the parallel region).
 //! - One `Vec<StagedCut>` per stage for the merge phase (bounded by
 //!   `local_work` entries, each holding one cut and its binding slot list).

@@ -51,6 +51,7 @@ use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -60,14 +61,13 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
-            StageExtractionSpec,
+            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
+            extract_stage_result,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
-    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -892,12 +892,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{simulate, SimulationOutputSpec};
+    use super::{SimulationOutputSpec, simulate};
     use crate::{
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{ScratchBuffers, SolverWorkspace},
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────

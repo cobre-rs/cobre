@@ -56,7 +56,7 @@
 //! No allocations occur per scenario or per stage during the inner loops.
 //! The [`TrajectoryRecord`] slice is pre-allocated by the caller. The only
 //! allocation inside the function is the [`RowBatch`] built by
-//! [`build_cut_row_batch`], which runs once per stage template (before the
+//! `build_cut_row_batch`, which runs once per stage template (before the
 //! scenario loop) — not once per scenario.
 
 use std::time::Instant;
@@ -265,37 +265,34 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
-#[must_use]
-pub fn build_cut_row_batch(
+/// Fill a pre-allocated [`RowBatch`] with Benders cut rows from the FCF.
+///
+/// Clears `batch` and repopulates it with active cuts from `fcf` at the
+/// given `stage`. The buffers inside `batch` retain their allocated capacity
+/// across calls, eliminating heap allocation on the hot path.
+///
+/// This is the allocation-free core used by `build_cut_row_batch`.
+pub fn build_cut_row_batch_into(
+    batch: &mut RowBatch,
     fcf: &FutureCostFunction,
     stage: usize,
     indexer: &StageIndexer,
     col_scale: &[f64],
-) -> RowBatch {
+) {
+    batch.clear();
+
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
 
     let num_cuts: usize = fcf.active_cuts(stage).count();
 
     if num_cuts == 0 {
-        return RowBatch {
-            num_rows: 0,
-            row_starts: vec![0_i32],
-            col_indices: vec![],
-            values: vec![],
-            row_lower: vec![],
-            row_upper: vec![],
-        };
+        batch.row_starts.push(0_i32);
+        return;
     }
 
     let nnz_per_cut = n_state + 1;
     let total_nnz = num_cuts * nnz_per_cut;
-
-    let mut row_starts: Vec<i32> = Vec::with_capacity(num_cuts + 1);
-    let mut col_indices: Vec<i32> = Vec::with_capacity(total_nnz);
-    let mut values = Vec::with_capacity(total_nnz);
-    let mut row_lower = Vec::with_capacity(num_cuts);
-    let mut row_upper = Vec::with_capacity(num_cuts);
 
     let mut nz_offset = 0;
 
@@ -309,7 +306,7 @@ pub fn build_cut_row_batch(
         );
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        row_starts.push(nz_offset as i32);
+        batch.row_starts.push(nz_offset as i32);
 
         for (j, &c) in coefficients.iter().enumerate() {
             debug_assert!(
@@ -317,16 +314,13 @@ pub fn build_cut_row_batch(
                 "column index j={j} exceeds i32::MAX"
             );
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            col_indices.push(j as i32);
-            // When column scaling is active, cut row entries must be in the
-            // scaled LP's coordinate system: multiply by d_j so that the
-            // constraint reads -c_j * d_j * x_tilde_j = -c_j * x_j.
+            batch.col_indices.push(j as i32);
             let d = if col_scale.is_empty() {
                 1.0
             } else {
                 col_scale[j]
             };
-            values.push(-c * d);
+            batch.values.push(-c * d);
         }
 
         debug_assert!(
@@ -334,34 +328,209 @@ pub fn build_cut_row_batch(
             "theta_col={theta_col} exceeds i32::MAX"
         );
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        col_indices.push(theta_col as i32);
-        // Theta column also needs scaling.
+        batch.col_indices.push(theta_col as i32);
         let d_theta = if col_scale.is_empty() {
             1.0
         } else {
             col_scale[theta_col]
         };
-        values.push(d_theta);
+        batch.values.push(d_theta);
 
-        row_lower.push(intercept);
-        row_upper.push(f64::INFINITY);
+        batch.row_lower.push(intercept);
+        batch.row_upper.push(f64::INFINITY);
 
         nz_offset += nnz_per_cut;
     }
 
     #[allow(clippy::expect_used)]
-    row_starts.push(
+    batch.row_starts.push(
         i32::try_from(total_nnz).expect("total_nnz exceeds i32::MAX; LP exceeds HiGHS API limit"),
     );
 
-    RowBatch {
-        num_rows: num_cuts,
-        row_starts,
-        col_indices,
-        values,
-        row_lower,
-        row_upper,
+    batch.num_rows = num_cuts;
+}
+
+/// Build a fresh [`RowBatch`] of Benders cut rows from the FCF.
+///
+/// Convenience wrapper around [`build_cut_row_batch_into`] that allocates a
+/// new `RowBatch`. For allocation-free usage on the hot path, prefer calling
+/// [`build_cut_row_batch_into`] with a pre-allocated batch.
+#[must_use]
+pub fn build_cut_row_batch(
+    fcf: &FutureCostFunction,
+    stage: usize,
+    indexer: &StageIndexer,
+    col_scale: &[f64],
+) -> RowBatch {
+    let mut batch = RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+    build_cut_row_batch_into(&mut batch, fcf, stage, indexer, col_scale);
+    batch
+}
+
+/// Append only the newly active cuts (not yet in the LP) to a live solver.
+///
+/// Iterates over all active cuts in `fcf.pools[stage]`, checks `row_map` to
+/// determine which are already present in the LP, builds a small [`RowBatch`]
+/// containing only the new cuts, and calls `solver.add_rows()`. Updates
+/// `row_map` with the new LP row indices.
+///
+/// Returns the number of new cuts appended (0 if none).
+///
+/// The LP rows produced use the same coefficient transformation as
+/// [`build_cut_row_batch_into`]: negated state coefficients with column
+/// scaling and a positive theta column entry.
+///
+/// # Arguments
+///
+/// - `solver`: the live LP solver instance with a loaded model.
+/// - `fcf`: the Future Cost Function containing all cut pools.
+/// - `stage`: 0-based stage index.
+/// - `indexer`: provides `n_state` and `theta` column index.
+/// - `col_scale`: column scaling factors (empty slice if no scaling).
+/// - `row_map`: per-stage [`CutRowMap`] to update.
+/// - `batch_buf`: reusable [`RowBatch`] buffer for constructing the new cut rows.
+///
+/// # Panics
+///
+/// Panics if `total_nnz` exceeds `i32::MAX` (LP exceeds the `HiGHS` API limit).
+/// In debug builds, also panics if `stage >= fcf.pools.len()`.
+///
+/// [`CutRowMap`]: crate::cut::CutRowMap
+pub fn append_new_cuts_to_lp<S: SolverInterface>(
+    solver: &mut S,
+    fcf: &FutureCostFunction,
+    stage: usize,
+    indexer: &StageIndexer,
+    col_scale: &[f64],
+    row_map: &mut crate::cut::CutRowMap,
+    batch_buf: &mut RowBatch,
+) -> usize {
+    batch_buf.clear();
+
+    let n_state = indexer.n_state;
+    let theta_col = indexer.theta;
+    let nnz_per_cut = n_state + 1;
+
+    let mut new_count = 0usize;
+    let mut nz_offset = 0usize;
+
+    for (slot, intercept, coefficients) in fcf.active_cuts(stage) {
+        // Skip cuts already present in the LP.
+        if row_map.lp_row_for_slot(slot).is_some() {
+            continue;
+        }
+
+        debug_assert_eq!(
+            coefficients.len(),
+            n_state,
+            "cut coefficients length {got} != n_state {expected}",
+            got = coefficients.len(),
+            expected = n_state,
+        );
+
+        // Build the row using the same transformation as build_cut_row_batch_into.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        batch_buf.row_starts.push(nz_offset as i32);
+
+        for (j, &c) in coefficients.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            batch_buf.col_indices.push(j as i32);
+            let d = if col_scale.is_empty() {
+                1.0
+            } else {
+                col_scale[j]
+            };
+            batch_buf.values.push(-c * d);
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        batch_buf.col_indices.push(theta_col as i32);
+        let d_theta = if col_scale.is_empty() {
+            1.0
+        } else {
+            col_scale[theta_col]
+        };
+        batch_buf.values.push(d_theta);
+
+        batch_buf.row_lower.push(intercept);
+        batch_buf.row_upper.push(f64::INFINITY);
+
+        row_map.insert(slot);
+        new_count += 1;
+        nz_offset += nnz_per_cut;
     }
+
+    if new_count > 0 {
+        let total_nnz = new_count * nnz_per_cut;
+        #[allow(clippy::expect_used)]
+        batch_buf.row_starts.push(
+            i32::try_from(total_nnz)
+                .expect("total_nnz exceeds i32::MAX; LP exceeds HiGHS API limit"),
+        );
+        batch_buf.num_rows = new_count;
+        solver.add_rows(batch_buf);
+    }
+
+    new_count
+}
+
+/// Deactivate cuts in the live LP by zeroing their row bounds.
+///
+/// For each slot index in `deactivation_set.indices`, looks up the LP row
+/// via `row_map`, then calls `solver.set_row_bounds` to set the row bounds
+/// to `(-inf, +inf)`, making the constraint non-binding (a free row).
+/// Updates `row_map` to mark the slot as deactivated.
+///
+/// Slots that are not present in the LP (never appended) are silently
+/// skipped. This handles the case where cut selection deactivates a cut
+/// that was generated but not yet appended to the LP.
+///
+/// # Returns
+///
+/// The number of LP rows whose bounds were actually zeroed.
+///
+/// # Panics
+///
+/// Panics if `set_row_bounds` is called with mismatched slice lengths
+/// (indicates a logic error in this function).
+pub fn deactivate_cuts_in_lp<S: SolverInterface>(
+    solver: &mut S,
+    deactivation_set: &crate::cut_selection::DeactivationSet,
+    row_map: &mut crate::cut::CutRowMap,
+) -> usize {
+    if deactivation_set.indices.is_empty() {
+        return 0;
+    }
+
+    let mut indices: Vec<usize> = Vec::with_capacity(deactivation_set.indices.len());
+    let mut lower: Vec<f64> = Vec::with_capacity(deactivation_set.indices.len());
+    let mut upper: Vec<f64> = Vec::with_capacity(deactivation_set.indices.len());
+
+    for &slot_u32 in &deactivation_set.indices {
+        let slot = slot_u32 as usize;
+        if let Some(lp_row) = row_map.lp_row_for_slot(slot) {
+            // Only deactivate if the slot is still active in the row_map.
+            if row_map.is_slot_active(slot) {
+                indices.push(lp_row);
+                lower.push(f64::NEG_INFINITY);
+                upper.push(f64::INFINITY);
+                row_map.deactivate(slot);
+            }
+        }
+    }
+
+    if !indices.is_empty() {
+        solver.set_row_bounds(&indices, &lower, &upper);
+    }
+
+    indices.len()
 }
 
 /// Bundled scalar parameters for one forward pass invocation.
@@ -436,7 +605,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
     basis_slice: &mut BasisStoreSliceMut<'_>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    cut_batches: &[RowBatch],
     key: &StageKey<'_>,
     worker_records: &mut [TrajectoryRecord],
 ) -> Result<f64, SddpError> {
@@ -485,8 +653,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
         );
     }
 
-    ws.solver.load_model(&ctx.templates[t]);
-    ws.solver.add_rows(&cut_batches[t]);
     ws.patch_buf.fill_forward_patches(
         indexer,
         &ws.current_state,
@@ -696,11 +862,13 @@ fn run_forward_stage<S: SolverInterface + Send>(
 /// - `initial_state.len() != indexer.n_state`
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
+#[allow(clippy::too_many_arguments)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
     ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
+    cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
     batch: &ForwardPassBatch,
     records: &mut [TrajectoryRecord],
@@ -726,9 +894,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     debug_assert_eq!(ctx.base_rows.len(), num_stages);
 
     let start = Instant::now();
-    let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
-        .collect();
+    for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
+        build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
+    }
     let tree_view = stochastic.tree_view();
     let base_seed = stochastic.base_seed();
     let n_workers = workspaces.len().max(1);
@@ -753,16 +921,30 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         .enumerate()
         .map(|(w, ((ws, worker_records), mut basis_slice))| {
             let (start_m, end_m) = partition(forward_passes, n_workers, w);
-            let mut local_costs = Vec::with_capacity(end_m - start_m);
+            let n_local = end_m - start_m;
+            let mut trajectory_costs = vec![0.0_f64; n_local];
             let local_solve_count_before = ws.solver.statistics().solve_count;
 
-            for (local_m, m) in (start_m..end_m).enumerate() {
-                let global_scenario = fwd_offset + m;
-                ws.current_state.clear();
-                ws.current_state.extend_from_slice(initial_state);
-                let mut trajectory_cost = 0.0_f64;
+            // Stage-first, scenario-second: load the LP model once per stage,
+            // then iterate over all scenarios patching bounds and solving.
+            for t in 0..num_stages {
+                ws.solver.load_model(&ctx.templates[t]);
+                if cut_batches[t].num_rows > 0 {
+                    ws.solver.add_rows(&cut_batches[t]);
+                }
 
-                for t in 0..num_stages {
+                for (local_m, m) in (start_m..end_m).enumerate() {
+                    // Restore per-scenario state for this stage.
+                    if t == 0 {
+                        ws.current_state.clear();
+                        ws.current_state.extend_from_slice(initial_state);
+                    } else {
+                        let prev_rec = &worker_records[local_m * num_stages + (t - 1)];
+                        ws.current_state.clear();
+                        ws.current_state.extend_from_slice(&prev_rec.state);
+                    }
+
+                    let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
                     let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
                     let (_, raw_noise) = sample_forward(&tree_view, base_seed, i32, s32, t32, t);
@@ -774,22 +956,19 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         iteration: *iteration,
                         raw_noise,
                     };
-                    trajectory_cost += run_forward_stage(
+                    trajectory_costs[local_m] += run_forward_stage(
                         ws,
                         &mut basis_slice,
                         ctx,
                         training_ctx,
-                        &cut_batches,
                         &key,
                         worker_records,
                     )?;
                 }
-
-                local_costs.push(trajectory_cost);
             }
 
             let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-            Ok((local_costs, local_solves))
+            Ok((trajectory_costs, local_solves))
         })
         .collect();
 
@@ -848,6 +1027,20 @@ mod tests {
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
     };
+
+    /// Create a `Vec<RowBatch>` of empty batches, one per stage.
+    fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
+        (0..n_stages)
+            .map(|_| RowBatch {
+                num_rows: 0,
+                row_starts: Vec::new(),
+                col_indices: Vec::new(),
+                values: Vec::new(),
+                row_lower: Vec::new(),
+                row_upper: Vec::new(),
+            })
+            .collect()
+    }
 
     // ── Mock solver ──────────────────────────────────────────────────────────
 
@@ -1343,6 +1536,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1382,8 +1576,10 @@ mod tests {
     fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
-        // The 2nd solve call (index 1) is stage 1 of scenario 0.
-        let solver = MockSolver::infeasible_on(solution, 1);
+        // Stage-first loop: with 2 scenarios and 3 stages, the solve order is
+        // (s0,t0), (s1,t0), (s0,t1), (s1,t1), ... — the 3rd call (index 2)
+        // is stage 1 of scenario 0.
+        let solver = MockSolver::infeasible_on(solution, 2);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let config = TrainingConfig {
             forward_passes: 2,
@@ -1422,6 +1618,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1509,6 +1706,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -1879,6 +2077,7 @@ mod tests {
             basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2027,6 +2226,7 @@ mod tests {
             &mut basis_store1,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2054,6 +2254,7 @@ mod tests {
             &mut basis_store4,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2141,6 +2342,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2396,6 +2598,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2546,6 +2749,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2753,6 +2957,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2860,6 +3065,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2962,6 +3168,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3041,6 +3248,7 @@ mod tests {
             &mut basis_store,
             &ctx,
             &fcf,
+            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3071,5 +3279,402 @@ mod tests {
             ws.scratch.load_rhs_buf.is_empty(),
             "load_rhs_buf must be empty when n_load_buses=0"
         );
+    }
+
+    // ── Tests for append_new_cuts_to_lp ─────────────────────────────────
+
+    /// Mock solver that records the last `add_rows` call for verification.
+    struct RecordingMockSolver {
+        last_batch: Option<RowBatch>,
+        add_rows_count: usize,
+    }
+
+    impl RecordingMockSolver {
+        fn new() -> Self {
+            Self {
+                last_batch: None,
+                add_rows_count: 0,
+            }
+        }
+    }
+
+    impl SolverInterface for RecordingMockSolver {
+        fn load_model(&mut self, _template: &StageTemplate) {}
+
+        fn add_rows(&mut self, cuts: &RowBatch) {
+            self.last_batch = Some(RowBatch {
+                num_rows: cuts.num_rows,
+                row_starts: cuts.row_starts.clone(),
+                col_indices: cuts.col_indices.clone(),
+                values: cuts.values.clone(),
+                row_lower: cuts.row_lower.clone(),
+                row_upper: cuts.row_upper.clone(),
+            });
+            self.add_rows_count += 1;
+        }
+
+        fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+
+        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            Err(SolverError::InternalError {
+                message: "not implemented for test".to_string(),
+                error_code: None,
+            })
+        }
+
+        fn reset(&mut self) {}
+
+        fn get_basis(&mut self, _out: &mut Basis) {}
+
+        fn solve_with_basis(
+            &mut self,
+            _basis: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            Err(SolverError::InternalError {
+                message: "not implemented for test".to_string(),
+                error_code: None,
+            })
+        }
+
+        fn statistics(&self) -> SolverStatistics {
+            SolverStatistics::default()
+        }
+
+        fn name(&self) -> &'static str {
+            "RecordingMock"
+        }
+    }
+
+    // ── Tests for append_new_cuts_to_lp ─────────────────────────────────
+
+    // StageIndexer::new(1, 0) gives: n_state=1, theta=3
+    // FCF state_dimension must match n_state=1.
+
+    fn empty_row_batch() -> RowBatch {
+        RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn append_new_cuts_returns_zero_when_no_new_cuts() {
+        use crate::cut::CutRowMap;
+
+        let fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let indexer = crate::StageIndexer::new(1, 0);
+        let mut row_map = CutRowMap::new(10, 5);
+        let mut batch_buf = empty_row_batch();
+        let mut solver = RecordingMockSolver::new();
+
+        // No active cuts -> should return 0 and not call add_rows.
+        let count = super::append_new_cuts_to_lp(
+            &mut solver,
+            &fcf,
+            0,
+            &indexer,
+            &[],
+            &mut row_map,
+            &mut batch_buf,
+        );
+        assert_eq!(count, 0);
+        assert_eq!(solver.add_rows_count, 0);
+    }
+
+    #[test]
+    fn append_new_cuts_appends_all_on_empty_row_map() {
+        use crate::cut::CutRowMap;
+
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
+        fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
+
+        let indexer = crate::StageIndexer::new(1, 0);
+        let mut row_map = CutRowMap::new(10, 5);
+        let mut batch_buf = empty_row_batch();
+        let mut solver = RecordingMockSolver::new();
+
+        let count = super::append_new_cuts_to_lp(
+            &mut solver,
+            &fcf,
+            0,
+            &indexer,
+            &[],
+            &mut row_map,
+            &mut batch_buf,
+        );
+
+        assert_eq!(count, 2);
+        assert_eq!(solver.add_rows_count, 1);
+        assert_eq!(row_map.total_cut_rows(), 2);
+        assert_eq!(row_map.active_count(), 2);
+        assert_eq!(row_map.lp_row_for_slot(0), Some(5));
+        assert_eq!(row_map.lp_row_for_slot(1), Some(6));
+    }
+
+    #[test]
+    fn append_new_cuts_skips_already_mapped_cuts() {
+        use crate::cut::CutRowMap;
+
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
+        fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
+
+        let indexer = crate::StageIndexer::new(1, 0);
+        let mut row_map = CutRowMap::new(10, 5);
+        // Pre-insert slot 0 as if it was already in the LP.
+        row_map.insert(0);
+
+        let mut batch_buf = empty_row_batch();
+        let mut solver = RecordingMockSolver::new();
+
+        let count = super::append_new_cuts_to_lp(
+            &mut solver,
+            &fcf,
+            0,
+            &indexer,
+            &[],
+            &mut row_map,
+            &mut batch_buf,
+        );
+
+        // Only slot 1 should be appended (slot 0 was already mapped).
+        assert_eq!(count, 1);
+        assert_eq!(solver.add_rows_count, 1);
+        assert_eq!(row_map.total_cut_rows(), 2);
+        assert!(solver.last_batch.as_ref().is_some_and(|b| b.num_rows == 1));
+    }
+
+    #[test]
+    fn append_new_cuts_matches_build_cut_row_batch_into() {
+        use crate::cut::CutRowMap;
+
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
+        fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
+
+        let indexer = crate::StageIndexer::new(1, 0);
+
+        // Build via build_cut_row_batch_into.
+        let mut expected_batch = empty_row_batch();
+        super::build_cut_row_batch_into(&mut expected_batch, &fcf, 0, &indexer, &[]);
+
+        // Build via append_new_cuts_to_lp (empty row_map, so all cuts are new).
+        let mut row_map = CutRowMap::new(10, 5);
+        let mut actual_batch = empty_row_batch();
+        let mut solver = RecordingMockSolver::new();
+        super::append_new_cuts_to_lp(
+            &mut solver,
+            &fcf,
+            0,
+            &indexer,
+            &[],
+            &mut row_map,
+            &mut actual_batch,
+        );
+
+        // The batch passed to add_rows must match build_cut_row_batch_into.
+        assert_eq!(actual_batch.num_rows, expected_batch.num_rows);
+        assert_eq!(actual_batch.row_starts, expected_batch.row_starts);
+        assert_eq!(actual_batch.col_indices, expected_batch.col_indices);
+        assert_eq!(actual_batch.values, expected_batch.values);
+        assert_eq!(actual_batch.row_lower, expected_batch.row_lower);
+        assert_eq!(actual_batch.row_upper, expected_batch.row_upper);
+    }
+
+    #[test]
+    fn append_new_cuts_with_scaling_matches_build() {
+        use crate::cut::CutRowMap;
+
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        fcf.add_cut(0, 0, 0, 10.0, &[1.0]);
+
+        let indexer = crate::StageIndexer::new(1, 0);
+        // col_scale must have at least theta+1 = 4 entries.
+        let col_scale = vec![0.5, 2.0, 1.0, 0.1];
+
+        let mut expected = empty_row_batch();
+        super::build_cut_row_batch_into(&mut expected, &fcf, 0, &indexer, &col_scale);
+
+        let mut row_map = CutRowMap::new(10, 5);
+        let mut actual = empty_row_batch();
+        let mut solver = RecordingMockSolver::new();
+        super::append_new_cuts_to_lp(
+            &mut solver,
+            &fcf,
+            0,
+            &indexer,
+            &col_scale,
+            &mut row_map,
+            &mut actual,
+        );
+
+        assert_eq!(actual.values, expected.values);
+        assert_eq!(actual.col_indices, expected.col_indices);
+    }
+
+    // ── Tests for deactivate_cuts_in_lp ────────────────────────────────
+
+    /// Mock solver that records `set_row_bounds` calls.
+    struct BoundRecordingMockSolver {
+        last_indices: Vec<usize>,
+        last_lower: Vec<f64>,
+        last_upper: Vec<f64>,
+        set_row_bounds_count: usize,
+    }
+
+    impl BoundRecordingMockSolver {
+        fn new() -> Self {
+            Self {
+                last_indices: Vec::new(),
+                last_lower: Vec::new(),
+                last_upper: Vec::new(),
+                set_row_bounds_count: 0,
+            }
+        }
+    }
+
+    impl SolverInterface for BoundRecordingMockSolver {
+        fn load_model(&mut self, _template: &StageTemplate) {}
+        fn add_rows(&mut self, _cuts: &RowBatch) {}
+        fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
+            self.last_indices = indices.to_vec();
+            self.last_lower = lower.to_vec();
+            self.last_upper = upper.to_vec();
+            self.set_row_bounds_count += 1;
+        }
+        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            Err(SolverError::InternalError {
+                message: "not implemented".to_string(),
+                error_code: None,
+            })
+        }
+        fn reset(&mut self) {}
+        fn get_basis(&mut self, _out: &mut Basis) {}
+        fn solve_with_basis(
+            &mut self,
+            _basis: &Basis,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            Err(SolverError::InternalError {
+                message: "not implemented".to_string(),
+                error_code: None,
+            })
+        }
+        fn statistics(&self) -> SolverStatistics {
+            SolverStatistics::default()
+        }
+        fn name(&self) -> &'static str {
+            "BoundRecordingMock"
+        }
+    }
+
+    #[test]
+    fn deactivate_cuts_empty_set_returns_zero() {
+        use crate::cut::CutRowMap;
+        use crate::cut_selection::DeactivationSet;
+
+        let mut solver = BoundRecordingMockSolver::new();
+        let mut row_map = CutRowMap::new(10, 5);
+
+        let deact = DeactivationSet {
+            stage_index: 0,
+            indices: vec![],
+        };
+        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
+        assert_eq!(count, 0);
+        assert_eq!(solver.set_row_bounds_count, 0);
+    }
+
+    #[test]
+    fn deactivate_cuts_zeros_bounds_for_mapped_slots() {
+        use crate::cut::CutRowMap;
+        use crate::cut_selection::DeactivationSet;
+
+        let mut solver = BoundRecordingMockSolver::new();
+        let mut row_map = CutRowMap::new(10, 5);
+        row_map.insert(0); // lp_row = 5
+        row_map.insert(1); // lp_row = 6
+        row_map.insert(2); // lp_row = 7
+
+        let deact = DeactivationSet {
+            stage_index: 0,
+            indices: vec![0, 2], // deactivate slots 0 and 2
+        };
+        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
+
+        assert_eq!(count, 2);
+        assert_eq!(solver.set_row_bounds_count, 1);
+        assert_eq!(solver.last_indices, vec![5, 7]);
+        assert!(solver.last_lower.iter().all(|&v| v == f64::NEG_INFINITY));
+        assert!(solver.last_upper.iter().all(|&v| v == f64::INFINITY));
+        assert_eq!(row_map.active_count(), 1); // only slot 1 remains active
+    }
+
+    #[test]
+    fn deactivate_cuts_skips_unmapped_slots() {
+        use crate::cut::CutRowMap;
+        use crate::cut_selection::DeactivationSet;
+
+        let mut solver = BoundRecordingMockSolver::new();
+        let mut row_map = CutRowMap::new(10, 5);
+        row_map.insert(0); // lp_row = 5
+
+        // Slot 3 was never inserted.
+        let deact = DeactivationSet {
+            stage_index: 0,
+            indices: vec![0, 3],
+        };
+        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
+
+        // Only slot 0 should be deactivated; slot 3 is skipped.
+        assert_eq!(count, 1);
+        assert_eq!(solver.last_indices, vec![5]);
+    }
+
+    #[test]
+    fn deactivate_cuts_preserves_row_mapping() {
+        use crate::cut::CutRowMap;
+        use crate::cut_selection::DeactivationSet;
+
+        let mut solver = BoundRecordingMockSolver::new();
+        let mut row_map = CutRowMap::new(10, 5);
+        row_map.insert(0); // lp_row = 5
+
+        let deact = DeactivationSet {
+            stage_index: 0,
+            indices: vec![0],
+        };
+        super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
+
+        // Row mapping is preserved after deactivation.
+        assert_eq!(row_map.lp_row_for_slot(0), Some(5));
+        assert!(!row_map.is_slot_active(0));
+    }
+
+    #[test]
+    fn deactivate_already_deactivated_slot_is_noop() {
+        use crate::cut::CutRowMap;
+        use crate::cut_selection::DeactivationSet;
+
+        let mut solver = BoundRecordingMockSolver::new();
+        let mut row_map = CutRowMap::new(10, 5);
+        row_map.insert(0);
+        row_map.deactivate(0); // already deactivated
+
+        let deact = DeactivationSet {
+            stage_index: 0,
+            indices: vec![0],
+        };
+        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
+
+        assert_eq!(count, 0);
+        assert_eq!(solver.set_row_bounds_count, 0);
     }
 }

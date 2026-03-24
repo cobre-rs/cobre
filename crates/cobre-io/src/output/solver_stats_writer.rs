@@ -43,6 +43,12 @@ pub struct SolverStatsRow {
     pub simplex_iterations: u64,
     /// Cumulative solve time in milliseconds.
     pub solve_time_ms: f64,
+    /// Cumulative time in `load_model` calls, in milliseconds.
+    pub load_model_time_ms: f64,
+    /// Cumulative time in `add_rows` calls, in milliseconds.
+    pub add_rows_time_ms: f64,
+    /// Cumulative time in `set_row_bounds`/`set_col_bounds` calls, in milliseconds.
+    pub set_bounds_time_ms: f64,
 }
 
 /// Write training solver statistics to `training/solver/iterations.parquet`.
@@ -107,6 +113,18 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
     );
     let solve_time_arr =
         Float64Array::from(rows.iter().map(|r| r.solve_time_ms).collect::<Vec<_>>());
+    let load_model_time_arr = Float64Array::from(
+        rows.iter()
+            .map(|r| r.load_model_time_ms)
+            .collect::<Vec<_>>(),
+    );
+    let add_rows_time_arr =
+        Float64Array::from(rows.iter().map(|r| r.add_rows_time_ms).collect::<Vec<_>>());
+    let set_bounds_time_arr = Float64Array::from(
+        rows.iter()
+            .map(|r| r.set_bounds_time_ms)
+            .collect::<Vec<_>>(),
+    );
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -123,6 +141,9 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
             Arc::new(basis_rejections_arr),
             Arc::new(simplex_iter_arr),
             Arc::new(solve_time_arr),
+            Arc::new(load_model_time_arr),
+            Arc::new(add_rows_time_arr),
+            Arc::new(set_bounds_time_arr),
         ],
     )
     .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
@@ -166,6 +187,9 @@ mod tests {
                 basis_rejections: 3,
                 simplex_iterations: 5000,
                 solve_time_ms: 42.5,
+                load_model_time_ms: 0.0,
+                add_rows_time_ms: 0.0,
+                set_bounds_time_ms: 0.0,
             },
             SolverStatsRow {
                 iteration: 1,
@@ -180,6 +204,9 @@ mod tests {
                 basis_rejections: 1,
                 simplex_iterations: 10000,
                 solve_time_ms: 85.0,
+                load_model_time_ms: 0.0,
+                add_rows_time_ms: 0.0,
+                set_bounds_time_ms: 0.0,
             },
         ]
     }
@@ -200,7 +227,7 @@ mod tests {
         let batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 12);
+        assert_eq!(batch.num_columns(), 15);
 
         let iteration_col = batch
             .column(0)
@@ -237,6 +264,6 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema();
-        assert_eq!(schema.fields().len(), 12);
+        assert_eq!(schema.fields().len(), 15);
     }
 }

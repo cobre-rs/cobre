@@ -20,10 +20,11 @@
 //! ```text
 //! [theta+1,                          theta+1+H*K)        turbine     — turbined flow (m³/s)
 //! [theta+1+H*K,                      theta+1+2*H*K)      spillage    — spilled flow (m³/s)
-//! [theta+1+2*H*K,                    theta+1+2*H*K+T*K)  thermal     — thermal generation (MW)
-//! [theta+1+2*H*K+T*K,                theta+1+2*H*K+T*K+2*L_n*K) line_fwd/rev — line flows
-//! [theta+1+2*H*K+T*K+2*L_n*K,       theta+1+2*H*K+T*K+2*L_n*K+B*S*K) deficit
-//! [theta+1+2*H*K+T*K+2*L_n*K+B*S*K, theta+1+2*H*K+T*K+2*L_n*K+B*S*K+B*K) excess
+//! [theta+1+2*H*K,                    theta+1+3*H*K)      diversion   — diverted flow (m³/s)
+//! [theta+1+3*H*K,                    theta+1+3*H*K+T*K)  thermal     — thermal generation (MW)
+//! [theta+1+3*H*K+T*K,                theta+1+3*H*K+T*K+2*L_n*K) line_fwd/rev — line flows
+//! [theta+1+3*H*K+T*K+2*L_n*K,       theta+1+3*H*K+T*K+2*L_n*K+B*S*K) deficit
+//! [theta+1+3*H*K+T*K+2*L_n*K+B*S*K, theta+1+3*H*K+T*K+2*L_n*K+B*S*K+B*K) excess
 //! ```
 //!
 //! When the inflow non-negativity penalty method is active (`has_inflow_penalty == true`),
@@ -106,8 +107,8 @@ pub struct FphaRowRange {
 /// See the [module-level documentation](self) for the full column and row
 /// layout, and [`StageIndexer::new`] for the construction formulas.
 ///
-/// Equipment column ranges (`turbine`, `spillage`, `thermal`, `line_fwd`,
-/// `line_rev`, `deficit`, `excess`) are populated only when constructed via
+/// Equipment column ranges (`turbine`, `spillage`, `diversion`, `thermal`,
+/// `line_fwd`, `line_rev`, `deficit`, `excess`) are populated only when constructed via
 /// [`StageIndexer::with_equipment`]. When constructed via [`StageIndexer::new`]
 /// or [`StageIndexer::from_stage_template`], those ranges are all empty (`0..0`)
 /// and `n_blks`, `n_thermals`, `n_lines`, `n_buses` are zero.
@@ -186,6 +187,14 @@ pub struct StageIndexer {
     /// Index for hydro `h`, block `b`: `spillage.start + h * n_blks + b`.
     /// Empty when built via [`StageIndexer::new`].
     pub spillage: Range<usize>,
+
+    /// Column range for diversion flow variables, one per (hydro, block) pair.
+    ///
+    /// Index for hydro `h`, block `b`: `diversion.start + h * n_blks + b`.
+    /// Hydros without a diversion channel have bounds [0, 0]; the LP presolve
+    /// eliminates them.
+    /// Empty when built via [`StageIndexer::new`].
+    pub diversion: Range<usize>,
 
     /// Column range for thermal generation variables, one per (thermal, block) pair.
     ///
@@ -495,6 +504,7 @@ impl StageIndexer {
             // Equipment ranges are empty until `with_equipment` is called.
             turbine: 0..0,
             spillage: 0..0,
+            diversion: 0..0,
             thermal: 0..0,
             line_fwd: 0..0,
             line_rev: 0..0,
@@ -540,7 +550,8 @@ impl StageIndexer {
     /// decision_start      = theta + 1
     /// turbine_start       = decision_start
     /// spillage_start      = turbine_start  + n_hydros * n_blks
-    /// thermal_start       = spillage_start + n_hydros * n_blks
+    /// diversion_start     = spillage_start + n_hydros * n_blks
+    /// thermal_start       = diversion_start + n_hydros * n_blks
     /// line_fwd_start      = thermal_start  + n_thermals * n_blks
     /// line_rev_start      = line_fwd_start + n_lines * n_blks
     /// deficit_start       = line_rev_start + n_lines * n_blks
@@ -574,21 +585,23 @@ impl StageIndexer {
     /// // N=1 hydro, L=0 lags, T=2 thermals, L_n=1 line, B=2 buses, K=1 block, no penalty
     /// // theta = N*(3+L) = 1*(3+0) = 3
     /// // decision_start = 4
-    /// // turbine:   4..5   (1 hydro * 1 block)
-    /// // spillage:  5..6   (1 hydro * 1 block)
-    /// // thermal:   6..8   (2 thermals * 1 block)
-    /// // line_fwd:  8..9   (1 line * 1 block)
-    /// // line_rev:  9..10  (1 line * 1 block)
-    /// // deficit:  10..12  (2 buses * 1 block)
-    /// // excess:   12..14  (2 buses * 1 block)
+    /// // turbine:    4..5   (1 hydro * 1 block)
+    /// // spillage:   5..6   (1 hydro * 1 block)
+    /// // diversion:  6..7   (1 hydro * 1 block)
+    /// // thermal:    7..9   (2 thermals * 1 block)
+    /// // line_fwd:   9..10  (1 line * 1 block)
+    /// // line_rev:  10..11  (1 line * 1 block)
+    /// // deficit:   11..13  (2 buses * 1 block)
+    /// // excess:    13..15  (2 buses * 1 block)
     /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
-    /// assert_eq!(idx.turbine,   4..5);
-    /// assert_eq!(idx.spillage,  5..6);
-    /// assert_eq!(idx.thermal,   6..8);
-    /// assert_eq!(idx.line_fwd,  8..9);
-    /// assert_eq!(idx.line_rev,  9..10);
-    /// assert_eq!(idx.deficit,  10..12);
-    /// assert_eq!(idx.excess,   12..14);
+    /// assert_eq!(idx.turbine,    4..5);
+    /// assert_eq!(idx.spillage,   5..6);
+    /// assert_eq!(idx.diversion,  6..7);
+    /// assert_eq!(idx.thermal,    7..9);
+    /// assert_eq!(idx.line_fwd,   9..10);
+    /// assert_eq!(idx.line_rev,  10..11);
+    /// assert_eq!(idx.deficit,   11..13);
+    /// assert_eq!(idx.excess,    13..15);
     /// assert!(idx.inflow_slack.is_empty());
     /// assert!(idx.generation.is_empty());
     /// assert_eq!(idx.n_blks, 1);
@@ -667,7 +680,8 @@ impl StageIndexer {
 
         let turbine_start = decision_start;
         let spillage_start = turbine_start + hydro_count * n_blks;
-        let thermal_start = spillage_start + hydro_count * n_blks;
+        let diversion_start = spillage_start + hydro_count * n_blks;
+        let thermal_start = diversion_start + hydro_count * n_blks;
         let line_fwd_start = thermal_start + n_thermals * n_blks;
         let line_rev_start = line_fwd_start + n_lines * n_blks;
         let deficit_start = line_rev_start + n_lines * n_blks;
@@ -751,7 +765,8 @@ impl StageIndexer {
 
         Self {
             turbine: turbine_start..spillage_start,
-            spillage: spillage_start..thermal_start,
+            spillage: spillage_start..diversion_start,
+            diversion: diversion_start..thermal_start,
             thermal: thermal_start..line_fwd_start,
             line_fwd: line_fwd_start..line_rev_start,
             line_rev: line_rev_start..deficit_start,
@@ -1082,6 +1097,7 @@ mod tests {
         let idx = StageIndexer::new(3, 2);
         assert!(idx.turbine.is_empty());
         assert!(idx.spillage.is_empty());
+        assert!(idx.diversion.is_empty());
         assert!(idx.thermal.is_empty());
         assert!(idx.line_fwd.is_empty());
         assert!(idx.line_rev.is_empty());
@@ -1097,13 +1113,14 @@ mod tests {
     //
     // theta = N*(3+L) = 1*(3+0) = 3
     // decision_start = 4
-    // turbine:   [4, 4+1*1)  = 4..5
-    // spillage:  [5, 5+1*1)  = 5..6
-    // thermal:   [6, 6+2*1)  = 6..8
-    // line_fwd:  [8, 8+1*1)  = 8..9
-    // line_rev:  [9, 9+1*1)  = 9..10
-    // deficit:  [10, 10+2*1) = 10..12
-    // excess:   [12, 12+2*1) = 12..14
+    // turbine:    [4, 4+1*1)  = 4..5
+    // spillage:   [5, 5+1*1)  = 5..6
+    // diversion:  [6, 6+1*1)  = 6..7
+    // thermal:    [7, 7+2*1)  = 7..9
+    // line_fwd:   [9, 9+1*1)  = 9..10
+    // line_rev:  [10,10+1*1)  = 10..11
+    // deficit:   [11,11+2*1)  = 11..13
+    // excess:    [13,13+2*1)  = 13..15
     #[test]
     fn with_equipment_doctest_n1_l0_t2_l1_b2_k1() {
         let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
@@ -1119,11 +1136,12 @@ mod tests {
         // Equipment ranges
         assert_eq!(idx.turbine, 4..5);
         assert_eq!(idx.spillage, 5..6);
-        assert_eq!(idx.thermal, 6..8);
-        assert_eq!(idx.line_fwd, 8..9);
-        assert_eq!(idx.line_rev, 9..10);
-        assert_eq!(idx.deficit, 10..12);
-        assert_eq!(idx.excess, 12..14);
+        assert_eq!(idx.diversion, 6..7);
+        assert_eq!(idx.thermal, 7..9);
+        assert_eq!(idx.line_fwd, 9..10);
+        assert_eq!(idx.line_rev, 10..11);
+        assert_eq!(idx.deficit, 11..13);
+        assert_eq!(idx.excess, 13..15);
 
         // Equipment counts
         assert_eq!(idx.n_blks, 1);
@@ -1136,13 +1154,14 @@ mod tests {
     //
     // theta = N*(3+L) = 2*(3+1) = 8
     // decision_start = 9
-    // turbine:   [9,  9+2*2)  = 9..13
-    // spillage: [13, 13+2*2)  = 13..17
-    // thermal:  [17, 17+3*2)  = 17..23
-    // line_fwd: [23, 23+2*2)  = 23..27
-    // line_rev: [27, 27+2*2)  = 27..31
-    // deficit:  [31, 31+4*2)  = 31..39
-    // excess:   [39, 39+4*2)  = 39..47
+    // turbine:    [9,  9+2*2)  = 9..13
+    // spillage:  [13, 13+2*2)  = 13..17
+    // diversion: [17, 17+2*2)  = 17..21
+    // thermal:   [21, 21+3*2)  = 21..27
+    // line_fwd:  [27, 27+2*2)  = 27..31
+    // line_rev:  [31, 31+2*2)  = 31..35
+    // deficit:   [35, 35+4*2)  = 35..43
+    // excess:    [43, 43+4*2)  = 43..51
     #[test]
     fn with_equipment_n2_l1_t3_l2_b4_k2() {
         let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false, vec![], &[]);
@@ -1154,11 +1173,12 @@ mod tests {
         // Equipment ranges
         assert_eq!(idx.turbine, 9..13);
         assert_eq!(idx.spillage, 13..17);
-        assert_eq!(idx.thermal, 17..23);
-        assert_eq!(idx.line_fwd, 23..27);
-        assert_eq!(idx.line_rev, 27..31);
-        assert_eq!(idx.deficit, 31..39);
-        assert_eq!(idx.excess, 39..47);
+        assert_eq!(idx.diversion, 17..21);
+        assert_eq!(idx.thermal, 21..27);
+        assert_eq!(idx.line_fwd, 27..31);
+        assert_eq!(idx.line_rev, 31..35);
+        assert_eq!(idx.deficit, 35..43);
+        assert_eq!(idx.excess, 43..51);
     }
 
     // with_equipment: no equipment (all counts zero), matches new() state layout
@@ -1175,6 +1195,7 @@ mod tests {
         // All equipment ranges empty
         assert!(with_eq.turbine.is_empty());
         assert!(with_eq.spillage.is_empty());
+        assert!(with_eq.diversion.is_empty());
         assert!(with_eq.thermal.is_empty());
         assert!(with_eq.line_fwd.is_empty());
         assert!(with_eq.line_rev.is_empty());
@@ -1191,7 +1212,8 @@ mod tests {
         assert_eq!(idx.turbine.start, idx.theta + 1);
         // each range starts where the previous ends
         assert_eq!(idx.spillage.start, idx.turbine.end);
-        assert_eq!(idx.thermal.start, idx.spillage.end);
+        assert_eq!(idx.diversion.start, idx.spillage.end);
+        assert_eq!(idx.thermal.start, idx.diversion.end);
         assert_eq!(idx.line_fwd.start, idx.thermal.end);
         assert_eq!(idx.line_rev.start, idx.line_fwd.end);
         assert_eq!(idx.deficit.start, idx.line_rev.end);
@@ -1219,14 +1241,15 @@ mod tests {
     // N=2, L=1, T=1, Ln=1, B=1, K=1, penalty=true
     // theta = N*(3+L) = 2*(3+1) = 8
     // decision_start = 9
-    // turbine:  [9,  11)
-    // spillage: [11, 13)
-    // thermal:  [13, 14)
-    // line_fwd: [14, 15)
-    // line_rev: [15, 16)
-    // deficit:  [16, 17)
-    // excess:   [17, 18)
-    // inflow_slack: [18, 20)  <- excess_end..excess_end+N
+    // turbine:    [9,  11)
+    // spillage:  [11, 13)
+    // diversion: [13, 15)
+    // thermal:   [15, 16)
+    // line_fwd:  [16, 17)
+    // line_rev:  [17, 18)
+    // deficit:   [18, 19)
+    // excess:    [19, 20)
+    // inflow_slack: [20, 22)  <- excess_end..excess_end+N
     #[test]
     fn with_equipment_inflow_penalty_appends_slack() {
         let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true, vec![], &[]);
@@ -1243,7 +1266,7 @@ mod tests {
             idx.hydro_count,
             "inflow_slack must contain exactly hydro_count columns"
         );
-        assert_eq!(idx.inflow_slack, 18..20);
+        assert_eq!(idx.inflow_slack, 20..22);
         // inflow_slack_rows stays empty in this implementation
         assert!(
             idx.inflow_slack_rows.is_empty(),
@@ -1285,12 +1308,13 @@ mod tests {
     // N=2, L=0, T=1, Ln=0, B=1, K=1, no penalty.
     // theta = N*(3+L) = 2*(3+0) = 6
     // decision_start = 7
-    // turbine:  [7, 9)   (2 hydros * 1 block)
-    // spillage: [9, 11)
-    // thermal:  [11, 12) (1 thermal * 1 block)
-    // deficit:  [12, 13) (1 bus * 1 block)
-    // excess:   [13, 14)
-    // generation: [14, 15) (1 FPHA hydro * 1 block)
+    // turbine:    [7, 9)   (2 hydros * 1 block)
+    // spillage:   [9, 11)
+    // diversion: [11, 13)  (2 hydros * 1 block)
+    // thermal:   [13, 14)  (1 thermal * 1 block)
+    // deficit:   [14, 15)  (1 bus * 1 block)
+    // excess:    [15, 16)
+    // generation: [16, 17) (1 FPHA hydro * 1 block)
     //
     // Row layout:
     // n_state = N*(1+L) = 2*(1+0) = 2
@@ -1306,7 +1330,7 @@ mod tests {
 
         // AC-1: generation spans 1 column (1 FPHA hydro * 1 block)
         assert_eq!(idx.generation.len(), 1, "generation must span 1 column");
-        assert_eq!(idx.generation, 14..15);
+        assert_eq!(idx.generation, 16..17);
         assert_eq!(idx.n_fpha_hydros, 1);
         assert_eq!(idx.fpha_hydro_indices, vec![0]);
 
@@ -1324,11 +1348,12 @@ mod tests {
     // N=4, L=0, T=0, Ln=0, B=1, K=2, no penalty.
     // theta = N*(3+L) = 4*(3+0) = 12
     // decision_start = 13
-    // turbine:  [13, 21)  (4 hydros * 2 blocks)
-    // spillage: [21, 29)
-    // deficit:  [29, 31)  (1 bus * 2 blocks)
-    // excess:   [31, 33)
-    // generation: [33, 37) (2 FPHA hydros * 2 blocks = 4 columns)
+    // turbine:    [13, 21)  (4 hydros * 2 blocks)
+    // spillage:   [21, 29)
+    // diversion:  [29, 37)  (4 hydros * 2 blocks)
+    // deficit:    [37, 39)  (1 bus * 2 blocks)
+    // excess:     [39, 41)
+    // generation: [41, 45) (2 FPHA hydros * 2 blocks = 4 columns)
     #[test]
     fn fpha_two_hydros_two_blocks_different_planes() {
         let idx = StageIndexer::with_equipment(4, 0, 0, 0, 1, 2, false, vec![1, 3], &[5, 4]);
@@ -1417,12 +1442,13 @@ mod tests {
     // N=2, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, 1 evap hydro.
     // theta = N*(3+L) = 2*(3+0) = 6
     // decision_start = 7
-    // turbine:  [7, 9)   (2 hydros * 1 block)
-    // spillage: [9, 11)
-    // deficit:  [11, 12) (1 bus * 1 block)
-    // excess:   [12, 13)
+    // turbine:    [7, 9)   (2 hydros * 1 block)
+    // spillage:   [9, 11)
+    // diversion: [11, 13)  (2 hydros * 1 block)
+    // deficit:   [13, 14)  (1 bus * 1 block)
+    // excess:    [14, 15)
     // generation: empty (no FPHA)
-    // evap cols: [13, 16)  (3 columns: Q_ev, f_evap_plus, f_evap_minus)
+    // evap cols: [15, 18)  (3 columns: Q_ev, f_evap_plus, f_evap_minus)
     //
     // Row layout:
     // n_state = N*(1+L) = 2
@@ -1452,10 +1478,10 @@ mod tests {
         assert_eq!(idx.evap_indices.len(), 1);
 
         let ei = idx.evap_indices(0);
-        // 3 columns placed after generation_end (which equals excess.end = 13)
-        assert_eq!(ei.q_ev_col, 13);
-        assert_eq!(ei.f_evap_plus_col, 14);
-        assert_eq!(ei.f_evap_minus_col, 15);
+        // 3 columns placed after generation_end (which equals excess.end = 15)
+        assert_eq!(ei.q_ev_col, 15);
+        assert_eq!(ei.f_evap_plus_col, 16);
+        assert_eq!(ei.f_evap_minus_col, 17);
         // row placed after load_balance.end = 7
         assert_eq!(ei.evap_row, 7);
     }
@@ -1467,11 +1493,12 @@ mod tests {
     // 2 evap hydros (indices 1, 2).
     // theta = 4*(3+0) = 12
     // decision_start = 13
-    // turbine:  [13, 17)  (4 hydros * 1 block)
-    // spillage: [17, 21)
-    // deficit:  [21, 22)  (1 bus * 1 block)
-    // excess:   [22, 23)
-    // generation: [23, 24) (1 FPHA hydro * 1 block)
+    // turbine:    [13, 17)  (4 hydros * 1 block)
+    // spillage:   [17, 21)
+    // diversion:  [21, 25)  (4 hydros * 1 block)
+    // deficit:    [25, 26)  (1 bus * 1 block)
+    // excess:     [26, 27)
+    // generation: [27, 28) (1 FPHA hydro * 1 block)
     //
     // Row layout:
     // n_state = 4
@@ -1481,7 +1508,7 @@ mod tests {
     // load_balance_end   = 12 + 1*1 = 13
     // fpha_rows[0].start = 13
     // fpha_row_cursor after FPHA = 13 + 3*1 = 16
-    // evap cols: [24, 30)   (2 evap hydros * 3 = 6 columns)
+    // evap cols: [28, 34)   (2 evap hydros * 3 = 6 columns)
     // evap_row[0] = 16, evap_row[1] = 17
     #[test]
     fn evap_two_hydros_with_fpha_contiguous() {
@@ -1505,14 +1532,14 @@ mod tests {
         let ei0 = idx.evap_indices(0);
         let ei1 = idx.evap_indices(1);
 
-        // Columns start at generation_end = 24
-        assert_eq!(ei0.q_ev_col, 24);
-        assert_eq!(ei0.f_evap_plus_col, 25);
-        assert_eq!(ei0.f_evap_minus_col, 26);
+        // Columns start at generation_end = 28
+        assert_eq!(ei0.q_ev_col, 28);
+        assert_eq!(ei0.f_evap_plus_col, 29);
+        assert_eq!(ei0.f_evap_minus_col, 30);
 
-        assert_eq!(ei1.q_ev_col, 27);
-        assert_eq!(ei1.f_evap_plus_col, 28);
-        assert_eq!(ei1.f_evap_minus_col, 29);
+        assert_eq!(ei1.q_ev_col, 31);
+        assert_eq!(ei1.f_evap_plus_col, 32);
+        assert_eq!(ei1.f_evap_minus_col, 33);
 
         // Rows placed after fpha_rows region: fpha_row_cursor = 13 + 3*1 = 16
         assert_eq!(ei0.evap_row, 16);
@@ -1539,13 +1566,14 @@ mod tests {
     // N=3, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, 1 evap hydro.
     // theta = N*(3+L) = 3*(3+0) = 9
     // decision_start = 10
-    // turbine:  [10, 13)  (3 hydros * 1 block)
-    // spillage: [13, 16)
-    // deficit:  [16, 17)  (1 bus * 1 block)
-    // excess:   [17, 18)
+    // turbine:    [10, 13)  (3 hydros * 1 block)
+    // spillage:   [13, 16)
+    // diversion:  [16, 19)  (3 hydros * 1 block)
+    // deficit:    [19, 20)  (1 bus * 1 block)
+    // excess:     [20, 21)
     // generation: empty (no FPHA)
-    // evap cols: [18, 21)  (1 evap hydro * 3 columns)
-    // withdrawal_slack: [21, 24)  (3 hydros)
+    // evap cols:  [21, 24)  (1 evap hydro * 3 columns)
+    // withdrawal_slack: [24, 27)  (3 hydros)
     #[test]
     fn withdrawal_slack_with_equipment_and_evaporation_n3_evap1() {
         let idx = StageIndexer::with_equipment_and_evaporation(
@@ -1574,7 +1602,7 @@ mod tests {
             3,
             "withdrawal_slack must contain exactly hydro_count columns"
         );
-        assert_eq!(idx.withdrawal_slack, 21..24);
+        assert_eq!(idx.withdrawal_slack, 24..27);
     }
 
     // AC: with_equipment_and_evaporation, N=0 → withdrawal_slack is 0..0.
@@ -1636,8 +1664,8 @@ mod tests {
     // AC: withdrawal_slack.start == evap_col_end (immediately after evaporation columns).
     //
     // N=2, L=0, no penalty, no FPHA, 1 evap hydro.
-    // evap cols: [excess_end, excess_end+3) = [13, 16)
-    // withdrawal_slack: [16, 18)
+    // evap cols: [excess_end, excess_end+3) = [15, 18)
+    // withdrawal_slack: [18, 20)
     #[test]
     fn withdrawal_slack_immediately_after_evap_columns() {
         let idx = StageIndexer::with_equipment_and_evaporation(
@@ -1656,18 +1684,18 @@ mod tests {
 
         // evap_col_end = evap_col_start + n_evap_hydros * 3
         // evap_col_start = generation_end = excess_end (no FPHA, no penalty)
-        // excess_end = excess_start + n_buses * n_blks = ... = 13
-        // evap_col_end = 13 + 1*3 = 16
+        // excess_end = excess_start + n_buses * n_blks = ... = 15
+        // evap_col_end = 15 + 1*3 = 18
         assert_eq!(
-            idx.withdrawal_slack.start, 16,
-            "withdrawal_slack must start at evap_col_end=16"
+            idx.withdrawal_slack.start, 18,
+            "withdrawal_slack must start at evap_col_end=18"
         );
         assert_eq!(
             idx.withdrawal_slack.len(),
             2,
             "withdrawal_slack length must equal hydro_count=2"
         );
-        assert_eq!(idx.withdrawal_slack, 16..18);
+        assert_eq!(idx.withdrawal_slack, 18..20);
     }
 
     // EvaporationIndices is Debug + Clone + Copy.
@@ -1716,14 +1744,15 @@ mod tests {
     fn extended_adjacency_invariant_with_fpha() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1, no penalty, 1 FPHA hydro.
         // theta=8, decision_start=9
-        // turbine:[9,11), spillage:[11,13), thermal:[13,14), line_fwd:[14,15),
-        // line_rev:[15,16), deficit:[16,17), excess:[17,18)
-        // generation:[18,19) (1 FPHA * 1 block, after excess.end since no penalty)
+        // turbine:[9,11), spillage:[11,13), diversion:[13,15), thermal:[15,16),
+        // line_fwd:[16,17), line_rev:[17,18), deficit:[18,19), excess:[19,20)
+        // generation:[20,21) (1 FPHA * 1 block, after excess.end since no penalty)
         let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![0], &[3]);
 
         assert_eq!(idx.turbine.start, idx.theta + 1);
         assert_eq!(idx.spillage.start, idx.turbine.end);
-        assert_eq!(idx.thermal.start, idx.spillage.end);
+        assert_eq!(idx.diversion.start, idx.spillage.end);
+        assert_eq!(idx.thermal.start, idx.diversion.end);
         assert_eq!(idx.line_fwd.start, idx.thermal.end);
         assert_eq!(idx.line_rev.start, idx.line_fwd.end);
         assert_eq!(idx.deficit.start, idx.line_rev.end);
@@ -1731,6 +1760,26 @@ mod tests {
         // generation follows excess (no penalty)
         assert_eq!(idx.generation.start, idx.excess.end);
         assert_eq!(idx.generation.len(), 1);
+    }
+
+    // ── Diversion field tests ──────────────────────────────────────────────
+
+    // Diversion range: N=3, K=2 → diversion.len() = 6, contiguous with spillage.
+    #[test]
+    fn test_diversion_range_n3_l0_k2() {
+        let idx = StageIndexer::with_equipment(3, 0, 0, 0, 1, 2, false, vec![], &[]);
+
+        assert_eq!(idx.diversion.start, idx.spillage.end);
+        assert_eq!(idx.diversion.len(), 3 * 2);
+        assert_eq!(idx.thermal.start, idx.diversion.end);
+    }
+
+    // Diversion range: N=0 → diversion is empty.
+    #[test]
+    fn test_diversion_zero_hydros() {
+        let idx = StageIndexer::with_equipment(0, 0, 1, 0, 1, 1, false, vec![], &[]);
+
+        assert!(idx.diversion.is_empty());
     }
 
     // ── z_inflow field tests ───────────────────────────────────────────────

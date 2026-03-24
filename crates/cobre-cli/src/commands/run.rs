@@ -514,6 +514,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                 &comm,
                 &result_tx,
                 Some(sim_event_tx),
+                &training_result.basis_cache,
             )
             .map_err(CliError::from);
         if let Some(handle) = sim_progress_handle {
@@ -591,7 +592,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
                     failed += 1;
                 }
             }
-            let mut sim_output = sim_writer.finalize();
+            let mut sim_output = sim_writer.finalize(sim_time_ms);
             sim_output.failed = failed;
 
             write_outputs(
@@ -721,6 +722,9 @@ fn delta_to_stats_row(
         basis_rejections: delta.basis_rejections as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
+        load_model_time_ms: delta.load_model_time_ms,
+        add_rows_time_ms: delta.add_rows_time_ms,
+        set_bounds_time_ms: delta.set_bounds_time_ms,
     }
 }
 

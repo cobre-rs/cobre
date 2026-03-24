@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-03-23
+
+### Added
+
+- **LP setup timing instrumentation** -- `SolverStatistics` now tracks cumulative
+  wall-clock time for `load_model`, `add_rows`, and `set_row_bounds`/`set_col_bounds`
+  separately from solve time. Three new columns (`load_model_time_ms`,
+  `add_rows_time_ms`, `set_bounds_time_ms`) in `training/solver/iterations.parquet`
+  enable diagnosing LP rebuild overhead vs simplex time.
+- **LP setup optimisation** -- Model persistence across scenarios at the same
+  stage (`S1`), active-cut-count caching, incremental cut append, sparse cut
+  representation, and bound-zeroing deactivation. Reduces LP rebuild overhead
+  by avoiding redundant `load_model` + `add_rows` calls.
+- **Simulation basis warm-start** -- Simulation LPs are warm-started with the
+  per-stage basis from the training checkpoint. The basis is read-only and shared
+  across all threads, preserving determinism while reducing simplex iterations.
+- **Physical evaporation upper bounds** -- Evaporation flow (`Q_ev`) is now
+  bounded above by a physical estimate derived from linearisation coefficients
+  and maximum storage, with a 2x safety margin. Over-evaporation slack
+  (`f_evap_minus`) is penalised at 100x the under-evaporation cost to prevent
+  the solver from inflating evaporation as a dump valve.
+- **Cost breakdown extraction** -- `inflow_penalty_cost`, `hydro_violation_cost`
+  (evaporation + withdrawal violations), and diversion cost are now extracted
+  from LP primal values into the simulation cost breakdown. Previously these
+  LP objective contributions were included in `immediate_cost` but not reported
+  in any named component field.
+
+### Fixed
+
+- **Stale z_inflow column offset formulas** -- Corrected 8 test column offset
+  formulas and 10+ comments in `lp_builder.rs` and `noise.rs` that still
+  referenced the old z_inflow-at-end-of-columns layout after the N\*(1+L)
+  refactoring. Tests passed coincidentally because adjacent columns had
+  identical bounds and objective values.
+- **Simulation cost extraction with LP prescaling** -- Per-variable cost
+  extraction (spillage, thermal, exchange, NCS curtailment, and the aggregate
+  cost breakdown) now divides by `col_scale[j]` to undo column prescaling.
+  Without this, per-entity costs were inflated by the column scale factor when
+  LP prescaling was active.
+- **NCS curtailment cost semantics** -- Changed curtailment cost to use
+  `curtailment_mw` (available minus generation) instead of `generation_mw`.
+  The field now reports the actual penalty for not generating, matching the
+  `curtailment_cost` field name semantics.
+- **HiGHS internal scaling disabled** -- Set `simplex_scale_strategy = 0` (off)
+  in default solver options. Cobre's own prescaler handles conditioning; the
+  HiGHS internal scaler interfered with basis reuse and dual extraction.
+
 ## [0.1.10] - 2026-03-23
 
 ### Added
@@ -397,7 +444,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 
-[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/cobre-rs/cobre/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/cobre-rs/cobre/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/cobre-rs/cobre/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/cobre-rs/cobre/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/cobre-rs/cobre/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/cobre-rs/cobre/compare/v0.1.5...v0.1.6

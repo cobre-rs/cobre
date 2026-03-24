@@ -18,8 +18,10 @@
 //! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
 //! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
 //! distributes scenarios across [`SolverWorkspace`] instances. Each stage LP
-//! is cold-started to guarantee thread-count-independent determinism. Results are sorted
-//! by `scenario_id` for deterministic MPI aggregation.
+//! is optionally warm-started with a per-stage basis from the training checkpoint.
+//! The warm-start basis is read-only and shared across all threads, so it does
+//! not introduce any thread-count-dependent state — determinism is preserved.
+//! Results are sorted by `scenario_id` for deterministic MPI aggregation.
 //!
 //! ## Seed domain separation
 //!
@@ -37,13 +39,14 @@
 //! [`RowBatch`] per stage is built once before the scenario loop — not once
 //! per scenario.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::TrainingEvent;
-use cobre_solver::{RowBatch, SolverError, SolverInterface};
+use cobre_core::{EntityId, TrainingEvent};
+use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -137,6 +140,19 @@ pub struct SimulationOutputSpec<'a> {
     /// active at that stage.
     pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
 
+    /// Mapping from target hydro ID to source hydro indices that divert to it.
+    ///
+    /// Used by the extraction pipeline to compute `diverted_inflow_m3s`.
+    /// Empty when no hydros have diversion.
+    pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
+
+    /// Per-stage hydro productivities accounting for per-stage overrides.
+    ///
+    /// `hydro_productivities_per_stage[stage]` contains one productivity value
+    /// per hydro plant.  For constant-productivity hydros this is the per-stage
+    /// override (or base value if no override); for FPHA hydros it is 0.0.
+    pub hydro_productivities_per_stage: &'a [Vec<f64>],
+
     /// Optional event sender for streaming progress events to the CLI/UI.
     pub event_sender: Option<Sender<TrainingEvent>>,
 }
@@ -151,14 +167,19 @@ struct ScenarioIds {
     num_stages: usize,
 }
 
-/// Rebuild the `row_lower` slice for a stage, incorporating stochastic load patches.
+/// Rebuild the `row_lower` slice for a stage with full unscaling.
 ///
-/// When load noise is active (`n_load_buses > 0`) and the load RHS buffer is
-/// populated, this function patches the template's `row_lower` in `scratch_buf`
-/// and returns a reference to the patched slice. Otherwise it returns the
-/// template's unmodified `row_lower` directly.
-fn build_row_lower_ref<'a>(
-    template_row_lower: &'a [f64],
+/// Always copies `template_row_lower` into `scratch_buf` and divides each element
+/// by its corresponding `row_scale` factor.  Stochastic load rows are then
+/// overwritten with the unscaled values from `load_rhs_buf` (which are already
+/// in MW).  The result is a slice where every element is in original units.
+///
+/// When `row_scale` is empty (no prescaling), the function does a bulk memcpy
+/// without per-element division, matching the old fast path.
+#[allow(clippy::too_many_arguments)]
+fn build_row_lower_unscaled<'a>(
+    template_row_lower: &[f64],
+    row_scale: &[f64],
     load_rhs_buf: &[f64],
     scratch_buf: &'a mut Vec<f64>,
     n_load_buses: usize,
@@ -166,9 +187,25 @@ fn build_row_lower_ref<'a>(
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
-    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
-        scratch_buf.clear();
+    scratch_buf.clear();
+    scratch_buf.reserve(template_row_lower.len());
+
+    // Unscale all template rows.
+    if row_scale.is_empty() {
         scratch_buf.extend_from_slice(template_row_lower);
+    } else {
+        for (i, &val) in template_row_lower.iter().enumerate() {
+            let scale = if i < row_scale.len() && row_scale[i] != 0.0 {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            scratch_buf.push(val / scale);
+        }
+    }
+
+    // Overwrite stochastic load rows (already in unscaled MW).
+    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
         let mut rhs_idx = 0;
         for &bus_pos in load_bus_indices {
             for blk in 0..n_blks {
@@ -177,10 +214,9 @@ fn build_row_lower_ref<'a>(
                 rhs_idx += 1;
             }
         }
-        &scratch_buf[..template_row_lower.len()]
-    } else {
-        template_row_lower
     }
+
+    &scratch_buf[..template_row_lower.len()]
 }
 
 /// Process all stages for one simulation scenario, updating workspace state in place.
@@ -233,8 +269,10 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// Solve one stage for one simulation scenario, updating workspace in-place.
 ///
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
-/// and returns `(immediate_cost, SimulationStageResult)`. Always cold-starts
-/// the LP to guarantee thread-count-independent determinism.
+/// and returns `(immediate_cost, SimulationStageResult)`. When a warm-start
+/// basis is provided, the LP is solved via `solve_with_basis`; otherwise it
+/// falls back to a cold-start `solve`. The warm-start basis is a read-only,
+/// per-stage artifact from training, so determinism is preserved.
 #[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
@@ -243,6 +281,7 @@ fn solve_simulation_stage<S: SolverInterface>(
     cut_batch: &RowBatch,
     output: &SimulationOutputSpec<'_>,
     ids: &SimStageIds,
+    warm_basis: Option<&Basis>,
 ) -> Result<(f64, SimulationStageResult), SimulationError> {
     // Precondition: ws.scratch.noise_buf, ws.scratch.load_rhs_buf, and
     // ws.scratch.ncs_col_upper_buf are populated by the caller
@@ -295,7 +334,12 @@ fn solve_simulation_stage<S: SolverInterface>(
         );
     }
 
-    let view = ws.solver.solve().map_err(|e| match e {
+    let view = if let Some(basis) = warm_basis {
+        ws.solver.solve_with_basis(basis)
+    } else {
+        ws.solver.solve()
+    }
+    .map_err(|e| match e {
         SolverError::Infeasible => SimulationError::LpInfeasible {
             scenario_id: ids.scenario_id,
             stage_id: ids.stage_id_u32,
@@ -432,8 +476,9 @@ fn extract_sim_stage_result(
     } else {
         (0, 0)
     };
-    let row_lower_ref = build_row_lower_ref(
+    let row_lower_ref = build_row_lower_unscaled(
         &ctx.templates[t].row_lower,
+        &ctx.templates[t].row_scale,
         &scratch.load_rhs_buf,
         &mut scratch.row_lower_buf,
         ctx.n_load_buses,
@@ -488,6 +533,13 @@ fn extract_sim_stage_result(
                 .get(t)
                 .map_or(&[], Vec::as_slice),
             ncs_col_upper,
+            diversion_upstream: output.diversion_upstream,
+            hydro_productivities: output
+                .hydro_productivities_per_stage
+                .get(t)
+                .map_or(&[], Vec::as_slice),
+            col_scale: &ctx.templates[t].col_scale,
+            row_scale: &ctx.templates[t].row_scale,
         },
         ids.stage_id_u32,
     );
@@ -501,6 +553,7 @@ fn process_scenario_stages<S: SolverInterface>(
     cut_batches: &[RowBatch],
     output: &SimulationOutputSpec<'_>,
     ids: &ScenarioIds,
+    stage_bases: &[Option<Basis>],
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
@@ -573,6 +626,7 @@ fn process_scenario_stages<S: SolverInterface>(
                 stage_id_u32,
                 scenario_id: ids.scenario_id,
             },
+            stage_bases.get(t).and_then(Option::as_ref),
         )?;
         // Advance state for next stage: already updated inside solve_simulation_stage, but
         // we need indexer.theta for cost accumulation (view already consumed). Cost is immediate only.
@@ -652,8 +706,11 @@ fn dispatch_scenario_result(
 /// Distributes locally assigned scenarios across worker threads using the same
 /// static partitioning as the training forward pass. Each [`SolverWorkspace`]
 /// owns its solver, patch buffer, and current-state buffer exclusively — there
-/// is no shared mutable state between workers. Each stage LP is cold-started
-/// to guarantee determinism regardless of thread count.
+/// is no shared mutable state between workers. When `stage_bases` provides a
+/// per-stage basis from the training checkpoint, each stage LP is warm-started
+/// via `solve_with_basis`; otherwise it falls back to a cold-start `solve`.
+/// The warm-start basis is read-only and shared across all threads, preserving
+/// determinism regardless of thread count.
 ///
 /// `SyncSender::send()` is thread-safe; each worker sends its
 /// [`SimulationScenarioResult`] through `result_tx` as it completes each
@@ -688,7 +745,11 @@ fn dispatch_scenario_result(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
-#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // owned Option<Sender> required for worker clone pattern
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,
@@ -696,6 +757,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     training_ctx: &TrainingContext<'_>,
     config: &SimulationConfig,
     output: SimulationOutputSpec<'_>,
+    stage_bases: &[Option<Basis>],
     comm: &C,
 ) -> Result<SimulationRunResult, SimulationError> {
     let TrainingContext {
@@ -764,6 +826,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         global_scenario,
                         num_stages,
                     },
+                    stage_bases,
                 )?;
                 let stats_after = ws.solver.statistics();
                 let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
@@ -820,6 +883,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::mpsc;
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
@@ -1175,6 +1239,14 @@ mod tests {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /// Build per-stage hydro productivities for 1 hydro with productivity 1.0.
+    ///
+    /// Returns `n_stages` inner vecs each containing a single `1.0` entry,
+    /// matching `entity_counts_1_hydro().hydro_productivities`.
+    fn hydro_productivities_1hydro(n_stages: usize) -> Vec<Vec<f64>> {
+        vec![vec![1.0]; n_stages]
+    }
+
     /// Wrap a `MockSolver` in a single-workspace slice for `simulate()` calls.
     ///
     /// All tests use a single workspace (serial execution) so that existing
@@ -1232,6 +1304,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -1264,8 +1337,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1322,6 +1398,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -1354,8 +1431,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1402,6 +1482,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -1434,8 +1515,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1480,6 +1564,7 @@ mod tests {
         // Drop the receiver immediately so send() will fail.
         drop(rx);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -1512,8 +1597,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -1560,6 +1648,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let run_result = simulate(
             &mut workspaces,
@@ -1592,8 +1681,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1637,6 +1729,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let run_result = simulate(
             &mut workspaces,
@@ -1669,8 +1762,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1714,6 +1810,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
@@ -1746,8 +1843,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1785,6 +1885,8 @@ mod tests {
         let comm = StubComm { rank: 0, size: 1 };
         let entity_counts = entity_counts_1_hydro();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
+
         // Run with 1 workspace.
         let (tx1, _rx1) = mpsc::sync_channel(64);
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
@@ -1819,8 +1921,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1881,8 +1986,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -1953,6 +2061,7 @@ mod tests {
         let (result_tx, _result_rx) = mpsc::sync_channel(32);
         let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -1985,8 +2094,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         );
         assert!(result.is_ok(), "simulate returned error: {result:?}");
@@ -2051,6 +2163,7 @@ mod tests {
 
         let (result_tx, _result_rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         let result = simulate(
             &mut workspaces,
@@ -2083,8 +2196,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         );
 
@@ -2134,6 +2250,7 @@ mod tests {
         let (result_tx, _result_rx) = mpsc::sync_channel(32);
         let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
@@ -2166,8 +2283,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2228,6 +2348,7 @@ mod tests {
         let (result_tx, _result_rx) = mpsc::sync_channel(32);
         let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
@@ -2260,8 +2381,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2321,6 +2445,7 @@ mod tests {
         let (result_tx, _result_rx) = mpsc::sync_channel(32);
         let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
@@ -2353,8 +2478,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2429,6 +2557,7 @@ mod tests {
         let (result_tx, _result_rx) = mpsc::sync_channel(16);
         let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
         simulate(
             &mut workspaces,
@@ -2461,8 +2590,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2696,6 +2828,7 @@ mod tests {
         let block_counts_per_stage = vec![1usize];
         let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         simulate(
             &mut workspaces,
             &StageContext {
@@ -2727,8 +2860,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2822,6 +2958,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(4);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
 
         simulate(
@@ -2855,8 +2992,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -2955,6 +3095,7 @@ mod tests {
         let block_counts_per_stage = vec![1usize];
         let noise_scale = vec![1.0_f64];
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         simulate(
             &mut workspaces,
             &StageContext {
@@ -2986,8 +3127,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -3249,6 +3393,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(16);
 
         // Use the hydro-aware workspace builder so zero_targets_buf[..1] is valid.
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
         simulate(
             &mut workspaces,
@@ -3281,8 +3426,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();
@@ -3341,6 +3489,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::sync_channel(16);
 
+        let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
         simulate(
             &mut workspaces,
@@ -3373,8 +3522,11 @@ mod tests {
                 ncs_col_starts: &[],
                 n_ncs_per_stage: &[],
                 ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            &[],
             &comm,
         )
         .unwrap();

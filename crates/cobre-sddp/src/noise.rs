@@ -868,7 +868,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 1);
         let mut state = vec![500.0, 99.0]; // v_out, stale lag
         let incoming_lags = vec![42.0]; // lag0 (lag-major: lag * n_h + h = 0*1+0 = 0)
-        // z_inflow starts at theta+1 = 1*(2+1)+1 = 4
+        // z_inflow starts at N*(1+L) = 1*(1+1) = 2
         let mut primal = vec![0.0; 10];
         primal[indexer.z_inflow.start] = 77.0; // Z_t for hydro 0
         shift_lag_state(&mut state, &incoming_lags, &primal, &indexer);

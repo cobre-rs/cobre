@@ -382,7 +382,13 @@ fn run_inner(
                 .collect::<Vec<SimulationScenarioResult>>()
         });
         let sim_result = setup
-            .simulate(&mut sim_pool.workspaces, &LocalBackend, &result_tx, None)
+            .simulate(
+                &mut sim_pool.workspaces,
+                &LocalBackend,
+                &result_tx,
+                None,
+                &training_result.basis_cache,
+            )
             .map_err(|e| format!("simulation error: {e}"));
         drop(result_tx);
         let local_results = drain_handle
@@ -400,7 +406,7 @@ fn run_inner(
                 failed += 1;
             }
         }
-        let mut sim_out = sim_writer.finalize();
+        let mut sim_out = sim_writer.finalize(0);
         sim_out.failed = failed;
         let sim_summary = SimSummary {
             n_scenarios: sim_out.n_scenarios,

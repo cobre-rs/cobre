@@ -244,6 +244,17 @@ impl FutureCostFunction {
         );
         self.pools[stage].deactivate(indices);
     }
+
+    /// Compute sparsity reports for all stages.
+    ///
+    /// Returns a vector of [`SparsityReport`] values, one per stage, in
+    /// stage order. Delegates to [`CutPool::sparsity_report`] for each pool.
+    ///
+    /// [`SparsityReport`]: super::pool::SparsityReport
+    #[must_use]
+    pub fn sparsity_reports(&self) -> Vec<super::pool::SparsityReport> {
+        self.pools.iter().map(CutPool::sparsity_report).collect()
+    }
 }
 
 #[cfg(test)]

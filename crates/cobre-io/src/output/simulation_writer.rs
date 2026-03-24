@@ -662,13 +662,20 @@ impl SimulationParquetWriter {
     /// Finalize writing and return the [`SimulationOutput`] summary.
     ///
     /// Consumes the writer. Returns a [`SimulationOutput`] with the total
-    /// number of scenarios written and the list of Hive partition paths.
+    /// number of scenarios written, the elapsed wall-clock time, and the
+    /// list of Hive partition paths.
+    ///
+    /// `total_time_ms` is the wall-clock duration of the simulation run in
+    /// milliseconds, measured by the caller. It is stored in
+    /// [`SimulationOutput::total_time_ms`] and written to the simulation
+    /// manifest as `duration_seconds`.
     #[must_use]
-    pub fn finalize(self) -> SimulationOutput {
+    pub fn finalize(self, total_time_ms: u64) -> SimulationOutput {
         SimulationOutput {
             n_scenarios: self.scenarios_written,
             completed: self.scenarios_written,
             failed: 0,
+            total_time_ms,
             partitions_written: self.partitions_written,
         }
     }
@@ -1852,7 +1859,7 @@ mod tests {
             .write_scenario(make_scenario_payload(1, 1))
             .expect("write scenario 1 must succeed");
 
-        let output = writer.finalize();
+        let output = writer.finalize(0);
         assert_eq!(output.n_scenarios, 2, "n_scenarios must be 2");
         assert_eq!(output.completed, 2, "completed must be 2");
         assert_eq!(output.failed, 0, "failed must be 0");
@@ -1873,7 +1880,7 @@ mod tests {
             .write_scenario(make_scenario_payload(0, 1))
             .expect("write scenario 0 must succeed");
 
-        let output = writer.finalize();
+        let output = writer.finalize(0);
         // The test system has hydros, so at minimum costs and hydros partitions.
         assert!(
             output.partitions_written.len() >= 2,

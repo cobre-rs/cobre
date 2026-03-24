@@ -14,7 +14,7 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -767,8 +767,11 @@ fn train_simulate_write_cycle() {
             ncs_col_starts: &[],
             n_ncs_per_stage: &[],
             ncs_entity_ids_per_stage: &[],
+            diversion_upstream: &HashMap::new(),
+            hydro_productivities_per_stage: &vec![vec![1.0]; fx.n_stages],
             event_sender: None,
         },
+        &[],
         &sim_comm,
     )
     .expect("simulate must succeed");
@@ -783,6 +786,7 @@ fn train_simulate_write_cycle() {
         n_scenarios: 2,
         completed: 2,
         failed: 0,
+        total_time_ms: 0,
         partitions_written: vec![],
     };
 

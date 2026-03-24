@@ -92,6 +92,8 @@ pub struct SimulationManifest {
     pub started_at: Option<String>,
     /// ISO 8601 timestamp when the run completed (null while running).
     pub completed_at: Option<String>,
+    /// Total simulation wall-clock duration in seconds (`null` when not measured).
+    pub duration_seconds: Option<f64>,
     /// Scenario completion counts.
     pub scenarios: ManifestScenarios,
     /// Relative paths to Hive partition directories written.
@@ -430,6 +432,7 @@ mod tests {
             status: "complete".to_string(),
             started_at: Some("2026-01-17T10:00:00Z".to_string()),
             completed_at: Some("2026-01-17T10:15:00Z".to_string()),
+            duration_seconds: Some(900.0),
             scenarios: ManifestScenarios {
                 total: 100,
                 completed: 100,
@@ -702,6 +705,7 @@ mod tests {
             status: "complete".to_string(),
             started_at: None,
             completed_at: None,
+            duration_seconds: None,
             scenarios: ManifestScenarios {
                 total: 100,
                 completed: 100,
@@ -829,6 +833,7 @@ mod tests {
             status: "complete".to_string(),
             started_at: None,
             completed_at: None,
+            duration_seconds: None,
             scenarios: ManifestScenarios {
                 total: 0,
                 completed: 0,

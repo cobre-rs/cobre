@@ -32,7 +32,7 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -625,8 +625,11 @@ fn simulate_fixture(
             ncs_col_starts: &[],
             n_ncs_per_stage: &[],
             ncs_entity_ids_per_stage: &[],
+            diversion_upstream: &HashMap::new(),
+            hydro_productivities_per_stage: &fx.stage_templates.hydro_productivities_per_stage,
             event_sender: None,
         },
+        &[],
         &comm,
     )?;
 

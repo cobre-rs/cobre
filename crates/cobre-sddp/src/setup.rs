@@ -864,6 +864,10 @@ impl StudySetup {
     /// (CLI/Python), because the caller also spawns the drain thread and
     /// progress display. `StudySetup` does not manage threads.
     ///
+    /// `stage_bases` provides an optional per-stage warm-start basis from the
+    /// training checkpoint. Pass `&training_result.basis_cache` to enable
+    /// warm-start, or `&[]` to fall back to cold-start.
+    ///
     /// # Errors
     ///
     /// Returns `Err(SimulationError::LpInfeasible { .. })` when a stage LP
@@ -878,6 +882,7 @@ impl StudySetup {
         comm: &C,
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
+        stage_bases: &[Option<cobre_solver::Basis>],
     ) -> Result<crate::SimulationRunResult, SimulationError> {
         let stage_ctx = self.stage_ctx();
         let training_ctx = self.training_ctx();
@@ -893,6 +898,8 @@ impl StudySetup {
             ncs_col_starts: &self.stage_templates.ncs_col_starts,
             n_ncs_per_stage: &self.stage_templates.n_ncs_per_stage,
             ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
+            diversion_upstream: &self.stage_templates.diversion_upstream,
+            hydro_productivities_per_stage: &self.stage_templates.hydro_productivities_per_stage,
             event_sender,
         };
 
@@ -903,6 +910,7 @@ impl StudySetup {
             &training_ctx,
             &sim_config,
             output,
+            stage_bases,
             comm,
         )
     }
@@ -2058,7 +2066,7 @@ mod tests {
         let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
         let sim_result = setup
-            .simulate(&mut pool.workspaces, &comm, &result_tx, None)
+            .simulate(&mut pool.workspaces, &comm, &result_tx, None, &[])
             .expect("simulate");
 
         // Drop the sender so the drain thread terminates.

@@ -59,6 +59,13 @@ use crate::cut_selection::CutMetadata;
 /// Slots are addressed by a deterministic formula derived from the iteration
 /// counter and forward pass index. The pool tracks a `populated_count`
 /// high-water mark to avoid scanning unpopulated slots.
+///
+/// A `cached_active_count` field is maintained incrementally by [`add_cut`]
+/// and [`deactivate`], making [`active_count`] an O(1) query.
+///
+/// [`add_cut`]: CutPool::add_cut
+/// [`deactivate`]: CutPool::deactivate
+/// [`active_count`]: CutPool::active_count
 #[derive(Debug, Clone)]
 pub struct CutPool {
     /// Per-slot coefficient arrays. Each inner `Vec` has length `state_dimension`.
@@ -96,6 +103,15 @@ pub struct CutPool {
     /// Number of warm-start cuts loaded before training begins. Acts as a
     /// base offset in the slot assignment formula. Fixed after construction.
     pub warm_start_count: u32,
+
+    /// Cached count of active cuts, maintained incrementally by [`add_cut`]
+    /// (increment) and [`deactivate`] (decrement). Makes [`active_count`]
+    /// O(1) instead of O(`populated_count`).
+    ///
+    /// [`add_cut`]: CutPool::add_cut
+    /// [`deactivate`]: CutPool::deactivate
+    /// [`active_count`]: CutPool::active_count
+    pub cached_active_count: usize,
 }
 
 impl CutPool {
@@ -149,6 +165,7 @@ impl CutPool {
             state_dimension,
             forward_passes,
             warm_start_count,
+            cached_active_count: 0,
         }
     }
 
@@ -221,7 +238,12 @@ impl CutPool {
 
         self.intercepts[slot] = intercept;
         self.coefficients[slot].copy_from_slice(coefficients);
+        debug_assert!(
+            !self.active[slot],
+            "add_cut: slot {slot} is already active (double-insert)"
+        );
         self.active[slot] = true;
+        self.cached_active_count += 1;
         self.metadata[slot] = CutMetadata {
             iteration_generated: iteration,
             forward_pass_index,
@@ -263,6 +285,9 @@ impl CutPool {
 
     /// Count the number of active cuts.
     ///
+    /// Returns the cached count in O(1). A debug assertion verifies consistency
+    /// with the computed count in debug builds.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -275,10 +300,20 @@ impl CutPool {
     /// ```
     #[must_use]
     pub fn active_count(&self) -> usize {
-        self.active[..self.populated_count]
-            .iter()
-            .filter(|&&a| a)
-            .count()
+        debug_assert_eq!(
+            self.cached_active_count,
+            self.active[..self.populated_count]
+                .iter()
+                .filter(|&&a| a)
+                .count(),
+            "cached active_count {} != computed {}",
+            self.cached_active_count,
+            self.active[..self.populated_count]
+                .iter()
+                .filter(|&&a| a)
+                .count(),
+        );
+        self.cached_active_count
     }
 
     /// Deactivate the cuts at the given slot indices.
@@ -304,8 +339,9 @@ impl CutPool {
         for &idx in indices {
             let i = idx as usize;
             debug_assert!(i < self.capacity, "deactivate index {i} out of bounds");
-            if i < self.capacity {
+            if i < self.capacity && self.active[i] {
                 self.active[i] = false;
+                self.cached_active_count -= 1;
             }
         }
     }
@@ -352,6 +388,77 @@ impl CutPool {
             })
             .fold(f64::NEG_INFINITY, f64::max)
     }
+
+    /// Compute a report of exact-zero sparsity across all active cuts.
+    ///
+    /// Scans every coefficient of every active cut and counts exact zeros
+    /// (`value == 0.0`). Returns a [`SparsityReport`] with aggregate and
+    /// per-dimension statistics. Only exact zeros are counted to preserve
+    /// bit-for-bit reproducibility when sparse representations are used.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cobre_sddp::cut::pool::CutPool;
+    ///
+    /// let mut pool = CutPool::new(10, 3, 1, 0);
+    /// pool.add_cut(0, 0, 1.0, &[1.0, 0.0, 2.0]);
+    /// pool.add_cut(1, 0, 2.0, &[0.0, 0.0, 3.0]);
+    ///
+    /// let report = pool.sparsity_report();
+    /// assert_eq!(report.total_coefficients, 6);   // 2 cuts * 3 dims
+    /// assert_eq!(report.exact_zero_count, 3);      // (0,1), (1,0), (1,1)
+    /// assert!((report.sparsity_fraction - 0.5).abs() < 1e-10);
+    /// assert_eq!(report.per_dimension_zeros, vec![1, 2, 0]);
+    /// ```
+    #[must_use]
+    pub fn sparsity_report(&self) -> SparsityReport {
+        let active_count = self.active_count();
+        let mut exact_zero_count = 0usize;
+        let mut per_dimension_zeros = vec![0usize; self.state_dimension];
+
+        for (_slot, _intercept, coeffs) in self.active_cuts() {
+            for (j, &c) in coeffs.iter().enumerate() {
+                if c == 0.0 {
+                    exact_zero_count += 1;
+                    per_dimension_zeros[j] += 1;
+                }
+            }
+        }
+
+        let total = active_count * self.state_dimension;
+        #[allow(clippy::cast_precision_loss)]
+        let fraction = if total > 0 {
+            exact_zero_count as f64 / total as f64
+        } else {
+            0.0
+        };
+
+        SparsityReport {
+            total_coefficients: total,
+            exact_zero_count,
+            sparsity_fraction: fraction,
+            per_dimension_zeros,
+        }
+    }
+}
+
+/// Report of exact-zero sparsity across active cuts in a [`CutPool`].
+///
+/// Produced by [`CutPool::sparsity_report`]. Only exact zeros (`value == 0.0`)
+/// are counted -- near-zero values are not included to preserve bit-for-bit
+/// reproducibility.
+#[derive(Debug, Clone)]
+pub struct SparsityReport {
+    /// Total number of coefficients scanned (`active_count * state_dimension`).
+    pub total_coefficients: usize,
+    /// Number of exact-zero coefficients (`value == 0.0`).
+    pub exact_zero_count: usize,
+    /// Fraction of exact-zero coefficients (0.0 to 1.0).
+    pub sparsity_fraction: f64,
+    /// Per-dimension zero count (length = `state_dimension`). Entry `j` is the
+    /// number of active cuts where `coefficient[j] == 0.0`.
+    pub per_dimension_zeros: Vec<usize>,
 }
 
 #[cfg(test)]
@@ -658,5 +765,86 @@ mod tests {
 
         let debug_str = format!("{pool:?}");
         assert!(!debug_str.is_empty());
+    }
+
+    // ── SparsityReport tests ──────────────────────────────────────────
+
+    #[test]
+    fn sparsity_report_empty_pool() {
+        let pool = CutPool::new(10, 3, 1, 0);
+        let report = pool.sparsity_report();
+        assert_eq!(report.total_coefficients, 0);
+        assert_eq!(report.exact_zero_count, 0);
+        assert!((report.sparsity_fraction - 0.0).abs() < f64::EPSILON);
+        assert_eq!(report.per_dimension_zeros, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn sparsity_report_all_nonzero() {
+        let mut pool = CutPool::new(10, 3, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0, 2.0, 3.0]);
+        pool.add_cut(1, 0, 2.0, &[4.0, 5.0, 6.0]);
+
+        let report = pool.sparsity_report();
+        assert_eq!(report.total_coefficients, 6);
+        assert_eq!(report.exact_zero_count, 0);
+        assert!((report.sparsity_fraction - 0.0).abs() < f64::EPSILON);
+        assert_eq!(report.per_dimension_zeros, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn sparsity_report_all_zero() {
+        let mut pool = CutPool::new(10, 3, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[0.0, 0.0, 0.0]);
+        pool.add_cut(1, 0, 2.0, &[0.0, 0.0, 0.0]);
+
+        let report = pool.sparsity_report();
+        assert_eq!(report.total_coefficients, 6);
+        assert_eq!(report.exact_zero_count, 6);
+        assert!((report.sparsity_fraction - 1.0).abs() < f64::EPSILON);
+        assert_eq!(report.per_dimension_zeros, vec![2, 2, 2]);
+    }
+
+    #[test]
+    fn sparsity_report_mixed() {
+        let mut pool = CutPool::new(10, 3, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0, 0.0, 2.0]);
+        pool.add_cut(1, 0, 2.0, &[0.0, 0.0, 3.0]);
+
+        let report = pool.sparsity_report();
+        assert_eq!(report.total_coefficients, 6);
+        assert_eq!(report.exact_zero_count, 3);
+        assert!((report.sparsity_fraction - 0.5).abs() < 1e-10);
+        assert_eq!(report.per_dimension_zeros, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn sparsity_report_excludes_inactive_cuts() {
+        let mut pool = CutPool::new(10, 2, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[0.0, 0.0]); // all zero, then deactivate
+        pool.add_cut(1, 0, 2.0, &[1.0, 2.0]); // all non-zero
+        pool.deactivate(&[0]);
+
+        let report = pool.sparsity_report();
+        // Only the second cut is active.
+        assert_eq!(report.total_coefficients, 2);
+        assert_eq!(report.exact_zero_count, 0);
+        assert!((report.sparsity_fraction - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn sparsity_report_per_dimension_zeros_correct() {
+        let mut pool = CutPool::new(10, 4, 1, 0);
+        // Cut 0: dims 0,2 are zero
+        pool.add_cut(0, 0, 1.0, &[0.0, 1.0, 0.0, 3.0]);
+        // Cut 1: dims 0,3 are zero
+        pool.add_cut(1, 0, 2.0, &[0.0, 2.0, 4.0, 0.0]);
+        // Cut 2: no zeros
+        pool.add_cut(2, 0, 3.0, &[5.0, 6.0, 7.0, 8.0]);
+
+        let report = pool.sparsity_report();
+        assert_eq!(report.total_coefficients, 12);
+        assert_eq!(report.exact_zero_count, 4);
+        assert_eq!(report.per_dimension_zeros, vec![2, 0, 1, 1]);
     }
 }

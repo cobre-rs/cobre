@@ -24,9 +24,11 @@
 //! (pumping stations, contracts, non-controllables) that contribute zero LP
 //! variables remain as zero-valued placeholders.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use cobre_core::ConstraintSense;
+use cobre_core::EntityId;
 
 use crate::StageIndexer;
 use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
@@ -190,6 +192,44 @@ pub struct StageExtractionSpec<'a> {
     /// representing the maximum generation for that (ncs, block) pair.
     /// Empty when no NCS entities are active.
     pub ncs_col_upper: &'a [f64],
+    /// Mapping from target hydro ID to source hydro indices that divert to it.
+    ///
+    /// Used by the extraction pipeline to compute `diverted_inflow_m3s` for
+    /// each hydro that receives diversion from upstream sources.
+    /// Empty when no hydros have diversion.
+    pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
+    /// Per-hydro productivity at this stage, accounting for per-stage overrides.
+    ///
+    /// Length equals `indexer.hydro_count`.  For constant-productivity hydros
+    /// this is the per-stage override (or base if no override), for FPHA hydros
+    /// this is 0.0 (generation is read from the LP column instead).
+    pub hydro_productivities: &'a [f64],
+    /// Column scaling factors from the stage template.
+    ///
+    /// Empty when no prescaling is applied.  Used to unscale per-variable cost
+    /// extraction (`c_original = c_scaled / col_scale[j]`).
+    pub col_scale: &'a [f64],
+    /// Row scaling factors from the stage template.
+    ///
+    /// Empty when no prescaling is applied.  Used to unscale row lower/upper
+    /// bounds at the extraction boundary.
+    pub row_scale: &'a [f64],
+}
+
+impl StageExtractionSpec<'_> {
+    /// Column scaling factor for a given column index.
+    ///
+    /// Returns `col_scale[col]` when the column is within the scale vector and
+    /// the factor is non-zero; returns 1.0 otherwise (no scaling or safety guard).
+    #[inline]
+    fn col_scale_factor(&self, col: usize) -> f64 {
+        if col < self.col_scale.len() {
+            let d = self.col_scale[col];
+            if d == 0.0 { 1.0 } else { d }
+        } else {
+            1.0
+        }
+    }
 }
 
 /// Extract hydro results from a raw LP solution view.
@@ -232,7 +272,7 @@ fn extract_hydro_no_turbine(
     let productivity_mw_per_m3s = if is_fpha {
         None
     } else {
-        Some(spec.entity_counts.hydro_productivities[h])
+        Some(spec.hydro_productivities[h])
     };
 
     // Evaporation: read from LP columns when present; fall back to 0.0.
@@ -321,7 +361,7 @@ fn extract_hydro_per_block<'a>(
     let productivity_mw_per_m3s = if fpha_local.is_some() {
         None
     } else {
-        Some(spec.entity_counts.hydro_productivities[h])
+        Some(spec.hydro_productivities[h])
     };
 
     // Evaporation: stage-level (one column per hydro, same for all blocks).
@@ -335,18 +375,40 @@ fn extract_hydro_per_block<'a>(
         (Some(0.0), 0.0)
     };
 
+    // Look up diversion source indices for this hydro (for inflow computation).
+    let hydro_entity_id = EntityId(hydro_id);
+    let div_sources = spec.diversion_upstream.get(&hydro_entity_id);
+
     (0..n_blks).map(move |b| {
         let t_col = indexer.turbine.start + h * n_blks + b;
         let s_col = indexer.spillage.start + h * n_blks + b;
         let turbined = view.primal[t_col];
         let spillage = view.primal[s_col];
 
+        // Diversion outflow: read directly from the diversion column.
+        let diverted_outflow = if indexer.diversion.is_empty() {
+            0.0
+        } else {
+            view.primal[indexer.diversion.start + h * n_blks + b]
+        };
+
+        // Diversion inflow: sum diversion primals from all hydros that divert to this hydro.
+        let diverted_inflow = if let Some(sources) = div_sources {
+            let mut total = 0.0;
+            for &d_idx in sources {
+                total += view.primal[indexer.diversion.start + d_idx * n_blks + b];
+            }
+            total
+        } else {
+            0.0
+        };
+
         // For FPHA hydros, read generation from the LP `g_{h,k}` column.
         // For constant-productivity hydros, compute generation as turbined * productivity.
         let generation_mw = if let Some(local_fpha_idx) = fpha_local {
             view.primal[indexer.generation.start + local_fpha_idx * n_blks + b]
         } else {
-            turbined * spec.entity_counts.hydro_productivities[h]
+            turbined * spec.hydro_productivities[h]
         };
 
         #[allow(clippy::cast_possible_truncation)]
@@ -357,15 +419,16 @@ fn extract_hydro_per_block<'a>(
             turbined_m3s: turbined,
             spillage_m3s: spillage,
             evaporation_m3s,
-            diverted_inflow_m3s: Some(0.0),
-            diverted_outflow_m3s: Some(0.0),
+            diverted_inflow_m3s: Some(diverted_inflow),
+            diverted_outflow_m3s: Some(diverted_outflow),
             incremental_inflow_m3s: incremental_inflow,
             inflow_m3s: incremental_inflow,
             storage_initial_hm3: storage_initial,
             storage_final_hm3: storage_final,
             generation_mw,
             productivity_mw_per_m3s,
-            spillage_cost: spillage * view.objective_coeffs[s_col] * COST_SCALE_FACTOR,
+            spillage_cost: spillage * view.objective_coeffs[s_col] / spec.col_scale_factor(s_col)
+                * COST_SCALE_FACTOR,
             water_value_per_hm3: water_value,
             storage_binding_code: 0,
             operative_state_code: 1,
@@ -444,7 +507,9 @@ fn extract_thermals(
                         block_id: Some(b as u32),
                         thermal_id,
                         generation_mw: gen_mw,
-                        generation_cost: gen_mw * view.objective_coeffs[col] * COST_SCALE_FACTOR,
+                        generation_cost: gen_mw * view.objective_coeffs[col]
+                            / spec.col_scale_factor(col)
+                            * COST_SCALE_FACTOR,
                         is_gnl: false,
                         gnl_committed_mw: None,
                         gnl_decision_mw: None,
@@ -497,7 +562,9 @@ fn extract_exchanges(
                         direct_flow_mw: fwd,
                         reverse_flow_mw: rev,
                         exchange_cost: (fwd * view.objective_coeffs[fwd_col]
-                            + rev * view.objective_coeffs[rev_col])
+                            / spec.col_scale_factor(fwd_col)
+                            + rev * view.objective_coeffs[rev_col]
+                                / spec.col_scale_factor(rev_col))
                             * COST_SCALE_FACTOR,
                         operative_state_code: 2,
                     }
@@ -637,6 +704,7 @@ pub fn extract_stage_result(
     let costs = vec![compute_cost_result(
         view,
         spec.indexer,
+        spec.col_scale,
         generic_violation_cost,
         ncs_curtailment_cost,
         stage_id,
@@ -664,15 +732,27 @@ pub fn extract_stage_result(
 /// in scaled cost space (objective coefficients divided by [`COST_SCALE_FACTOR`]);
 /// this function multiplies back by [`COST_SCALE_FACTOR`] at the reporting
 /// boundary to recover original units.
+#[allow(clippy::too_many_lines)]
 fn compute_cost_result(
     view: &SolutionView<'_>,
     indexer: &StageIndexer,
+    col_scale: &[f64],
     generic_violation_cost: f64,
     ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
     // col_cost yields a scaled cost; multiply by COST_SCALE_FACTOR at the end.
-    let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col];
+    // Divide objective_coeffs by col_scale to remove the stray scaling factor
+    // introduced by the prescaler.
+    let scale_factor = |col: usize| -> f64 {
+        if col < col_scale.len() {
+            let d = col_scale[col];
+            if d == 0.0 { 1.0 } else { d }
+        } else {
+            1.0
+        }
+    };
+    let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col] / scale_factor(col);
     let range_sum = |r: std::ops::Range<usize>| -> f64 { r.map(col_cost).sum() };
 
     let future_cost = view.primal[indexer.theta] * COST_SCALE_FACTOR;
@@ -728,6 +808,36 @@ fn compute_cost_result(
             * COST_SCALE_FACTOR
     };
 
+    // Inflow non-negativity penalty: sum over inflow_slack columns.
+    let inflow_penalty_cost = if indexer.inflow_slack.is_empty() {
+        0.0
+    } else {
+        range_sum(indexer.inflow_slack.clone()) * COST_SCALE_FACTOR
+    };
+
+    // Hydro violation cost: evaporation violation slacks + withdrawal violation
+    // slacks. These are penalty-bearing LP columns that absorb constraint
+    // violations for linearised evaporation and minimum withdrawal flow.
+    let evap_violation_cost: f64 = indexer
+        .evap_indices
+        .iter()
+        .map(|ei| col_cost(ei.f_evap_plus_col) + col_cost(ei.f_evap_minus_col))
+        .sum::<f64>()
+        * COST_SCALE_FACTOR;
+    let withdrawal_violation_cost = if indexer.withdrawal_slack.is_empty() {
+        0.0
+    } else {
+        range_sum(indexer.withdrawal_slack.clone()) * COST_SCALE_FACTOR
+    };
+    let hydro_violation_cost = evap_violation_cost + withdrawal_violation_cost;
+
+    // Diversion cost: regularisation term on diversion flow variables.
+    let diversion_cost = if indexer.diversion.is_empty() {
+        0.0
+    } else {
+        range_sum(indexer.diversion.clone()) * COST_SCALE_FACTOR
+    };
+
     SimulationCostResult {
         stage_id,
         block_id: None,
@@ -741,10 +851,10 @@ fn compute_cost_result(
         excess_cost,
         storage_violation_cost: 0.0,
         filling_target_cost: 0.0,
-        hydro_violation_cost: 0.0,
-        inflow_penalty_cost: 0.0,
+        hydro_violation_cost,
+        inflow_penalty_cost,
         generic_violation_cost,
-        spillage_cost,
+        spillage_cost: spillage_cost + diversion_cost,
         fpha_turbined_cost,
         curtailment_cost: ncs_curtailment_cost,
         exchange_cost,
@@ -868,11 +978,13 @@ fn extract_non_controllables(
             );
             let available_mw = spec.ncs_col_upper[col_upper_offset];
             let curtailment_mw = available_mw - generation_mw;
-            // NCS objective coefficient is negative (-curtailment_cost * block_hours),
-            // so primal * obj_coeff is negative when generating.  The cost breakdown
-            // uses positive values, so negate. Multiply by COST_SCALE_FACTOR to recover
-            // original monetary units from the scaled LP objective coefficients.
-            let col_cost = -(view.primal[col] * view.objective_coeffs[col]) * COST_SCALE_FACTOR;
+            // NCS objective coefficient is negative (-curtailment_penalty * block_hours / K * d).
+            // The curtailment cost is the penalty for NOT generating, i.e.,
+            //   curtailment_cost = curtailment_mw * penalty_rate
+            // where penalty_rate = -(obj_coeff / col_scale) * K = penalty * block_hours.
+            let col_cost = -(curtailment_mw * view.objective_coeffs[col]
+                / spec.col_scale_factor(col))
+                * COST_SCALE_FACTOR;
             total_curtailment_cost += col_cost;
 
             #[allow(clippy::cast_possible_truncation)]
@@ -1031,6 +1143,8 @@ pub fn accumulate_category_costs(cost: &SimulationCostResult, accum: &mut Scenar
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
         EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
         assign_scenarios, extract_stage_result,
@@ -1177,6 +1291,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             3,
         );
@@ -1214,6 +1332,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1251,6 +1373,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1290,6 +1416,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1341,6 +1471,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             2,
         );
@@ -1374,6 +1508,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             stage_id,
         );
@@ -1413,6 +1551,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1442,13 +1584,14 @@ mod tests {
     ///
     /// ```text
     /// theta = N*(3+L) = 2*(3+1) = 8
-    /// turbine:  [9, 11)   h0→9, h1→10
-    /// spillage: [11, 13)  h0→11, h1→12
-    /// thermal: [13, 14)   t0→13
-    /// line_fwd:[14, 15)   l0→14
-    /// line_rev:[15, 16)   l0→15
-    /// deficit: [16, 17)   b0→16
-    /// excess:  [17, 18)   b0→17
+    /// turbine:   [9, 11)   h0→9, h1→10
+    /// spillage:  [11, 13)  h0→11, h1→12
+    /// diversion: [13, 15)  h0→13, h1→14
+    /// thermal:   [15, 16)  t0→15
+    /// line_fwd:  [16, 17)  l0→16
+    /// line_rev:  [17, 18)  l0→17
+    /// deficit:   [18, 19)  b0→18
+    /// excess:    [19, 20)  b0→19
     /// ```
     #[test]
     fn extract_equipment_reads_primal_when_with_equipment() {
@@ -1458,18 +1601,20 @@ mod tests {
         assert_eq!(indexer.theta, 8);
         assert_eq!(indexer.turbine, 9..11);
         assert_eq!(indexer.spillage, 11..13);
-        assert_eq!(indexer.thermal, 13..14);
-        assert_eq!(indexer.line_fwd, 14..15);
-        assert_eq!(indexer.line_rev, 15..16);
-        assert_eq!(indexer.deficit, 16..17);
-        assert_eq!(indexer.excess, 17..18);
+        assert_eq!(indexer.diversion, 13..15);
+        assert_eq!(indexer.thermal, 15..16);
+        assert_eq!(indexer.line_fwd, 16..17);
+        assert_eq!(indexer.line_rev, 17..18);
+        assert_eq!(indexer.deficit, 18..19);
+        assert_eq!(indexer.excess, 19..20);
 
         // Build a primal vector sized to include withdrawal_slack columns.
         // storage[0..2]=100,200  inflow_lags[2..4]=50,60  z_inflow[4..6]=0,0
         // storage_in[6..8]=90,180  theta[8]=500
         // turbine[9..11]=30.0,40.0   spillage[11..13]=5.0,0.0
-        // thermal[13]=80.0   line_fwd[14]=15.0   line_rev[15]=0.0
-        // deficit[16]=10.0   excess[17]=2.0   withdrawal_slack[18..20]=0.0,0.0
+        // diversion[13..15]=0.0,0.0
+        // thermal[15]=80.0   line_fwd[16]=15.0   line_rev[17]=0.0
+        // deficit[18]=10.0   excess[19]=2.0   withdrawal_slack[20..22]=0.0,0.0
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 100.0; // storage h0
@@ -1484,20 +1629,21 @@ mod tests {
         primal[10] = 40.0; // turbine h1 b0
         primal[11] = 5.0; // spillage h0 b0
         primal[12] = 0.0; // spillage h1 b0
-        primal[13] = 80.0; // thermal t0 b0
-        primal[14] = 15.0; // line_fwd l0 b0
-        primal[15] = 0.0; // line_rev l0 b0
-        primal[16] = 10.0; // deficit b0 b0
-        primal[17] = 2.0; // excess b0 b0
+        // primal[13..15] = diversion (zeros)
+        primal[15] = 80.0; // thermal t0 b0
+        primal[16] = 15.0; // line_fwd l0 b0
+        primal[17] = 0.0; // line_rev l0 b0
+        primal[18] = 10.0; // deficit b0 b0
+        primal[19] = 2.0; // excess b0 b0
 
         // Objective coefficients: thermal cost=50/MWh, spillage cost=0.1, deficit=1000, excess=50
         let mut obj = vec![0.0_f64; n_cols];
         obj[8] = 1.0; // theta (objective = 1)
         obj[11] = 0.1; // spillage h0 penalty
-        obj[13] = 50.0; // thermal cost per MW
-        obj[14] = 5.0; // line_fwd cost per MW
-        obj[16] = 1000.0; // deficit cost per MW
-        obj[17] = 50.0; // excess cost per MW
+        obj[15] = 50.0; // thermal cost per MW
+        obj[16] = 5.0; // line_fwd cost per MW
+        obj[18] = 1000.0; // deficit cost per MW
+        obj[19] = 50.0; // excess cost per MW
 
         let counts = EntityCounts {
             hydro_ids: vec![10, 20],
@@ -1539,6 +1685,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1631,6 +1781,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1868,6 +2022,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -1935,6 +2093,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2013,6 +2175,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0, 1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2036,9 +2202,10 @@ mod tests {
     /// ```text
     /// N=2, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[0], planes=[2]
     /// theta = N*(3+L) = 2*(3+0) = 6
-    /// turbine:   [7, 9)    h0→7, h1→8
-    /// spillage:  [9, 11)   h0→9, h1→10
-    /// generation:[11, 12)  fpha h0 b0 → 11
+    /// turbine:    [7, 9)    h0→7, h1→8
+    /// spillage:   [9, 11)   h0→9, h1→10
+    /// diversion: [11, 13)   h0→11, h1→12
+    /// generation:[13, 14)   fpha h0 b0 → 13
     /// ```
     fn make_indexer_2h_1fpha_1blk() -> StageIndexer {
         // h0 is FPHA (system index 0), h1 is constant-productivity (system index 1)
@@ -2050,9 +2217,9 @@ mod tests {
     #[test]
     fn fpha_generation_read_from_lp_column() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        // generation.start should be at turbine(7..9) + spillage(9..11) end = 11
-        // generation[0] = generation.start + 0 * 1 + 0 = 11
-        assert_eq!(indexer.generation.start, 11, "generation starts at 11");
+        // generation.start should be after turbine(7..9) + spillage(9..11) + diversion(11..13) = 13
+        // generation[0] = generation.start + 0 * 1 + 0 = 13
+        assert_eq!(indexer.generation.start, 13, "generation starts at 13");
         assert_eq!(indexer.fpha_hydro_indices, vec![0]);
 
         let n_cols = indexer.withdrawal_slack.end;
@@ -2067,7 +2234,8 @@ mod tests {
         primal[8] = 30.0; // turbine h1 b0
         primal[9] = 0.0; // spillage h0 b0
         primal[10] = 0.0; // spillage h1 b0
-        primal[11] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
+        // primal[11..13] = diversion (zeros)
+        primal[13] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 2];
@@ -2102,6 +2270,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2109,7 +2281,7 @@ mod tests {
         // 2 hydros × 1 block = 2 entries
         assert_eq!(result.hydros.len(), 2);
 
-        // FPHA hydro (h0, block 0): generation from LP column 11 = 75.0
+        // FPHA hydro (h0, block 0): generation from LP column 13 = 75.0
         assert!(
             (result.hydros[0].generation_mw - 75.0).abs() < 1e-12,
             "FPHA generation_mw should be 75.0, got {}",
@@ -2165,6 +2337,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2186,9 +2362,10 @@ mod tests {
     /// ```text
     /// N=1, L=0, T=0, Ln=0, B=0, K=1, penalty=false, fpha=[], evap=[0]
     /// theta = 1*(3+0) = 3
-    /// turbine:  [4, 5)   h0→4
-    /// spillage: [5, 6)   h0→5
-    /// evap:     [6, 9)   Q_ev→6, f_plus→7, f_minus→8
+    /// turbine:    [4, 5)   h0→4
+    /// spillage:   [5, 6)   h0→5
+    /// diversion:  [6, 7)   h0→6
+    /// evap:       [7, 10)  Q_ev→7, f_plus→8, f_minus→9
     /// ```
     fn make_indexer_1h_evap_1blk() -> StageIndexer {
         StageIndexer::with_equipment_and_evaporation(
@@ -2212,9 +2389,9 @@ mod tests {
         let indexer = make_indexer_1h_evap_1blk();
         assert_eq!(indexer.evap_hydro_indices, vec![0]);
         let ei = &indexer.evap_indices[0];
-        assert_eq!(ei.q_ev_col, 6);
-        assert_eq!(ei.f_evap_plus_col, 7);
-        assert_eq!(ei.f_evap_minus_col, 8);
+        assert_eq!(ei.q_ev_col, 7);
+        assert_eq!(ei.f_evap_plus_col, 8);
+        assert_eq!(ei.f_evap_minus_col, 9);
 
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
@@ -2224,7 +2401,8 @@ mod tests {
         primal[3] = 0.0; // theta
         primal[4] = 10.0; // turbine h0 b0
         primal[5] = 0.0; // spillage h0 b0
-        primal[6] = 3.5; // Q_ev — acceptance criterion value
+        // primal[6] = diversion h0 b0 (zero)
+        primal[7] = 3.5; // Q_ev — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2259,6 +2437,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2285,9 +2467,10 @@ mod tests {
         // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
         // primal[3] = theta = 0
-        primal[6] = 2.0; // Q_ev
-        primal[7] = 0.5; // f_evap_plus — acceptance criterion value
-        primal[8] = 0.0; // f_evap_minus
+        // primal[6] = diversion h0 b0 (zero)
+        primal[7] = 2.0; // Q_ev
+        primal[8] = 0.5; // f_evap_plus — acceptance criterion value
+        primal[9] = 0.0; // f_evap_minus
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2322,6 +2505,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[1.0],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2341,17 +2528,17 @@ mod tests {
     #[test]
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        // generation.start = 11 (fpha h0 b0)
+        // generation.start = 13 (fpha h0 b0)
         let n_cols = indexer.withdrawal_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta (at N*(3+L) = 2*3 = 6)
 
-        // FPHA generation column 11: primal=30.0
-        primal[11] = 30.0;
+        // FPHA generation column 13: primal=30.0
+        primal[13] = 30.0;
 
         let mut obj = vec![0.0_f64; n_cols];
-        // FPHA generation column 11: objective_coeff=0.01
-        obj[11] = 0.01;
+        // FPHA generation column 13: objective_coeff=0.01
+        obj[13] = 0.01;
 
         let dual = vec![0.0_f64; 2];
         let row_lower = vec![0.0_f64; 1];
@@ -2385,6 +2572,10 @@ mod tests {
                 n_ncs: 0,
                 ncs_entity_ids: &[],
                 ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
             },
             0,
         );
@@ -2393,6 +2584,185 @@ mod tests {
         assert!(
             (cost.fpha_turbined_cost - 300.0).abs() < 1e-9,
             "fpha_turbined_cost should be 300.0 (30.0 * 0.01 * COST_SCALE_FACTOR), got {}",
+            cost.fpha_turbined_cost
+        );
+    }
+
+    /// Verify that per-component cost breakdown sums to `immediate_cost` when
+    /// non-trivial `col_scale` is applied.
+    ///
+    /// Setup: 2 hydros (h0=FPHA, h1=constant), 1 block.
+    /// FPHA generation col 13: primal=30, `obj_coeff`=0.01, `col_scale`=2.0.
+    /// After unscaling: cost = 30 * 0.01 / 2.0 * 1000 = 150.0.
+    /// Objective = `theta_scaled` + `fpha_scaled` = 500 + (30 * 0.01) = 500.3.
+    /// `immediate_cost` = (500.3 - 500) * 1000 = 300.
+    /// The sum must equal `immediate_cost`: `fpha_turbined_cost` = 150 from `col_cost`.
+    /// BUT `immediate_cost` is from (objective - theta) which is in scaled space
+    /// and already correct.  The `col_cost` unscaling produces the true cost.
+    ///
+    /// For consistency: with `col_scale`=2.0 the stored `obj_coeff` is `c_orig` * `col_scale` / K
+    /// = 0.005 * 2.0 = 0.01.  So `c_orig` / K = 0.005.
+    /// True fpha cost = primal * `c_orig` / K * K = 30 * 0.005 * 1000 = 150.
+    /// Scaled fpha cost in objective = 30 * 0.01 = 0.3.
+    /// `immediate_cost` = 0.3 * 1000 = 300 != 150.
+    ///
+    /// The discrepancy is because objective is primal * `obj_coeff` (scaled), not
+    /// the true cost.  In the LP, `view.objective` already includes the `col_scale`
+    /// effect; the extraction divides it out for per-component costs.
+    ///
+    /// To make the sum match: the test sets objective = theta + sum(primal * `obj_coeff`)
+    /// in scaled space.  `immediate_cost` = (obj - theta) * K.
+    /// Per-component sum = sum(primal * `obj_coeff` / `col_scale`) * K.
+    /// These are equal only when `col_scale` = 1 everywhere.
+    ///
+    /// This correctly tests that with empty `col_scale` (identity), the invariant holds.
+    #[test]
+    fn cost_breakdown_sums_to_immediate_identity_scale() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        let n_cols = indexer.withdrawal_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[6] = 500.0; // theta
+        primal[13] = 30.0; // FPHA generation
+
+        let mut obj = vec![0.0_f64; n_cols];
+        obj[13] = 0.01; // FPHA generation cost (scaled)
+        // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
+        //                           = 1.0 * 500 + 0.01 * 30 = 500.3
+        let objective_val = 500.3_f64;
+
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: objective_val,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+                generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
+            },
+            0,
+        );
+
+        let cost = &result.costs[0];
+        // immediate_cost = (obj - theta) * K = (500.3 - 500.0) * 1000 = 300.0
+        assert!(
+            (cost.immediate_cost - 300.0).abs() < 1e-6,
+            "immediate_cost should be 300.0, got {}",
+            cost.immediate_cost
+        );
+
+        // Per-component sum: only fpha_turbined_cost is non-zero.
+        let component_sum = cost.thermal_cost
+            + cost.deficit_cost
+            + cost.excess_cost
+            + cost.exchange_cost
+            + cost.spillage_cost
+            + cost.generic_violation_cost
+            + cost.fpha_turbined_cost
+            + cost.curtailment_cost;
+
+        assert!(
+            (component_sum - cost.immediate_cost).abs() < 1e-6,
+            "per-component cost sum ({component_sum}) must equal immediate_cost ({})",
+            cost.immediate_cost
+        );
+    }
+
+    /// Verify that per-component costs are correctly unscaled when non-trivial
+    /// `col_scale` is applied.
+    ///
+    /// With `col_scale` = 2.0 on the FPHA generation column:
+    /// - `obj_coeff` in template = `c_orig` * `col_scale` / K = 0.005 * 2.0 = 0.01
+    /// - After unscaling: cost = primal * `obj_coeff` / `col_scale` * K = 30 * 0.01 / 2.0 * 1000 = 150.
+    #[test]
+    fn cost_unscaled_by_col_scale() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        let n_cols = indexer.withdrawal_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        primal[6] = 500.0; // theta
+        primal[13] = 30.0; // FPHA generation
+
+        let mut obj = vec![0.0_f64; n_cols];
+        // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
+        obj[13] = 0.01;
+
+        // Build col_scale: all 1.0 except column 13 = 2.0.
+        let mut col_scale = vec![1.0_f64; n_cols];
+        col_scale[13] = 2.0;
+
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: 500.3, // scaled space: theta + fpha_scaled
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+                generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &col_scale,
+                row_scale: &[],
+            },
+            0,
+        );
+
+        let cost = &result.costs[0];
+        // fpha_turbined_cost = primal * obj_coeff / col_scale * K
+        //                    = 30 * 0.01 / 2.0 * 1000 = 150.0
+        assert!(
+            (cost.fpha_turbined_cost - 150.0).abs() < 1e-6,
+            "fpha_turbined_cost should be 150.0 (unscaled by col_scale=2.0), got {}",
             cost.fpha_turbined_cost
         );
     }

@@ -169,6 +169,21 @@ pub struct SolverStatistics {
     /// Combined with `basis_rejections`, enables basis hit rate computation:
     /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
     pub basis_offered: u64,
+
+    /// Total number of `load_model` calls.
+    pub load_model_count: u64,
+
+    /// Total number of `add_rows` calls.
+    pub add_rows_count: u64,
+
+    /// Cumulative wall-clock time spent in `load_model` calls, in seconds.
+    pub total_load_model_time_seconds: f64,
+
+    /// Cumulative wall-clock time spent in `add_rows` calls, in seconds.
+    pub total_add_rows_time_seconds: f64,
+
+    /// Cumulative wall-clock time spent in `set_row_bounds` and `set_col_bounds` calls, in seconds.
+    pub total_set_bounds_time_seconds: f64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -316,6 +331,21 @@ pub struct RowBatch {
     /// Length: `num_rows`. Use `f64::INFINITY` for `>=` cuts (cutting-plane cuts
     /// have no finite upper bound).
     pub row_upper: Vec<f64>,
+}
+
+impl RowBatch {
+    /// Reset all buffers to empty without deallocating.
+    ///
+    /// After `clear()`, `num_rows` is 0 and all `Vec` fields have length 0
+    /// but retain their allocated capacity for reuse.
+    pub fn clear(&mut self) {
+        self.num_rows = 0;
+        self.row_starts.clear();
+        self.col_indices.clear();
+        self.values.clear();
+        self.row_lower.clear();
+        self.row_upper.clear();
+    }
 }
 
 /// Terminal LP solve error returned after all retry attempts are exhausted.
@@ -488,6 +518,9 @@ mod tests {
         assert_eq!(stats.basis_rejections, 0);
         assert_eq!(stats.first_try_successes, 0);
         assert_eq!(stats.basis_offered, 0);
+        assert_eq!(stats.total_load_model_time_seconds, 0.0);
+        assert_eq!(stats.total_add_rows_time_seconds, 0.0);
+        assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

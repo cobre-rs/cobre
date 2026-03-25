@@ -233,14 +233,20 @@ struct SuccessorSpec<'a> {
     basis_store: &'a BasisStore,
     /// Minimum dual multiplier for a cut to count as binding.
     cut_activity_tolerance: f64,
+    /// Populated count of the successor's cut pool. Used to size the
+    /// `slot_increments` Vec for O(1) indexed binding tracking.
+    successor_populated_count: usize,
 }
 
 /// Per-trial-point mutable accumulators reused across openings.
 struct TrialAccumulators {
     /// Collected per-opening outcomes (intercept + coefficients + objective).
     outcomes: Vec<BackwardOutcome>,
-    /// Binding cut slot increments keyed by slot index.
-    slot_increments: std::collections::HashMap<usize, u64>,
+    /// Binding count per cut pool slot. Indexed by slot index, pre-allocated
+    /// to `pool.populated_count` and zeroed per trial point via `fill(0)`.
+    /// Replaces the previous `HashMap<usize, u64>` to eliminate hashing
+    /// overhead and per-stage allocation.
+    slot_increments: Vec<u64>,
 }
 
 /// Apply noise and state patches for one opening of the backward pass.
@@ -441,7 +447,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 [succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor];
             for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
                 if cut_duals[cut_idx] > succ.cut_activity_tolerance {
-                    *accum.slot_increments.entry(slot).or_insert(0) += 1;
+                    accum.slot_increments[slot] += 1;
                 }
             }
         }
@@ -463,7 +469,9 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let binding_increments: Vec<(usize, u64)> = accum
         .slot_increments
         .iter()
-        .map(|(&s, &c)| (s, c))
+        .enumerate()
+        .filter(|&(_, c)| *c > 0)
+        .map(|(s, c)| (s, *c))
         .collect();
     Ok(StagedCut {
         trial_point_idx: m,
@@ -506,12 +514,12 @@ fn process_stage_backward<S: SolverInterface + Send>(
             let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
             let mut accum = TrialAccumulators {
                 outcomes: Vec::with_capacity(n_openings),
-                slot_increments: std::collections::HashMap::new(),
+                slot_increments: vec![0u64; succ.successor_populated_count],
             };
 
             for m in start_m..end_m {
                 accum.outcomes.clear();
-                accum.slot_increments.clear();
+                accum.slot_increments.fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
                     ctx,
@@ -655,6 +663,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             successor_active_slots: &successor_active_slots,
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,
+            successor_populated_count: fcf.pools[successor].populated_count,
         };
         let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);

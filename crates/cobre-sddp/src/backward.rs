@@ -105,6 +105,19 @@ pub struct BackwardResult {
     /// where cuts are added. Entries are in reverse stage order (matching
     /// the backward iteration direction).
     pub stage_stats: Vec<(usize, SolverStatsDelta)>,
+
+    /// Wall-clock time for state exchange (`allgatherv`) accumulated across
+    /// all stages, in milliseconds.
+    pub state_exchange_time_ms: u64,
+
+    /// Wall-clock time for `build_cut_row_batch_into` accumulated across
+    /// all stages, in milliseconds.
+    pub cut_batch_build_time_ms: u64,
+
+    /// Estimated rayon barrier + scheduling overhead accumulated across all
+    /// stages, in milliseconds. Computed per-stage as
+    /// `process_stage_wall_ms - (solve_time_ms / n_workers)`.
+    pub rayon_overhead_time_ms: u64,
 }
 
 /// Per-thread staging buffer for one aggregated cut produced at a single trial
@@ -172,6 +185,14 @@ pub struct BackwardPassSpec<'a> {
     /// Per-stage risk measures (length = `num_stages`). `risk_measures[t]`
     /// is applied when aggregating cut outcomes at stage `t`.
     pub risk_measures: &'a [RiskMeasure],
+
+    /// Minimum dual multiplier for a cut to count as binding (BUG-2 fix).
+    ///
+    /// Cuts with duals above this threshold are marked as binding during the
+    /// backward pass activity tracking. A value of `0.0` preserves the
+    /// original strict-positive behavior; a value like `1e-8` filters out
+    /// numerical noise from near-zero positive duals.
+    pub cut_activity_tolerance: f64,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -198,6 +219,8 @@ struct SuccessorSpec<'a> {
     successor_active_slots: &'a [usize],
     /// Basis store for warm-starting each worker's first opening solve.
     basis_store: &'a BasisStore,
+    /// Minimum dual multiplier for a cut to count as binding.
+    cut_activity_tolerance: f64,
 }
 
 /// Per-trial-point mutable accumulators reused across openings.
@@ -391,7 +414,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             let cut_duals = &view.dual
                 [succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor];
             for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
-                if cut_duals[cut_idx] > 0.0 {
+                if cut_duals[cut_idx] > succ.cut_activity_tolerance {
                     *accum.slot_increments.entry(slot).or_insert(0) += 1;
                 }
             }
@@ -549,6 +572,11 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         .sum();
     let mut cuts_generated: usize = 0;
     let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
+    let mut state_exchange_ms: u64 = 0;
+    let mut cut_batch_build_ms: u64 = 0;
+    let mut rayon_overhead_ms: u64 = 0;
+    #[allow(clippy::cast_precision_loss)]
+    let n_workers = workspaces.len() as f64;
     let tree_view = stochastic.tree_view();
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
@@ -557,7 +585,12 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // state for stage `t` (the state entering stage `t+1`). When records
         // is empty the caller has pre-populated the exchange buffers (test path).
         if !spec.records.is_empty() {
+            let exch_start = Instant::now();
             spec.exchange.exchange(spec.records, t, num_stages, comm)?;
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                state_exchange_ms += exch_start.elapsed().as_millis() as u64;
+            }
         }
 
         let successor = t + 1;
@@ -572,6 +605,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_precision_loss)]
         let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
 
+        let batch_start = Instant::now();
         build_cut_row_batch_into(
             &mut cut_batches[successor],
             fcf,
@@ -579,6 +613,10 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             indexer,
             &ctx.templates[successor].col_scale,
         );
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            cut_batch_build_ms += batch_start.elapsed().as_millis() as u64;
+        }
         let num_cuts_at_successor = cut_batches[successor].num_rows;
         let template_num_rows = ctx.templates[successor].num_rows;
         let successor_active_slots: Vec<usize> = fcf
@@ -596,7 +634,9 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             template_num_rows,
             successor_active_slots: &successor_active_slots,
             basis_store,
+            cut_activity_tolerance: spec.cut_activity_tolerance,
         };
+        let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
 
         let mut all_staged: Vec<StagedCut> = Vec::with_capacity(spec.local_work);
@@ -634,6 +674,16 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             aggregate_solver_statistics(&pool_stats)
         };
         let stage_delta = SolverStatsDelta::from_snapshots(&stage_stats_before, &stage_stats_after);
+
+        // Rayon overhead: wall-clock of the parallel region minus the average
+        // per-worker solve time. This is an upper bound on barrier + scheduling.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        {
+            let process_wall_ms = process_start.elapsed().as_millis() as u64;
+            let avg_solve_ms = (stage_delta.solve_time_ms / n_workers) as u64;
+            rayon_overhead_ms += process_wall_ms.saturating_sub(avg_solve_ms);
+        }
+
         stage_stats.push((successor, stage_delta));
     }
 
@@ -649,6 +699,9 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         elapsed_ms,
         lp_solves: solves_after - solves_before,
         stage_stats,
+        state_exchange_time_ms: state_exchange_ms,
+        cut_batch_build_time_ms: cut_batch_build_ms,
+        rayon_overhead_time_ms: rayon_overhead_ms,
     })
 }
 
@@ -1083,10 +1136,16 @@ mod tests {
             elapsed_ms: 42,
             lp_solves: 0,
             stage_stats: Vec::new(),
+            state_exchange_time_ms: 0,
+            cut_batch_build_time_ms: 0,
+            rayon_overhead_time_ms: 0,
         };
         assert_eq!(r.cuts_generated, 6);
         assert_eq!(r.elapsed_ms, 42);
         assert!(r.stage_stats.is_empty());
+        assert_eq!(r.state_exchange_time_ms, 0);
+        assert_eq!(r.cut_batch_build_time_ms, 0);
+        assert_eq!(r.rayon_overhead_time_ms, 0);
     }
 
     #[test]
@@ -1096,6 +1155,9 @@ mod tests {
             elapsed_ms: 100,
             lp_solves: 0,
             stage_stats: Vec::new(),
+            state_exchange_time_ms: 0,
+            cut_batch_build_time_ms: 0,
+            rayon_overhead_time_ms: 0,
         };
         let c = r.clone();
         assert_eq!(c.cuts_generated, 3);
@@ -1189,6 +1251,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1261,6 +1324,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1333,6 +1397,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1401,6 +1466,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1469,6 +1535,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1535,6 +1602,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         );
@@ -1645,6 +1713,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1733,6 +1802,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1826,6 +1896,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1906,6 +1977,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -1995,6 +2067,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2079,6 +2152,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2156,6 +2230,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2241,6 +2316,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         );
@@ -2352,6 +2428,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2403,6 +2480,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2722,6 +2800,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2846,6 +2925,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )
@@ -2975,6 +3055,7 @@ mod tests {
                 fwd_offset: 0,
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
             },
             &comm,
         )

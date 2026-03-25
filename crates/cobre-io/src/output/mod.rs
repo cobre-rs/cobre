@@ -132,6 +132,21 @@ pub struct IterationRecord {
     /// Maps to `io_write_ms` in `training/timing/iterations.parquet`.
     pub time_io_write_ms: u64,
 
+    /// Wall-clock time for state exchange (`allgatherv`) in the backward pass (ms).
+    ///
+    /// Maps to `state_exchange_ms` in `training/timing/iterations.parquet`.
+    pub time_state_exchange_ms: u64,
+
+    /// Wall-clock time for cut batch assembly in the backward pass (ms).
+    ///
+    /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
+    pub time_cut_batch_build_ms: u64,
+
+    /// Estimated rayon barrier + scheduling overhead in the backward pass (ms).
+    ///
+    /// Maps to `rayon_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_rayon_overhead_ms: u64,
+
     /// Residual wall-clock time not attributed to any specific phase (ms).
     ///
     /// Computed as `time_total_ms - sum(all other time_* fields)`.
@@ -467,6 +482,9 @@ mod tests {
             time_mpi_allreduce_ms: 0,
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             solve_time_ms: 0.0,
         }
@@ -606,6 +624,9 @@ mod tests {
             time_mpi_allreduce_ms: 3,
             time_mpi_broadcast_ms: 2,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 2),
             solve_time_ms: 0.0,
         };

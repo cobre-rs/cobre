@@ -551,6 +551,7 @@ fn train_fixture(
             mode: StoppingMode::Any,
         },
         None,
+        0.0,
         None,
         &comm,
         1,

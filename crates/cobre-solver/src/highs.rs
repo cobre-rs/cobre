@@ -1147,6 +1147,7 @@ impl SolverInterface for HighsSolver {
         // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
         // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
         // - We pass exactly `num_cols` col entries and `num_rows` row entries.
+        let basis_set_start = Instant::now();
         let set_status = unsafe {
             ffi::cobre_highs_set_basis(
                 self.handle,
@@ -1154,6 +1155,7 @@ impl SolverInterface for HighsSolver {
                 self.basis_row_i32.as_ptr(),
             )
         };
+        self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
 
         // Basis rejection tracking: fall back to cold-start and track for diagnostics.
         if set_status == ffi::HIGHS_STATUS_ERROR {

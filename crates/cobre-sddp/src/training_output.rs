@@ -47,6 +47,12 @@ struct PartialRecord {
     cut_selection_allgatherv_ms: u64,
     /// Cumulative LP solve wall-clock time for this iteration (ms).
     solve_time_ms: f64,
+    /// State exchange time from [`TrainingEvent::BackwardPassComplete`] (ms).
+    state_exchange_ms: u64,
+    /// Cut batch build time from [`TrainingEvent::BackwardPassComplete`] (ms).
+    cut_batch_build_ms: u64,
+    /// Rayon overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
+    rayon_overhead_ms: u64,
 }
 
 /// Accumulate per-iteration partial records from the event log.
@@ -108,10 +114,16 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
             TrainingEvent::BackwardPassComplete {
                 iteration,
                 cuts_generated,
+                state_exchange_time_ms,
+                cut_batch_build_time_ms,
+                rayon_overhead_time_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
                 record.cuts_added = *cuts_generated;
+                record.state_exchange_ms = *state_exchange_time_ms;
+                record.cut_batch_build_ms = *cut_batch_build_time_ms;
+                record.rayon_overhead_ms = *rayon_overhead_time_ms;
             }
 
             TrainingEvent::CutSyncComplete {
@@ -196,6 +208,9 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
         time_mpi_allreduce_ms: partial.forward_sync_ms,
         time_mpi_broadcast_ms: partial.cut_sync_ms,
         time_io_write_ms: 0,
+        time_state_exchange_ms: partial.state_exchange_ms,
+        time_cut_batch_build_ms: partial.cut_batch_build_ms,
+        time_rayon_overhead_ms: partial.rayon_overhead_ms,
         time_overhead_ms: overhead_ms,
         solve_time_ms: partial.solve_time_ms,
     }
@@ -534,6 +549,9 @@ mod tests {
                 cuts_generated: 12,
                 stages_processed: 3,
                 elapsed_ms: 80,
+                state_exchange_time_ms: 0,
+                cut_batch_build_time_ms: 0,
+                rayon_overhead_time_ms: 0,
             },
             TrainingEvent::CutSyncComplete {
                 iteration: 1,

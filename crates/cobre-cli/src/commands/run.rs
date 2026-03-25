@@ -306,6 +306,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         bcast_config.policy_path.clone(),
         bcast_config.inflow_method.clone(),
         cut_selection,
+        bcast_config.cut_activity_tolerance,
         hydro_models,
     )
     .map_err(CliError::from)?;
@@ -725,6 +726,7 @@ fn delta_to_stats_row(
         load_model_time_ms: delta.load_model_time_ms,
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
+        basis_set_time_ms: delta.basis_set_time_ms,
     }
 }
 

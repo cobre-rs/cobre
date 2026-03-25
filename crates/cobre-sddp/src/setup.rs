@@ -104,6 +104,8 @@ pub struct StudyParams {
     pub inflow_method: InflowNonNegativityMethod,
     /// Optional cut selection strategy (None means cut selection is disabled).
     pub cut_selection: Option<CutSelectionStrategy>,
+    /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
+    pub cut_activity_tolerance: f64,
 }
 
 impl StudyParams {
@@ -187,6 +189,12 @@ impl StudyParams {
         let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
             .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
 
+        let cut_activity_tolerance = config
+            .training
+            .cut_selection
+            .cut_activity_tolerance
+            .unwrap_or(0.0);
+
         Ok(Self {
             seed,
             forward_passes,
@@ -196,6 +204,7 @@ impl StudyParams {
             policy_path,
             inflow_method,
             cut_selection,
+            cut_activity_tolerance,
         })
     }
 }
@@ -250,6 +259,7 @@ pub struct StudySetup {
     policy_path: String,
     inflow_method: InflowNonNegativityMethod,
     cut_selection: Option<CutSelectionStrategy>,
+    cut_activity_tolerance: f64,
     stopping_rule_set: StoppingRuleSet,
 }
 
@@ -286,6 +296,7 @@ impl StudySetup {
             params.policy_path,
             params.inflow_method,
             params.cut_selection,
+            params.cut_activity_tolerance,
             hydro_models,
         )
     }
@@ -328,6 +339,7 @@ impl StudySetup {
         policy_path: String,
         inflow_method: InflowNonNegativityMethod,
         cut_selection: Option<CutSelectionStrategy>,
+        cut_activity_tolerance: f64,
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
@@ -575,6 +587,7 @@ impl StudySetup {
             policy_path,
             inflow_method,
             cut_selection,
+            cut_activity_tolerance,
             stopping_rule_set,
         })
     }
@@ -740,6 +753,12 @@ impl StudySetup {
         self.cut_selection.as_ref()
     }
 
+    /// Minimum dual multiplier for a cut to count as binding.
+    #[must_use]
+    pub fn cut_activity_tolerance(&self) -> f64 {
+        self.cut_activity_tolerance
+    }
+
     /// Return a reference to the stopping rule set.
     #[must_use]
     pub fn stopping_rule_set(&self) -> &StoppingRuleSet {
@@ -841,6 +860,7 @@ impl StudySetup {
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             self.cut_selection.as_ref(),
+            self.cut_activity_tolerance,
             shutdown_flag,
             comm,
             n_threads,

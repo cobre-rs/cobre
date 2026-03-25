@@ -215,6 +215,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
     let mut mpi_allreduce_ms = Int64Builder::with_capacity(n);
     let mut mpi_broadcast_ms = Int64Builder::with_capacity(n);
     let mut io_write_ms = Int64Builder::with_capacity(n);
+    let mut state_exchange_ms = Int64Builder::with_capacity(n);
+    let mut cut_batch_build_ms = Int64Builder::with_capacity(n);
+    let mut rayon_overhead_ms = Int64Builder::with_capacity(n);
     let mut overhead_ms = Int64Builder::with_capacity(n);
 
     for rec in records {
@@ -227,6 +230,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
         mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
         mpi_broadcast_ms.append_value(rec.time_mpi_broadcast_ms as i64);
         io_write_ms.append_value(rec.time_io_write_ms as i64);
+        state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
+        cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
+        rayon_overhead_ms.append_value(rec.time_rayon_overhead_ms as i64);
         overhead_ms.append_value(rec.time_overhead_ms as i64);
     }
 
@@ -242,6 +248,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
             Arc::new(mpi_allreduce_ms.finish()),
             Arc::new(mpi_broadcast_ms.finish()),
             Arc::new(io_write_ms.finish()),
+            Arc::new(state_exchange_ms.finish()),
+            Arc::new(cut_batch_build_ms.finish()),
+            Arc::new(rayon_overhead_ms.finish()),
             Arc::new(overhead_ms.finish()),
         ],
     )
@@ -319,6 +328,9 @@ mod tests {
             time_mpi_allreduce_ms: 0,
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
@@ -400,8 +412,8 @@ mod tests {
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            10,
-            "iteration_timing schema has 10 columns"
+            13,
+            "iteration_timing schema has 13 columns"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -596,7 +608,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 10);
+        assert_eq!(batch.num_columns(), 13);
     }
 
     #[test]

@@ -125,6 +125,15 @@ pub enum TrainingEvent {
         stages_processed: u32,
         /// Wall-clock time for the backward pass, in milliseconds.
         elapsed_ms: u64,
+        /// Wall-clock time for state exchange (`allgatherv`) across all stages,
+        /// in milliseconds.
+        state_exchange_time_ms: u64,
+        /// Wall-clock time for cut batch assembly (`build_cut_row_batch_into`)
+        /// across all stages, in milliseconds.
+        cut_batch_build_time_ms: u64,
+        /// Estimated rayon barrier + scheduling overhead across all stages,
+        /// in milliseconds.
+        rayon_overhead_time_ms: u64,
     },
 
     /// Step 4: Cut synchronization (allgatherv) completed.
@@ -320,6 +329,9 @@ mod tests {
                 cuts_generated: 48,
                 stages_processed: 12,
                 elapsed_ms: 87,
+                state_exchange_time_ms: 0,
+                cut_batch_build_time_ms: 0,
+                rayon_overhead_time_ms: 0,
             },
             TrainingEvent::CutSyncComplete {
                 iteration: 1,

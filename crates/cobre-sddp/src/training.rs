@@ -260,6 +260,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     cut_selection: Option<&CutSelectionStrategy>,
+    cut_activity_tolerance: f64,
     shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
     n_fwd_threads: usize,
@@ -473,6 +474,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             local_work: my_actual_fwd,
             fwd_offset: my_fwd_offset,
             risk_measures,
+            cut_activity_tolerance,
         };
 
         let backward_result = run_backward_pass(
@@ -517,8 +519,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 cuts_generated: backward_result.cuts_generated as u32,
                 stages_processed: num_stages.saturating_sub(1) as u32,
                 elapsed_ms: backward_elapsed_ms,
+                state_exchange_time_ms: backward_result.state_exchange_time_ms,
+                cut_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
+                rayon_overhead_time_ms: backward_result.rayon_overhead_time_ms,
             },
         );
+        let cut_sync_start = Instant::now();
         for stage in 0..num_stages.saturating_sub(1) {
             let owned_cuts = collect_local_cuts_for_stage(fcf, stage, iteration);
             let local_cuts: Vec<(u32, u32, u32, f64, &[f64])> = owned_cuts
@@ -529,6 +535,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 .collect();
             cut_sync_bufs.sync_cuts(stage, &local_cuts, fcf, comm)?;
         }
+        #[allow(clippy::cast_possible_truncation)]
+        let cut_sync_ms = cut_sync_start.elapsed().as_millis() as u64;
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
@@ -538,7 +546,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 cuts_distributed: backward_result.cuts_generated as u32,
                 cuts_active: fcf.total_active_cuts() as u32,
                 cuts_removed: 0,
-                sync_time_ms: 0,
+                sync_time_ms: cut_sync_ms,
             },
         );
 
@@ -1208,6 +1216,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1278,6 +1287,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1357,6 +1367,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1481,6 +1492,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1550,6 +1562,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1617,6 +1630,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(1),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1691,6 +1705,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1778,6 +1793,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             Some(&strategy),
+            0.0,
             None,
             &comm,
             1,
@@ -1884,6 +1900,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             Some(&strategy),
+            0.0,
             None,
             &comm,
             1,
@@ -1979,6 +1996,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(3),
             None,
+            0.0,
             None,
             &comm,
             1,

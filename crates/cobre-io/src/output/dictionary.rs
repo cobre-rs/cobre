@@ -410,6 +410,9 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "mpi_allreduce_ms"
         | "mpi_broadcast_ms"
         | "io_write_ms"
+        | "state_exchange_ms"
+        | "cut_batch_build_ms"
+        | "rayon_overhead_ms"
         | "overhead_ms"
         | "forward_time_ms"
         | "backward_time_ms"
@@ -583,6 +586,9 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("iteration_timing", "mpi_allreduce_ms") => "MPI allreduce time",
         ("iteration_timing", "mpi_broadcast_ms") => "MPI broadcast time",
         ("iteration_timing", "io_write_ms") => "I/O write time",
+        ("iteration_timing", "state_exchange_ms") => "State exchange allgatherv time",
+        ("iteration_timing", "cut_batch_build_ms") => "Cut batch assembly time",
+        ("iteration_timing", "rayon_overhead_ms") => "Rayon barrier/scheduling overhead",
         ("iteration_timing", "overhead_ms") => "Overhead time",
         // ── rank_timing ────────────────────────────────────────────────────
         ("rank_timing", "iteration") => "Iteration number (1-based)",
@@ -1331,8 +1337,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 147,
-            "variables.csv must have exactly 147 data rows (one per column across all 13 schemas)"
+            row_count, 150,
+            "variables.csv must have exactly 150 data rows (one per column across all 13 schemas)"
         );
     }
 

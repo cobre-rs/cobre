@@ -112,6 +112,7 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_path: String,
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: BroadcastCutSelection,
+    pub(crate) cut_activity_tolerance: f64,
 }
 
 impl BroadcastConfig {
@@ -168,6 +169,7 @@ impl BroadcastConfig {
             policy_path: params.policy_path,
             inflow_method: params.inflow_method,
             cut_selection,
+            cut_activity_tolerance: params.cut_activity_tolerance,
         })
     }
 }

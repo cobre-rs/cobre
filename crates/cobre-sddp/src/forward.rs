@@ -1512,6 +1512,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         }
     }
 
@@ -3063,6 +3064,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -3166,6 +3168,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];

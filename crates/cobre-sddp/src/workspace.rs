@@ -82,6 +82,15 @@ pub struct SolverWorkspace<S: SolverInterface> {
     pub current_state: Vec<f64>,
     /// Pre-allocated scratch buffers for noise transformation and simulation.
     pub(crate) scratch: ScratchBuffers,
+    /// Per-stage cut row tracking for incremental backward pass LP updates.
+    ///
+    /// Indexed by stage. `None` means the LP for that stage has not been
+    /// loaded yet (first iteration or after a periodic rebuild), and a full
+    /// `load_model + add_rows` is required. `Some(map)` means the LP is
+    /// persisted and only incremental `add_rows` for new cuts is needed.
+    ///
+    /// Initialized empty; resized to `num_stages` on first backward pass use.
+    pub(crate) backward_cut_maps: Vec<Option<crate::cut::CutRowMap>>,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
@@ -120,6 +129,15 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
+        }
+    }
+
+    /// Reset the backward cut map for a specific stage, forcing a full LP
+    /// rebuild on the next backward pass iteration for that stage.
+    pub(crate) fn reset_backward_map(&mut self, stage: usize) {
+        if stage < self.backward_cut_maps.len() {
+            self.backward_cut_maps[stage] = None;
         }
     }
 }
@@ -176,6 +194,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
+                backward_cut_maps: Vec::new(),
             })
             .collect();
         Self { workspaces }
@@ -234,6 +253,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
+                backward_cut_maps: Vec::new(),
             });
         }
         Ok(Self { workspaces })

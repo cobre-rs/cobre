@@ -254,6 +254,18 @@ struct TrialAccumulators {
 /// Called once before the opening loop in [`process_trial_point_backward`].
 /// The LP structure (template + cuts) is identical across all openings for
 /// the same trial point — only the noise-dependent bounds change.
+///
+/// # Future: incremental cut injection
+///
+/// The per-worker `backward_cut_maps` field in [`SolverWorkspace`] is
+/// provisioned for a future incremental path that skips `load_model` on
+/// iterations 2+ and only appends new cuts via `add_rows`. Implementing
+/// this requires adapting the dual extraction logic in
+/// [`process_trial_point_backward`] to use [`CutRowMap`] for LP row
+/// lookups instead of assuming sequential row ordering (the current
+/// `view.dual[template_num_rows..template_num_rows + num_cuts]` pattern).
+///
+/// [`CutRowMap`]: crate::cut::CutRowMap
 fn load_backward_lp<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,

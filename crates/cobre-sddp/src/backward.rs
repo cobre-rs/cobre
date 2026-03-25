@@ -70,7 +70,7 @@
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
@@ -374,23 +374,25 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let tree_view = training_ctx.stochastic.tree_view();
     let x_hat = spec.exchange.state_at(succ.my_rank, m);
     let scenario = spec.fwd_offset + m;
-    let mut working_basis: Option<Basis> = None;
     let s = succ.successor;
 
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
-        let warm = if omega == 0 {
-            succ.basis_store.get(m, s)
-        } else {
-            working_basis.as_ref()
-        };
-        let view = (if let Some(rb) = warm {
-            ws.solver.solve_with_basis(rb)
+        // Opening 0: use forward-pass basis from BasisStore for warm start.
+        // Openings 1+: HiGHS retains internal factorization from the previous
+        // solve — only bounds/RHS changed via `patch_opening_bounds`, so
+        // `solve()` hot-starts without redundant refactorization (P3b).
+        let view = if omega == 0 {
+            if let Some(rb) = succ.basis_store.get(m, s) {
+                ws.solver.solve_with_basis(rb)
+            } else {
+                ws.solver.solve()
+            }
         } else {
             ws.solver.solve()
-        })
+        }
         .map_err(|e| match e {
             SolverError::Infeasible => SddpError::Infeasible {
                 stage: succ.t,
@@ -430,13 +432,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                     *accum.slot_increments.entry(slot).or_insert(0) += 1;
                 }
             }
-        }
-        if let Some(rb) = working_basis.as_mut() {
-            ws.solver.get_basis(rb);
-        } else {
-            let mut rb = Basis::new(ctx.templates[s].num_cols, ctx.templates[s].num_rows);
-            ws.solver.get_basis(&mut rb);
-            working_basis = Some(rb);
         }
         accum.outcomes.push(BackwardOutcome {
             intercept,
@@ -2226,15 +2221,16 @@ mod tests {
         );
     }
 
-    /// Multi-opening warm-start: given 3 openings at the same successor stage,
-    /// the first opening cold-starts (store slot is None), and openings 2 and 3
-    /// warm-start from the first opening's basis via `working_basis`.
+    /// Multi-opening P3b behavior: given 3 openings at the same successor stage,
+    /// the first opening cold-starts (store slot is None via `solve()`), and
+    /// openings 1 and 2 use HiGHS internal hot-start via `solve()` instead of
+    /// `solve_with_basis(working_basis)`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
-    /// then `solver.warm_start_calls == 2` after the backward pass (openings 2
+    /// then `solver.warm_start_calls == 0` after the backward pass (P3b: no
     /// and 3 warm-start; opening 1 cold-starts).
     #[test]
-    fn multi_opening_warm_start_subsequent_openings_use_basis() {
+    fn multi_opening_subsequent_openings_use_internal_hotstart() {
         let n_stages = 2_usize;
         let n_openings = 3_usize;
         let stochastic = make_stochastic_context(n_stages, n_openings);
@@ -2298,14 +2294,14 @@ mod tests {
         )
         .unwrap();
 
-        // Opening 1: cold-start (store slot was None for scenario 0, stage 1).
-        // Opening 2: warm-start (working_basis populated by opening 1).
-        // Opening 3: warm-start (working_basis updated by opening 2).
+        // P3b optimization: opening 0 cold-starts (no basis in store),
+        // openings 1 and 2 use solve() (HiGHS internal hot-start) instead of
+        // solve_with_basis. No explicit warm-start calls for subsequent openings.
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
-            warm_start_calls, 2,
-            "openings 2 and 3 must call solve_with_basis \
-             (warm_start_calls == 2, got {warm_start_calls})"
+            warm_start_calls, 0,
+            "P3b: no solve_with_basis calls expected when BasisStore is empty \
+             (warm_start_calls == 0, got {warm_start_calls})"
         );
     }
 

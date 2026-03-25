@@ -430,6 +430,18 @@ pub struct StageIndexer {
     /// Used by `PatchBuffer::fill_z_inflow_patches` as the base offset for
     /// Category 5 patches. Equal to `z_inflow_rows.start`.
     pub z_inflow_row_start: usize,
+
+    /// Indices of state dimensions whose cut coefficients can be nonzero.
+    ///
+    /// Storage indices `[0, N)` are always included. Lag indices `[N, N*(1+L))`
+    /// are included only when `lag < actual_ar_order[hydro]`. Hydros with AR
+    /// order < `max_par_order` have padded lag slots whose duals are
+    /// structurally zero.
+    ///
+    /// When empty (default), callers should treat all `n_state` indices as
+    /// nonzero (dense path). Use [`set_nonzero_mask`](Self::set_nonzero_mask) to
+    /// populate after construction when per-hydro AR orders are available.
+    pub nonzero_state_indices: Vec<usize>,
 }
 
 impl StageIndexer {
@@ -536,6 +548,7 @@ impl StageIndexer {
             z_inflow,
             z_inflow_rows,
             z_inflow_row_start,
+            nonzero_state_indices: Vec::new(),
         }
     }
 
@@ -855,6 +868,57 @@ impl StageIndexer {
     #[must_use]
     pub fn from_stage_template(template: &StageTemplate) -> Self {
         Self::new(template.n_hydro, template.max_par_order)
+    }
+
+    /// Compute and store the nonzero state index mask from per-hydro AR orders.
+    ///
+    /// `ar_orders` must have length `hydro_count`. Each entry is the actual AR
+    /// order for that hydro (0 means no AR lags). Indices `[0, N)` (storage)
+    /// are always included. For each hydro `h`, lag indices
+    /// `inflow_lags.start + h * max_par_order + l` are included for
+    /// `l in 0..ar_orders[h]`.
+    ///
+    /// After calling, `nonzero_state_indices` is sorted in ascending order and
+    /// has no duplicates. If `max_par_order == 0` or all hydros have full AR
+    /// order, the mask covers all `n_state` indices (equivalent to dense).
+    ///
+    /// # Panics (debug builds only)
+    ///
+    /// Panics if `ar_orders.len() != hydro_count` or any `ar_orders[h] > max_par_order`.
+    pub fn set_nonzero_mask(&mut self, ar_orders: &[usize]) {
+        debug_assert_eq!(
+            ar_orders.len(),
+            self.hydro_count,
+            "ar_orders length {} != hydro_count {}",
+            ar_orders.len(),
+            self.hydro_count
+        );
+
+        let mut mask = Vec::with_capacity(self.n_state);
+
+        // Storage indices are always nonzero.
+        for h in 0..self.hydro_count {
+            mask.push(h);
+        }
+
+        // Lag indices: include only used lags.
+        for (h, &order) in ar_orders.iter().enumerate() {
+            debug_assert!(
+                order <= self.max_par_order,
+                "ar_orders[{h}] = {order} exceeds max_par_order {}",
+                self.max_par_order
+            );
+            for lag in 0..order {
+                mask.push(self.inflow_lags.start + h * self.max_par_order + lag);
+            }
+        }
+
+        debug_assert!(
+            mask.windows(2).all(|w| w[0] < w[1]),
+            "nonzero_state_indices must be sorted and unique"
+        );
+
+        self.nonzero_state_indices = mask;
     }
 }
 
@@ -1831,5 +1895,69 @@ mod tests {
         // N*(1+L) = 1*(1+0) = 1, z_inflow at 1..2
         assert_eq!(idx.z_inflow, 1..2);
         assert_eq!(idx.z_inflow.len(), 1);
+    }
+
+    // ── Nonzero state mask tests ───────────────────────────────────────────
+
+    #[test]
+    fn nonzero_mask_default_is_empty() {
+        let idx = StageIndexer::new(4, 6);
+        assert!(
+            idx.nonzero_state_indices.is_empty(),
+            "default mask must be empty (dense path)"
+        );
+    }
+
+    #[test]
+    fn nonzero_mask_mixed_ar_orders() {
+        // 4 hydros, max_par_order=6, ar_orders=[0, 1, 3, 6]
+        let mut idx = StageIndexer::new(4, 6);
+        idx.set_nonzero_mask(&[0, 1, 3, 6]);
+
+        // Storage indices: 0, 1, 2, 3 (4 entries)
+        // Hydro 0: AR(0) → 0 lag entries
+        // Hydro 1: AR(1) → 1 lag entry  (index 4+1*6+0 = 10)
+        // Hydro 2: AR(3) → 3 lag entries (indices 4+2*6+{0,1,2} = 16,17,18)
+        // Hydro 3: AR(6) → 6 lag entries (indices 4+3*6+{0..5} = 22,23,24,25,26,27)
+        // Total: 4 + 0 + 1 + 3 + 6 = 14
+        assert_eq!(
+            idx.nonzero_state_indices.len(),
+            14,
+            "mask length: 4 storage + 0 + 1 + 3 + 6 = 14"
+        );
+
+        // Verify storage indices
+        assert_eq!(&idx.nonzero_state_indices[..4], &[0, 1, 2, 3]);
+
+        // Verify hydro 1 lag
+        assert_eq!(idx.nonzero_state_indices[4], 10); // 4 + 1*6 + 0
+
+        // Verify hydro 2 lags
+        assert_eq!(&idx.nonzero_state_indices[5..8], &[16, 17, 18]);
+
+        // Verify hydro 3 lags
+        assert_eq!(&idx.nonzero_state_indices[8..14], &[22, 23, 24, 25, 26, 27]);
+
+        // Verify sorted
+        assert!(idx.nonzero_state_indices.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn nonzero_mask_zero_par_order() {
+        // max_par_order=0: no lags, mask = storage only
+        let mut idx = StageIndexer::new(3, 0);
+        idx.set_nonzero_mask(&[0, 0, 0]);
+        assert_eq!(idx.nonzero_state_indices.len(), 3);
+        assert_eq!(&idx.nonzero_state_indices, &[0, 1, 2]);
+    }
+
+    #[test]
+    fn nonzero_mask_all_full_order() {
+        // All hydros at max AR order: mask covers all n_state indices
+        let mut idx = StageIndexer::new(2, 3);
+        idx.set_nonzero_mask(&[3, 3]);
+        // n_state = 2*(1+3) = 8, mask should have 2 + 2*3 = 8
+        assert_eq!(idx.nonzero_state_indices.len(), 8);
+        assert_eq!(idx.nonzero_state_indices.len(), idx.n_state);
     }
 }

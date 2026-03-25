@@ -494,6 +494,16 @@ impl StudySetup {
         // z-inflow column and row ranges are set by StageIndexer::new at
         // fixed offset N*(1+L), no per-stage wiring needed.
 
+        // ── Nonzero state mask for sparse cut injection (P3) ────────────────
+        // Build per-hydro AR orders from the precomputed PAR model. When the
+        // PAR has hydros with AR order < max_par_order, the mask enables
+        // sparse cut rows in `build_cut_row_batch_into`.
+        if indexer.max_par_order > 0 && stochastic.par().n_hydros() > 0 {
+            let par = stochastic.par();
+            let ar_orders: Vec<usize> = (0..par.n_hydros()).map(|h| par.order(h)).collect();
+            indexer.set_nonzero_mask(&ar_orders);
+        }
+
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
 

@@ -128,52 +128,6 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
     (total > 0 && phantom * 5 > total) || iterations_since_rebuild >= 50
 }
 
-/// Collect the newly generated cuts from the FCF pool for a given stage and
-/// iteration.
-///
-/// The backward pass inserts cuts directly into the FCF with deterministic
-/// slot indices. This helper reads back the metadata for those slots to build
-/// the `local_cuts` tuple slice consumed by [`CutSyncBuffers::sync_cuts`].
-///
-/// Returns a `Vec` of `(slot_index, iteration, forward_pass_index, intercept,
-/// coefficients)` tuples for all cuts at `stage` whose
-/// `metadata.iteration_generated == iteration`.
-///
-/// This allocation is bounded to `total_scenarios` entries per stage per
-/// iteration and is acceptable on the backward/sync path (not the inner LP
-/// loop).
-fn collect_local_cuts_for_stage(
-    fcf: &FutureCostFunction,
-    stage: usize,
-    iteration: u64,
-) -> Vec<(u32, u32, u32, f64, Vec<f64>)> {
-    let pool = &fcf.pools[stage];
-    let mut result = Vec::new();
-    for slot in 0..pool.populated_count {
-        if !pool.active[slot] {
-            continue;
-        }
-        let meta = &pool.metadata[slot];
-        if meta.iteration_generated != iteration {
-            continue;
-        }
-        let intercept = pool.intercepts[slot];
-        let coefficients = pool.coefficients[slot].clone();
-        #[allow(clippy::cast_possible_truncation)]
-        let slot_u32 = slot as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let iter_u32 = iteration as u32;
-        result.push((
-            slot_u32,
-            iter_u32,
-            meta.forward_pass_index,
-            intercept,
-            coefficients,
-        ));
-    }
-    result
-}
-
 // ---------------------------------------------------------------------------
 // train
 // ---------------------------------------------------------------------------
@@ -475,6 +429,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             fwd_offset: my_fwd_offset,
             risk_measures,
             cut_activity_tolerance,
+            cut_sync_bufs: &mut cut_sync_bufs,
         };
 
         let backward_result = run_backward_pass(
@@ -524,20 +479,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 rayon_overhead_time_ms: backward_result.rayon_overhead_time_ms,
             },
         );
-        let cut_sync_start = Instant::now();
-        for stage in 0..num_stages.saturating_sub(1) {
-            let owned_cuts = collect_local_cuts_for_stage(fcf, stage, iteration);
-            let local_cuts: Vec<(u32, u32, u32, f64, &[f64])> = owned_cuts
-                .iter()
-                .map(|(slot, iter, fp, intercept, coeffs)| {
-                    (*slot, *iter, *fp, *intercept, coeffs.as_slice())
-                })
-                .collect();
-            cut_sync_bufs.sync_cuts(stage, &local_cuts, fcf, comm)?;
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        let cut_sync_ms = cut_sync_start.elapsed().as_millis() as u64;
-
+        // Cut sync now happens per-stage inside `run_backward_pass`. The
+        // measured time is returned in `backward_result.cut_sync_time_ms`.
         #[allow(clippy::cast_possible_truncation)]
         emit(
             event_sender.as_ref(),
@@ -546,7 +489,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 cuts_distributed: backward_result.cuts_generated as u32,
                 cuts_active: fcf.total_active_cuts() as u32,
                 cuts_removed: 0,
-                sync_time_ms: cut_sync_ms,
+                sync_time_ms: backward_result.cut_sync_time_ms,
             },
         );
 

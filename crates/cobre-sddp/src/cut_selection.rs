@@ -888,4 +888,88 @@ mod tests {
             "error message must mention check_frequency, got: {msg}"
         );
     }
+
+    /// Re-deactivation of already-inactive cut does not corrupt `cached_active_count`.
+    ///
+    /// When Level1 `select_for_stage` returns an index that is already
+    /// deactivated, `CutPool::deactivate` must skip the decrement. This test
+    /// verifies the safety invariant via the cut pool directly.
+    #[test]
+    fn redeactivation_of_inactive_cut_is_noop() {
+        use crate::cut::pool::CutPool;
+
+        let mut pool = CutPool::new(10, 1, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0]); // slot 0, active
+        pool.add_cut(1, 0, 2.0, &[2.0]); // slot 1, active
+        pool.add_cut(2, 0, 3.0, &[3.0]); // slot 2, active
+        assert_eq!(pool.active_count(), 3);
+
+        // Mark slots 1 and 2 as having binding activity so Level1 retains them.
+        pool.metadata[1].active_count = 5;
+        pool.metadata[2].active_count = 3;
+
+        // Deactivate slot 0 manually.
+        pool.deactivate(&[0]);
+        assert_eq!(pool.active_count(), 2);
+
+        // Level1 selection: slot 0 still has active_count == 0 in metadata,
+        // so it appears in the deactivation set again. Slots 1 and 2 have
+        // active_count > 0 and are retained.
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 1,
+        };
+        let deact = strategy.select_for_stage(&pool.metadata[..pool.populated_count], 5, 0);
+        // Slot 0 is in the deactivation set (active_count == 0).
+        assert!(
+            deact.indices.contains(&0),
+            "slot 0 should be selected for deactivation"
+        );
+        assert_eq!(
+            deact.indices.len(),
+            1,
+            "only slot 0 should be selected (slots 1,2 have activity)"
+        );
+
+        // Re-apply deactivation — must not double-decrement.
+        pool.deactivate(&deact.indices);
+        assert_eq!(
+            pool.active_count(),
+            2,
+            "active_count must not change when re-deactivating an already-inactive cut"
+        );
+    }
+
+    /// Lml1 `memory_window` boundary: cuts at exactly the window edge are
+    /// retained, cuts beyond are deactivated.
+    ///
+    /// With `memory_window: 3, current_iteration: 10`:
+    /// - `last_active_iter=1`: 10-1=9 > 3 → deactivated
+    /// - `last_active_iter=5`: 10-5=5 > 3 → deactivated
+    /// - `last_active_iter=7`: 10-7=3 not > 3 → retained (boundary)
+    /// - `last_active_iter=8`: 10-8=2 not > 3 → retained
+    /// - `last_active_iter=10`: 10-10=0 not > 3 → retained
+    #[test]
+    fn lml1_memory_window_boundary_behavior() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 3,
+            check_frequency: 1,
+        };
+        let metadata = vec![
+            make_meta(0, 1, 0),  // last_active_iter = 1
+            make_meta(0, 5, 0),  // last_active_iter = 5
+            make_meta(0, 7, 0),  // last_active_iter = 7 (boundary)
+            make_meta(0, 8, 0),  // last_active_iter = 8
+            make_meta(0, 10, 0), // last_active_iter = 10
+        ];
+
+        let deact = strategy.select_for_stage(&metadata, 10, 0);
+
+        // Slots 0 and 1 deactivated, slots 2-4 retained.
+        assert_eq!(
+            deact.indices,
+            vec![0, 1],
+            "only cuts with last_active_iter 1 and 5 should be deactivated"
+        );
+    }
 }

@@ -1,0 +1,26 @@
+{
+    "hooks": {
+        "SessionStart": [
+            {
+                "matcher": "compact",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cat \"$CLAUDE_PROJECT_DIR/.claude/architecture-rules.md\""
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|MultiEdit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/check-hot-path.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}

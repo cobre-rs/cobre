@@ -26,8 +26,11 @@ book/output/
 # Implementation plans (local development only)
 plans/
 
-# Claude Code artifacts (local development only)
-.claude/
+# Claude Code — track project rules and hooks, ignore ephemeral state
+.claude/*
+!.claude/architecture-rules.md
+!.claude/settings.json
+!.claude/hooks/
 assessment*.md
 
 # Stale vendor directory (real HiGHS submodule is at crates/cobre-solver/vendor/)

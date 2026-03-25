@@ -2,7 +2,7 @@
 //!
 //! [`write_noise_openings`] exports an [`OpeningTree`] to
 //! `output/stochastic/noise_openings.parquet` using the 4-column schema
-//! defined in ADR-008:
+//! defined below:
 //!
 //! | Column          | Type    | Description                                  |
 //! |-----------------|---------|----------------------------------------------|
@@ -54,7 +54,7 @@
 //! | `std_mw`   | DOUBLE | Seasonal standard deviation (MW)         |
 //!
 //! [`write_fitting_report`] exports a [`FittingReport`] to
-//! `output/stochastic/fitting_report.json` using the ADR-009 structure:
+//! `output/stochastic/fitting_report.json` using the structure:
 //!
 //! ```json
 //! {
@@ -90,7 +90,7 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 ///
 /// The output schema is exactly 4 columns — `stage_id: Int32`,
 /// `opening_index: UInt32`, `entity_index: UInt32`, `value: Float64` — in
-/// that order, matching the ADR-008 schema and the input expected by
+/// that order, matching the noise openings schema and the input expected by
 /// `parse_noise_openings` / `assemble_opening_tree`. Rows are written in
 /// `(stage_id, opening_index, entity_index)` order.
 ///
@@ -676,7 +676,7 @@ pub struct FittingReport {
 
 /// Write a [`FittingReport`] to a pretty-printed JSON file at `path`.
 ///
-/// The output matches the ADR-009 fitting report schema. Hydro IDs appear as
+/// The output matches the fitting report schema. Hydro IDs appear as
 /// string keys in ascending sort order (`BTreeMap` iteration order). An empty
 /// report produces `{"hydros":{}}`.
 ///
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        use crate::scenarios::{NoiseOpeningRow, assemble_opening_tree, parse_noise_openings};
+        use crate::scenarios::{assemble_opening_tree, parse_noise_openings, NoiseOpeningRow};
 
         let tree = make_tree_2s_2d();
         let tmp = tempfile::tempdir().expect("tempdir must succeed");

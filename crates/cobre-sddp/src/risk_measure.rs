@@ -2,7 +2,7 @@
 //!
 //! [`RiskMeasure`] is a flat enum with two variants — [`RiskMeasure::Expectation`]
 //! and [`RiskMeasure::CVaR`] — dispatched via `match` at each backward pass stage.
-//! This uses enum dispatch for closed variant sets (avoids `Box<dyn>`; see docs/adr/002-enum-dispatch.md).
+//! This uses enum dispatch for closed variant sets (avoids `Box<dyn>`; enum dispatch for closed variant sets).
 //!
 //! ## Aggregation semantics
 //!
@@ -76,7 +76,7 @@ pub struct BackwardOutcome {
 /// ## Dispatch
 ///
 /// Both variants are dispatched via `match` (enum dispatch for closed variant sets,
-/// avoids `Box<dyn>`; see docs/adr/002-enum-dispatch.md).
+/// avoids `Box<dyn>`; enum dispatch for closed variant sets).
 /// `aggregate_cut` and `evaluate_risk` are pure query methods — they do
 /// not return `Result` because all inputs are validated at configuration
 /// load time.

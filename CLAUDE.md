@@ -1,311 +1,103 @@
-# Cobre -- Development Guidelines
-
-This file is loaded by Claude Code when working in this repository. It captures
-the conventions, source-of-truth references, and architectural decisions that
-govern all development on the Cobre ecosystem.
-
----
+# Cobre — Development Guidelines
 
 ## Project Overview
 
-Cobre is an ecosystem of Rust crates for power system analysis and optimization.
-The first solver vertical is SDDP-based hydrothermal dispatch -- a production-grade
-distributed solver for long-term energy planning.
+Cobre is a Rust ecosystem for power system optimization. The first solver
+vertical is SDDP-based hydrothermal dispatch.
 
 - **Language**: Rust 2024 edition, MSRV 1.86
 - **License**: Apache-2.0
 - **Workspace**: 11 crates (10 workspace + 1 external `ferrompi`)
 - **Build**: `cargo build --workspace`
 - **Test**: `cargo test --workspace --all-features`
+- **Format**: `cargo fmt --all` (CI enforces `--check`)
 
-See `CONTRIBUTING.md` for build prerequisites, project structure, commit message
-format, and crate-specific coding guidelines.
-
----
-
-## Two Repositories, Two Roles
-
-Development spans two repositories with distinct roles:
-
-| Repository     | Location                  | Role                                  | Contains                                                                                                               |
-| -------------- | ------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **cobre-docs** | `~/git/cobre-docs`        | **What we want** -- the specification | 74 spec files defining architecture, algorithms, data model, HPC layer, testing contracts, and cross-cutting decisions |
-| **cobre**      | `~/git/cobre` (this repo) | **What exists** -- the implementation | Rust source code, software book, ADRs, CI, and everything that ships                                                   |
-
-**cobre-docs is the source of truth for design.** Every implementation decision must
-trace back to a spec section. When coding a feature, read the relevant spec first.
-If the spec is silent on a detail, that is a spec gap -- escalate it, do not guess.
-
-**cobre is the source of truth for what has been built.** The code, tests, and
-software book in this repo reflect the current state of the implementation. When
-a spec describes a feature that hasn't been implemented yet, the code is the
-authority on what actually works today.
-
-### Key paths in cobre-docs
-
-| Category              | Path                                            | Purpose                                              |
-| --------------------- | ----------------------------------------------- | ---------------------------------------------------- |
-| Implementation order  | `src/specs/overview/implementation-ordering.md` | 8-phase build sequence, per-phase spec reading lists |
-| Spec gap inventory    | `src/specs/overview/spec-gap-inventory.md`      | 39 resolved gaps with resolution paths               |
-| Decision log          | `src/specs/overview/decision-log.md`            | DEC-001 through DEC-017, cross-cutting decisions     |
-| Cross-reference index | `src/specs/cross-reference-index.md`            | Spec-to-crate mappings, dependency order             |
-| Design principles     | `src/specs/overview/design-principles.md`       | Format selection, declaration-order invariance       |
-| Architecture specs    | `src/specs/architecture/`                       | Trait specs, testing specs, impl specs               |
-| HPC specs             | `src/specs/hpc/`                                | Communication, parallelism, memory, backends         |
-| Math specs            | `src/specs/math/`                               | Algorithm formulations, LP structure                 |
-| Data model specs      | `src/specs/data-model/`                         | Input/output schemas, internal structures            |
-
-### Spec consultation workflow
-
-Before implementing any module:
-
-1. **Read the phase entry** in `implementation-ordering.md` section 5 for the crate
-2. **Read every spec** in that phase's reading list
-3. **Check the decision log** for DEC-NNN entries that affect the crate
-4. **Check the spec gap inventory** for gaps in the crate's specs (all 39 are resolved
-   but the resolutions document important design details)
-5. **Read the cross-reference index** sections 1-2 for the crate's spec mapping
-
-When you encounter a spec reference like "SS4.2" or "§1.3", these are section
-identifiers in the spec files:
-
-- **SS** prefix = architecture spec sections (e.g., SS4 in `training-loop.md`)
-- **§** prefix = HPC spec sections (e.g., §1 in `communicator-trait.md`)
-- Plain numbered sections = overview/planning specs (e.g., `## 3.` in `implementation-ordering.md`)
+See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.1.9)
+## Current State (v0.1.11)
 
-The SDDP solver is fully functional. The pipeline covers case loading, stochastic
-scenario generation, training, simulation, policy checkpointing, and output writing.
-Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
+The SDDP solver is fully functional: case loading, stochastic scenario
+generation, training, simulation, policy checkpointing, and output writing.
+2,747 tests, including 16 deterministic regression cases (D01–D16).
 
-**What's implemented:**
+**Implemented:** constant-productivity and FPHA hydro models, evaporation,
+cascade coupling, water withdrawal, inflow non-negativity, multi-segment
+deficit, generic constraints (20 variable types), NCS stochastic availability,
+block factors, per-stage productivity override, CVaR risk measure, PAR(p)
+estimation (periodic YW, PACF), LP scaling, solver statistics instrumentation,
+LP setup optimisation (model persistence, incremental cuts, sparse cuts),
+simulation basis warm-start, MPI distribution, Python bindings with Arrow
+zero-copy, CLI with 6 subcommands.
 
-- Training loop with forward/backward pass, Benders cut management, 5 stopping rules
-- Constant-productivity and FPHA hydro production models (precomputed + computed from geometry)
-- Cascade hydro coupling, evaporation linearization, water withdrawal, inflow non-negativity penalties
-- User-defined generic constraints over LP variables (20 variable types including `line_exchange` for net flow) with slack penalties and violation output
-- Per-stage productivity override in `hydro_production_models.json` (replaces base `productivity_mw_per_m3s` for specific stages/seasons)
-- Multi-segment deficit pricing (N deficit columns per bus per block with capacity constraints)
-- PAR(p) fitting (periodic YW, PACF-based order selection), stochastic load demand
-- PAR(p) lag initialization from `past_inflows` in `initial_conditions.json` with validation rules
-- LP scaling (row scaling with RHS prescaling, cost scaling) for improved solver conditioning
-- Solver statistics: per-phase LP timing, simplex iterations, basis reuse tracking, Parquet output
-- LP scaling diagnostics report (JSON) with per-stage conditioning analysis
-- Simulation pipeline with FlatBuffers policy checkpoint and Parquet output
-- Per-scenario simulation statistics
-- Multi-bus transmission with line flow limits
-- MPI distribution (ferrompi) and intra-rank thread parallelism (rayon, `--threads N`)
-- CLI: `init`, `run`, `validate`, `report`, `summary`, `version`
-- Block factors for load demand (`scenarios/load_factors.json`), transmission line capacity (`constraints/exchange_factors.json`), and NCS availability (`scenarios/non_controllable_factors.json`) with per-bus/line/source, per-stage, per-block scaling
-- NCS stochastic availability via `scenarios/non_controllable_stats.parquet` (mean + std availability factor per source per stage, normal draw clamped to [0,1], patched per scenario in forward/backward pass and lower bound evaluation)
-- Python bindings (PyO3, tested on 3.12/3.13/3.14) with Arrow zero-copy result loading
-
-**Known gaps:**
-
-- CVaR risk measure (enum variant exists, LP modification not implemented)
-- GNL thermals, batteries (entity stubs exist, no LP contribution)
+**Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 
 ---
 
-## Trait Variant Selection (Minimal Viable)
+## Hard Rules
 
-Each trait abstraction has one variant for the minimal viable solver:
+These are non-negotiable. Violations must be fixed before committing.
 
-| Trait                  | Variant           | Rationale                                           |
-| ---------------------- | ----------------- | --------------------------------------------------- |
-| `RiskMeasure`          | Expectation       | Risk-neutral baseline                               |
-| `CutSelectionStrategy` | Level-1           | Preserves convergence while controlling pool growth |
-| `HorizonMode`          | Finite            | Linear stage chain, zero terminal value             |
-| `SamplingScheme`       | InSample          | Same openings for forward and backward pass         |
-| `StoppingRule`         | All 5 (composite) | Full stopping rule set via `StoppingRuleSet`        |
-| `SolverInterface`      | HiGHS             | Open-source LP solver with warm-start support       |
-| `Communicator`         | MPI (ferrompi)    | Production distributed backend                      |
-
-Deferred variants are documented in `implementation-ordering.md` section 6.
-
----
-
-## System Element Scope
-
-Five element types are fully modeled. Two are NO-OP stubs (type exists in registry
-but contributes zero LP variables/constraints):
-
-| Element          | Status | Notes                                                                                                                                                          |
-| ---------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bus              | Full   | Power balance constraint per bus per block                                                                                                                     |
-| Line             | Full   | Flow variable with MW capacity bounds                                                                                                                          |
-| Thermal          | Full   | Generation variable with MW bounds and cost                                                                                                                    |
-| Hydro            | Full   | Reservoir, turbine, spillage. Constant productivity, FPHA (precomputed + computed from geometry), evaporation linearization                                    |
-| Contract         | Stub   | NO-OP -- entity exists, no LP contribution                                                                                                                     |
-| Pumping Station  | Stub   | NO-OP -- entity exists, no LP contribution                                                                                                                     |
-| Non-Controllable | Full   | Generation variable bounded by stochastic availability × block factor, with curtailment penalty. Stochastic availability via `non_controllable_stats.parquet`. |
-
-Stubs exist in the registry so LP construction code iterates over all element
-types uniformly. Implementing an element means adding LP variables/constraints.
+- `unsafe_code = "forbid"` — no unsafe anywhere
+- `unwrap_used = "deny"` — no `.unwrap()` in library code (ok in tests)
+- `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI
+- **Never use `Box<dyn Trait>`** — enum dispatch for closed variant sets
+- **Never allocate on hot paths** — pre-allocate workspaces, reuse buffers
+- **Never add `#[allow(clippy::too_many_arguments)]`** without first absorbing
+  the parameter into an existing context struct. See `.claude/architecture-rules.md`
+- **Declaration-order invariance** — results must be bit-for-bit identical
+  regardless of input entity ordering
+- **Infrastructure crate genericity** — `cobre-core`, `cobre-io`, `cobre-solver`,
+  `cobre-stochastic`, `cobre-comm` must contain zero algorithm-specific references
+  (no "sddp", "SDDP", "Benders" in types, functions, or doc comments)
+- **Python parity** — every output file the CLI writes must also be written by
+  the Python bindings in `cobre-python`. When adding a new output, wire it in both.
+- Do not use `bincode` — use `postcard` for MPI, `FlatBuffers` for policy
+- Do not commit secrets, `.env` files, or credentials
+- Do not force-push to `main`
 
 ---
 
-## Coding Standards
+## Pre-Commit Check
 
-### Hard rules (enforced by workspace lints)
+Before committing changes to `crates/`, run:
 
-- `unsafe_code = "forbid"` -- no unsafe at all
-- `unwrap_used = "deny"` -- no `.unwrap()` in library code (ok in tests)
-- `clippy::all` and `clippy::pedantic` at `warn` level
-- `missing_docs = "warn"` -- all public items should have doc comments
-- **`cargo fmt` must pass** -- run `cargo fmt --all` after every implementation ticket
-  and before committing. CI enforces `cargo fmt --all -- --check`.
+```
+python3 scripts/check_suppressions.py --max 0
+```
 
-### Performance rules
+This checks that no `#[allow(clippy::too_many_arguments)]` exists in production
+code (code before `#[cfg(test)]`). If the check fails, absorb the parameter
+into an existing context struct instead of adding a suppression. Read
+`.claude/architecture-rules.md` for the specific struct patterns.
 
-- **No allocation on hot paths.** The SDDP training loop solves millions of LPs.
-  Pre-allocate workspaces; reuse buffers.
-- **Cache-friendly layout.** Group LP variables that are accessed together (e.g., all
-  storage levels before all inflow lags) for contiguous memory access.
-- **SIMD-friendly arrays.** Prefer flat `Vec<f64>` over nested structs on hot paths.
-- **Compile-time dispatch for FFI.** The `SolverInterface` trait uses monomorphization
-  (not `dyn`) because it wraps FFI calls. All other traits use enum dispatch.
-
-### Dispatch patterns
-
-The Cobre architecture uses four dispatch patterns. **Never use `Box<dyn Trait>`** --
-closed variant sets always prefer enum dispatch.
-
-| Pattern                                           | Mechanism                                 | Examples                                                |
-| ------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| Single active variant, global scope               | Flat enum, `match`                        | `CutSelectionStrategy`, `HorizonMode`, `SamplingScheme` |
-| Single active variant, per-stage scope            | Flat enum, `match`                        | `RiskMeasure`                                           |
-| Multiple active variants, simultaneous evaluation | `Vec<EnumVariant>` + composition struct   | `StoppingRuleSet`                                       |
-| Single active variant, fixed at build time, FFI   | Rust trait, compile-time monomorphization | `SolverInterface`                                       |
-
-### Error handling
-
-- **Pure query methods** (`should_run`, `select`, `evaluate`): never return `Result`.
-  They rely on upstream validation guarantees.
-- **FFI-wrapping methods** (`solve`, `solve_with_basis`): return `Result` with split
-  Ok/Err postcondition tables as documented in the trait specs.
-- **Err recovery**: the **caller** calls `reset()` before reusing an instance after error.
-
-### Serialization
-
-- **MPI broadcast**: use `postcard` (not `bincode` -- it is unmaintained)
-- **Policy persistence** (FCF cuts): use `FlatBuffers`
-- **Input data**: JSON + Parquet
-- **Output data**: Hive-partitioned Parquet
-
-### Declaration-order invariance
-
-Results must be **bit-for-bit identical** regardless of input entity ordering. Entity
-collections are always stored in canonical ID-sorted order. Every function that
-processes entity collections must be tested with reordered input.
-
-### Infrastructure crate genericity (ENFORCED)
-
-The infrastructure crates (`cobre-core`, `cobre-io`, `cobre-solver`, `cobre-stochastic`,
-`cobre-comm`) are **deliberately generic** and must contain **zero algorithm-specific
-references** (no SDDP, no algorithm names in function/struct/type names, docs, or
-comments). This is a first-class requirement from the ecosystem design (see
-`cobre-docs/src/specs/overview/ecosystem-vision.md` §6).
-
-**Rules:**
-
-- No function, struct, enum, or type may include "sddp", "SDDP", or any other
-  algorithm name in infrastructure crates
-- Doc comments must use generic language ("the calling algorithm", "iterative LP
-  solving", "optimization algorithms") instead of algorithm-specific references
-- Test code may mention algorithms only in comments explaining the fixture's origin,
-  never in function or variable names
-- Application crates (`cobre-cli`, `cobre-mcp`, `cobre-tui`, `cobre-python`) and the
-  solver vertical (`cobre-sddp`) **may** reference SDDP freely
-
-**Quality gate:** All infrastructure crate files must pass
-`grep -riE 'sddp' crates/<crate>/src/` with zero matches.
+The current codebase has legacy suppressions that are being worked down.
+Until they reach zero, use `--max 15` as the threshold. The count must
+never increase.
 
 ---
 
-## Key Architectural Decisions
+## Architecture Guides (Read When Relevant)
 
-These are from the decision log (`DEC-001` through `DEC-017` in cobre-docs). The most
-implementation-critical ones:
+When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
+`simulation/pipeline.rs`, `lower_bound.rs`), read:
+→ `.claude/architecture-rules.md`
 
-| DEC     | Decision                                                               |
-| ------- | ---------------------------------------------------------------------- |
-| DEC-001 | Enum dispatch over `Box<dyn Trait>` for closed variant sets            |
-| DEC-002 | Compile-time monomorphization for `SolverInterface` (FFI wrapper)      |
-| DEC-003 | `postcard` for MPI serialization (not `bincode`)                       |
-| DEC-004 | FlatBuffers for FCF policy persistence                                 |
-| DEC-005 | Five-layer validation pipeline in `cobre-io`                           |
-| DEC-006 | Three-tier penalty resolution (global/entity/stage)                    |
-| DEC-009 | Per-stage `allgatherv` in backward pass for cut synchronization        |
-| DEC-016 | Deferred parallel cut selection with `allgatherv` for DeactivationSets |
-| DEC-017 | Communication-free parallel noise via deterministic SipHash-1-3 seeds  |
+When adding new LP variables, constraints, or entity types, read:
+→ `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`
 
-Always check the full decision log before making architectural choices.
+When adding new output files, check both CLI and Python write paths:
+→ `crates/cobre-cli/src/commands/run.rs` (`write_outputs` function)
+→ `crates/cobre-python/src/run.rs` (`run_inner` function)
 
 ---
 
-## Documentation Sites
+## Key References
 
-| Site                  | Repository        | Content                               | When to update                                 |
-| --------------------- | ----------------- | ------------------------------------- | ---------------------------------------------- |
-| Software book         | `cobre/book/`     | Installation, guides, crate overviews | During/after implementation                    |
-| Methodology reference | `cobre-docs/`     | Specs, theory, math, formats          | Before implementation (specs define contracts) |
-| ADRs                  | `cobre/docs/adr/` | Architecture Decision Records         | When cross-cutting decisions are made          |
-
-The software book in `book/` uses mdBook. It contains user-facing documentation that
-describes what the software does. Theory pages in cobre-docs are written **ahead** of
-implementation (they define the contract); software pages in `book/` are written
-**during or after** implementation (they describe what exists).
-
----
-
-## Agent Delegation
-
-When delegating implementation tasks to specialist agents, use these mappings:
-
-| Crate / Task                      | Agent                               |
-| --------------------------------- | ----------------------------------- |
-| `cobre-core`, `cobre-sddp`        | `hpc-rust-developer`                |
-| `cobre-solver` (FFI, HiGHS, CLP)  | `hpc-rust-developer`                |
-| `cobre-comm`, `ferrompi` (MPI)    | `hpc-rust-developer`                |
-| `cobre-stochastic` (scenarios)    | `hpc-rust-developer`                |
-| `cobre-io` (JSON, Parquet)        | `hpc-rust-developer`                |
-| `cobre-cli` (clap, lifecycle)     | `hpc-rust-developer`                |
-| `cobre-python` (PyO3)             | `hpc-rust-developer`                |
-| `cobre-tui` (ratatui)             | `hpc-rust-developer`                |
-| `cobre-mcp` (MCP server)          | `hpc-rust-developer`                |
-| Parallel algorithm design         | `hpc-parallel-computing-specialist` |
-| SDDP algorithm questions          | `sddp-specialist`                   |
-| Data model / serialization format | `data-model-format-specialist`      |
-| Test planning                     | `monorepo-test-planner`             |
-| Test implementation               | `monorepo-test-developer`           |
-| Documentation (book pages)        | `open-source-documentation-writer`  |
-
-### Agent dispatch protocol
-
-When dispatching any implementation agent:
-
-1. **Always provide the spec file path** from `~/git/cobre-docs/` -- the agent reads
-   the spec before writing code
-2. **Tell the agent what already exists** -- point to the current crate source files
-   in this repo so it builds on existing work, not from scratch
-3. **Specify the target crate and module** -- e.g., "implement in `crates/cobre-sddp/src/risk.rs`"
-
----
-
-## Do NOT
-
-- Implement anything without first reading the relevant spec in cobre-docs
-- Use `Box<dyn Trait>` -- prefer enum dispatch for closed variant sets
-- Use `unsafe` -- it is `forbid` at workspace level
-- Use `.unwrap()` in library code -- it is `deny` at workspace level
-- Use `bincode` -- use `postcard` for MPI, `FlatBuffers` for policy
-- Allocate on the hot path inside the training loop
-- Break declaration-order invariance (results must be identical regardless of input ordering)
-- Reference SDDP (or any algorithm name) in infrastructure crate code, types, or docs
-- Make architectural decisions not specified in the specs -- escalate gaps
-- Commit secrets, `.env` files, or credentials
-- Force-push to `main`
+| Resource | Location | Purpose |
+|----------|----------|---------|
+| Software book | `book/` | User-facing documentation (mdBook) |
+| Methodology reference | `~/git/cobre-docs/` | Specs, theory, math |
+| CHANGELOG | `CHANGELOG.md` | Per-release feature list |
+| Design docs | `docs/design/` | Future feature designs (not yet implemented) |

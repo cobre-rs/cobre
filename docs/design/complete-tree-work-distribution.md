@@ -1,8 +1,4 @@
-# ADR-010: Complete Tree Work Distribution
-
-**Status:** Accepted
-**Date:** 2026-03-13
-**Spec reference:** DEC-009 (per-stage allgatherv for cut synchronization)
+# Design: Complete Tree Work Distribution
 
 ## Context
 

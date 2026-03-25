@@ -1,8 +1,4 @@
-# ADR-011: Per-Stage Warm-Start Counts and Terminal-Stage Boundary Conditions
-
-**Status:** Accepted
-**Date:** 2026-03-13
-**Spec reference:** None (implementation-level generalization of `FutureCostFunction`)
+# Design: Per-Stage Warm-Start Counts and Terminal-Stage Boundary Conditions
 
 ## Context
 
@@ -52,7 +48,7 @@ num_stages`.
 
 ### 2. FlatBuffers schema addition for per-stage cut counts
 
-The policy checkpoint format (ADR-005) is extended with a new header field:
+The policy checkpoint format (FlatBuffers) is extended with a new header field:
 
 ```
 warm_start_counts: [uint32]  // per-stage count; length == num_stages

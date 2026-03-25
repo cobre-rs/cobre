@@ -60,10 +60,10 @@ The following features were delivered in v0.1.3:
 - **Simulation progress fix** -- `WelfordAccumulator` moved to `cobre-core` and
   per-worker accumulation bug corrected, restoring accurate progress reporting
   during the simulation pipeline.
-- **User-supplied opening tree (ADR-008)** -- Callers can now supply a custom
+- **User-supplied opening tree** -- Callers can now supply a custom
   opening tree instead of the auto-generated one, enabling reproducible scenario
   studies with fixed initial conditions.
-- **Stochastic artifact export (ADR-009)** -- The forward pass can export sampled
+- **Stochastic artifact export** -- The forward pass can export sampled
   scenario trajectories as Parquet artifacts for offline analysis and validation.
 - **`ScratchBuffers` separation** -- Per-iteration scratch memory separated from
   training state, reducing allocation pressure on the hot path.

@@ -1,6 +1,6 @@
 //! Postcard serialization helpers for MPI broadcast of [`System`].
 //!
-//! Cobre uses `postcard` (not `bincode`) for MPI serialization (see docs/adr/004-postcard-mpi-serialization.md).
+//! Cobre uses `postcard` (not `bincode`) for MPI serialization (see CLAUDE.md hard rules).
 //! These helpers serialize a [`System`] to a compact byte buffer for broadcast
 //! and deserialize it on worker ranks, rebuilding the O(1) lookup indices that
 //! are skipped during serialization (per spec SS6.2).

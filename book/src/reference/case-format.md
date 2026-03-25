@@ -672,8 +672,8 @@ on failure:
 The total row count must equal `n_stages × openings_per_stage × (n_hydros +
 n_load_buses)`.
 
-See [ADR-008](../../docs/adr/008-user-supplied-opening-tree.md) for design
-rationale and [User-Supplied Opening Trees](../guide/stochastic-modeling.md#user-supplied-opening-trees)
+See the `noise_openings.rs` module for the full schema and validation
+rules, and [User-Supplied Opening Trees](../guide/stochastic-modeling.md#user-supplied-opening-trees)
 in the Stochastic Modeling guide for usage instructions.
 
 ---

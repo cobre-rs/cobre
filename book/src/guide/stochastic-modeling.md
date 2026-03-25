@@ -490,7 +490,7 @@ noise.
   is not applied again. You are responsible for any spatial correlation structure
   encoded in the values you supply.
 
-For design rationale, see [ADR-008](../../docs/adr/008-user-supplied-opening-tree.md).
+The file schema and validation rules are documented in the `noise_openings.rs` module.
 
 ---
 

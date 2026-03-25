@@ -319,13 +319,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and histogram (31+ hydros). Replaces the `[stochastic]` `eprintln!` pattern.
 - **User-supplied opening tree** -- when `scenarios/noise_openings.parquet` is
   present in the case directory, Cobre loads, validates, and uses it as the
-  backward-pass opening tree instead of generating one internally (ADR-008).
+  backward-pass opening tree instead of generating one internally.
   The exported `output/stochastic/noise_openings.parquet` uses the same schema,
   so the round-trip from export to re-supply is a copy operation.
 - **Stochastic artifact export** -- after the stochastic context is built,
   Cobre writes up to six artifact files to `output/stochastic/`: fitted
   seasonal statistics, AR coefficients, correlation matrix, fitting report,
-  noise openings, and load seasonal statistics (ADR-009). Controlled by
+  noise openings, and load seasonal statistics. Controlled by
   `exports.stochastic` in `config.json`.
 
 ### Changed
@@ -386,12 +386,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ADR-008: User-supplied opening tree via Parquet file (design accepted,
-  implementation planned for v0.1.3).
-- ADR-009: Stochastic artifact export (design accepted, implementation
-  planned for v0.1.3).
-- ADR-010: Complete tree work distribution for forward/backward pass.
-- ADR-011: Per-stage warm-start counts and terminal-stage boundary conditions.
 - Generic PAR type aliases (`ParOrder`, `ParCoefficients`, `ParResidualStdRatio`)
   in cobre-stochastic for improved API clarity.
 

@@ -4,7 +4,7 @@
 //! for handling negative PAR(p) inflow realisations in the LP subproblems.
 //! It is dispatched via `match` when constructing LP templates and extracting
 //! simulation results. Enum dispatch is used because the variant set is closed
-//! (see `docs/adr/002-enum-dispatch.md`).
+//! (enum dispatch for closed variant sets).
 
 /// Inflow non-negativity treatment method.
 ///

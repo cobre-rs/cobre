@@ -42,7 +42,7 @@ fn run<S: SolverInterface>(solver_factory: impl Fn() -> S, ...) { ... }
 
 The compiler generates one concrete implementation per backend. The HiGHS
 backend is the only active backend in a standard build; the binary contains
-no solver-selection branch. This pattern is implemented in ADR-003.
+no solver-selection branch. This pattern uses compile-time monomorphization.
 
 ### Custom FFI — not `highs-sys`
 

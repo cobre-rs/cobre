@@ -68,7 +68,7 @@ pub enum BackendKind {
 /// [`crate::Communicator`] carries generic methods (`allgatherv<T>`, `allreduce<T>`,
 /// `broadcast<T>`) that make the trait intentionally not object-safe — writing
 /// `Box<dyn Communicator>` does not compile. Enum dispatch is used for closed
-/// variant sets (avoids `Box<dyn>`; see docs/adr/002-enum-dispatch.md): a `match` arm delegates
+/// variant sets (avoids `Box<dyn>`; enum dispatch for closed variant sets): a `match` arm delegates
 /// each method call to the inner concrete type. The dispatch overhead is a
 /// single branch predictor–friendly integer comparison (spec SS4.3), negligible
 /// compared to the cost of the MPI collective or LP solve it wraps.

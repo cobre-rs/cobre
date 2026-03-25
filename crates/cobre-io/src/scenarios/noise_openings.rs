@@ -6,7 +6,7 @@
 //! stage coverage. [`assemble_opening_tree`] converts validated rows into an
 //! [`OpeningTree`].
 //!
-//! ## Parquet schema (ADR-008)
+//! ## Parquet schema
 //!
 //! | Column           | Type    | Required | Description                                  |
 //! | ---------------- | ------- | -------- | -------------------------------------------- |
@@ -37,10 +37,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::Path;
 
-use crate::LoadError;
 use crate::parquet_helpers::{
     extract_required_float64, extract_required_int32, extract_required_uint32,
 };
+use crate::LoadError;
 
 /// A single row from `scenarios/noise_openings.parquet`.
 ///

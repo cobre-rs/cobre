@@ -10,7 +10,7 @@ use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics,
 /// # Design
 ///
 /// The trait is resolved as a **generic type parameter at compile time**
-/// (compile-time monomorphization for FFI-wrapping trait; see docs/adr/003-compile-time-solver.md),
+/// (compile-time monomorphization for FFI-wrapping trait),
 /// not as `dyn SolverInterface`. This monomorphization approach
 /// eliminates virtual dispatch overhead on the hot path, where tens of millions
 /// of LP solves occur during a single training run. The training loop is

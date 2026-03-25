@@ -113,6 +113,8 @@ pub(crate) struct BroadcastConfig {
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: BroadcastCutSelection,
     pub(crate) cut_activity_tolerance: f64,
+    /// HiGHS simplex strategy override. `None` means use the Cobre default (4 = primal).
+    pub(crate) simplex_strategy: Option<u32>,
 }
 
 impl BroadcastConfig {
@@ -170,6 +172,7 @@ impl BroadcastConfig {
             inflow_method: params.inflow_method,
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
+            simplex_strategy: config.training.solver.simplex_strategy,
         })
     }
 }

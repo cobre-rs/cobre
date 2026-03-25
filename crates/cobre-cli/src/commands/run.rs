@@ -347,7 +347,21 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-export barrier error: {e}"),
     })?;
 
-    let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
+    // Capture the optional simplex strategy override from the broadcast config.
+    // When set, it overrides the Cobre default (primal simplex, strategy 4) on
+    // every solver instance created by this rank, including the worker pool.
+    let simplex_strategy = bcast_config.simplex_strategy;
+
+    let solver_factory = move || {
+        let mut s = HighsSolver::new()?;
+        if let Some(strategy) = simplex_strategy {
+            #[allow(clippy::cast_possible_wrap)]
+            s.set_simplex_strategy(strategy as i32);
+        }
+        Ok(s)
+    };
+
+    let mut solver = solver_factory().map_err(|e: cobre_solver::SolverError| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
     })?;
 
@@ -371,7 +385,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &mut solver,
         &comm,
         n_threads,
-        HighsSolver::new,
+        solver_factory,
         Some(event_tx),
         None,
     ) {
@@ -481,7 +495,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let sim_config = setup.simulation_config();
 
         let mut sim_pool = setup
-            .create_workspace_pool(n_threads, HighsSolver::new)
+            .create_workspace_pool(n_threads, solver_factory)
             .map_err(|e| CliError::Solver {
                 message: format!("HiGHS initialisation failed for simulation pool: {e}"),
             })?;

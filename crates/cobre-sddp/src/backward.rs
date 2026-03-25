@@ -426,17 +426,19 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
         // Cut rows have implicit row_scale = 1.0 and require no adjustment.
         let row_scale = &ctx.templates[s].row_scale;
-        let coefficients: Vec<f64> = if row_scale.is_empty() {
-            view.dual[..indexer.n_state].to_vec()
+        let out = &mut accum.outcomes[omega];
+        if row_scale.is_empty() {
+            out.coefficients
+                .copy_from_slice(&view.dual[..indexer.n_state]);
         } else {
-            view.dual[..indexer.n_state]
-                .iter()
-                .enumerate()
-                .map(|(i, &d)| d * row_scale[i])
-                .collect()
-        };
-        let intercept = objective
-            - coefficients
+            for (i, &d) in view.dual[..indexer.n_state].iter().enumerate() {
+                out.coefficients[i] = d * row_scale[i];
+            }
+        }
+        out.objective_value = objective;
+        out.intercept = objective
+            - out
+                .coefficients
                 .iter()
                 .zip(x_hat)
                 .map(|(pi, x)| pi * x)
@@ -451,11 +453,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 }
             }
         }
-        accum.outcomes.push(BackwardOutcome {
-            intercept,
-            coefficients,
-            objective_value: objective,
-        });
     }
 
     let (agg_intercept, agg_coefficients) =
@@ -512,13 +509,19 @@ fn process_stage_backward<S: SolverInterface + Send>(
             }
 
             let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
+            let n_state = training_ctx.indexer.n_state;
             let mut accum = TrialAccumulators {
-                outcomes: Vec::with_capacity(n_openings),
+                outcomes: (0..n_openings)
+                    .map(|_| BackwardOutcome {
+                        intercept: 0.0,
+                        coefficients: vec![0.0; n_state],
+                        objective_value: 0.0,
+                    })
+                    .collect(),
                 slot_increments: vec![0u64; succ.successor_populated_count],
             };
 
             for m in start_m..end_m {
-                accum.outcomes.clear();
                 accum.slot_increments.fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
@@ -992,6 +995,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         }]
     }
 
@@ -2476,6 +2480,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -2540,6 +2545,7 @@ mod tests {
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
+                backward_cut_maps: Vec::new(),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2844,6 +2850,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
 
@@ -2977,6 +2984,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3105,6 +3113,7 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
+            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;

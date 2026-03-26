@@ -1272,7 +1272,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }]
     }
 
@@ -1954,7 +1953,6 @@ mod tests {
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
-                backward_cut_maps: Vec::new(),
             })
             .collect();
         let result_4 = simulate(
@@ -2821,7 +2819,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3091,7 +3088,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -3348,7 +3344,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }]
     }
 

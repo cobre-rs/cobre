@@ -235,6 +235,18 @@ Documentation improvements are always welcome. The Rust API docs live inline in 
 - **No `unwrap()` in library code.** Use `Result` or `Option` with proper error types. `unwrap()` is acceptable in tests and examples.
 - **Minimize allocations in hot paths.** The SDDP solver runs millions of LP solves — allocation-heavy code in the inner loop is a performance problem.
 
+### Python Parity
+
+Every output file written by the CLI (`write_outputs` in `crates/cobre-cli/src/commands/run.rs`)
+must also be written by the Python bindings (`run_inner` in `crates/cobre-python/src/run.rs`).
+When adding a new output:
+
+1. Add the `cobre_io::write_*` call in both the CLI and Python paths
+2. Run `python3 scripts/check_python_parity.py` to verify parity
+3. The pre-commit hook runs this check automatically
+
+See `.claude/architecture-rules.md` for the full Python parity checklist.
+
 ### Crate-Specific Guidelines
 
 #### cobre-core
@@ -311,6 +323,19 @@ If you're a **researcher** with algorithmic improvements:
 ## Decision Making
 
 Cobre is currently maintained by [@rjmalves](https://github.com/rjmalves). Major design decisions (new crates, breaking API changes, new solver backends) are made through GitHub issues with discussion. As the contributor base grows, we'll formalize this with an RFC process.
+
+## Release Checklist
+
+Before tagging a new release:
+
+1. Update `CHANGELOG.md` with the new version's changes
+2. Update `CLAUDE.md` "Current State" section:
+   - Version number matches `Cargo.toml`
+   - Test count is current (`cargo test --workspace --all-features 2>&1 | grep "test result:" | awk '{sum += $4} END {print sum}'`)
+   - Feature list and known gaps are accurate
+3. Run `python3 scripts/check_claudemd_version.py` to verify version match
+4. Run `cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings`
+5. Tag: `git tag v<version>`
 
 ## License
 

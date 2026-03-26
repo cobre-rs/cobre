@@ -48,7 +48,7 @@ use crate::{
     cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, deactivate_cuts_in_lp, run_forward_pass, sync_forward},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,

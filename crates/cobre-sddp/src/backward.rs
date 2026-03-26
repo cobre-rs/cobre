@@ -263,12 +263,11 @@ struct TrialAccumulators {
 ///
 /// # Future: incremental cut injection
 ///
-/// The per-worker `backward_cut_maps` field in [`SolverWorkspace`] is
-/// provisioned for a future incremental path that skips `load_model` on
-/// iterations 2+ and only appends new cuts via `add_rows`. Implementing
-/// this requires adapting the dual extraction logic in
-/// [`process_trial_point_backward`] to use [`CutRowMap`] for LP row
-/// lookups instead of assuming sequential row ordering (the current
+/// A future incremental path could skip `load_model` on iterations 2+
+/// and only append new cuts via `add_rows`. Implementing this requires
+/// adapting the dual extraction logic in [`process_trial_point_backward`]
+/// to use [`CutRowMap`] for LP row lookups instead of assuming sequential
+/// row ordering (the current
 /// `view.dual[template_num_rows..template_num_rows + num_cuts]` pattern).
 ///
 /// [`CutRowMap`]: crate::cut::CutRowMap
@@ -995,7 +994,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }]
     }
 
@@ -2480,7 +2478,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -2545,7 +2542,6 @@ mod tests {
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
-                backward_cut_maps: Vec::new(),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2850,7 +2846,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
 
@@ -2984,7 +2979,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3113,7 +3107,6 @@ mod tests {
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
-            backward_cut_maps: Vec::new(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;

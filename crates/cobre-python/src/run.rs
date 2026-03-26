@@ -367,7 +367,7 @@ fn run_inner(
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
-    let training_result = setup
+    let training_outcome = setup
         .train(
             &mut solver,
             &LocalBackend,
@@ -377,6 +377,13 @@ fn run_inner(
             None,
         )
         .map_err(|e| format!("training error: {e}"))?;
+    if let Some(ref e) = training_outcome.error {
+        return Err(format!(
+            "training failed after {} iterations: {e}",
+            training_outcome.result.iterations
+        ));
+    }
+    let training_result = training_outcome.result;
 
     let events: Vec<_> = event_rx.try_iter().collect();
     let training_output = setup.build_training_output(&training_result, &events);

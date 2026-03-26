@@ -619,11 +619,11 @@ fn train_simulate_write_cycle() {
     )
     .expect("train must succeed");
 
-    assert_eq!(result.iterations, 3);
+    assert_eq!(result.result.iterations, 3);
 
     let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-    let training_output = build_training_output(&result, &events, &fcf);
+    let training_output = build_training_output(&result.result, &events, &fcf);
 
     assert_eq!(training_output.convergence_records.len(), 3);
 
@@ -682,9 +682,9 @@ fn train_simulate_write_cycle() {
         version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-08T00:00:00Z".to_string(),
-        completed_iterations: result.iterations as u32,
-        final_lower_bound: result.final_lb,
-        best_upper_bound: Some(result.final_ub),
+        completed_iterations: result.result.iterations as u32,
+        final_lower_bound: result.result.final_lb,
+        best_upper_bound: Some(result.result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: fx.n_stages as u32,
         config_hash: "test-config-hash".to_string(),

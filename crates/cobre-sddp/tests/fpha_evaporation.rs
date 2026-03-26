@@ -159,9 +159,9 @@ fn fpha_evaporation_case_converges() {
 
     // Acceptance criterion: convergence within the 256-iteration budget.
     assert!(
-        training_result.iterations <= 256,
+        training_result.result.iterations <= 256,
         "training must converge within 256 iterations; got {}",
-        training_result.iterations
+        training_result.result.iterations
     );
 
     // ── Step 7: simulate ──────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ fn fpha_evaporation_case_converges() {
             &comm,
             &result_tx,
             None,
-            &training_result.basis_cache,
+            &training_result.result.basis_cache,
         )
         .expect("simulate must return Ok");
 

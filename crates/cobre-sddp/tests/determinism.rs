@@ -532,6 +532,7 @@ fn run_training(
     n_iterations: u64,
 ) -> (cobre_sddp::TrainingResult, FutureCostFunction) {
     // Each run gets a fresh FCF and a fresh primary solver.
+    // train() now returns TrainingOutcome; unwrap the result field.
     let mut fcf = make_fcf_3h(fx.n_stages);
     let mut primary_solver = MockSolver3H::new(100.0);
     let comm = StubComm;
@@ -590,7 +591,7 @@ fn run_training(
         })
         .unwrap();
 
-    (result, fcf)
+    (result.result, fcf)
 }
 
 // ===========================================================================

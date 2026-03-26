@@ -500,7 +500,7 @@ fn build_fixture() -> Fixture {
 fn train_fixture(
     fx: &Fixture,
     iterations: u64,
-) -> Result<cobre_sddp::TrainingResult, cobre_sddp::SddpError> {
+) -> Result<cobre_sddp::TrainingOutcome, cobre_sddp::SddpError> {
     let n_stages = fx.stage_templates.templates.len();
     let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");

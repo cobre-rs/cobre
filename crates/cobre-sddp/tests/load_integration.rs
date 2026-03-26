@@ -497,9 +497,9 @@ fn test_stochastic_load_training_completes() {
     .expect("train must succeed with stochastic load");
 
     assert_eq!(
-        result.iterations, 3,
+        result.result.iterations, 3,
         "expected exactly 3 iterations, got {}",
-        result.iterations
+        result.result.iterations
     );
 
     // Collect ConvergenceUpdate events to confirm one LB per iteration.
@@ -597,11 +597,14 @@ fn test_deterministic_load_training_matches_baseline() {
     .expect("train must succeed with deterministic load");
 
     assert_eq!(
-        result.iterations, 3,
+        result.result.iterations, 3,
         "expected exactly 3 iterations, got {}",
-        result.iterations
+        result.result.iterations
     );
-    assert!(result.final_lb >= 0.0, "final_lb must be non-negative");
+    assert!(
+        result.result.final_lb >= 0.0,
+        "final_lb must be non-negative"
+    );
 }
 
 /// Verify that two training runs with identical seed=42 and stochastic load
@@ -694,9 +697,9 @@ fn test_stochastic_load_seed_determinism() {
     let (result2, lbs2) = run_training();
 
     assert_eq!(
-        result1.iterations, result2.iterations,
+        result1.result.iterations, result2.result.iterations,
         "iteration counts must be identical: {} vs {}",
-        result1.iterations, result2.iterations
+        result1.result.iterations, result2.result.iterations
     );
 
     assert_eq!(
@@ -719,10 +722,10 @@ fn test_stochastic_load_seed_determinism() {
     }
 
     assert_eq!(
-        result1.final_lb.to_bits(),
-        result2.final_lb.to_bits(),
+        result1.result.final_lb.to_bits(),
+        result2.result.final_lb.to_bits(),
         "final_lb must be bit-for-bit identical: {} vs {}",
-        result1.final_lb,
-        result2.final_lb
+        result1.result.final_lb,
+        result2.result.final_lb
     );
 }

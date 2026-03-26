@@ -369,7 +369,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         ))
     };
 
-    let training_result = match setup.train(
+    let training_outcome = match setup.train(
         &mut solver,
         &comm,
         n_threads,
@@ -377,7 +377,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         Some(event_tx),
         None,
     ) {
-        Ok(result) => result,
+        Ok(outcome) => outcome,
         Err(e) => {
             if let Some(handle) = progress_handle {
                 let _ = handle.join();
@@ -385,6 +385,17 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             return Err(CliError::from(e));
         }
     };
+    // Propagate captured mid-iteration error as CliError. The
+    // output-before-error behaviour is added in Epic 2.
+    if let Some(ref training_error) = training_outcome.error {
+        if let Some(handle) = progress_handle {
+            let _ = handle.join();
+        }
+        return Err(CliError::Internal {
+            message: format!("training failed mid-iteration: {training_error}"),
+        });
+    }
+    let training_result = training_outcome.result;
 
     let events: Vec<TrainingEvent> = match (progress_handle, quiet_rx) {
         (Some(handle), _) => handle.join(),

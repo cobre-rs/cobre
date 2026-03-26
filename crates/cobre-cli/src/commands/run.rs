@@ -347,21 +347,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-export barrier error: {e}"),
     })?;
 
-    // Capture the optional simplex strategy override from the broadcast config.
-    // When set, it overrides the Cobre default (primal simplex, strategy 4) on
-    // every solver instance created by this rank, including the worker pool.
-    let simplex_strategy = bcast_config.simplex_strategy;
+    let solver_factory = HighsSolver::new;
 
-    let solver_factory = move || {
-        let mut s = HighsSolver::new()?;
-        if let Some(strategy) = simplex_strategy {
-            #[allow(clippy::cast_possible_wrap)]
-            s.set_simplex_strategy(strategy as i32);
-        }
-        Ok(s)
-    };
-
-    let mut solver = solver_factory().map_err(|e: cobre_solver::SolverError| CliError::Solver {
+    let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
     })?;
 
@@ -794,6 +782,17 @@ fn write_outputs(
             })
             .collect();
         cobre_io::write_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+    }
+
+    // Write per-stage cut selection records to training/cut_selection/iterations.parquet.
+    if !training_output.cut_selection_records.is_empty() {
+        let parquet_config = cobre_io::ParquetWriterConfig::default();
+        cobre_io::write_cut_selection_records(
+            output_dir,
+            &training_output.cut_selection_records,
+            &parquet_config,
+        )
+        .map_err(CliError::from)?;
     }
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.

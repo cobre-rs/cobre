@@ -248,6 +248,7 @@ mod tests {
                 total_active: 80,
                 peak_active: 95,
             },
+            cut_selection_records: vec![],
         }
     }
 

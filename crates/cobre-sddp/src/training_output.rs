@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use cobre_core::TrainingEvent;
-use cobre_io::{CutStatistics, IterationRecord, TrainingOutput};
+use cobre_io::{CutSelectionRecord, CutStatistics, IterationRecord, TrainingOutput};
 
 use crate::{FutureCostFunction, TrainingResult};
 
@@ -307,6 +307,31 @@ pub fn build_training_output(
     #[allow(clippy::cast_possible_truncation)]
     let iterations_completed = result.iterations as u32;
 
+    #[allow(clippy::cast_possible_truncation)]
+    let cut_selection_records: Vec<CutSelectionRecord> = events
+        .iter()
+        .filter_map(|event| {
+            if let TrainingEvent::CutSelectionComplete {
+                iteration,
+                per_stage,
+                ..
+            } = event
+            {
+                Some(per_stage.iter().map(move |rec| CutSelectionRecord {
+                    iteration: *iteration as u32,
+                    stage: rec.stage,
+                    cuts_populated: rec.cuts_populated,
+                    cuts_active_before: rec.cuts_active_before,
+                    cuts_deactivated: rec.cuts_deactivated,
+                    cuts_active_after: rec.cuts_active_after,
+                }))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect();
+
     TrainingOutput {
         convergence_records,
         final_lower_bound: result.final_lb,
@@ -317,6 +342,7 @@ pub fn build_training_output(
         termination_reason: result.reason.clone(),
         total_time_ms: result.total_time_ms,
         cut_stats,
+        cut_selection_records,
     }
 }
 
@@ -792,5 +818,60 @@ mod tests {
             rec.time_overhead_ms, 0,
             "overhead_ms must be 0 when attributed phases exceed total (saturating sub)"
         );
+    }
+
+    #[test]
+    fn cut_selection_records_extracted_from_events() {
+        use cobre_core::StageSelectionRecord;
+
+        let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 3);
+        let events = vec![
+            make_iteration_summary(1, 95.0, 112.0, 0.15),
+            make_iteration_summary(2, 98.0, 111.0, 0.12),
+            make_iteration_summary(3, 100.0, 110.0, 0.1),
+            TrainingEvent::CutSelectionComplete {
+                iteration: 2,
+                cuts_deactivated: 3,
+                stages_processed: 2,
+                selection_time_ms: 10,
+                allgatherv_time_ms: 0,
+                per_stage: vec![
+                    StageSelectionRecord {
+                        stage: 0,
+                        cuts_populated: 5,
+                        cuts_active_before: 5,
+                        cuts_deactivated: 0,
+                        cuts_active_after: 5,
+                    },
+                    StageSelectionRecord {
+                        stage: 1,
+                        cuts_populated: 8,
+                        cuts_active_before: 8,
+                        cuts_deactivated: 3,
+                        cuts_active_after: 5,
+                    },
+                ],
+            },
+        ];
+        let fcf = make_empty_fcf();
+        let output = build_training_output(&result, &events, &fcf);
+
+        assert_eq!(output.cut_selection_records.len(), 2);
+        assert_eq!(output.cut_selection_records[0].iteration, 2);
+        assert_eq!(output.cut_selection_records[0].stage, 0);
+        assert_eq!(output.cut_selection_records[0].cuts_deactivated, 0);
+        assert_eq!(output.cut_selection_records[1].stage, 1);
+        assert_eq!(output.cut_selection_records[1].cuts_deactivated, 3);
+        assert_eq!(output.cut_selection_records[1].cuts_active_after, 5);
+    }
+
+    #[test]
+    fn no_cut_selection_events_produces_empty_records() {
+        let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 1);
+        let events = vec![make_iteration_summary(1, 100.0, 110.0, 0.1)];
+        let fcf = make_empty_fcf();
+        let output = build_training_output(&result, &events, &fcf);
+
+        assert!(output.cut_selection_records.is_empty());
     }
 }

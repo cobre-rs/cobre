@@ -24,9 +24,10 @@ use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
-    buses_schema, contracts_schema, convergence_schema, costs_schema, exchanges_schema,
-    generic_violations_schema, hydros_schema, inflow_lags_schema, iteration_timing_schema,
-    non_controllables_schema, pumping_stations_schema, rank_timing_schema, thermals_schema,
+    buses_schema, contracts_schema, convergence_schema, costs_schema, cut_selection_schema,
+    exchanges_schema, generic_violations_schema, hydros_schema, inflow_lags_schema,
+    iteration_timing_schema, non_controllables_schema, pumping_stations_schema, rank_timing_schema,
+    thermals_schema,
 };
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
@@ -283,6 +284,7 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
         ("convergence", convergence_schema()),
         ("iteration_timing", iteration_timing_schema()),
         ("rank_timing", rank_timing_schema()),
+        ("cut_selection", cut_selection_schema()),
     ];
 
     for (schema_name, schema) in schemas {
@@ -599,6 +601,13 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("rank_timing", "idle_time_ms") => "Idle time for this rank",
         ("rank_timing", "lp_solves") => "LP solves on this rank",
         ("rank_timing", "scenarios_processed") => "Scenarios processed by this rank",
+        // ── cut_selection ──────────────────────────────────────────────────
+        ("cut_selection", "iteration") => "Iteration number (1-based)",
+        ("cut_selection", "stage") => "Stage index (0-based)",
+        ("cut_selection", "cuts_populated") => "Total cuts ever generated at this stage",
+        ("cut_selection", "cuts_active_before") => "Active cuts before selection ran",
+        ("cut_selection", "cuts_deactivated") => "Cuts deactivated by selection",
+        ("cut_selection", "cuts_active_after") => "Active cuts after selection",
         _ => "",
     }
 }
@@ -1337,8 +1346,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 150,
-            "variables.csv must have exactly 150 data rows (one per column across all 13 schemas)"
+            row_count, 156,
+            "variables.csv must have exactly 156 data rows (one per column across all 14 schemas)"
         );
     }
 

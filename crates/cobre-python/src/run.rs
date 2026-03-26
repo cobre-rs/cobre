@@ -369,6 +369,16 @@ fn run_inner(
 
     let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
+    // Write per-stage cut selection records (training-only, no simulation dependency).
+    if !training_output.cut_selection_records.is_empty() {
+        cobre_io::write_cut_selection_records(
+            &output_dir,
+            &training_output.cut_selection_records,
+            &ParquetWriterConfig::default(),
+        )
+        .map_err(|e| format!("cut selection output: {e}"))?;
+    }
+
     if should_simulate {
         let io_capacity = setup.simulation_config().io_channel_capacity;
         let mut sim_pool = setup

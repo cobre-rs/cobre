@@ -284,6 +284,21 @@ pub(crate) fn solver_iterations_schema() -> Schema {
     ])
 }
 
+/// Schema for `training/cut_selection/iterations.parquet` — per-stage
+/// cut selection statistics.
+///
+/// 6 fields. One row per (iteration, stage) pair.
+pub(crate) fn cut_selection_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("iteration", DataType::Int32, false),
+        Field::new("stage", DataType::Int32, false),
+        Field::new("cuts_populated", DataType::Int32, false),
+        Field::new("cuts_active_before", DataType::Int32, false),
+        Field::new("cuts_deactivated", DataType::Int32, false),
+        Field::new("cuts_active_after", DataType::Int32, false),
+    ])
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -686,8 +701,18 @@ mod tests {
     }
 
     #[test]
+    fn cut_selection_schema_field_count_and_types() {
+        let schema = cut_selection_schema();
+        assert_eq!(schema.fields().len(), 6);
+        for field in schema.fields() {
+            assert_eq!(field.data_type(), &DataType::Int32);
+            assert!(!field.is_nullable());
+        }
+    }
+
+    #[test]
     fn all_schema_functions_return_valid_schemas() {
-        // Call all 14 schema functions and verify they return non-empty schemas
+        // Call all schema functions and verify they return non-empty schemas
         // without panicking.
         let schemas: Vec<(Schema, &str)> = vec![
             (costs_schema(), "costs"),
@@ -703,6 +728,7 @@ mod tests {
             (convergence_schema(), "convergence"),
             (iteration_timing_schema(), "iteration_timing"),
             (rank_timing_schema(), "rank_timing"),
+            (cut_selection_schema(), "cut_selection"),
         ];
         for (schema, name) in &schemas {
             assert!(
@@ -729,6 +755,7 @@ mod tests {
             ("convergence", 13),
             ("iteration_timing", 13),
             ("rank_timing", 8),
+            ("cut_selection", 6),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {
             assert_eq!(

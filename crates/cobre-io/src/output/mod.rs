@@ -41,7 +41,7 @@ pub use stochastic::{
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
     write_load_seasonal_stats, write_noise_openings,
 };
-pub use training_writer::TrainingParquetWriter;
+pub use training_writer::{TrainingParquetWriter, write_cut_selection_records};
 
 use cobre_core::System;
 use std::path::Path;
@@ -178,6 +178,26 @@ pub struct CutStatistics {
     pub peak_active: u64,
 }
 
+/// One row in `training/cut_selection/iterations.parquet`.
+///
+/// Represents per-stage cut selection statistics for a single iteration.
+/// Only populated when cut selection is enabled.
+#[derive(Debug, Clone)]
+pub struct CutSelectionRecord {
+    /// Iteration number (1-based).
+    pub iteration: u32,
+    /// 0-based stage index.
+    pub stage: u32,
+    /// Total cuts ever generated at this stage.
+    pub cuts_populated: u32,
+    /// Active cuts before selection ran.
+    pub cuts_active_before: u32,
+    /// Cuts deactivated by selection at this stage.
+    pub cuts_deactivated: u32,
+    /// Active cuts after selection.
+    pub cuts_active_after: u32,
+}
+
 /// Aggregate type carrying all training data needed for output writing.
 ///
 /// Constructed by the solver after training completes and passed to
@@ -215,6 +235,12 @@ pub struct TrainingOutput {
 
     /// Summary cut pool statistics for the run.
     pub cut_stats: CutStatistics,
+
+    /// Per-stage cut selection records for Parquet output.
+    ///
+    /// Empty when cut selection is disabled. When non-empty, written to
+    /// `training/cut_selection/iterations.parquet`.
+    pub cut_selection_records: Vec<CutSelectionRecord>,
 }
 
 /// Aggregate type carrying simulation completion data for output writing.
@@ -318,6 +344,7 @@ pub struct SimulationOutput {
 ///         total_active: 80,
 ///         peak_active: 95,
 ///     },
+///     cut_selection_records: Vec::new(),
 /// };
 /// write_results(Path::new("/tmp/out"), &training, None, system, config)?;
 /// # Ok(())
@@ -506,6 +533,7 @@ mod tests {
                 total_active: 80,
                 peak_active: 95,
             },
+            cut_selection_records: vec![],
         }
     }
 
@@ -585,6 +613,7 @@ mod tests {
                 total_active: 120,
                 peak_active: 150,
             },
+            cut_selection_records: vec![],
         };
 
         assert_eq!(output.convergence_records.len(), 5);

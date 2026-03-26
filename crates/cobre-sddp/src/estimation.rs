@@ -319,10 +319,12 @@ fn run_estimation(
         &seasonal_stats,
         stages,
         &hydro_ids,
-        max_order,
-        config.estimation.max_coefficient_magnitude,
-        &config.estimation.order_selection,
-        season_map,
+        &ArEstimationConfig {
+            max_order,
+            max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
+            method: &config.estimation.order_selection,
+            season_map,
+        },
     )?;
 
     // ── Step 6: estimate or preserve correlation ─────────────────────────────
@@ -352,6 +354,14 @@ fn run_estimation(
     ))
 }
 
+/// Configuration parameters for AR coefficient estimation.
+struct ArEstimationConfig<'a> {
+    max_order: usize,
+    max_coeff_magnitude: Option<f64>,
+    method: &'a OrderSelectionMethod,
+    season_map: Option<&'a cobre_core::temporal::SeasonMap>,
+}
+
 /// Estimate AR coefficients with the configured order selection method.
 ///
 /// For `Fixed`, delegates directly to `estimate_ar_coefficients`.
@@ -359,26 +369,22 @@ fn run_estimation(
 /// coefficients, then calls `levinson_durbin` per `(entity, season)` pair to
 /// get `sigma2_per_order` for AIC minimisation, and truncates the coefficient
 /// vector to the AIC-selected order.
-#[allow(clippy::too_many_arguments)]
 fn estimate_ar_coefficients_with_selection(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
     stages: &[cobre_core::temporal::Stage],
     hydro_ids: &[EntityId],
-    max_order: usize,
-    max_coeff_magnitude: Option<f64>,
-    method: &OrderSelectionMethod,
-    season_map: Option<&cobre_core::temporal::SeasonMap>,
+    cfg: &ArEstimationConfig<'_>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
-    match method {
+    match cfg.method {
         OrderSelectionMethod::Fixed => {
             let mut estimates = estimate_ar_coefficients_with_season_map(
                 observations,
                 seasonal_stats,
                 stages,
                 hydro_ids,
-                max_order,
-                season_map,
+                cfg.max_order,
+                cfg.season_map,
             )?;
 
             // Build stats_map and n_seasons for contribution validation.
@@ -406,7 +412,7 @@ fn estimate_ar_coefficients_with_selection(
                 n_seasons,
                 &stats_map,
                 &sigma2_map,
-                max_coeff_magnitude,
+                cfg.max_coeff_magnitude,
             );
 
             let report = build_estimation_report(&estimates, n_seasons, &reductions, "fixed");
@@ -417,9 +423,9 @@ fn estimate_ar_coefficients_with_selection(
             seasonal_stats,
             stages,
             hydro_ids,
-            max_order,
-            season_map,
-            max_coeff_magnitude,
+            cfg.max_order,
+            cfg.season_map,
+            cfg.max_coeff_magnitude,
         ),
     }
 }
@@ -1451,10 +1457,12 @@ mod tests {
             &seasonal_stats,
             &stages,
             &hydro_ids,
-            max_order,
-            None, // max_coeff_magnitude
-            &method,
-            None, // season_map
+            &ArEstimationConfig {
+                max_order,
+                max_coeff_magnitude: None,
+                method: &method,
+                season_map: None,
+            },
         )
         .unwrap();
 

@@ -104,6 +104,8 @@ pub struct StudyParams {
     pub inflow_method: InflowNonNegativityMethod,
     /// Optional cut selection strategy (None means cut selection is disabled).
     pub cut_selection: Option<CutSelectionStrategy>,
+    /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
+    pub cut_activity_tolerance: f64,
 }
 
 impl StudyParams {
@@ -187,6 +189,12 @@ impl StudyParams {
         let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
             .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
 
+        let cut_activity_tolerance = config
+            .training
+            .cut_selection
+            .cut_activity_tolerance
+            .unwrap_or(0.0);
+
         Ok(Self {
             seed,
             forward_passes,
@@ -196,6 +204,7 @@ impl StudyParams {
             policy_path,
             inflow_method,
             cut_selection,
+            cut_activity_tolerance,
         })
     }
 }
@@ -250,6 +259,7 @@ pub struct StudySetup {
     policy_path: String,
     inflow_method: InflowNonNegativityMethod,
     cut_selection: Option<CutSelectionStrategy>,
+    cut_activity_tolerance: f64,
     stopping_rule_set: StoppingRuleSet,
 }
 
@@ -286,6 +296,7 @@ impl StudySetup {
             params.policy_path,
             params.inflow_method,
             params.cut_selection,
+            params.cut_activity_tolerance,
             hydro_models,
         )
     }
@@ -328,6 +339,7 @@ impl StudySetup {
         policy_path: String,
         inflow_method: InflowNonNegativityMethod,
         cut_selection: Option<CutSelectionStrategy>,
+        cut_activity_tolerance: f64,
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
@@ -482,6 +494,16 @@ impl StudySetup {
         // z-inflow column and row ranges are set by StageIndexer::new at
         // fixed offset N*(1+L), no per-stage wiring needed.
 
+        // ── Nonzero state mask for sparse cut injection (P3) ────────────────
+        // Build per-hydro AR orders from the precomputed PAR model. When the
+        // PAR has hydros with AR order < max_par_order, the mask enables
+        // sparse cut rows in `build_cut_row_batch_into`.
+        if indexer.max_par_order > 0 && stochastic.par().n_hydros() > 0 {
+            let par = stochastic.par();
+            let ar_orders: Vec<usize> = (0..par.n_hydros()).map(|h| par.order(h)).collect();
+            indexer.set_nonzero_mask(&ar_orders);
+        }
+
         // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
 
@@ -575,6 +597,7 @@ impl StudySetup {
             policy_path,
             inflow_method,
             cut_selection,
+            cut_activity_tolerance,
             stopping_rule_set,
         })
     }
@@ -740,6 +763,12 @@ impl StudySetup {
         self.cut_selection.as_ref()
     }
 
+    /// Minimum dual multiplier for a cut to count as binding.
+    #[must_use]
+    pub fn cut_activity_tolerance(&self) -> f64 {
+        self.cut_activity_tolerance
+    }
+
     /// Return a reference to the stopping rule set.
     #[must_use]
     pub fn stopping_rule_set(&self) -> &StoppingRuleSet {
@@ -841,6 +870,7 @@ impl StudySetup {
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             self.cut_selection.as_ref(),
+            self.cut_activity_tolerance,
             shutdown_flag,
             comm,
             n_threads,
@@ -1064,13 +1094,14 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
         }
     }
 
-    // ── Lag portion (populated from past_inflows) ─────────────────────────────
+    // ── Lag portion (populated from past_inflows, lag-major layout) ─────────────
     if indexer.max_par_order > 0 {
+        let n_h = indexer.hydro_count;
         for pi in &ic.past_inflows {
             if let Ok(idx) = hydros.binary_search_by_key(&pi.hydro_id.0, |h| h.id.0) {
                 let n_lags = pi.values_m3s.len().min(indexer.max_par_order);
                 for lag in 0..n_lags {
-                    let slot = indexer.inflow_lags.start + idx * indexer.max_par_order + lag;
+                    let slot = indexer.inflow_lags.start + lag * n_h + idx;
                     state[slot] = pi.values_m3s[lag];
                 }
             }
@@ -2713,28 +2744,29 @@ mod tests {
 
         let state = build_initial_state(&system, &indexer);
 
-        // State layout: storage(0..2), lags(2..6).
-        // Hydro at idx 0 (id=1): lag 0 = 600.0, lag 1 = 500.0.
-        // Hydro at idx 1 (id=2): lag 0 = 200.0, lag 1 = 100.0.
+        // State layout: storage(0..2), lags(2..6) in lag-major order.
+        // Lag-major: slot = s + lag * N + h, where N = 2.
+        // lag0_h0 = 600.0 at s+0, lag0_h1 = 200.0 at s+1,
+        // lag1_h0 = 500.0 at s+2, lag1_h1 = 100.0 at s+3.
         let s = indexer.inflow_lags.start;
         assert!(
             (state[s] - 600.0).abs() < 1e-10,
-            "hydro 1 lag 0: expected 600.0, got {}",
+            "lag0 hydro 0: expected 600.0, got {}",
             state[s]
         );
         assert!(
-            (state[s + 1] - 500.0).abs() < 1e-10,
-            "hydro 1 lag 1: expected 500.0, got {}",
+            (state[s + 1] - 200.0).abs() < 1e-10,
+            "lag0 hydro 1: expected 200.0, got {}",
             state[s + 1]
         );
         assert!(
-            (state[s + 2] - 200.0).abs() < 1e-10,
-            "hydro 2 lag 0: expected 200.0, got {}",
+            (state[s + 2] - 500.0).abs() < 1e-10,
+            "lag1 hydro 0: expected 500.0, got {}",
             state[s + 2]
         );
         assert!(
             (state[s + 3] - 100.0).abs() < 1e-10,
-            "hydro 2 lag 1: expected 100.0, got {}",
+            "lag1 hydro 1: expected 100.0, got {}",
             state[s + 3]
         );
         assert_eq!(
@@ -2816,29 +2848,30 @@ mod tests {
 
         let state = setup.initial_state();
 
-        // With 2 hydros and max_par_order=2, lag slots start after storage slots.
-        // Hydro 1 (idx 0): lag 0 = 600.0, lag 1 = 500.0
-        // Hydro 2 (idx 1): lag 0 = 200.0, lag 1 = 100.0
+        // With 2 hydros (N=2) and max_par_order=2 (L=2), lag slots start at N=2.
+        // Lag-major layout: slot = lag_start + lag * N + h.
+        // lag0_h0 = 600.0 at [2], lag0_h1 = 200.0 at [3],
+        // lag1_h0 = 500.0 at [4], lag1_h1 = 100.0 at [5].
         let n_hydros = 2;
         let lag_start = n_hydros;
         assert!(
             (state[lag_start] - 600.0).abs() < 1e-10,
-            "hydro 1 lag 0 should be 600.0 via StudySetup, got {}",
+            "lag0 hydro 0 should be 600.0 via StudySetup, got {}",
             state[lag_start]
         );
         assert!(
-            (state[lag_start + 1] - 500.0).abs() < 1e-10,
-            "hydro 1 lag 1 should be 500.0 via StudySetup, got {}",
+            (state[lag_start + 1] - 200.0).abs() < 1e-10,
+            "lag0 hydro 1 should be 200.0 via StudySetup, got {}",
             state[lag_start + 1]
         );
         assert!(
-            (state[lag_start + 2] - 200.0).abs() < 1e-10,
-            "hydro 2 lag 0 should be 200.0 via StudySetup, got {}",
+            (state[lag_start + 2] - 500.0).abs() < 1e-10,
+            "lag1 hydro 0 should be 500.0 via StudySetup, got {}",
             state[lag_start + 2]
         );
         assert!(
             (state[lag_start + 3] - 100.0).abs() < 1e-10,
-            "hydro 2 lag 1 should be 100.0 via StudySetup, got {}",
+            "lag1 hydro 1 should be 100.0 via StudySetup, got {}",
             state[lag_start + 3]
         );
     }

@@ -283,6 +283,8 @@ pub fn build_cut_row_batch_into(
 
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
+    let mask = &indexer.nonzero_state_indices;
+    let is_sparse = !mask.is_empty();
 
     let num_cuts: usize = fcf.active_cuts(stage).count();
 
@@ -291,7 +293,13 @@ pub fn build_cut_row_batch_into(
         return;
     }
 
-    let nnz_per_cut = n_state + 1;
+    // Sparse path: NNZ = mask.len() + 1 (nonzero state entries + theta).
+    // Dense path: NNZ = n_state + 1 (all state entries + theta).
+    let nnz_per_cut = if is_sparse {
+        mask.len() + 1
+    } else {
+        n_state + 1
+    };
     let total_nnz = num_cuts * nnz_per_cut;
 
     let mut nz_offset = 0;
@@ -308,19 +316,38 @@ pub fn build_cut_row_batch_into(
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch.row_starts.push(nz_offset as i32);
 
-        for (j, &c) in coefficients.iter().enumerate() {
-            debug_assert!(
-                i32::try_from(j).is_ok(),
-                "column index j={j} exceeds i32::MAX"
-            );
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            batch.col_indices.push(j as i32);
-            let d = if col_scale.is_empty() {
-                1.0
-            } else {
-                col_scale[j]
-            };
-            batch.values.push(-c * d);
+        if is_sparse {
+            // Sparse path: iterate only over nonzero state indices.
+            for &j in mask {
+                debug_assert!(
+                    i32::try_from(j).is_ok(),
+                    "column index j={j} exceeds i32::MAX"
+                );
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                batch.col_indices.push(j as i32);
+                let d = if col_scale.is_empty() {
+                    1.0
+                } else {
+                    col_scale[j]
+                };
+                batch.values.push(-coefficients[j] * d);
+            }
+        } else {
+            // Dense path: iterate over all state indices (backward compatible).
+            for (j, &c) in coefficients.iter().enumerate() {
+                debug_assert!(
+                    i32::try_from(j).is_ok(),
+                    "column index j={j} exceeds i32::MAX"
+                );
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                batch.col_indices.push(j as i32);
+                let d = if col_scale.is_empty() {
+                    1.0
+                } else {
+                    col_scale[j]
+                };
+                batch.values.push(-c * d);
+            }
         }
 
         debug_assert!(

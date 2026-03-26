@@ -41,7 +41,7 @@ pub use stochastic::{
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
     write_load_seasonal_stats, write_noise_openings,
 };
-pub use training_writer::TrainingParquetWriter;
+pub use training_writer::{TrainingParquetWriter, write_cut_selection_records};
 
 use cobre_core::System;
 use std::path::Path;
@@ -132,6 +132,21 @@ pub struct IterationRecord {
     /// Maps to `io_write_ms` in `training/timing/iterations.parquet`.
     pub time_io_write_ms: u64,
 
+    /// Wall-clock time for state exchange (`allgatherv`) in the backward pass (ms).
+    ///
+    /// Maps to `state_exchange_ms` in `training/timing/iterations.parquet`.
+    pub time_state_exchange_ms: u64,
+
+    /// Wall-clock time for cut batch assembly in the backward pass (ms).
+    ///
+    /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
+    pub time_cut_batch_build_ms: u64,
+
+    /// Estimated rayon barrier + scheduling overhead in the backward pass (ms).
+    ///
+    /// Maps to `rayon_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_rayon_overhead_ms: u64,
+
     /// Residual wall-clock time not attributed to any specific phase (ms).
     ///
     /// Computed as `time_total_ms - sum(all other time_* fields)`.
@@ -161,6 +176,26 @@ pub struct CutStatistics {
 
     /// Highest number of active cuts observed at any point during training.
     pub peak_active: u64,
+}
+
+/// One row in `training/cut_selection/iterations.parquet`.
+///
+/// Represents per-stage cut selection statistics for a single iteration.
+/// Only populated when cut selection is enabled.
+#[derive(Debug, Clone)]
+pub struct CutSelectionRecord {
+    /// Iteration number (1-based).
+    pub iteration: u32,
+    /// 0-based stage index.
+    pub stage: u32,
+    /// Total cuts ever generated at this stage.
+    pub cuts_populated: u32,
+    /// Active cuts before selection ran.
+    pub cuts_active_before: u32,
+    /// Cuts deactivated by selection at this stage.
+    pub cuts_deactivated: u32,
+    /// Active cuts after selection.
+    pub cuts_active_after: u32,
 }
 
 /// Aggregate type carrying all training data needed for output writing.
@@ -200,6 +235,12 @@ pub struct TrainingOutput {
 
     /// Summary cut pool statistics for the run.
     pub cut_stats: CutStatistics,
+
+    /// Per-stage cut selection records for Parquet output.
+    ///
+    /// Empty when cut selection is disabled. When non-empty, written to
+    /// `training/cut_selection/iterations.parquet`.
+    pub cut_selection_records: Vec<CutSelectionRecord>,
 }
 
 /// Aggregate type carrying simulation completion data for output writing.
@@ -303,6 +344,7 @@ pub struct SimulationOutput {
 ///         total_active: 80,
 ///         peak_active: 95,
 ///     },
+///     cut_selection_records: Vec::new(),
 /// };
 /// write_results(Path::new("/tmp/out"), &training, None, system, config)?;
 /// # Ok(())
@@ -467,6 +509,9 @@ mod tests {
             time_mpi_allreduce_ms: 0,
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             solve_time_ms: 0.0,
         }
@@ -488,6 +533,7 @@ mod tests {
                 total_active: 80,
                 peak_active: 95,
             },
+            cut_selection_records: vec![],
         }
     }
 
@@ -567,6 +613,7 @@ mod tests {
                 total_active: 120,
                 peak_active: 150,
             },
+            cut_selection_records: vec![],
         };
 
         assert_eq!(output.convergence_records.len(), 5);
@@ -606,6 +653,9 @@ mod tests {
             time_mpi_allreduce_ms: 3,
             time_mpi_broadcast_ms: 2,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 2),
             solve_time_ms: 0.0,
         };

@@ -110,7 +110,7 @@ pre,
 .content main h2,
 .content main h3,
 .content main h4 {
-  color: var(--bright);
+  color: var(--copper-light);
   font-weight: 600;
 }
 
@@ -273,6 +273,54 @@ pre,
   padding: 0.15em 0.5em;
   border-radius: 3px;
   vertical-align: middle;
+}
+
+/* --- Light theme overrides ------------------------------------------------ */
+
+.light {
+  --sidebar-bg: #f8f7f5;
+  --sidebar-fg: #333;
+  --sidebar-active: var(--copper);
+  --links: var(--flow-blue);
+  --inline-code-color: var(--copper-dark);
+  --quote-bg: #f4f0eb;
+  --quote-border: var(--copper);
+  --table-header-bg: #f4f0eb;
+}
+
+.light .content main h1,
+.light .content main h2,
+.light .content main h3,
+.light .content main h4 {
+  color: var(--copper);
+}
+
+.light .content a {
+  color: var(--flow-blue);
+}
+
+.light .content a:hover {
+  color: var(--copper);
+  border-bottom-color: var(--copper);
+}
+
+.light .sidebar a.active,
+.light .sidebar a:hover,
+.light .sidebar .chapter li.active > a {
+  color: var(--copper);
+}
+
+.light .content pre {
+  background-color: #f4f0eb;
+  border: 1px solid #ddd;
+}
+
+.light .content code {
+  color: var(--copper-dark);
+}
+
+.light .content pre > code {
+  color: #333;
 }
 
 /* --- Responsive tweaks ---------------------------------------------------- */

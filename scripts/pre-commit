@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook for Cobre
+# Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+echo "==> Running cargo fmt --check..."
+cargo fmt --all -- --check
+
+echo "==> Running suppression check..."
+python3 scripts/check_suppressions.py --max 12
+
+echo "==> Running Python parity check..."
+python3 scripts/check_python_parity.py --max 0
+
+echo "==> Pre-commit checks passed."

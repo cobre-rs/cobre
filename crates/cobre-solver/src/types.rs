@@ -184,6 +184,12 @@ pub struct SolverStatistics {
 
     /// Cumulative wall-clock time spent in `set_row_bounds` and `set_col_bounds` calls, in seconds.
     pub total_set_bounds_time_seconds: f64,
+
+    /// Cumulative wall-clock time spent in `set_basis` FFI calls, in seconds.
+    ///
+    /// Accumulated by `solve_with_basis` around the basis installation step.
+    /// `solve()` (without basis) does not increment this counter.
+    pub total_basis_set_time_seconds: f64,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.

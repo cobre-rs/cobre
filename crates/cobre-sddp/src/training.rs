@@ -32,7 +32,7 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::TrainingEvent;
+use cobre_core::{StageSelectionRecord, TrainingEvent};
 use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
@@ -48,7 +48,7 @@ use crate::{
     cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, deactivate_cuts_in_lp, run_forward_pass, sync_forward},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
@@ -126,52 +126,6 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
     let phantom = total - active;
     // Rebuild when phantom rows exceed 20% of total, or every 50 iterations.
     (total > 0 && phantom * 5 > total) || iterations_since_rebuild >= 50
-}
-
-/// Collect the newly generated cuts from the FCF pool for a given stage and
-/// iteration.
-///
-/// The backward pass inserts cuts directly into the FCF with deterministic
-/// slot indices. This helper reads back the metadata for those slots to build
-/// the `local_cuts` tuple slice consumed by [`CutSyncBuffers::sync_cuts`].
-///
-/// Returns a `Vec` of `(slot_index, iteration, forward_pass_index, intercept,
-/// coefficients)` tuples for all cuts at `stage` whose
-/// `metadata.iteration_generated == iteration`.
-///
-/// This allocation is bounded to `total_scenarios` entries per stage per
-/// iteration and is acceptable on the backward/sync path (not the inner LP
-/// loop).
-fn collect_local_cuts_for_stage(
-    fcf: &FutureCostFunction,
-    stage: usize,
-    iteration: u64,
-) -> Vec<(u32, u32, u32, f64, Vec<f64>)> {
-    let pool = &fcf.pools[stage];
-    let mut result = Vec::new();
-    for slot in 0..pool.populated_count {
-        if !pool.active[slot] {
-            continue;
-        }
-        let meta = &pool.metadata[slot];
-        if meta.iteration_generated != iteration {
-            continue;
-        }
-        let intercept = pool.intercepts[slot];
-        let coefficients = pool.coefficients[slot].clone();
-        #[allow(clippy::cast_possible_truncation)]
-        let slot_u32 = slot as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let iter_u32 = iteration as u32;
-        result.push((
-            slot_u32,
-            iter_u32,
-            meta.forward_pass_index,
-            intercept,
-            coefficients,
-        ));
-    }
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +214,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     cut_selection: Option<&CutSelectionStrategy>,
+    cut_activity_tolerance: f64,
     shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
     n_fwd_threads: usize,
@@ -473,6 +428,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             local_work: my_actual_fwd,
             fwd_offset: my_fwd_offset,
             risk_measures,
+            cut_activity_tolerance,
+            cut_sync_bufs: &mut cut_sync_bufs,
         };
 
         let backward_result = run_backward_pass(
@@ -517,19 +474,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 cuts_generated: backward_result.cuts_generated as u32,
                 stages_processed: num_stages.saturating_sub(1) as u32,
                 elapsed_ms: backward_elapsed_ms,
+                state_exchange_time_ms: backward_result.state_exchange_time_ms,
+                cut_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
+                rayon_overhead_time_ms: backward_result.rayon_overhead_time_ms,
             },
         );
-        for stage in 0..num_stages.saturating_sub(1) {
-            let owned_cuts = collect_local_cuts_for_stage(fcf, stage, iteration);
-            let local_cuts: Vec<(u32, u32, u32, f64, &[f64])> = owned_cuts
-                .iter()
-                .map(|(slot, iter, fp, intercept, coeffs)| {
-                    (*slot, *iter, *fp, *intercept, coeffs.as_slice())
-                })
-                .collect();
-            cut_sync_bufs.sync_cuts(stage, &local_cuts, fcf, comm)?;
-        }
-
+        // Cut sync now happens per-stage inside `run_backward_pass`. The
+        // measured time is returned in `backward_result.cut_sync_time_ms`.
         #[allow(clippy::cast_possible_truncation)]
         emit(
             event_sender.as_ref(),
@@ -538,7 +489,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 cuts_distributed: backward_result.cuts_generated as u32,
                 cuts_active: fcf.total_active_cuts() as u32,
                 cuts_removed: 0,
-                sync_time_ms: 0,
+                sync_time_ms: backward_result.cut_sync_time_ms,
             },
         );
 
@@ -547,20 +498,49 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 let sel_start = Instant::now();
                 let num_sel_stages = num_stages.saturating_sub(1);
                 let mut cuts_deactivated = 0u32;
+                let mut per_stage = Vec::with_capacity(num_sel_stages);
+
+                // Stage 0 is exempt: its cuts are never the "successor" in the
+                // backward pass, so their binding activity is never updated.
+                // Deactivating them would weaken the lower bound approximation.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    let pool0 = &fcf.pools[0];
+                    let active_0 = pool0.active_count() as u32;
+                    per_stage.push(StageSelectionRecord {
+                        stage: 0,
+                        cuts_populated: pool0.populated_count as u32,
+                        cuts_active_before: active_0,
+                        cuts_deactivated: 0,
+                        cuts_active_after: active_0,
+                    });
+                }
 
                 #[allow(clippy::cast_possible_truncation)]
-                for stage in 0..num_sel_stages {
-                    let stage_u32 = stage as u32;
-                    let deact =
-                        strategy.select_for_stage(&fcf.pools[stage].metadata, iteration, stage_u32);
-                    cuts_deactivated += deact.indices.len() as u32;
+                for stage in 1..num_sel_stages {
+                    let pool = &fcf.pools[stage];
+                    let populated = pool.populated_count as u32;
+                    let active_before = pool.active_count() as u32;
 
-                    // Deactivate cuts in the lower bound solver's LP (stage 0 only).
-                    if stage == 0 && comm.rank() == 0 {
-                        deactivate_cuts_in_lp(solver, &deact, &mut lb_cut_row_map);
-                    }
+                    let stage_u32 = stage as u32;
+                    let deact = strategy.select_for_stage(
+                        &pool.metadata[..pool.populated_count],
+                        iteration,
+                        stage_u32,
+                    );
+                    let n_deact = deact.indices.len() as u32;
+                    cuts_deactivated += n_deact;
 
                     fcf.pools[stage].deactivate(&deact.indices);
+
+                    let active_after = fcf.pools[stage].active_count() as u32;
+                    per_stage.push(StageSelectionRecord {
+                        stage: stage_u32,
+                        cuts_populated: populated,
+                        cuts_active_before: active_before,
+                        cuts_deactivated: n_deact,
+                        cuts_active_after: active_after,
+                    });
                 }
 
                 #[allow(clippy::cast_possible_truncation)]
@@ -576,6 +556,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         stages_processed,
                         selection_time_ms,
                         allgatherv_time_ms: 0,
+                        per_stage,
                     },
                 );
             }
@@ -1208,6 +1189,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1278,6 +1260,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1357,6 +1340,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1481,6 +1465,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1550,6 +1535,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1617,6 +1603,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(1),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1691,6 +1678,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
+            0.0,
             None,
             &comm,
             1,
@@ -1778,6 +1766,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             Some(&strategy),
+            0.0,
             None,
             &comm,
             1,
@@ -1810,18 +1799,11 @@ mod tests {
 
     /// `cut_selection_deactivates_inactive_cuts`
     ///
-    /// Given `train` with `cut_selection: Some(Level1 { threshold: 0,
-    /// check_frequency: 2 })` running for 2 iterations where the mock solver
-    /// produces cuts with zero activity at stage 0, when the training loop
-    /// reaches iteration 2, then `CutSelectionComplete` is emitted with
-    /// `cuts_deactivated > 0`.
-    ///
-    /// Rationale: the mock solver returns `dual: vec![0.0; 1]` for every LP
-    /// solve. The backward pass therefore never marks any cut as binding
-    /// (`is_binding = false`), so all generated cuts have `active_count = 0`
-    /// and are deactivated at the Level1 selection step.
+    /// Stage 0 is exempt from cut selection because its cuts have no
+    /// backward-pass activity tracking. With a 2-stage system, only stage 0
+    /// has cuts, so `cuts_deactivated` must be 0.
     #[test]
-    fn cut_selection_deactivates_inactive_cuts() {
+    fn cut_selection_stage0_exempt_preserves_cuts() {
         use crate::cut_selection::CutSelectionStrategy;
 
         let n_stages = 2;
@@ -1835,7 +1817,6 @@ mod tests {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-        // max_iterations=10 so the FCF has enough capacity for iteration 2
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
@@ -1848,7 +1829,6 @@ mod tests {
             event_sender: Some(tx),
         };
 
-        // Level1 with threshold=0, check_frequency=2: fires at iteration 2.
         let strategy = CutSelectionStrategy::Level1 {
             threshold: 0,
             check_frequency: 2,
@@ -1884,6 +1864,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             Some(&strategy),
+            0.0,
             None,
             &comm,
             1,
@@ -1907,6 +1888,7 @@ mod tests {
         let TrainingEvent::CutSelectionComplete {
             iteration,
             cuts_deactivated,
+            per_stage,
             ..
         } = sel_events[0]
         else {
@@ -1914,9 +1896,19 @@ mod tests {
         };
 
         assert_eq!(*iteration, 2, "selection must fire at iteration 2");
+        assert_eq!(
+            *cuts_deactivated, 0,
+            "stage 0 is exempt from cut selection, so no cuts should be deactivated"
+        );
+        // Verify per-stage records are populated and stage 0 is exempt.
         assert!(
-            *cuts_deactivated > 0,
-            "expected cuts_deactivated > 0 (mock solver produces zero-activity cuts), got 0"
+            !per_stage.is_empty(),
+            "per_stage must contain at least the stage 0 record"
+        );
+        assert_eq!(per_stage[0].stage, 0, "first record must be stage 0");
+        assert_eq!(
+            per_stage[0].cuts_deactivated, 0,
+            "stage 0 must have zero deactivations"
         );
     }
 
@@ -1979,6 +1971,7 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(3),
             None,
+            0.0,
             None,
             &comm,
             1,

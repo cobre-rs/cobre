@@ -352,6 +352,47 @@ impl CutSyncBuffers {
     }
 }
 
+/// Collect the current iteration's local cuts from the FCF for a given stage.
+///
+/// Returns a vector of `(slot, iteration, forward_pass_index, intercept,
+/// coefficients)` tuples — the format consumed by
+/// [`CutSyncBuffers::sync_cuts`].
+#[must_use]
+///
+/// Only cuts generated at the given `iteration` and currently active are
+/// included. This is called once per stage inside the backward per-stage loop
+/// to prepare the local data for the `allgatherv` exchange.
+#[allow(clippy::cast_possible_truncation)]
+pub fn collect_local_cuts_for_stage(
+    fcf: &FutureCostFunction,
+    stage: usize,
+    iteration: u64,
+) -> Vec<(u32, u32, u32, f64, Vec<f64>)> {
+    let pool = &fcf.pools[stage];
+    let mut result = Vec::new();
+    for slot in 0..pool.populated_count {
+        if !pool.active[slot] {
+            continue;
+        }
+        let meta = &pool.metadata[slot];
+        if meta.iteration_generated != iteration {
+            continue;
+        }
+        let intercept = pool.intercepts[slot];
+        let coefficients = pool.coefficients[slot].clone();
+        let slot_u32 = slot as u32;
+        let iter_u32 = iteration as u32;
+        result.push((
+            slot_u32,
+            iter_u32,
+            meta.forward_pass_index,
+            intercept,
+            coefficients,
+        ));
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(

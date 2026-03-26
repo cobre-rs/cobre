@@ -54,6 +54,9 @@ pub struct SolverStatsDelta {
 
     /// Cumulative wall-clock time spent in `set_row_bounds`/`set_col_bounds` calls, in milliseconds.
     pub set_bounds_time_ms: f64,
+
+    /// Cumulative wall-clock time spent in `set_basis` FFI calls, in milliseconds.
+    pub basis_set_time_ms: f64,
 }
 
 impl SolverStatsDelta {
@@ -85,6 +88,9 @@ impl SolverStatsDelta {
             set_bounds_time_ms: (after.total_set_bounds_time_seconds
                 - before.total_set_bounds_time_seconds)
                 * 1000.0,
+            basis_set_time_ms: (after.total_basis_set_time_seconds
+                - before.total_basis_set_time_seconds)
+                * 1000.0,
         }
     }
 
@@ -109,6 +115,7 @@ impl SolverStatsDelta {
             result.load_model_time_ms += d.load_model_time_ms;
             result.add_rows_time_ms += d.add_rows_time_ms;
             result.set_bounds_time_ms += d.set_bounds_time_ms;
+            result.basis_set_time_ms += d.basis_set_time_ms;
         }
         result
     }
@@ -137,6 +144,7 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
         result.total_load_model_time_seconds += s.total_load_model_time_seconds;
         result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
         result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
+        result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
     }
     result
 }
@@ -170,6 +178,7 @@ mod tests {
             total_load_model_time_seconds: 1.0,
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
+            total_basis_set_time_seconds: 0.1,
         };
         let after = SolverStatistics {
             solve_count: 20,
@@ -186,6 +195,7 @@ mod tests {
             total_load_model_time_seconds: 3.0,
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
+            total_basis_set_time_seconds: 0.3,
         };
 
         let delta = SolverStatsDelta::from_snapshots(&before, &after);
@@ -203,6 +213,7 @@ mod tests {
         assert!((delta.load_model_time_ms - 2000.0).abs() < 1e-6);
         assert!((delta.add_rows_time_ms - 1000.0).abs() < 1e-6);
         assert!((delta.set_bounds_time_ms - 500.0).abs() < 1e-6);
+        assert!((delta.basis_set_time_ms - 200.0).abs() < 1e-6);
     }
 
     #[test]
@@ -222,6 +233,7 @@ mod tests {
             total_load_model_time_seconds: 0.1,
             total_add_rows_time_seconds: 0.05,
             total_set_bounds_time_seconds: 0.02,
+            total_basis_set_time_seconds: 0.01,
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
         assert_eq!(delta.lp_solves, 0);
@@ -236,6 +248,7 @@ mod tests {
         assert!((delta.load_model_time_ms).abs() < 1e-10);
         assert!((delta.add_rows_time_ms).abs() < 1e-10);
         assert!((delta.set_bounds_time_ms).abs() < 1e-10);
+        assert!((delta.basis_set_time_ms).abs() < 1e-10);
     }
 
     #[test]
@@ -262,6 +275,7 @@ mod tests {
             load_model_time_ms: 10.0,
             add_rows_time_ms: 5.0,
             set_bounds_time_ms: 2.0,
+            basis_set_time_ms: 1.0,
         };
         let d2 = SolverStatsDelta {
             lp_solves: 20,
@@ -278,6 +292,7 @@ mod tests {
             load_model_time_ms: 20.0,
             add_rows_time_ms: 10.0,
             set_bounds_time_ms: 4.0,
+            basis_set_time_ms: 2.0,
         };
 
         let agg = SolverStatsDelta::aggregate(&[d1, d2]);
@@ -295,6 +310,7 @@ mod tests {
         assert!((agg.load_model_time_ms - 30.0).abs() < 1e-6);
         assert!((agg.add_rows_time_ms - 15.0).abs() < 1e-6);
         assert!((agg.set_bounds_time_ms - 6.0).abs() < 1e-6);
+        assert!((agg.basis_set_time_ms - 3.0).abs() < 1e-6);
     }
 
     #[test]
@@ -314,6 +330,7 @@ mod tests {
             total_load_model_time_seconds: 1.0,
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
+            total_basis_set_time_seconds: 0.05,
         };
         let s2 = SolverStatistics {
             solve_count: 20,
@@ -330,6 +347,7 @@ mod tests {
             total_load_model_time_seconds: 3.0,
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
+            total_basis_set_time_seconds: 0.15,
         };
 
         let agg = aggregate_solver_statistics(&[s1, s2]);
@@ -347,5 +365,6 @@ mod tests {
         assert!((agg.total_load_model_time_seconds - 4.0).abs() < 1e-10);
         assert!((agg.total_add_rows_time_seconds - 2.0).abs() < 1e-10);
         assert!((agg.total_set_bounds_time_seconds - 1.0).abs() < 1e-10);
+        assert!((agg.total_basis_set_time_seconds - 0.2).abs() < 1e-10);
     }
 }

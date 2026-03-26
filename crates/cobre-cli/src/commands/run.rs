@@ -306,6 +306,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         bcast_config.policy_path.clone(),
         bcast_config.inflow_method.clone(),
         cut_selection,
+        bcast_config.cut_activity_tolerance,
         hydro_models,
     )
     .map_err(CliError::from)?;
@@ -346,6 +347,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         message: format!("post-export barrier error: {e}"),
     })?;
 
+    let solver_factory = HighsSolver::new;
+
     let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
     })?;
@@ -370,7 +373,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         &mut solver,
         &comm,
         n_threads,
-        HighsSolver::new,
+        solver_factory,
         Some(event_tx),
         None,
     ) {
@@ -480,7 +483,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let sim_config = setup.simulation_config();
 
         let mut sim_pool = setup
-            .create_workspace_pool(n_threads, HighsSolver::new)
+            .create_workspace_pool(n_threads, solver_factory)
             .map_err(|e| CliError::Solver {
                 message: format!("HiGHS initialisation failed for simulation pool: {e}"),
             })?;
@@ -595,36 +598,36 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize(sim_time_ms);
             sim_output.failed = failed;
 
-            write_outputs(
-                &output_dir,
-                &system,
-                &config,
-                &training_output,
-                Some(&sim_output),
-                &setup,
-                &training_result,
-                Some(&sim_run_result.solver_stats),
+            write_outputs(&WriteOutputsArgs {
+                output_dir: &output_dir,
+                system: &system,
+                config: &config,
+                training_output: &training_output,
+                sim_output: Some(&sim_output),
+                setup: &setup,
+                training_result: &training_result,
+                sim_solver_stats: Some(&sim_run_result.solver_stats),
                 quiet,
-                &stderr,
-            )?;
+                stderr: &stderr,
+            })?;
         }
     } else if is_root {
         let config = root_config.ok_or_else(|| CliError::Internal {
             message: "root_config was None on rank 0 — internal invariant violated".to_string(),
         })?;
 
-        write_outputs(
-            &output_dir,
-            &system,
-            &config,
-            &training_output,
-            None,
-            &setup,
-            &training_result,
-            None,
+        write_outputs(&WriteOutputsArgs {
+            output_dir: &output_dir,
+            system: &system,
+            config: &config,
+            training_output: &training_output,
+            sim_output: None,
+            setup: &setup,
+            training_result: &training_result,
+            sim_solver_stats: None,
             quiet,
-            &stderr,
-        )?;
+            stderr: &stderr,
+        })?;
     }
 
     Ok(())
@@ -725,51 +728,62 @@ fn delta_to_stats_row(
         load_model_time_ms: delta.load_model_time_ms,
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
+        basis_set_time_ms: delta.basis_set_time_ms,
     }
+}
+
+/// Arguments for [`write_outputs`], grouping everything needed to write
+/// training and simulation results to disk.
+struct WriteOutputsArgs<'a> {
+    output_dir: &'a Path,
+    system: &'a System,
+    config: &'a cobre_io::Config,
+    training_output: &'a cobre_io::TrainingOutput,
+    sim_output: Option<&'a cobre_io::SimulationOutput>,
+    setup: &'a StudySetup,
+    training_result: &'a cobre_sddp::TrainingResult,
+    sim_solver_stats: Option<&'a [(u32, cobre_sddp::SolverStatsDelta)]>,
+    quiet: bool,
+    stderr: &'a Term,
 }
 
 /// Extracted from `execute()` to give the output-writing step a clear boundary.
 /// Handles both the with-simulation path (`sim_output = Some(...)`) and the
 /// training-only path (`sim_output = None`). Prints "Writing outputs..." and
 /// the output path with timing when `quiet` is false.
-#[allow(clippy::too_many_arguments)]
-fn write_outputs(
-    output_dir: &Path,
-    system: &System,
-    config: &cobre_io::Config,
-    training_output: &cobre_io::TrainingOutput,
-    sim_output: Option<&cobre_io::SimulationOutput>,
-    setup: &StudySetup,
-    training_result: &cobre_sddp::TrainingResult,
-    sim_solver_stats: Option<&[(u32, cobre_sddp::SolverStatsDelta)]>,
-    quiet: bool,
-    stderr: &Term,
-) -> Result<(), CliError> {
-    if !quiet {
+fn write_outputs(args: &WriteOutputsArgs<'_>) -> Result<(), CliError> {
+    if !args.quiet {
         use std::io::Write;
-        let _ = stderr.write_line("Writing outputs...");
+        let _ = args.stderr.write_line("Writing outputs...");
         let _ = std::io::stderr().flush();
     }
     let write_start = std::time::Instant::now();
 
-    let policy_dir = output_dir.join(setup.policy_path());
+    let policy_dir = args.output_dir.join(args.setup.policy_path());
     crate::policy_io::write_checkpoint(
         &policy_dir,
-        setup.fcf(),
-        training_result,
+        args.setup.fcf(),
+        args.training_result,
         &crate::policy_io::CheckpointParams {
-            max_iterations: setup.max_iterations(),
-            forward_passes: setup.forward_passes(),
-            seed: setup.seed(),
+            max_iterations: args.setup.max_iterations(),
+            forward_passes: args.setup.forward_passes(),
+            seed: args.setup.seed(),
         },
     )?;
 
-    write_results(output_dir, training_output, sim_output, system, config)
-        .map_err(CliError::from)?;
+    write_results(
+        args.output_dir,
+        args.training_output,
+        args.sim_output,
+        args.system,
+        args.config,
+    )
+    .map_err(CliError::from)?;
 
     // Write training solver stats to training/solver/iterations.parquet.
-    if !training_result.solver_stats_log.is_empty() {
-        let rows: Vec<cobre_io::SolverStatsRow> = training_result
+    if !args.training_result.solver_stats_log.is_empty() {
+        let rows: Vec<cobre_io::SolverStatsRow> = args
+            .training_result
             .solver_stats_log
             .iter()
             .map(|(iter, phase, stage, delta)| {
@@ -777,11 +791,22 @@ fn write_outputs(
                 delta_to_stats_row(*iter as u32, phase, *stage, delta)
             })
             .collect();
-        cobre_io::write_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+        cobre_io::write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
+    }
+
+    // Write per-stage cut selection records to training/cut_selection/iterations.parquet.
+    if !args.training_output.cut_selection_records.is_empty() {
+        let parquet_config = cobre_io::ParquetWriterConfig::default();
+        cobre_io::write_cut_selection_records(
+            args.output_dir,
+            &args.training_output.cut_selection_records,
+            &parquet_config,
+        )
+        .map_err(CliError::from)?;
     }
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
-    if let Some(stats) = sim_solver_stats {
+    if let Some(stats) = args.sim_solver_stats {
         if !stats.is_empty() {
             let rows: Vec<cobre_io::SolverStatsRow> = stats
                 .iter()
@@ -789,13 +814,14 @@ fn write_outputs(
                     delta_to_stats_row(*scenario_id, "simulation", -1, delta)
                 })
                 .collect();
-            cobre_io::write_simulation_solver_stats(output_dir, &rows).map_err(CliError::from)?;
+            cobre_io::write_simulation_solver_stats(args.output_dir, &rows)
+                .map_err(CliError::from)?;
         }
     }
 
-    if !quiet {
+    if !args.quiet {
         let write_secs = write_start.elapsed().as_secs_f64();
-        crate::summary::print_output_path(stderr, output_dir, write_secs);
+        crate::summary::print_output_path(args.stderr, args.output_dir, write_secs);
     }
 
     Ok(())

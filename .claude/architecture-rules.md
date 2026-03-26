@@ -15,17 +15,17 @@ struct** instead of adding a function parameter.
 
 Available context structs:
 
-| Struct | File | Purpose | Mutable? |
-|--------|------|---------|----------|
-| `StageContext` | `cobre-sddp/src/context.rs` | Per-stage templates, base rows, layout | Immutable (`&`) |
-| `TrainingContext` | `cobre-sddp/src/context.rs` | Horizon, indexer, stochastic, initial state | Immutable (`&`) |
-| `ScratchBuffers` | `cobre-sddp/src/workspace.rs` | Per-worker noise/patch scratch space | Mutable (`&mut`) |
-| `SolverWorkspace` | `cobre-sddp/src/workspace.rs` | Solver + scratch + patch buffer | Mutable (`&mut`) |
-| `TrainingConfig` | `cobre-sddp/src/training.rs` | Forward passes, iteration limit, seed | Owned (moved in) |
-| `SimulationConfig` | `cobre-sddp/src/simulation/types.rs` | Scenario count, channel capacity | Immutable (`&`) |
-| `BackwardPassSpec` | `cobre-sddp/src/backward.rs` | Risk measures, opening tree, cut selection | Mutable (`&mut`) |
-| `ForwardPassBatch` | `cobre-sddp/src/forward.rs` | Local pass count, iteration, offset | Immutable (`&`) |
-| `LbEvalSpec` | `cobre-sddp/src/lower_bound.rs` | Template, noise scale, opening tree | Immutable (`&`) |
+| Struct             | File                                 | Purpose                                     | Mutable?         |
+| ------------------ | ------------------------------------ | ------------------------------------------- | ---------------- |
+| `StageContext`     | `cobre-sddp/src/context.rs`          | Per-stage templates, base rows, layout      | Immutable (`&`)  |
+| `TrainingContext`  | `cobre-sddp/src/context.rs`          | Horizon, indexer, stochastic, initial state | Immutable (`&`)  |
+| `ScratchBuffers`   | `cobre-sddp/src/workspace.rs`        | Per-worker noise/patch scratch space        | Mutable (`&mut`) |
+| `SolverWorkspace`  | `cobre-sddp/src/workspace.rs`        | Solver + scratch + patch buffer             | Mutable (`&mut`) |
+| `TrainingConfig`   | `cobre-sddp/src/training.rs`         | Forward passes, iteration limit, seed       | Owned (moved in) |
+| `SimulationConfig` | `cobre-sddp/src/simulation/types.rs` | Scenario count, channel capacity            | Immutable (`&`)  |
+| `BackwardPassSpec` | `cobre-sddp/src/backward.rs`         | Risk measures, opening tree, cut selection  | Mutable (`&mut`) |
+| `ForwardPassBatch` | `cobre-sddp/src/forward.rs`          | Local pass count, iteration, offset         | Immutable (`&`)  |
+| `LbEvalSpec`       | `cobre-sddp/src/lower_bound.rs`      | Template, noise scale, opening tree         | Immutable (`&`)  |
 
 **Decision tree when adding new data to the hot path:**
 
@@ -41,13 +41,13 @@ Available context structs:
 
 ## Function Signature Budgets
 
-| Function | Max args | Current | Location |
-|----------|----------|---------|----------|
-| `run_forward_pass` | 8 | 8 | `forward.rs` |
-| `run_backward_pass` | 8 | 8 | `backward.rs` |
-| `simulate` | 8 | 8 | `simulation/pipeline.rs` |
-| `train` | 14 | 14 | `training.rs` |
-| `evaluate_lower_bound` | 9 | 9 | `lower_bound.rs` |
+| Function               | Max args | Current | Location                 |
+| ---------------------- | -------- | ------- | ------------------------ |
+| `run_forward_pass`     | 8        | 8       | `forward.rs`             |
+| `run_backward_pass`    | 8        | 8       | `backward.rs`            |
+| `simulate`             | 8        | 8       | `simulation/pipeline.rs` |
+| `train`                | 14       | 14      | `training.rs`            |
+| `evaluate_lower_bound` | 9        | 9       | `lower_bound.rs`         |
 
 If a function exceeds its budget, the correct response is to refactor, not to
 add `#[allow(clippy::too_many_arguments)]`.
@@ -104,6 +104,5 @@ When adding a new output file in the CLI (`write_outputs` in `run.rs`):
 2. If not, add it. The Python path should call the same `cobre_io` write function.
 
 Current gaps (to be fixed):
-- `training/scaling_report.json` — CLI writes, Python does not
-- `training/solver/iterations.parquet` — CLI writes, Python does not
-- `simulation/solver/scenarios.parquet` — CLI writes, Python does not
+
+- None — all CLI output writes are mirrored in Python.

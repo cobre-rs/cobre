@@ -591,6 +591,9 @@ mod tests {
             cuts_generated: 48,
             stages_processed: 12,
             elapsed_ms: 87,
+            state_exchange_time_ms: 0,
+            cut_batch_build_time_ms: 0,
+            rayon_overhead_time_ms: 0,
         })
         .unwrap();
         tx.send(make_iteration_summary(1)).unwrap();

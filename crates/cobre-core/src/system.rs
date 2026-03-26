@@ -812,12 +812,14 @@ impl SystemBuilder {
         let non_controllable_source_index = build_index(&self.non_controllable_sources);
 
         validate_cross_references(
-            &self.lines,
-            &self.hydros,
-            &self.thermals,
-            &self.pumping_stations,
-            &self.contracts,
-            &self.non_controllable_sources,
+            &CrossRefEntities {
+                lines: &self.lines,
+                hydros: &self.hydros,
+                thermals: &self.thermals,
+                pumping_stations: &self.pumping_stations,
+                contracts: &self.contracts,
+                non_controllable_sources: &self.non_controllable_sources,
+            },
             &bus_index,
             &hydro_index,
             &mut errors,
@@ -979,24 +981,28 @@ fn check_duplicates<T: HasId>(
 ///
 /// This function runs after duplicate checking passes and after indices are
 /// built, but before topology construction.
-#[allow(clippy::too_many_arguments)]
+/// Bundles entity slices needed for cross-reference validation.
+struct CrossRefEntities<'a> {
+    lines: &'a [Line],
+    hydros: &'a [Hydro],
+    thermals: &'a [Thermal],
+    pumping_stations: &'a [PumpingStation],
+    contracts: &'a [EnergyContract],
+    non_controllable_sources: &'a [NonControllableSource],
+}
+
 fn validate_cross_references(
-    lines: &[Line],
-    hydros: &[Hydro],
-    thermals: &[Thermal],
-    pumping_stations: &[PumpingStation],
-    contracts: &[EnergyContract],
-    non_controllable_sources: &[NonControllableSource],
+    entities: &CrossRefEntities<'_>,
     bus_index: &HashMap<EntityId, usize>,
     hydro_index: &HashMap<EntityId, usize>,
     errors: &mut Vec<ValidationError>,
 ) {
-    validate_line_refs(lines, bus_index, errors);
-    validate_hydro_refs(hydros, bus_index, hydro_index, errors);
-    validate_thermal_refs(thermals, bus_index, errors);
-    validate_pumping_station_refs(pumping_stations, bus_index, hydro_index, errors);
-    validate_contract_refs(contracts, bus_index, errors);
-    validate_ncs_refs(non_controllable_sources, bus_index, errors);
+    validate_line_refs(entities.lines, bus_index, errors);
+    validate_hydro_refs(entities.hydros, bus_index, hydro_index, errors);
+    validate_thermal_refs(entities.thermals, bus_index, errors);
+    validate_pumping_station_refs(entities.pumping_stations, bus_index, hydro_index, errors);
+    validate_contract_refs(entities.contracts, bus_index, errors);
+    validate_ncs_refs(entities.non_controllable_sources, bus_index, errors);
 }
 
 fn validate_line_refs(

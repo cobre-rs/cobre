@@ -54,6 +54,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 ///         total_active: 0,
 ///         peak_active: 0,
 ///     },
+///     cut_selection_records: Vec::new(),
 /// };
 /// writer.write(&training)?;
 /// # Ok(())
@@ -215,6 +216,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
     let mut mpi_allreduce_ms = Int64Builder::with_capacity(n);
     let mut mpi_broadcast_ms = Int64Builder::with_capacity(n);
     let mut io_write_ms = Int64Builder::with_capacity(n);
+    let mut state_exchange_ms = Int64Builder::with_capacity(n);
+    let mut cut_batch_build_ms = Int64Builder::with_capacity(n);
+    let mut rayon_overhead_ms = Int64Builder::with_capacity(n);
     let mut overhead_ms = Int64Builder::with_capacity(n);
 
     for rec in records {
@@ -227,6 +231,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
         mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
         mpi_broadcast_ms.append_value(rec.time_mpi_broadcast_ms as i64);
         io_write_ms.append_value(rec.time_io_write_ms as i64);
+        state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
+        cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
+        rayon_overhead_ms.append_value(rec.time_rayon_overhead_ms as i64);
         overhead_ms.append_value(rec.time_overhead_ms as i64);
     }
 
@@ -242,10 +249,69 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
             Arc::new(mpi_allreduce_ms.finish()),
             Arc::new(mpi_broadcast_ms.finish()),
             Arc::new(io_write_ms.finish()),
+            Arc::new(state_exchange_ms.finish()),
+            Arc::new(cut_batch_build_ms.finish()),
+            Arc::new(rayon_overhead_ms.finish()),
             Arc::new(overhead_ms.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("iteration_timing", e.to_string()))
+}
+
+/// Write `training/cut_selection/iterations.parquet` from cut selection records.
+///
+/// Creates the `training/cut_selection/` directory if it does not exist.
+/// Does nothing if `records` is empty.
+///
+/// # Errors
+///
+/// Returns [`OutputError`] on filesystem or serialization failures.
+pub fn write_cut_selection_records(
+    output_dir: &Path,
+    records: &[super::CutSelectionRecord],
+    config: &ParquetWriterConfig,
+) -> Result<(), OutputError> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let dir = output_dir.join("training/cut_selection");
+    std::fs::create_dir_all(&dir).map_err(|e| OutputError::io(&dir, e))?;
+
+    let schema = Arc::new(super::schemas::cut_selection_schema());
+
+    let n = records.len();
+    let mut iteration_builder = Int32Builder::with_capacity(n);
+    let mut stage_builder = Int32Builder::with_capacity(n);
+    let mut populated_builder = Int32Builder::with_capacity(n);
+    let mut active_before_builder = Int32Builder::with_capacity(n);
+    let mut deactivated_builder = Int32Builder::with_capacity(n);
+    let mut active_after_builder = Int32Builder::with_capacity(n);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    for r in records {
+        iteration_builder.append_value(r.iteration as i32);
+        stage_builder.append_value(r.stage as i32);
+        populated_builder.append_value(r.cuts_populated as i32);
+        active_before_builder.append_value(r.cuts_active_before as i32);
+        deactivated_builder.append_value(r.cuts_deactivated as i32);
+        active_after_builder.append_value(r.cuts_active_after as i32);
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(iteration_builder.finish()),
+            Arc::new(stage_builder.finish()),
+            Arc::new(populated_builder.finish()),
+            Arc::new(active_before_builder.finish()),
+            Arc::new(deactivated_builder.finish()),
+            Arc::new(active_after_builder.finish()),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("cut_selection", e.to_string()))?;
+
+    write_parquet(&dir.join("iterations.parquet"), &batch, config)
 }
 
 /// Write a `RecordBatch` to `path` as a Parquet file, atomically.
@@ -319,6 +385,9 @@ mod tests {
             time_mpi_allreduce_ms: 0,
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
@@ -341,6 +410,7 @@ mod tests {
                 total_active: 80,
                 peak_active: 95,
             },
+            cut_selection_records: vec![],
         }
     }
 
@@ -400,8 +470,8 @@ mod tests {
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            10,
-            "iteration_timing schema has 10 columns"
+            13,
+            "iteration_timing schema has 13 columns"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -596,7 +666,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 10);
+        assert_eq!(batch.num_columns(), 13);
     }
 
     #[test]
@@ -636,5 +706,59 @@ mod tests {
         assert!(gap_col.is_null(2), "row 2: None must be null");
         assert!(!gap_col.is_null(3), "row 3: Some(2.0) must not be null");
         assert!(!gap_col.is_null(4), "row 4: Some(1.0) must not be null");
+    }
+
+    // -------------------------------------------------------------------------
+    // write_cut_selection_records tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_cut_selection_empty_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = ParquetWriterConfig::default();
+        write_cut_selection_records(tmp.path(), &[], &config).unwrap();
+        assert!(
+            !tmp.path()
+                .join("training/cut_selection/iterations.parquet")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn write_cut_selection_roundtrip() {
+        use super::super::CutSelectionRecord;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = ParquetWriterConfig::default();
+        let records = vec![
+            CutSelectionRecord {
+                iteration: 3,
+                stage: 0,
+                cuts_populated: 10,
+                cuts_active_before: 10,
+                cuts_deactivated: 0,
+                cuts_active_after: 10,
+            },
+            CutSelectionRecord {
+                iteration: 3,
+                stage: 1,
+                cuts_populated: 8,
+                cuts_active_before: 8,
+                cuts_deactivated: 2,
+                cuts_active_after: 6,
+            },
+        ];
+        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        let path = tmp.path().join("training/cut_selection/iterations.parquet");
+        assert!(path.exists());
+
+        let file = std::fs::File::open(&path).unwrap();
+        let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch: RecordBatch = reader.into_iter().next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 6);
     }
 }

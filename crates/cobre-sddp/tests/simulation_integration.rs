@@ -610,6 +610,7 @@ fn train_simulate_write_cycle() {
         &fx.risk_measures,
         iteration_limit(3),
         None,
+        0.0,
         None,
         &comm,
         1,

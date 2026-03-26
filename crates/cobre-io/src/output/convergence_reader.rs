@@ -224,6 +224,9 @@ mod tests {
             time_mpi_allreduce_ms: 0,
             time_mpi_broadcast_ms: 0,
             time_io_write_ms: 0,
+            time_state_exchange_ms: 0,
+            time_cut_batch_build_ms: 0,
+            time_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             solve_time_ms: 0.0,
         }
@@ -245,6 +248,7 @@ mod tests {
                 total_active: 80,
                 peak_active: 95,
             },
+            cut_selection_records: vec![],
         }
     }
 

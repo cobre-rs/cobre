@@ -95,7 +95,7 @@ fn default_options() -> [DefaultOption; 8] {
         },
         DefaultOption {
             name: c"simplex_strategy",
-            value: OptionValue::Int(4), // Primal simplex
+            value: OptionValue::Int(1), // Dual simplex
         },
         DefaultOption {
             name: c"simplex_scale_strategy",
@@ -197,7 +197,7 @@ impl HighsSolver {
     /// | Option                         | Value       | Type   |
     /// |--------------------------------|-------------|--------|
     /// | `solver`                       | `"simplex"` | string |
-    /// | `simplex_strategy`             | `4`         | int    |
+    /// | `simplex_strategy`             | `1`         | int    |
     /// | `simplex_scale_strategy`       | `0`         | int    |
     /// | `presolve`                     | `"off"`     | string |
     /// | `parallel`                     | `"off"`     | string |
@@ -1147,6 +1147,7 @@ impl SolverInterface for HighsSolver {
         // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
         // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
         // - We pass exactly `num_cols` col entries and `num_rows` row entries.
+        let basis_set_start = Instant::now();
         let set_status = unsafe {
             ffi::cobre_highs_set_basis(
                 self.handle,
@@ -1154,6 +1155,7 @@ impl SolverInterface for HighsSolver {
                 self.basis_row_i32.as_ptr(),
             )
         };
+        self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
 
         // Basis rejection tracking: fall back to cold-start and track for diagnostics.
         if set_status == ffi::HIGHS_STATUS_ERROR {
@@ -1998,7 +2000,7 @@ mod research_tests_ticket_023 {
         // Apply cobre defaults (mirror HighsSolver::new() configuration).
         unsafe {
             ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
-            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 1);
             ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_string_option(highs, c"parallel".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_double_option(
@@ -2046,7 +2048,7 @@ mod research_tests_ticket_023 {
         // Restore default settings (mirror restore_default_settings()).
         unsafe {
             ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
-            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 1);
             ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_double_option(
                 highs,

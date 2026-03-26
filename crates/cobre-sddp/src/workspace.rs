@@ -253,6 +253,30 @@ impl<S: SolverInterface> WorkspacePool<S> {
 /// Internally, data is stored flat as
 /// `bases[scenario * num_stages + stage]` for cache-friendly sequential
 /// access within a single scenario's stage loop.
+///
+/// # Cut selection interaction
+///
+/// Basis row statuses are positional: `row_status[i]` corresponds to LP
+/// row `i`. When cut selection changes the active cut set between
+/// iterations, the number of cut rows in the LP changes and the stored
+/// basis row statuses become stale — they no longer align with the
+/// current LP row layout.
+///
+/// **Current behavior (option 1):** We accept the degraded warm-start.
+/// `HiGHS` detects the dimension mismatch when `solve_with_basis` is called
+/// with a basis whose row count differs from the current LP row count and
+/// falls back to a crash start. This is tracked as a `basis_rejection` in
+/// [`SolverStatistics`]. The template (non-cut) row statuses remain valid;
+/// only the cut row portion becomes meaningless.
+///
+/// **If degradation is problematic (option 3):** After cut selection runs,
+/// discard the cut row statuses from all stored bases, retaining only the
+/// template row portion. This gives a clean partial warm-start at zero
+/// implementation cost beyond a single truncation. See
+/// `docs/specs/backward-pass-performance-spec.md` section 6.1 for the full
+/// design discussion.
+///
+/// [`SolverStatistics`]: cobre_solver::SolverStatistics
 pub struct BasisStore {
     /// Flat storage: `bases[scenario * num_stages + stage]`.
     bases: Vec<Option<Basis>>,

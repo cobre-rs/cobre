@@ -224,7 +224,7 @@ pub(crate) fn convergence_schema() -> Schema {
 
 /// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
 ///
-/// 10 fields. See output-schemas.md SS6.2.
+/// 13 fields. See output-schemas.md SS6.2.
 pub(crate) fn iteration_timing_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
@@ -236,6 +236,9 @@ pub(crate) fn iteration_timing_schema() -> Schema {
         Field::new("mpi_allreduce_ms", DataType::Int64, false),
         Field::new("mpi_broadcast_ms", DataType::Int64, false),
         Field::new("io_write_ms", DataType::Int64, false),
+        Field::new("state_exchange_ms", DataType::Int64, false),
+        Field::new("cut_batch_build_ms", DataType::Int64, false),
+        Field::new("rayon_overhead_ms", DataType::Int64, false),
         Field::new("overhead_ms", DataType::Int64, false),
     ])
 }
@@ -259,7 +262,7 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 15 columns. One row per (iteration, phase, stage) triple.
+/// 16 columns. One row per (iteration, phase, stage) triple.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
@@ -277,6 +280,22 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("load_model_time_ms", DataType::Float64, false),
         Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
+        Field::new("basis_set_time_ms", DataType::Float64, false),
+    ])
+}
+
+/// Schema for `training/cut_selection/iterations.parquet` — per-stage
+/// cut selection statistics.
+///
+/// 6 fields. One row per (iteration, stage) pair.
+pub(crate) fn cut_selection_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("iteration", DataType::Int32, false),
+        Field::new("stage", DataType::Int32, false),
+        Field::new("cuts_populated", DataType::Int32, false),
+        Field::new("cuts_active_before", DataType::Int32, false),
+        Field::new("cuts_deactivated", DataType::Int32, false),
+        Field::new("cuts_active_after", DataType::Int32, false),
     ])
 }
 
@@ -642,8 +661,8 @@ mod tests {
         let schema = iteration_timing_schema();
         assert_eq!(
             schema.fields().len(),
-            10,
-            "iteration_timing schema must have 10 fields"
+            13,
+            "iteration_timing schema must have 13 fields"
         );
     }
 
@@ -682,8 +701,18 @@ mod tests {
     }
 
     #[test]
+    fn cut_selection_schema_field_count_and_types() {
+        let schema = cut_selection_schema();
+        assert_eq!(schema.fields().len(), 6);
+        for field in schema.fields() {
+            assert_eq!(field.data_type(), &DataType::Int32);
+            assert!(!field.is_nullable());
+        }
+    }
+
+    #[test]
     fn all_schema_functions_return_valid_schemas() {
-        // Call all 14 schema functions and verify they return non-empty schemas
+        // Call all schema functions and verify they return non-empty schemas
         // without panicking.
         let schemas: Vec<(Schema, &str)> = vec![
             (costs_schema(), "costs"),
@@ -699,6 +728,7 @@ mod tests {
             (convergence_schema(), "convergence"),
             (iteration_timing_schema(), "iteration_timing"),
             (rank_timing_schema(), "rank_timing"),
+            (cut_selection_schema(), "cut_selection"),
         ];
         for (schema, name) in &schemas {
             assert!(
@@ -723,8 +753,9 @@ mod tests {
             ("inflow_lags", 4),
             ("generic_violations", 5),
             ("convergence", 13),
-            ("iteration_timing", 10),
+            ("iteration_timing", 13),
             ("rank_timing", 8),
+            ("cut_selection", 6),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {
             assert_eq!(

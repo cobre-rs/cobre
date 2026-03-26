@@ -95,7 +95,7 @@ fn default_options() -> [DefaultOption; 8] {
         },
         DefaultOption {
             name: c"simplex_strategy",
-            value: OptionValue::Int(4), // Primal simplex
+            value: OptionValue::Int(1), // Dual simplex
         },
         DefaultOption {
             name: c"simplex_scale_strategy",
@@ -197,7 +197,7 @@ impl HighsSolver {
     /// | Option                         | Value       | Type   |
     /// |--------------------------------|-------------|--------|
     /// | `solver`                       | `"simplex"` | string |
-    /// | `simplex_strategy`             | `4`         | int    |
+    /// | `simplex_strategy`             | `1`         | int    |
     /// | `simplex_scale_strategy`       | `0`         | int    |
     /// | `presolve`                     | `"off"`     | string |
     /// | `parallel`                     | `"off"`     | string |
@@ -274,30 +274,6 @@ impl HighsSolver {
             }
         }
         Ok(())
-    }
-
-    /// Overrides the `simplex_strategy` option for this solver instance.
-    ///
-    /// Valid values: `0` (auto), `1` (dual simplex), `4` (primal simplex).
-    /// This overrides the default of `4` set by [`HighsSolver::new`]. The
-    /// override is **not** preserved across retry escalation cycles — retry
-    /// levels that change the strategy for recovery purposes will take effect
-    /// as normal.
-    ///
-    /// # Valid Values
-    ///
-    /// | Value | Meaning         |
-    /// |-------|-----------------|
-    /// | `0`   | HiGHS auto-pick |
-    /// | `1`   | Dual simplex    |
-    /// | `4`   | Primal simplex  |
-    pub fn set_simplex_strategy(&mut self, strategy: i32) {
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer obtained from
-        // `cobre_highs_create()` and kept alive for the lifetime of `self`.
-        // The option name is a static C string; the value is a plain `i32`.
-        unsafe {
-            ffi::cobre_highs_set_int_option(self.handle, c"simplex_strategy".as_ptr(), strategy);
-        }
     }
 
     /// Extracts the optimal solution from `HiGHS` into pre-allocated buffers and returns
@@ -2024,7 +2000,7 @@ mod research_tests_ticket_023 {
         // Apply cobre defaults (mirror HighsSolver::new() configuration).
         unsafe {
             ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
-            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 1);
             ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_string_option(highs, c"parallel".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_double_option(
@@ -2072,7 +2048,7 @@ mod research_tests_ticket_023 {
         // Restore default settings (mirror restore_default_settings()).
         unsafe {
             ffi::cobre_highs_set_string_option(highs, c"solver".as_ptr(), c"simplex".as_ptr());
-            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 4);
+            ffi::cobre_highs_set_int_option(highs, c"simplex_strategy".as_ptr(), 1);
             ffi::cobre_highs_set_string_option(highs, c"presolve".as_ptr(), c"off".as_ptr());
             ffi::cobre_highs_set_double_option(
                 highs,

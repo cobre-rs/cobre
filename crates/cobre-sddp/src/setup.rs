@@ -1094,13 +1094,14 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
         }
     }
 
-    // ── Lag portion (populated from past_inflows) ─────────────────────────────
+    // ── Lag portion (populated from past_inflows, lag-major layout) ─────────────
     if indexer.max_par_order > 0 {
+        let n_h = indexer.hydro_count;
         for pi in &ic.past_inflows {
             if let Ok(idx) = hydros.binary_search_by_key(&pi.hydro_id.0, |h| h.id.0) {
                 let n_lags = pi.values_m3s.len().min(indexer.max_par_order);
                 for lag in 0..n_lags {
-                    let slot = indexer.inflow_lags.start + idx * indexer.max_par_order + lag;
+                    let slot = indexer.inflow_lags.start + lag * n_h + idx;
                     state[slot] = pi.values_m3s[lag];
                 }
             }
@@ -2743,28 +2744,29 @@ mod tests {
 
         let state = build_initial_state(&system, &indexer);
 
-        // State layout: storage(0..2), lags(2..6).
-        // Hydro at idx 0 (id=1): lag 0 = 600.0, lag 1 = 500.0.
-        // Hydro at idx 1 (id=2): lag 0 = 200.0, lag 1 = 100.0.
+        // State layout: storage(0..2), lags(2..6) in lag-major order.
+        // Lag-major: slot = s + lag * N + h, where N = 2.
+        // lag0_h0 = 600.0 at s+0, lag0_h1 = 200.0 at s+1,
+        // lag1_h0 = 500.0 at s+2, lag1_h1 = 100.0 at s+3.
         let s = indexer.inflow_lags.start;
         assert!(
             (state[s] - 600.0).abs() < 1e-10,
-            "hydro 1 lag 0: expected 600.0, got {}",
+            "lag0 hydro 0: expected 600.0, got {}",
             state[s]
         );
         assert!(
-            (state[s + 1] - 500.0).abs() < 1e-10,
-            "hydro 1 lag 1: expected 500.0, got {}",
+            (state[s + 1] - 200.0).abs() < 1e-10,
+            "lag0 hydro 1: expected 200.0, got {}",
             state[s + 1]
         );
         assert!(
-            (state[s + 2] - 200.0).abs() < 1e-10,
-            "hydro 2 lag 0: expected 200.0, got {}",
+            (state[s + 2] - 500.0).abs() < 1e-10,
+            "lag1 hydro 0: expected 500.0, got {}",
             state[s + 2]
         );
         assert!(
             (state[s + 3] - 100.0).abs() < 1e-10,
-            "hydro 2 lag 1: expected 100.0, got {}",
+            "lag1 hydro 1: expected 100.0, got {}",
             state[s + 3]
         );
         assert_eq!(
@@ -2846,29 +2848,30 @@ mod tests {
 
         let state = setup.initial_state();
 
-        // With 2 hydros and max_par_order=2, lag slots start after storage slots.
-        // Hydro 1 (idx 0): lag 0 = 600.0, lag 1 = 500.0
-        // Hydro 2 (idx 1): lag 0 = 200.0, lag 1 = 100.0
+        // With 2 hydros (N=2) and max_par_order=2 (L=2), lag slots start at N=2.
+        // Lag-major layout: slot = lag_start + lag * N + h.
+        // lag0_h0 = 600.0 at [2], lag0_h1 = 200.0 at [3],
+        // lag1_h0 = 500.0 at [4], lag1_h1 = 100.0 at [5].
         let n_hydros = 2;
         let lag_start = n_hydros;
         assert!(
             (state[lag_start] - 600.0).abs() < 1e-10,
-            "hydro 1 lag 0 should be 600.0 via StudySetup, got {}",
+            "lag0 hydro 0 should be 600.0 via StudySetup, got {}",
             state[lag_start]
         );
         assert!(
-            (state[lag_start + 1] - 500.0).abs() < 1e-10,
-            "hydro 1 lag 1 should be 500.0 via StudySetup, got {}",
+            (state[lag_start + 1] - 200.0).abs() < 1e-10,
+            "lag0 hydro 1 should be 200.0 via StudySetup, got {}",
             state[lag_start + 1]
         );
         assert!(
-            (state[lag_start + 2] - 200.0).abs() < 1e-10,
-            "hydro 2 lag 0 should be 200.0 via StudySetup, got {}",
+            (state[lag_start + 2] - 500.0).abs() < 1e-10,
+            "lag1 hydro 0 should be 500.0 via StudySetup, got {}",
             state[lag_start + 2]
         );
         assert!(
             (state[lag_start + 3] - 100.0).abs() < 1e-10,
-            "hydro 2 lag 1 should be 100.0 via StudySetup, got {}",
+            "lag1 hydro 1 should be 100.0 via StudySetup, got {}",
             state[lag_start + 3]
         );
     }

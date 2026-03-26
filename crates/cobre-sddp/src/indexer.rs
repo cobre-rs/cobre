@@ -127,10 +127,10 @@ pub struct StageIndexer {
 
     /// Column range `[N, N*(1+L))` for AR lag variables.
     ///
-    /// Lag variables are stored in hydro-major order: all lags for hydro 0,
-    /// then all lags for hydro 1, etc. The column index for hydro `h` at
-    /// lag `l` (0-indexed, lag 1 = most recent) is:
-    /// `inflow_lags.start + h * max_par_order + l`.
+    /// Lag variables are stored in lag-major order: all hydros for lag 0,
+    /// then all hydros for lag 1, etc. The column index for hydro `h` at
+    /// lag `l` (0-indexed, lag 0 = most recent) is:
+    /// `inflow_lags.start + l * hydro_count + h`.
     pub inflow_lags: Range<usize>,
 
     /// Column range `[N*(2+L), N*(3+L))` for incoming storage volumes.
@@ -901,15 +901,18 @@ impl StageIndexer {
             mask.push(h);
         }
 
-        // Lag indices: include only used lags.
-        for (h, &order) in ar_orders.iter().enumerate() {
-            debug_assert!(
-                order <= self.max_par_order,
-                "ar_orders[{h}] = {order} exceeds max_par_order {}",
-                self.max_par_order
-            );
-            for lag in 0..order {
-                mask.push(self.inflow_lags.start + h * self.max_par_order + lag);
+        // Lag indices: include only used lags (lag-major layout matching LP).
+        // Iterate lag-first, hydro-second to produce sorted indices.
+        for lag in 0..self.max_par_order {
+            for (h, &order) in ar_orders.iter().enumerate() {
+                debug_assert!(
+                    order <= self.max_par_order,
+                    "ar_orders[{h}] = {order} exceeds max_par_order {}",
+                    self.max_par_order
+                );
+                if lag < order {
+                    mask.push(self.inflow_lags.start + lag * self.hydro_count + h);
+                }
             }
         }
 
@@ -1910,15 +1913,19 @@ mod tests {
 
     #[test]
     fn nonzero_mask_mixed_ar_orders() {
-        // 4 hydros, max_par_order=6, ar_orders=[0, 1, 3, 6]
+        // 4 hydros (N=4), max_par_order=6 (L=6), ar_orders=[0, 1, 3, 6]
+        // inflow_lags.start = N = 4
+        // Lag-major layout: slot = 4 + lag * N + h
         let mut idx = StageIndexer::new(4, 6);
         idx.set_nonzero_mask(&[0, 1, 3, 6]);
 
-        // Storage indices: 0, 1, 2, 3 (4 entries)
-        // Hydro 0: AR(0) → 0 lag entries
-        // Hydro 1: AR(1) → 1 lag entry  (index 4+1*6+0 = 10)
-        // Hydro 2: AR(3) → 3 lag entries (indices 4+2*6+{0,1,2} = 16,17,18)
-        // Hydro 3: AR(6) → 6 lag entries (indices 4+3*6+{0..5} = 22,23,24,25,26,27)
+        // Storage: [0, 1, 2, 3]
+        // lag0: h1→4+0*4+1=5, h2→6, h3→7
+        // lag1: h2→4+1*4+2=10, h3→11
+        // lag2: h2→4+2*4+2=14, h3→15
+        // lag3: h3→4+3*4+3=19
+        // lag4: h3→4+4*4+3=23
+        // lag5: h3→4+5*4+3=27
         // Total: 4 + 0 + 1 + 3 + 6 = 14
         assert_eq!(
             idx.nonzero_state_indices.len(),
@@ -1926,19 +1933,12 @@ mod tests {
             "mask length: 4 storage + 0 + 1 + 3 + 6 = 14"
         );
 
-        // Verify storage indices
         assert_eq!(&idx.nonzero_state_indices[..4], &[0, 1, 2, 3]);
+        assert_eq!(
+            &idx.nonzero_state_indices[4..],
+            &[5, 6, 7, 10, 11, 14, 15, 19, 23, 27]
+        );
 
-        // Verify hydro 1 lag
-        assert_eq!(idx.nonzero_state_indices[4], 10); // 4 + 1*6 + 0
-
-        // Verify hydro 2 lags
-        assert_eq!(&idx.nonzero_state_indices[5..8], &[16, 17, 18]);
-
-        // Verify hydro 3 lags
-        assert_eq!(&idx.nonzero_state_indices[8..14], &[22, 23, 24, 25, 26, 27]);
-
-        // Verify sorted
         assert!(idx.nonzero_state_indices.windows(2).all(|w| w[0] < w[1]));
     }
 

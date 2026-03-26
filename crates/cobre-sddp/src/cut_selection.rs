@@ -269,7 +269,9 @@ impl CutSelectionStrategy {
             Self::Level1 { threshold, .. } => metadata
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| m.active_count <= *threshold)
+                .filter(|(_, m)| {
+                    m.active_count <= *threshold && m.iteration_generated < current_iteration
+                })
                 .map(|(i, _)| i as u32)
                 .collect(),
 
@@ -277,7 +279,8 @@ impl CutSelectionStrategy {
                 .iter()
                 .enumerate()
                 .filter(|(_, m)| {
-                    current_iteration.saturating_sub(m.last_active_iter) > *memory_window
+                    m.iteration_generated < current_iteration
+                        && current_iteration.saturating_sub(m.last_active_iter) > *memory_window
                 })
                 .map(|(i, _)| i as u32)
                 .collect(),
@@ -970,6 +973,64 @@ mod tests {
             deact.indices,
             vec![0, 1],
             "only cuts with last_active_iter 1 and 5 should be deactivated"
+        );
+    }
+
+    /// Cuts generated in the current iteration must never be deactivated by
+    /// Level1, even if their `active_count` is 0 (they haven't been tested
+    /// yet). This prevents the pathology where every new cut is immediately
+    /// killed, causing the lower bound to stagnate.
+    #[test]
+    fn level1_spares_cuts_from_current_iteration() {
+        let strategy = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 1,
+        };
+        let metadata = vec![
+            CutMetadata {
+                iteration_generated: 10, // same as current_iteration
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 10,
+                domination_count: 0,
+            },
+            CutMetadata {
+                iteration_generated: 5, // older, zero activity
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 5,
+                domination_count: 0,
+            },
+        ];
+        let deact = strategy.select(&metadata, 10);
+        assert_eq!(
+            deact.indices,
+            vec![1],
+            "only the older cut (iter 5) should be deactivated; \
+             the current-iteration cut (iter 10) must be spared"
+        );
+    }
+
+    /// Lml1 also spares cuts from the current iteration via the
+    /// `iteration_generated` guard (defense-in-depth; `last_active_iter`
+    /// initialization already protects, but the guard is explicit).
+    #[test]
+    fn lml1_spares_cuts_from_current_iteration() {
+        let strategy = CutSelectionStrategy::Lml1 {
+            memory_window: 0,
+            check_frequency: 1,
+        };
+        let metadata = vec![CutMetadata {
+            iteration_generated: 10,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 10,
+            domination_count: 0,
+        }];
+        let deact = strategy.select(&metadata, 10);
+        assert!(
+            deact.indices.is_empty(),
+            "current-iteration cut must not be deactivated even with memory_window=0"
         );
     }
 }

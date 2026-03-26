@@ -199,14 +199,6 @@ pub struct TrainingSolverConfig {
 
     /// Total time budget in seconds across all retry attempts for one solve.
     pub retry_time_budget_seconds: f64,
-
-    /// HiGHS simplex strategy override (0 = auto, 1 = dual, 4 = primal).
-    ///
-    /// When `None` (the default), HiGHS uses Cobre's tuned default of primal
-    /// simplex (strategy 4). Set this to benchmark alternative strategies
-    /// without recompiling.
-    #[serde(default)]
-    pub simplex_strategy: Option<u32>,
 }
 
 impl Default for TrainingSolverConfig {
@@ -214,7 +206,6 @@ impl Default for TrainingSolverConfig {
         Self {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
-            simplex_strategy: None,
         }
     }
 }

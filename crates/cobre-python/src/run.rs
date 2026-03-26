@@ -28,12 +28,11 @@ use pyo3::types::PyDict;
 
 use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
-use cobre_io::{write_results, ParquetWriterConfig, SolverStatsRow};
+use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
     build_hydro_model_summary, build_stochastic_summary, prepare_hydro_models, prepare_stochastic,
-    ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary,
-    SimulationScenarioResult, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
-    DEFAULT_SEED,
+    ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary, SolverStatsDelta,
+    StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -377,12 +376,7 @@ fn run_inner(
             None,
         )
         .map_err(|e| format!("training error: {e}"))?;
-    if let Some(ref e) = training_outcome.error {
-        return Err(format!(
-            "training failed after {} iterations: {e}",
-            training_outcome.result.iterations
-        ));
-    }
+    let training_error = training_outcome.error;
     let training_result = training_outcome.result;
 
     let events: Vec<_> = event_rx.try_iter().collect();
@@ -437,18 +431,47 @@ fn run_inner(
         .map_err(|e| format!("cut selection output: {e}"))?;
     }
 
+    // Write training results (convergence, dictionaries, manifests, metadata)
+    // immediately — before simulation starts. This ensures training artifacts
+    // are persisted even if simulation fails.
+    cobre_io::write_training_results(&output_dir, &training_output, &system, &config)
+        .map_err(|e| format!("training results output: {e}"))?;
+
+    // If training failed mid-iteration, return the error after writing partial
+    // outputs. All training artifacts are persisted; simulation is skipped.
+    if let Some(ref e) = training_error {
+        return Err(format!(
+            "training failed after {} iterations: {e}",
+            training_result.iterations
+        ));
+    }
+
     if should_simulate {
         let io_capacity = setup.simulation_config().io_channel_capacity;
         let mut sim_pool = setup
             .create_workspace_pool(n_threads, HighsSolver::new)
             .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
-        // Drain thread prevents bounded-channel deadlock when n_scenarios > io_capacity.
+
+        // Create the writer before spawning the drain thread so initialization
+        // errors surface on the main thread.
+        let sim_writer =
+            SimulationParquetWriter::new(&output_dir, &system, &ParquetWriterConfig::default())
+                .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
+
+        // Drain thread writes scenarios directly to Parquet (matches CLI flow).
         let drain_handle = std::thread::spawn(move || {
-            result_rx
-                .into_iter()
-                .collect::<Vec<SimulationScenarioResult>>()
+            let mut writer = sim_writer;
+            let mut failed: u32 = 0;
+            for scenario_result in result_rx {
+                if let Err(e) = writer.write_scenario(ScenarioWritePayload::from(scenario_result)) {
+                    eprintln!("cobre-python: simulation write warning: {e}");
+                    failed += 1;
+                }
+            }
+            (writer, failed)
         });
+
         let sim_result = setup
             .simulate(
                 &mut sim_pool.workspaces,
@@ -459,10 +482,14 @@ fn run_inner(
             )
             .map_err(|e| format!("simulation error: {e}"));
         drop(result_tx);
-        let local_results = drain_handle
+
+        let (sim_writer, write_failures) = drain_handle
             .join()
             .map_err(|_| "drain thread panicked".to_string())?;
         let sim_run_result = sim_result?;
+
+        let mut sim_out = sim_writer.finalize(0);
+        sim_out.failed = write_failures;
 
         // Write simulation solver stats to simulation/solver/scenarios.parquet.
         if !sim_run_result.solver_stats.is_empty() {
@@ -477,30 +504,13 @@ fn run_inner(
                 .map_err(|e| format!("simulation solver stats output: {e}"))?;
         }
 
-        let mut sim_writer =
-            SimulationParquetWriter::new(&output_dir, &system, &ParquetWriterConfig::default())
-                .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
-        let mut failed: u32 = 0;
-        for scenario_result in local_results {
-            if let Err(e) = sim_writer.write_scenario(ScenarioWritePayload::from(scenario_result)) {
-                eprintln!("cobre-python: simulation write warning: {e}");
-                failed += 1;
-            }
-        }
-        let mut sim_out = sim_writer.finalize(0);
-        sim_out.failed = failed;
         let sim_summary = SimSummary {
             n_scenarios: sim_out.n_scenarios,
             completed: sim_out.completed,
         };
-        write_results(
-            &output_dir,
-            &training_output,
-            Some(&sim_out),
-            &system,
-            &config,
-        )
-        .map_err(|e| format!("output write error: {e}"))?;
+        cobre_io::write_simulation_results(&output_dir, &sim_out)
+            .map_err(|e| format!("simulation results output: {e}"))?;
+
         Ok(RunSummary {
             converged,
             iterations,
@@ -514,8 +524,6 @@ fn run_inner(
             hydro_models: hydro_models_summary,
         })
     } else {
-        write_results(&output_dir, &training_output, None, &system, &config)
-            .map_err(|e| format!("output write error: {e}"))?;
         Ok(RunSummary {
             converged,
             iterations,

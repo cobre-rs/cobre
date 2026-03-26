@@ -142,6 +142,7 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
 
             TrainingEvent::CutSelectionComplete {
                 iteration,
+                cuts_deactivated,
                 selection_time_ms,
                 allgatherv_time_ms,
                 ..
@@ -149,6 +150,8 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 let record = partials.entry(*iteration).or_default();
                 record.cut_selection_ms = *selection_time_ms;
                 record.cut_selection_allgatherv_ms = *allgatherv_time_ms;
+                // Adjust cuts_active to reflect the post-selection count.
+                record.cuts_active = record.cuts_active.saturating_sub(*cuts_deactivated);
             }
 
             _ => {}
@@ -666,6 +669,7 @@ mod tests {
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
+                per_stage: vec![],
             },
         ];
         let fcf = make_empty_fcf();
@@ -741,6 +745,7 @@ mod tests {
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
+                per_stage: vec![],
             },
         ];
         let fcf = make_empty_fcf();

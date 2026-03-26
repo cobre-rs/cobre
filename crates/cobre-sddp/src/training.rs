@@ -32,7 +32,7 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::TrainingEvent;
+use cobre_core::{StageSelectionRecord, TrainingEvent};
 use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
@@ -498,20 +498,49 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 let sel_start = Instant::now();
                 let num_sel_stages = num_stages.saturating_sub(1);
                 let mut cuts_deactivated = 0u32;
+                let mut per_stage = Vec::with_capacity(num_sel_stages);
+
+                // Stage 0 is exempt: its cuts are never the "successor" in the
+                // backward pass, so their binding activity is never updated.
+                // Deactivating them would weaken the lower bound approximation.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    let pool0 = &fcf.pools[0];
+                    let active_0 = pool0.active_count() as u32;
+                    per_stage.push(StageSelectionRecord {
+                        stage: 0,
+                        cuts_populated: pool0.populated_count as u32,
+                        cuts_active_before: active_0,
+                        cuts_deactivated: 0,
+                        cuts_active_after: active_0,
+                    });
+                }
 
                 #[allow(clippy::cast_possible_truncation)]
-                for stage in 0..num_sel_stages {
-                    let stage_u32 = stage as u32;
-                    let deact =
-                        strategy.select_for_stage(&fcf.pools[stage].metadata, iteration, stage_u32);
-                    cuts_deactivated += deact.indices.len() as u32;
+                for stage in 1..num_sel_stages {
+                    let pool = &fcf.pools[stage];
+                    let populated = pool.populated_count as u32;
+                    let active_before = pool.active_count() as u32;
 
-                    // Deactivate cuts in the lower bound solver's LP (stage 0 only).
-                    if stage == 0 && comm.rank() == 0 {
-                        deactivate_cuts_in_lp(solver, &deact, &mut lb_cut_row_map);
-                    }
+                    let stage_u32 = stage as u32;
+                    let deact = strategy.select_for_stage(
+                        &pool.metadata[..pool.populated_count],
+                        iteration,
+                        stage_u32,
+                    );
+                    let n_deact = deact.indices.len() as u32;
+                    cuts_deactivated += n_deact;
 
                     fcf.pools[stage].deactivate(&deact.indices);
+
+                    let active_after = fcf.pools[stage].active_count() as u32;
+                    per_stage.push(StageSelectionRecord {
+                        stage: stage_u32,
+                        cuts_populated: populated,
+                        cuts_active_before: active_before,
+                        cuts_deactivated: n_deact,
+                        cuts_active_after: active_after,
+                    });
                 }
 
                 #[allow(clippy::cast_possible_truncation)]
@@ -527,6 +556,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         stages_processed,
                         selection_time_ms,
                         allgatherv_time_ms: 0,
+                        per_stage,
                     },
                 );
             }
@@ -1769,18 +1799,11 @@ mod tests {
 
     /// `cut_selection_deactivates_inactive_cuts`
     ///
-    /// Given `train` with `cut_selection: Some(Level1 { threshold: 0,
-    /// check_frequency: 2 })` running for 2 iterations where the mock solver
-    /// produces cuts with zero activity at stage 0, when the training loop
-    /// reaches iteration 2, then `CutSelectionComplete` is emitted with
-    /// `cuts_deactivated > 0`.
-    ///
-    /// Rationale: the mock solver returns `dual: vec![0.0; 1]` for every LP
-    /// solve. The backward pass therefore never marks any cut as binding
-    /// (`is_binding = false`), so all generated cuts have `active_count = 0`
-    /// and are deactivated at the Level1 selection step.
+    /// Stage 0 is exempt from cut selection because its cuts have no
+    /// backward-pass activity tracking. With a 2-stage system, only stage 0
+    /// has cuts, so `cuts_deactivated` must be 0.
     #[test]
-    fn cut_selection_deactivates_inactive_cuts() {
+    fn cut_selection_stage0_exempt_preserves_cuts() {
         use crate::cut_selection::CutSelectionStrategy;
 
         let n_stages = 2;
@@ -1794,7 +1817,6 @@ mod tests {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-        // max_iterations=10 so the FCF has enough capacity for iteration 2
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
@@ -1807,7 +1829,6 @@ mod tests {
             event_sender: Some(tx),
         };
 
-        // Level1 with threshold=0, check_frequency=2: fires at iteration 2.
         let strategy = CutSelectionStrategy::Level1 {
             threshold: 0,
             check_frequency: 2,
@@ -1867,6 +1888,7 @@ mod tests {
         let TrainingEvent::CutSelectionComplete {
             iteration,
             cuts_deactivated,
+            per_stage,
             ..
         } = sel_events[0]
         else {
@@ -1874,9 +1896,19 @@ mod tests {
         };
 
         assert_eq!(*iteration, 2, "selection must fire at iteration 2");
+        assert_eq!(
+            *cuts_deactivated, 0,
+            "stage 0 is exempt from cut selection, so no cuts should be deactivated"
+        );
+        // Verify per-stage records are populated and stage 0 is exempt.
         assert!(
-            *cuts_deactivated > 0,
-            "expected cuts_deactivated > 0 (mock solver produces zero-activity cuts), got 0"
+            !per_stage.is_empty(),
+            "per_stage must contain at least the stage 0 record"
+        );
+        assert_eq!(per_stage[0].stage, 0, "first record must be stage 0");
+        assert_eq!(
+            per_stage[0].cuts_deactivated, 0,
+            "stage 0 must have zero deactivations"
         );
     }
 

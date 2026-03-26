@@ -53,6 +53,25 @@ pub struct StoppingRuleResult {
     pub detail: String,
 }
 
+/// Per-stage cut selection statistics for one iteration.
+///
+/// Each instance describes the cut lifecycle at a single stage after a
+/// selection step: how many cuts existed, how many were active before
+/// selection, how many were deactivated, and how many remain active.
+#[derive(Debug, Clone)]
+pub struct StageSelectionRecord {
+    /// 0-based stage index.
+    pub stage: u32,
+    /// Total cuts ever generated at this stage (high-water mark).
+    pub cuts_populated: u32,
+    /// Active cuts before selection ran.
+    pub cuts_active_before: u32,
+    /// Cuts deactivated by selection at this stage.
+    pub cuts_deactivated: u32,
+    /// Active cuts after selection.
+    pub cuts_active_after: u32,
+}
+
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
 ///
@@ -170,6 +189,8 @@ pub enum TrainingEvent {
         /// Wall-clock time for the allgatherv deactivation-set exchange, in
         /// milliseconds.
         allgatherv_time_ms: u64,
+        /// Per-stage breakdown of selection results.
+        per_stage: Vec<StageSelectionRecord>,
     },
 
     /// Step 5: Convergence check completed.
@@ -346,6 +367,7 @@ mod tests {
                 stages_processed: 12,
                 selection_time_ms: 20,
                 allgatherv_time_ms: 1,
+                per_stage: vec![],
             },
             TrainingEvent::ConvergenceUpdate {
                 iteration: 1,
@@ -530,6 +552,7 @@ mod tests {
             stages_processed: 12,
             selection_time_ms: 25,
             allgatherv_time_ms: 2,
+            per_stage: vec![],
         };
         let TrainingEvent::CutSelectionComplete {
             iteration,
@@ -537,6 +560,7 @@ mod tests {
             stages_processed,
             selection_time_ms,
             allgatherv_time_ms,
+            per_stage,
         } = event
         else {
             panic!("wrong variant")
@@ -546,6 +570,7 @@ mod tests {
         assert_eq!(stages_processed, 12);
         assert_eq!(selection_time_ms, 25);
         assert_eq!(allgatherv_time_ms, 2);
+        assert!(per_stage.is_empty());
     }
 
     #[test]

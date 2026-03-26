@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook for Cobre
+# Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+echo "==> Running cargo fmt --check..."
+cargo fmt --all -- --check
+
+echo "==> Running suppression check..."
+python3 scripts/check_suppressions.py --max 15
+
+echo "==> Pre-commit checks passed."

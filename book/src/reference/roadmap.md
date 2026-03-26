@@ -153,6 +153,72 @@ The following features were delivered in v0.1.9:
 - **Per-scenario simulation statistics** -- Individual scenario cost and LP solve
   metrics exported alongside aggregate simulation results.
 
+## v0.1.10 Deliverables
+
+The following features were delivered in v0.1.10:
+
+- **Z-inflow LP variable** -- New `z_inflow` variable tracks realized inflow per
+  hydro at a fixed column offset, enabling accurate inflow reporting in
+  simulation output independent of lag dynamics. Includes deterministic test D16
+  for PAR(1) lag shift verification.
+- **LP column/row layout refactor** -- Z-inflow columns and rows relocated to a
+  fixed offset, shifting dependent variables accordingly. All 56 affected test
+  assertions updated for the new layout.
+- **Water value extraction fix** -- Corrected simulation output reading the wrong
+  row duals for water values after the layout refactor.
+- **PAR seasonal model expansion fix** -- Fixed auto-estimation emitting one
+  model per season instead of one per stage, ensuring stages beyond the first in
+  each season receive inflow AR coefficients.
+- **Lag state transition wiring** -- Lag state shift in the forward/backward pass
+  now propagates PAR(p) lag variables correctly across stages.
+- **Inflow reporting fix** -- Simulation inflow values now reflect realized
+  inflow rather than stale lag-derived values.
+- **`load_model` hoisting** -- Moved the `load_model` call out of the backward
+  pass inner opening loop, avoiding redundant LP reloads per stage.
+
+## v0.1.11 Deliverables
+
+The following features were delivered in v0.1.11:
+
+- **LP setup instrumentation and optimisation** -- `SolverStatistics` tracks
+  cumulative wall-clock time for `load_model`, `add_rows`, and `set_bounds`
+  separately from solve time. Model persistence across scenarios at the same
+  stage, active-cut-count caching, incremental cut append, sparse cut
+  representation, and bound-zeroing deactivation reduce LP rebuild overhead.
+- **Simulation basis warm-start** -- Simulation LPs are warm-started with the
+  per-stage basis from the training checkpoint. The basis is read-only and shared
+  across all threads, preserving determinism while reducing simplex iterations.
+- **Physical evaporation upper bounds** -- Evaporation flow is bounded above by a
+  physical estimate derived from linearisation coefficients and maximum storage,
+  with a 2x safety margin and a high penalty on over-evaporation slack.
+- **Cost breakdown extraction** -- Inflow penalty cost, hydro violation cost
+  (evaporation + withdrawal), and diversion cost are now extracted from LP primal
+  values into the simulation cost breakdown.
+- **Simulation cost extraction prescaling fix** -- Per-variable cost extraction
+  now divides by column scale factors to undo LP prescaling, correcting inflated
+  per-entity costs.
+- **NCS curtailment cost semantics fix** -- Curtailment cost now uses curtailment
+  MW (available minus generation) instead of generation MW, matching field name
+  semantics.
+- **HiGHS internal scaling disabled** -- `simplex_scale_strategy` set to 0 (off)
+  in default solver options; Cobre's own prescaler handles conditioning.
+
+## v0.1.12 Deliverables (unreleased)
+
+The following features are included in the upcoming v0.1.12 release:
+
+- **Backward-pass performance program** -- A series of optimizations targeting
+  the backward pass hot path: cut selection with domination-count tracking,
+  incremental cut injection into the LP, sparse cut coefficient storage,
+  configurable simplex strategy, pre-allocated backward coefficient buffers, and
+  replacement of `HashMap` with `Vec` for binding slot increments.
+- **Cut selection observability** -- Per-stage cut selection records exported as
+  Parquet via a new `write_cut_selection_records` pipeline, enabling analysis of
+  which cuts are active, dominated, or dropped across training iterations.
+- **Python parity restored** -- Three missing output writes (`scaling_report.json`,
+  `training/solver/iterations.parquet`, `simulation/solver/scenarios.parquet`)
+  added to the Python bindings, closing all known CLI/Python output gaps.
+
 ## Sections
 
 The roadmap is organized into four areas:
@@ -165,4 +231,5 @@ The roadmap is organized into four areas:
   and `cobre-tui` remain stubbed for future implementation.
 - **Algorithm Extensions** -- Deferred solver variants: multi-cut formulation
   and infinite-horizon policy graphs. (CVaR risk measure was delivered in
-  v0.1.1. Cut selection wiring was delivered in v0.1.2.)
+  v0.1.1. Cut selection wiring was delivered in v0.1.2. Cut selection
+  observability was delivered in v0.1.12.)

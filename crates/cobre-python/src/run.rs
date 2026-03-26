@@ -28,11 +28,12 @@ use pyo3::types::PyDict;
 
 use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
-use cobre_io::{write_results, ParquetWriterConfig};
+use cobre_io::{write_results, ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
     build_hydro_model_summary, build_stochastic_summary, prepare_hydro_models, prepare_stochastic,
     ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary,
-    SimulationScenarioResult, StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
+    SimulationScenarioResult, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
+    DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -287,6 +288,37 @@ fn export_stochastic_artifacts_py(
     }
 }
 
+/// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
+///
+/// The `id` parameter is the row identifier: iteration number for training phases,
+/// scenario ID for the simulation phase.
+#[allow(clippy::cast_possible_truncation)]
+fn delta_to_stats_row(
+    id: u32,
+    phase: &str,
+    stage: i32,
+    delta: &SolverStatsDelta,
+) -> SolverStatsRow {
+    SolverStatsRow {
+        iteration: id,
+        phase: phase.to_string(),
+        stage,
+        lp_solves: delta.lp_solves as u32,
+        lp_successes: delta.lp_successes as u32,
+        lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
+        lp_failures: delta.lp_failures as u32,
+        retry_attempts: delta.retry_attempts as u32,
+        basis_offered: delta.basis_offered as u32,
+        basis_rejections: delta.basis_rejections as u32,
+        simplex_iterations: delta.simplex_iterations,
+        solve_time_ms: delta.solve_time_ms,
+        load_model_time_ms: delta.load_model_time_ms,
+        add_rows_time_ms: delta.add_rows_time_ms,
+        set_bounds_time_ms: delta.set_bounds_time_ms,
+        basis_set_time_ms: delta.basis_set_time_ms,
+    }
+}
+
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
 #[allow(clippy::too_many_lines)]
 fn run_inner(
@@ -327,6 +359,11 @@ fn run_inner(
             estimation_report.as_ref(),
         );
     }
+
+    // Write scaling report (before training starts).
+    let scaling_path = output_dir.join("training/scaling_report.json");
+    cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
+        .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
@@ -369,6 +406,20 @@ fn run_inner(
 
     let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
+    // Write training solver stats to training/solver/iterations.parquet.
+    if !training_result.solver_stats_log.is_empty() {
+        let rows: Vec<SolverStatsRow> = training_result
+            .solver_stats_log
+            .iter()
+            .map(|(iter, phase, stage, delta)| {
+                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
+                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            })
+            .collect();
+        cobre_io::write_solver_stats(&output_dir, &rows)
+            .map_err(|e| format!("solver stats output: {e}"))?;
+    }
+
     // Write per-stage cut selection records (training-only, no simulation dependency).
     if !training_output.cut_selection_records.is_empty() {
         cobre_io::write_cut_selection_records(
@@ -404,7 +455,20 @@ fn run_inner(
         let local_results = drain_handle
             .join()
             .map_err(|_| "drain thread panicked".to_string())?;
-        sim_result?;
+        let sim_run_result = sim_result?;
+
+        // Write simulation solver stats to simulation/solver/scenarios.parquet.
+        if !sim_run_result.solver_stats.is_empty() {
+            let rows: Vec<SolverStatsRow> = sim_run_result
+                .solver_stats
+                .iter()
+                .map(|(scenario_id, delta)| {
+                    delta_to_stats_row(*scenario_id, "simulation", -1, delta)
+                })
+                .collect();
+            cobre_io::write_simulation_solver_stats(&output_dir, &rows)
+                .map_err(|e| format!("simulation solver stats output: {e}"))?;
+        }
 
         let mut sim_writer =
             SimulationParquetWriter::new(&output_dir, &system, &ParquetWriterConfig::default())

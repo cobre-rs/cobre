@@ -28,10 +28,10 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, SimulationScenarioResult,
-    StudySetup, build_hydro_model_summary, build_stochastic_summary,
-    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
-    prepare_hydro_models, prepare_stochastic,
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
+    build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
+    inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
+    prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -548,10 +548,31 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         let io_capacity = sim_config.io_channel_capacity;
         let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
+        // Every rank creates its own writer (Strategy B: each rank calls
+        // create_dir_all independently — idempotent, no synchronisation needed).
+        let parquet_config = cobre_io::ParquetWriterConfig::default();
+        let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
+            &output_dir,
+            &system,
+            &parquet_config,
+        )
+        .map_err(CliError::from)?;
+
+        // The drain thread writes scenarios directly to Parquet instead of
+        // collecting into a Vec. This avoids the need to gather all results
+        // on rank 0 via MPI (which overflows i32 on large cases).
         let drain_handle = std::thread::spawn(move || {
-            result_rx
-                .into_iter()
-                .collect::<Vec<SimulationScenarioResult>>()
+            let mut failed: u32 = 0;
+            for scenario_result in result_rx {
+                let payload = cobre_io::output::simulation_writer::ScenarioWritePayload::from(
+                    scenario_result,
+                );
+                if let Err(e) = sim_writer.write_scenario(payload) {
+                    tracing::error!("simulation write error: {e}");
+                    failed += 1;
+                }
+            }
+            (sim_writer, failed)
         });
 
         let sim_start = std::time::Instant::now();
@@ -572,14 +593,20 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         drop(result_tx);
 
         #[allow(clippy::expect_used)]
-        let local_results = drain_handle.join().expect("drain thread panicked");
+        let (sim_writer, write_failures) = drain_handle.join().expect("drain thread panicked");
 
         let sim_run_result = sim_result?;
 
         #[allow(clippy::cast_possible_truncation)]
         let sim_time_ms = sim_start.elapsed().as_millis() as u64;
 
-        let all_results = gather_simulation_results(&comm, &local_results)?;
+        let mut local_sim_output = sim_writer.finalize(sim_time_ms);
+        local_sim_output.failed = write_failures;
+
+        // Merge per-rank simulation metadata using lightweight MPI collectives.
+        // For single-rank runs this is a no-op passthrough; for multi-rank runs
+        // it uses allreduce (counts, time) and allgatherv (partition paths).
+        let merged_sim_output = merge_simulation_metadata(&comm, &local_sim_output)?;
 
         comm.barrier().map_err(|e| CliError::Internal {
             message: format!("post-simulation barrier error: {e}"),
@@ -618,30 +645,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         }
 
         if is_root {
-            let parquet_config = cobre_io::ParquetWriterConfig::default();
-            let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
-                &output_dir,
-                &system,
-                &parquet_config,
-            )
-            .map_err(CliError::from)?;
-
-            let mut failed: u32 = 0;
-            for scenario_result in all_results {
-                let payload = cobre_io::output::simulation_writer::ScenarioWritePayload::from(
-                    scenario_result,
-                );
-                if let Err(e) = sim_writer.write_scenario(payload) {
-                    tracing::error!("simulation write error: {e}");
-                    failed += 1;
-                }
-            }
-            let mut sim_output = sim_writer.finalize(sim_time_ms);
-            sim_output.failed = failed;
-
             write_simulation_outputs(&WriteSimulationArgs {
                 output_dir: &output_dir,
-                sim_output: &sim_output,
+                sim_output: &merged_sim_output,
                 sim_solver_stats: &sim_run_result.solver_stats,
                 quiet,
                 stderr: &stderr,
@@ -652,70 +658,95 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Gather simulation results from all MPI ranks into a single `Vec`.
+/// Merge per-rank simulation metadata using lightweight MPI collective operations.
 ///
-/// Extracted from `execute()` so that the allgatherv + deserialization pattern has
-/// a clear name and boundary. Runs on all ranks: each rank serializes its local
-/// results, exchanges byte-count lengths via `allgatherv`, exchanges the raw bytes
-/// via a second `allgatherv`, then deserializes each rank's partition into the
-/// returned `Vec`. All ranks return the complete set of results.
-fn gather_simulation_results<C: Communicator>(
+/// Each rank contributes its local [`SimulationOutput`](cobre_io::SimulationOutput) from
+/// the distributed Parquet writing phase. The merge uses:
+///
+/// - `allreduce(Sum)` for scenario counts (`n_scenarios`, `completed`, `failed`)
+/// - `allreduce(Max)` for `total_time_ms` (wall-clock = slowest rank)
+/// - `allgatherv` for partition path strings (newline-delimited UTF-8)
+///
+/// For single-rank runs (local communicator), this is equivalent to a passthrough.
+#[allow(clippy::cast_possible_truncation)]
+fn merge_simulation_metadata<C: Communicator>(
     comm: &C,
-    local_results: &[SimulationScenarioResult],
-) -> Result<Vec<SimulationScenarioResult>, CliError> {
-    let local_bytes = postcard::to_allocvec(local_results).map_err(|e| CliError::Internal {
-        message: format!("simulation result serialization error: {e}"),
-    })?;
+    local: &cobre_io::SimulationOutput,
+) -> Result<cobre_io::SimulationOutput, CliError> {
+    // Scalar counts: allreduce(Sum) on [n_scenarios, completed, failed].
+    let send_counts = [local.n_scenarios, local.completed, local.failed];
+    let mut merged_counts = [0u32; 3];
+    comm.allreduce(&send_counts, &mut merged_counts, ReduceOp::Sum)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation metadata count allreduce error: {e}"),
+        })?;
 
+    // Wall-clock time: allreduce(Max) — slowest rank determines total time.
+    let send_time = [local.total_time_ms];
+    let mut merged_time = [0u64; 1];
+    comm.allreduce(&send_time, &mut merged_time, ReduceOp::Max)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation metadata time allreduce error: {e}"),
+        })?;
+
+    // Partition paths: encode as newline-delimited UTF-8, exchange via allgatherv.
+    let local_paths_bytes = local.partitions_written.join("\n").into_bytes();
+
+    // Exchange per-rank byte counts.
+    let send_len = [local_paths_bytes.len() as u64];
     let n_ranks = comm.size();
-    #[allow(clippy::cast_possible_truncation)]
-    let send_len = [local_bytes.len() as u64];
     let mut all_lens = vec![0u64; n_ranks];
     let len_counts: Vec<usize> = vec![1; n_ranks];
     let len_displs: Vec<usize> = (0..n_ranks).collect();
     comm.allgatherv(&send_len, &mut all_lens, &len_counts, &len_displs)
         .map_err(|e| CliError::Internal {
-            message: format!("simulation result length exchange error: {e}"),
+            message: format!("partition path length exchange error: {e}"),
         })?;
 
-    let recv_counts: Vec<usize> = all_lens
-        .iter()
-        .map(|&l| {
-            usize::try_from(l).map_err(|e| CliError::Internal {
-                message: format!("simulation result byte count exceeds usize: {e}"),
-            })
-        })
-        .collect::<Result<_, _>>()?;
+    // Exchange path bytes.
+    let recv_counts: Vec<usize> = all_lens.iter().map(|&l| l as usize).collect();
     let recv_displs: Vec<usize> = recv_counts
         .iter()
         .scan(0usize, |acc, &c| {
-            let displ = *acc;
+            let d = *acc;
             *acc += c;
-            Some(displ)
+            Some(d)
         })
         .collect();
     let total_bytes: usize = recv_counts.iter().sum();
-
     let mut all_bytes = vec![0u8; total_bytes];
-    comm.allgatherv(&local_bytes, &mut all_bytes, &recv_counts, &recv_displs)
-        .map_err(|e| CliError::Internal {
-            message: format!("simulation result gather error: {e}"),
+    comm.allgatherv(
+        &local_paths_bytes,
+        &mut all_bytes,
+        &recv_counts,
+        &recv_displs,
+    )
+    .map_err(|e| CliError::Internal {
+        message: format!("partition path gather error: {e}"),
+    })?;
+
+    // Parse received bytes back into path strings.
+    let mut all_partitions: Vec<String> = Vec::new();
+    for (i, &count) in recv_counts.iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        let start = recv_displs[i];
+        let chunk = &all_bytes[start..start + count];
+        let text = std::str::from_utf8(chunk).map_err(|e| CliError::Internal {
+            message: format!("partition path UTF-8 decode error from rank {i}: {e}"),
         })?;
-
-    let mut all_results: Vec<SimulationScenarioResult> = Vec::new();
-    let mut offset = 0;
-    for &count in &recv_counts {
-        let partition: Vec<SimulationScenarioResult> =
-            postcard::from_bytes(&all_bytes[offset..offset + count]).map_err(|e| {
-                CliError::Internal {
-                    message: format!("simulation result deserialization error: {e}"),
-                }
-            })?;
-        all_results.extend(partition);
-        offset += count;
+        all_partitions.extend(text.split('\n').filter(|s| !s.is_empty()).map(String::from));
     }
+    all_partitions.sort();
 
-    Ok(all_results)
+    Ok(cobre_io::SimulationOutput {
+        n_scenarios: merged_counts[0],
+        completed: merged_counts[1],
+        failed: merged_counts[2],
+        total_time_ms: merged_time[0],
+        partitions_written: all_partitions,
+    })
 }
 
 /// Write training checkpoint and results to the output directory.

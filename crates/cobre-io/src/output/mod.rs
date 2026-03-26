@@ -270,6 +270,52 @@ pub struct SimulationOutput {
     pub partitions_written: Vec<String>,
 }
 
+impl SimulationOutput {
+    /// Combine multiple per-rank simulation outputs into a single aggregate.
+    ///
+    /// Merge rules:
+    /// - `n_scenarios`: sum across all outputs.
+    /// - `completed`: sum across all outputs.
+    /// - `failed`: sum across all outputs.
+    /// - `total_time_ms`: max across all outputs (wall-clock = slowest rank).
+    /// - `partitions_written`: concatenation of all outputs' partitions, sorted
+    ///   for deterministic ordering regardless of input order.
+    ///
+    /// Returns a zeroed [`SimulationOutput`] with empty partitions when the
+    /// input slice is empty.
+    #[must_use]
+    pub fn merge(outputs: &[Self]) -> Self {
+        if outputs.is_empty() {
+            return Self {
+                n_scenarios: 0,
+                completed: 0,
+                failed: 0,
+                total_time_ms: 0,
+                partitions_written: Vec::new(),
+            };
+        }
+
+        let n_scenarios = outputs.iter().map(|o| o.n_scenarios).sum();
+        let completed = outputs.iter().map(|o| o.completed).sum();
+        let failed = outputs.iter().map(|o| o.failed).sum();
+        let total_time_ms = outputs.iter().map(|o| o.total_time_ms).max().unwrap_or(0);
+
+        let mut partitions_written: Vec<String> = outputs
+            .iter()
+            .flat_map(|o| o.partitions_written.iter().cloned())
+            .collect();
+        partitions_written.sort();
+
+        Self {
+            n_scenarios,
+            completed,
+            failed,
+            total_time_ms,
+            partitions_written,
+        }
+    }
+}
+
 /// Write all output artifacts to `output_dir`.
 ///
 /// This function is the symmetric counterpart of [`crate::load_case`]: it
@@ -1126,5 +1172,93 @@ mod tests {
             .is_file();
         let split_sim_manifest = tmp_split.path().join("simulation/_manifest.json").is_file();
         assert_eq!(combined_sim_manifest, split_sim_manifest);
+    }
+
+    #[test]
+    fn test_merge_empty_slice() {
+        let merged = SimulationOutput::merge(&[]);
+        assert_eq!(merged.n_scenarios, 0);
+        assert_eq!(merged.completed, 0);
+        assert_eq!(merged.failed, 0);
+        assert_eq!(merged.total_time_ms, 0);
+        assert!(merged.partitions_written.is_empty());
+    }
+
+    #[test]
+    fn test_merge_single_output() {
+        let output = SimulationOutput {
+            n_scenarios: 5,
+            completed: 4,
+            failed: 1,
+            total_time_ms: 1000,
+            partitions_written: vec!["simulation/costs/scenario_id=0000/data.parquet".to_string()],
+        };
+        let merged = SimulationOutput::merge(std::slice::from_ref(&output));
+        assert_eq!(merged.n_scenarios, 5);
+        assert_eq!(merged.completed, 4);
+        assert_eq!(merged.failed, 1);
+        assert_eq!(merged.total_time_ms, 1000);
+        assert_eq!(merged.partitions_written, output.partitions_written);
+    }
+
+    #[test]
+    fn test_merge_two_outputs() {
+        let a = SimulationOutput {
+            n_scenarios: 3,
+            completed: 3,
+            failed: 0,
+            total_time_ms: 500,
+            partitions_written: vec![
+                "simulation/costs/scenario_id=0000/data.parquet".to_string(),
+                "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+            ],
+        };
+        let b = SimulationOutput {
+            n_scenarios: 2,
+            completed: 1,
+            failed: 1,
+            total_time_ms: 800,
+            partitions_written: vec!["simulation/costs/scenario_id=0002/data.parquet".to_string()],
+        };
+        let merged = SimulationOutput::merge(&[a, b]);
+        assert_eq!(merged.n_scenarios, 5);
+        assert_eq!(merged.completed, 4);
+        assert_eq!(merged.failed, 1);
+        // total_time_ms uses max, not sum
+        assert_eq!(merged.total_time_ms, 800);
+        assert_eq!(merged.partitions_written.len(), 3);
+    }
+
+    #[test]
+    fn test_merge_partitions_sorted() {
+        let a = SimulationOutput {
+            n_scenarios: 1,
+            completed: 1,
+            failed: 0,
+            total_time_ms: 100,
+            partitions_written: vec![
+                "simulation/hydros/scenario_id=0002/data.parquet".to_string(),
+                "simulation/costs/scenario_id=0002/data.parquet".to_string(),
+            ],
+        };
+        let b = SimulationOutput {
+            n_scenarios: 1,
+            completed: 1,
+            failed: 0,
+            total_time_ms: 200,
+            partitions_written: vec![
+                "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+                "simulation/hydros/scenario_id=0001/data.parquet".to_string(),
+            ],
+        };
+        let merged = SimulationOutput::merge(&[a, b]);
+        // Partitions must be sorted regardless of input order
+        let expected = vec![
+            "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+            "simulation/costs/scenario_id=0002/data.parquet".to_string(),
+            "simulation/hydros/scenario_id=0001/data.parquet".to_string(),
+            "simulation/hydros/scenario_id=0002/data.parquet".to_string(),
+        ];
+        assert_eq!(merged.partitions_written, expected);
     }
 }

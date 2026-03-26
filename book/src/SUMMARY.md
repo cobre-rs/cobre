@@ -6,6 +6,7 @@
 
 # Tutorial
 
+- [What Cobre Solves](./tutorial/what-cobre-solves.md)
 - [Installation](./tutorial/installation.md)
 - [Quickstart](./tutorial/quickstart.md)
 - [Anatomy of a Case](./tutorial/anatomy-of-a-case.md)
@@ -28,6 +29,8 @@
   - [Configuration](./guide/configuration.md)
   - [CLI Reference](./guide/cli-reference.md)
   - [Interpreting Results](./guide/interpreting-results.md)
+- [NEWAVE Migration](./guide/newave-migration.md)
+- [Python Quickstart](./guide/python-quickstart.md)
 
 ---
 

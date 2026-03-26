@@ -44,3 +44,20 @@ graph TD
 ```
 
 For the full dependency graph and crate responsibilities, see the [methodology reference](https://cobre-rs.github.io/cobre-docs/specs/overview/implementation-ordering.html).
+
+## Feature Summary
+
+The ecosystem delivers a full SDDP training and simulation pipeline:
+
+- **Entity model and topology validation** (`cobre-core`)
+- **JSON/Parquet case loading** with 5-layer validation (`cobre-io`)
+- **LP solver abstraction** with HiGHS backend and warm-start basis management (`cobre-solver`)
+- **Pluggable communication** with MPI and local backends (`cobre-comm`)
+- **PAR(p) inflow models** with deterministic correlated scenario generation and inflow non-negativity enforcement (`cobre-stochastic`)
+- **SDDP training loop** with forward/backward passes, Benders cut generation, cut synchronization, and composite stopping rules (`cobre-sddp`)
+- **Simulation pipeline** with Hive-partitioned Parquet output and FlatBuffers policy checkpointing (`cobre-sddp`)
+- **CLI** with six subcommands (`run`, `validate`, `report`, `init`, `schema`, `summary`, `version`), rayon-based intra-rank thread parallelism, progress bars, and post-run summary (`cobre-cli`)
+- **Python bindings** via PyO3 with Arrow zero-copy result loading (`cobre-python`)
+- **JSON Schema** files for all input types, hosted for `$schema` editor integration
+
+The workspace is verified by over 2,800 tests.

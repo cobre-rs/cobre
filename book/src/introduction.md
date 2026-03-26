@@ -2,24 +2,47 @@
 
 **Open infrastructure for power system computation. Built in Rust.**
 
-Cobre is an ecosystem of Rust crates for power system analysis and optimization. The first solver vertical implements Stochastic Dual Dynamic Programming (SDDP) for long-term hydrothermal dispatch -- a problem central to energy planning in systems with large hydroelectric capacity.
+Cobre solves long-term hydrothermal dispatch -- the problem of scheduling water
+and fuel across power grids with large hydroelectric capacity. It provides an
+open-source, reproducible alternative built on modern infrastructure: Rust for
+performance and safety, Parquet for data interchange, and Python for analysis
+workflows.
 
-## Design goals
+## Choose Your Path
 
-- **Production-grade HPC**: hybrid MPI + thread parallelism, designed for cluster execution via `mpiexec`
-- **Reproducible results**: deterministic output regardless of rank count, thread count, or input ordering
-- **Modular architecture**: 11 crates with clean boundaries, each independently testable
-- **Open solver stack**: HiGHS LP solver, no proprietary dependencies for core functionality
+> **Coming from NEWAVE?**
+> If you already work with hydrothermal dispatch tools and want to see how Cobre
+> compares, start with the [NEWAVE Migration Guide](./guide/newave-migration.md).
 
-## Current status
+> **New to SDDP?**
+> If you want to understand the algorithm before diving into code, read
+> [What Cobre Solves](./tutorial/what-cobre-solves.md).
 
-All 8 implementation phases are complete. The ecosystem delivers a full SDDP training and simulation pipeline: entity model and topology validation (`cobre-core`), JSON/Parquet case loading with 5-layer validation (`cobre-io`), LP solver abstraction with HiGHS backend and warm-start basis management (`cobre-solver`), pluggable communication with MPI and local backends (`cobre-comm`), PAR(p) inflow models with deterministic correlated scenario generation and inflow non-negativity enforcement (`cobre-stochastic`), the SDDP training loop with forward/backward passes, Benders cut generation, cut synchronization, and composite stopping rules, plus the full simulation pipeline with Hive-partitioned Parquet output and FlatBuffers policy checkpointing (`cobre-sddp`). The CLI (`cobre-cli`) exposes six subcommands -- `run`, `validate`, `report`, `init`, `schema`, and `version` -- with rayon-based intra-rank thread parallelism via `--threads N`, progress bars, and a post-run summary. JSON Schema files for all input types are generated via `cobre schema export` and hosted at `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/`, enabling `$schema` editor integration. Python bindings are available via `cobre-python` (PyO3). The workspace is verified by over 2,800 tests.
+> **Python user?**
+> If you want to run studies from Jupyter or a Python script, see the
+> [Python Quickstart](./guide/python-quickstart.md).
 
-## Quick links
+## What Cobre Does
+
+- **Solve long-term hydrothermal dispatch** via Stochastic Dual Dynamic
+  Programming (SDDP), with training, simulation, and policy export.
+- **Model complex power systems** -- hydro cascades with variable-head
+  production, thermal units, transmission networks, non-controllable sources,
+  and user-defined generic constraints.
+- **Generate stochastic scenarios** using periodic autoregressive (PAR) inflow
+  models with correlated multi-site noise.
+- **Scale across clusters** with hybrid MPI + thread parallelism, producing
+  bit-for-bit identical results regardless of rank or thread count.
+- **Analyze results from Python** using Arrow zero-copy bindings, or directly
+  from Parquet output files.
+
+## Quick Links
 
 |                       |                                                                         |
 | --------------------- | ----------------------------------------------------------------------- |
 | GitHub                | [github.com/cobre-rs/cobre](https://github.com/cobre-rs/cobre)          |
-| API docs (rustdoc)    | `cargo doc --workspace --no-deps --open`                                |
-| Methodology reference | [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/) |
+| Software Book         | You are here                                                            |
+| API Docs              | [docs.rs/cobre](https://docs.rs/cobre)                                  |
+| PyPI                  | [pypi.org/project/cobre-python](https://pypi.org/project/cobre-python/) |
+| Methodology Reference | [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/) |
 | License               | [Apache-2.0](https://github.com/cobre-rs/cobre/blob/main/LICENSE)       |

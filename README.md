@@ -18,195 +18,51 @@
 
 ---
 
-**Cobre** is an open-source ecosystem of Rust crates for power system analysis and optimization. It provides a shared data model, file format interoperability, stochastic scenario generation, and a distributed SDDP solver for hydrothermal dispatch — with interfaces for CLI, Python, and AI agents.
-
-The name comes from the Portuguese word for **copper** — the metal that conducts electricity.
-
-> **Software Book:** [cobre-rs.github.io/cobre](https://cobre-rs.github.io/cobre/) |
-> **Methodology:** [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/)
+**Cobre** is a Rust ecosystem for power system optimization. It ships a distributed SDDP solver for hydrothermal dispatch with CLI, Python, and AI-agent interfaces. The name comes from the Portuguese word for **copper**.
 
 ## Why Cobre?
 
-Power system computation today is split between closed-source commercial tools and fragmented academic projects. Cobre aims to provide:
+- **Production performance** -- Rust gives C/C++-level speed with memory safety. For software that dispatches national power grids, both matter.
+- **Reproducibility** -- Declaration-order invariance guarantees bit-for-bit identical results regardless of input entity ordering.
+- **Modularity** -- Pick the crates you need. Use `cobre-core` for data modeling alone, or `cobre-sddp` for the full solver.
+- **Interoperability** -- JSON/Parquet input, Python bindings for Jupyter workflows, MCP server for AI agents.
 
-- **A shared data model** — the same `HydroPlant`, `Bus`, or `ThermalUnit` type works whether you're running a 10-year stochastic dispatch or inspecting results from Python. Define your system once, analyze it from multiple angles.
-- **Production performance** — Rust gives C/C++-level speed with memory safety. For software that dispatches national power grids, both matter.
-- **Reproducibility** — declaration-order invariance guarantees bit-for-bit identical results regardless of input entity ordering.
-- **Modularity** — pick the crates you need. Use `cobre-core` for data modeling without pulling in solver dependencies. Use `cobre-sddp` without caring about interfaces.
-- **Interoperability** — JSON/Parquet input, MCP server for AI agents, Python bindings for Jupyter workflows.
-
-## Crates
-
-| Crate                                          | Status                                                                                     | Description                                                                                                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`cobre-core`](crates/cobre-core/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Power system entity model — buses, hydros, thermals, lines, non-controllable sources, pumping stations, contracts                              |
-| [`cobre-io`](crates/cobre-io/)                 | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Input loading (JSON/Parquet), output writing (Parquet/FlatBuffers), 5-layer validation pipeline                                                |
-| [`cobre-stochastic`](crates/cobre-stochastic/) | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | PAR(p) inflow models, PAR(p) fitting, stochastic load noise, NCS availability noise, correlated scenario generation, opening tree construction |
-| [`cobre-solver`](crates/cobre-solver/)         | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | LP solver abstraction with HiGHS backend, zero-copy solution views, warm-start basis management                                                |
-| [`cobre-comm`](crates/cobre-comm/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Pluggable communication abstraction — MPI, TCP, shared-memory, and local backends                                                              |
-| [`cobre-sddp`](crates/cobre-sddp/)             | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Stochastic Dual Dynamic Programming — training loop, forward/backward pass, cut management, estimation pipeline                                |
-| [`cobre-cli`](crates/cobre-cli/)               | ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square)               | Command-line interface: `init`, `run`, `validate`, `report`, `summary`, `version`                                                              |
-| [`cobre-python`](crates/cobre-python/)         | ![experimental](https://img.shields.io/badge/status-experimental-E74C3C?style=flat-square) | PyO3 bindings — case loading, validation, training, simulation, result inspection                                                              |
-
-**Related:**
-
-| Repository                                             | Description                                                    |
-| ------------------------------------------------------ | -------------------------------------------------------------- |
-| [`ferrompi`](https://github.com/cobre-rs/ferrompi)     | MPI 4.x safe Rust bindings — optional backend for `cobre-comm` |
-| [`cobre-docs`](https://github.com/cobre-rs/cobre-docs) | Methodology reference and full specification corpus (mdBook)   |
-
-> Status badges use the [Cobre brand palette](docs/BRAND-GUIDELINES.md): ![experimental](https://img.shields.io/badge/status-experimental-DC4C4C?style=flat-square) ![alpha](https://img.shields.io/badge/status-alpha-F5A623?style=flat-square) ![beta](https://img.shields.io/badge/status-beta-4A90B8?style=flat-square) ![stable](https://img.shields.io/badge/status-stable-4A8B6F?style=flat-square)
-
-## Architecture
-
-The ecosystem is organized in five layers. `cobre-core` is the shared foundation — every other crate depends on it and nothing in the lower layers knows about SDDP.
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                     Application Layer                            │
-│  ┌───────────┐                                                   │
-│  │ cobre-cli │                                                   │
-│  └─────┬─────┘                                                   │
-├────────┼─────────────────────────────────────────────────────────┤
-│        │        Solver Vertical                                  │
-│  ┌─────┴────────────────────────────────────────────┐            │
-│  │                      cobre-sddp                  │            │
-│  │     Training loop · Simulation · Cut management  │            │
-│  └────┬────────────────────────────────┬────────────┘            │
-├───────┼────────────────────────────────┼─────────────────────────┤
-│       │        Infrastructure          │                         │
-│  ┌────┴──────┐  ┌───────────┐  ┌───────┴──────┐  ┌──────────┐    │
-│  │cobre-     │  │cobre-     │  │cobre-        │  │cobre-    │    │
-│  │stochastic │  │solver     │  │comm          │  │io        │    │
-│  │PAR(p) ·   │  │HiGHS ·    │  │MPI · TCP ·   │  │JSON ·    │    │
-│  │scenarios  │  │LP/warm-   │  │shm · local   │  │Parquet · │    │
-│  │           │  │start      │  │              │  │FlatBufs  │    │
-│  └────┬──────┘  └─────┬─────┘  └──────┬───────┘  └────┬─────┘    │
-├───────┴───────────────┴───────────────┴───────────────┴──────────┤
-│                       Foundation Layer                           │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │                       cobre-core                         │    │
-│  │  Buses · Hydros · Thermals · Lines · NCS · Pumping       │    │
-│  │  Contracts                                               │    │
-│  └──────────────────────────────────────────────────────────┘    │
-├──────────────────────────────────────────────────────────────────┤
-│            Optional: ferrompi (MPI 4.x Rust bindings)            │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-Key design decisions:
-
-- **`cobre-core` has zero solver dependencies** — a pure data and validation crate
-- **Static dispatch** — generics over solver and communicator traits eliminate vtable overhead
-- **Declaration-order invariance** — entity collections are sorted by ID; results are reproducible regardless of input file ordering
-
-## Quick Start
-
-<p align="center">
-  <img src="recordings/quickstart.gif" alt="Quick Start Demo" width="800"/>
-</p>
-
-> **Warning:** Cobre v0.1 is alpha software. The API and case format are not stable yet.
+## Install
 
 ```bash
-# Install (requires Rust 1.86+ and HiGHS)
+# Rust CLI (requires Rust 1.86+ and HiGHS)
 cargo install cobre-cli
 
-# Scaffold the 1dtoy example
-cobre init --template 1dtoy my-study/
-
-# Run training + simulation
-cobre run my-study/
-
-# Inspect results
-cobre report my-study/output/
-
-# Print summary statistics
-cobre summary my-study/output/
+# Python bindings (3.12 / 3.13 / 3.14)
+pip install cobre-python
 ```
 
-A case directory follows a JSON + Parquet layout:
+## Quick Links
 
-```
-case/
-├── config.json          # Algorithm configuration (solver, iterations, risk measure…)
-├── stages.json          # Stage definitions and policy graph
-├── system/              # Entity registries (buses.json, hydros.json, thermals.json…)
-├── scenarios/           # Stochastic data (PAR coefficients, correlation — Parquet)
-│   ├── inflow_history.parquet   # (optional) Historical inflow series for PAR fitting
-│   └── load_factors.parquet     # (optional) Load factor time series
-└── constraints/         # Initial conditions and generic constraints (JSON)
-```
+| Resource      | Link                                                                    |
+| ------------- | ----------------------------------------------------------------------- |
+| Software Book | [cobre-rs.github.io/cobre](https://cobre-rs.github.io/cobre/)           |
+| Methodology   | [cobre-rs.github.io/cobre-docs](https://cobre-rs.github.io/cobre-docs/) |
+| API Docs      | [docs.rs/cobre](https://docs.rs/cobre)                                  |
+| PyPI          | [pypi.org/project/cobre-python](https://pypi.org/project/cobre-python/) |
 
-See the [software book](https://cobre-rs.github.io/cobre/) for the complete input/output specification and user guide.
+## Getting Started
 
-## Context
+- **Coming from NEWAVE?** -- See the [NEWAVE Migration Guide](https://cobre-rs.github.io/cobre/guide/newave-migration.html)
+- **New to SDDP?** -- Read [What Cobre Solves](https://cobre-rs.github.io/cobre/tutorial/what-cobre-solves.html)
+- **Python user?** -- Try the [Python Quickstart](https://cobre-rs.github.io/cobre/guide/python-quickstart.html)
 
-Cobre was born from the need for an open, modern alternative for enabling power system planning research in Brazil. While those tools are mature and production-proven, they present challenges in auditability, extensibility, and integration with modern computational infrastructure.
+## Current Status
 
-The project draws inspiration from:
-
-- **NREL Sienna** (Julia) — ecosystem architecture with shared data model
-- **PowSyBl** (Java) — modular design, institutional adoption path
-- **SDDP.jl** (Julia) — algorithmic reference for SDDP implementation
-- **SPARHTACUS** (C++) — auditable pre-processing approach
-
-Cobre is not a replacement for these tools — it's a new entry in the ecosystem, offering the Rust community's strengths (safety, performance, modern tooling) to a domain that can benefit from them.
-
-## Current State
-
-Cobre v0.1.9 ships a fully functional SDDP solver for hydrothermal dispatch. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. Includes a deterministic regression suite (D01-D15) with hand-computed expected costs.
-
-**What works today:**
-
-- Training loop with forward/backward pass, Benders cut management, and 5 stopping rules
-- Constant-productivity and FPHA hydroelectric production models (precomputed and computed from reservoir geometry)
-- Cascade hydro coupling, evaporation, water withdrawal, inflow non-negativity penalties
-- User-defined generic constraints over LP variables (thermal generation, hydro storage, line flows, etc.) with slack penalties
-- Multi-segment deficit pricing (N cost tiers per bus)
-- PAR(p) fitting from inflow history (Levinson-Durbin, AIC order selection)
-- Stochastic load demand and correlated multi-site scenario generation
-- Simulation pipeline with policy checkpoint (FlatBuffers) and Parquet output
-- Multi-bus transmission networks with line flow limits
-- Distributed execution via MPI (`ferrompi`) and intra-rank thread parallelism (rayon)
-- CLI: `init`, `run`, `validate`, `report`, `summary`
-- Block factors for load demand, line capacity, and NCS availability (per-bus/line/source, per-stage, per-block scaling)
-- NCS stochastic availability via `non_controllable_stats.parquet` (mean + std per source per stage, clamped normal draw patched per scenario)
-- Solver statistics: per-phase LP timing, simplex iteration counts, basis reuse tracking, and Parquet output
-- LP scaling diagnostics report (JSON) with per-stage conditioning analysis
-- Python bindings (PyO3, tested on 3.12/3.13/3.14)
-
-## Roadmap
-
-See the [methodology roadmap](https://cobre-rs.github.io/cobre-docs/roadmap/overview.html) for the full list of planned features. Highlights:
-
-- [ ] `cobre-tui` — ratatui convergence monitor, co-hosted and pipe modes
-- [ ] `cobre-mcp` — MCP server for AI agent integration (stdio + HTTP/SSE)
-- [ ] Wire pumping stations and energy contracts
-- [ ] GNL thermal plants and battery energy storage
-- [ ] Multi-cut formulation
-- [ ] Markovian policy graphs
-- [ ] Benchmark suite with published results
+Cobre v0.1.11 is alpha software with a fully functional SDDP solver. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. See the [roadmap](https://cobre-rs.github.io/cobre/reference/roadmap.html) for what's next.
 
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-The project follows [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat(sddp): implement multi-cut strategy
-fix(core): correct reservoir volume bounds validation
-docs(io): document Parquet schema for hydro inflows
-```
-
 ## License
 
-Cobre is licensed under the [Apache License, Version 2.0](LICENSE).
-
-## Citation
-
-If you use Cobre in academic work, please cite:
+Licensed under [Apache-2.0](LICENSE).
 
 ```bibtex
 @software{cobre,

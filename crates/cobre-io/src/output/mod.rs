@@ -350,15 +350,19 @@ pub struct SimulationOutput {
 /// # Ok(())
 /// # }
 /// ```
-#[allow(
-    clippy::too_many_lines,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation
-)]
-pub fn write_results(
+/// Write training artifacts to the output directory.
+///
+/// Creates the `training/` subdirectory structure (dictionaries, convergence
+/// Parquet, timing, manifest, metadata) and writes the `training/_SUCCESS`
+/// marker on completion. Also creates an empty `simulation/` directory so
+/// downstream code can unconditionally write into it.
+///
+/// This function is one half of the split from [`write_results`]; it can be
+/// called independently to persist training outputs before simulation starts.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+pub fn write_training_results(
     output_dir: &Path,
     training_output: &TrainingOutput,
-    simulation_output: Option<&SimulationOutput>,
     system: &System,
     config: &Config,
 ) -> Result<(), OutputError> {
@@ -447,32 +451,69 @@ pub fn write_results(
         &training_metadata,
     )?;
 
-    if let Some(sim_output) = simulation_output {
-        let sim_manifest = SimulationManifest {
-            version: "2.0.0".to_string(),
-            status: "complete".to_string(),
-            started_at: None,
-            completed_at: None,
-            duration_seconds: Some(sim_output.total_time_ms as f64 / 1_000.0),
-            scenarios: ManifestScenarios {
-                total: sim_output.n_scenarios,
-                completed: sim_output.completed,
-                failed: sim_output.failed,
-            },
-            partitions_written: sim_output.partitions_written.clone(),
-            checksum: None,
-            mpi_info: ManifestMpiInfo::default(),
-        };
-        write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
-    }
-
     std::fs::write(output_dir.join("training/_SUCCESS"), b"")
         .map_err(|e| OutputError::io(output_dir.join("training/_SUCCESS"), e))?;
-    if simulation_output.is_some() {
-        std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
-            .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
-    }
 
+    Ok(())
+}
+
+/// Write simulation artifacts to the output directory.
+///
+/// Writes `simulation/_manifest.json` and the `simulation/_SUCCESS` marker.
+/// The `simulation/` directory must already exist (created by
+/// [`write_training_results`]).
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if manifest serialization or file I/O fails.
+#[allow(clippy::cast_precision_loss)]
+pub fn write_simulation_results(
+    output_dir: &Path,
+    simulation_output: &SimulationOutput,
+) -> Result<(), OutputError> {
+    let sim_manifest = SimulationManifest {
+        version: "2.0.0".to_string(),
+        status: "complete".to_string(),
+        started_at: None,
+        completed_at: None,
+        duration_seconds: Some(simulation_output.total_time_ms as f64 / 1_000.0),
+        scenarios: ManifestScenarios {
+            total: simulation_output.n_scenarios,
+            completed: simulation_output.completed,
+            failed: simulation_output.failed,
+        },
+        partitions_written: simulation_output.partitions_written.clone(),
+        checksum: None,
+        mpi_info: ManifestMpiInfo::default(),
+    };
+    write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
+
+    std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
+        .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
+
+    Ok(())
+}
+
+/// Write all output artifacts (training + simulation) to the output directory.
+///
+/// Convenience wrapper that calls [`write_training_results`] followed by
+/// [`write_simulation_results`] (when simulation output is present).
+/// Retained for backward compatibility.
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if any file I/O or serialization step fails.
+pub fn write_results(
+    output_dir: &Path,
+    training_output: &TrainingOutput,
+    simulation_output: Option<&SimulationOutput>,
+    system: &System,
+    config: &Config,
+) -> Result<(), OutputError> {
+    write_training_results(output_dir, training_output, system, config)?;
+    if let Some(sim) = simulation_output {
+        write_simulation_results(output_dir, sim)?;
+    }
     Ok(())
 }
 
@@ -995,5 +1036,95 @@ mod tests {
             exports: ExportsConfig::default(),
             estimation: EstimationConfig::default(),
         }
+    }
+
+    fn make_simulation_output() -> SimulationOutput {
+        SimulationOutput {
+            n_scenarios: 10,
+            completed: 10,
+            failed: 0,
+            total_time_ms: 1_000,
+            partitions_written: vec!["simulation/costs/part-00.parquet".to_string()],
+        }
+    }
+
+    #[test]
+    fn write_training_results_produces_complete_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(3);
+
+        write_training_results(tmp.path(), &training, &make_system(), &make_config())
+            .expect("write_training_results must succeed");
+
+        assert!(tmp.path().join("training").is_dir());
+        assert!(tmp.path().join("training/dictionaries").is_dir());
+        assert!(tmp.path().join("training/timing").is_dir());
+        assert!(tmp.path().join("training/_manifest.json").is_file());
+        assert!(tmp.path().join("training/metadata.json").is_file());
+        assert!(tmp.path().join("training/_SUCCESS").is_file());
+        assert!(
+            tmp.path().join("simulation").is_dir(),
+            "simulation/ directory must be created by write_training_results"
+        );
+    }
+
+    #[test]
+    fn write_simulation_results_produces_manifest_and_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Simulation dir must exist (normally created by write_training_results).
+        std::fs::create_dir_all(tmp.path().join("simulation")).unwrap();
+        let sim = make_simulation_output();
+
+        write_simulation_results(tmp.path(), &sim).expect("write_simulation_results must succeed");
+
+        assert!(tmp.path().join("simulation/_manifest.json").is_file());
+        assert!(tmp.path().join("simulation/_SUCCESS").is_file());
+    }
+
+    #[test]
+    fn split_functions_match_write_results_output() {
+        let tmp_combined = tempfile::tempdir().unwrap();
+        let tmp_split = tempfile::tempdir().unwrap();
+        let training = make_training_output(2);
+        let sim = make_simulation_output();
+
+        // Write combined.
+        write_results(
+            tmp_combined.path(),
+            &training,
+            Some(&sim),
+            &make_system(),
+            &make_config(),
+        )
+        .expect("write_results must succeed");
+
+        // Write split.
+        write_training_results(tmp_split.path(), &training, &make_system(), &make_config())
+            .expect("write_training_results must succeed");
+        write_simulation_results(tmp_split.path(), &sim)
+            .expect("write_simulation_results must succeed");
+
+        // Both should produce the same file set.
+        let combined_training_success = tmp_combined.path().join("training/_SUCCESS").is_file();
+        let split_training_success = tmp_split.path().join("training/_SUCCESS").is_file();
+        assert_eq!(combined_training_success, split_training_success);
+
+        let combined_sim_success = tmp_combined.path().join("simulation/_SUCCESS").is_file();
+        let split_sim_success = tmp_split.path().join("simulation/_SUCCESS").is_file();
+        assert_eq!(combined_sim_success, split_sim_success);
+
+        let combined_manifest = tmp_combined
+            .path()
+            .join("training/_manifest.json")
+            .is_file();
+        let split_manifest = tmp_split.path().join("training/_manifest.json").is_file();
+        assert_eq!(combined_manifest, split_manifest);
+
+        let combined_sim_manifest = tmp_combined
+            .path()
+            .join("simulation/_manifest.json")
+            .is_file();
+        let split_sim_manifest = tmp_split.path().join("simulation/_manifest.json").is_file();
+        assert_eq!(combined_sim_manifest, split_sim_manifest);
     }
 }

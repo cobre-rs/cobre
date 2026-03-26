@@ -27,7 +27,6 @@ use cobre_io::output::{
     write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
-use cobre_io::write_results;
 use cobre_sddp::{
     EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, SimulationScenarioResult,
     StudySetup, build_hydro_model_summary, build_stochastic_summary,
@@ -186,7 +185,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let (
         raw_system,
         raw_bcast_config,
-        root_config,
+        mut root_config,
         root_stochastic,
         root_estimation_report,
         raw_bcast_tree,
@@ -379,22 +378,15 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     ) {
         Ok(outcome) => outcome,
         Err(e) => {
+            // Truly unrecoverable (pre-iteration). No partial results to write.
             if let Some(handle) = progress_handle {
                 let _ = handle.join();
             }
             return Err(CliError::from(e));
         }
     };
-    // Propagate captured mid-iteration error as CliError. The
-    // output-before-error behaviour is added in Epic 2.
-    if let Some(ref training_error) = training_outcome.error {
-        if let Some(handle) = progress_handle {
-            let _ = handle.join();
-        }
-        return Err(CliError::Internal {
-            message: format!("training failed mid-iteration: {training_error}"),
-        });
-    }
+    // Extract the TrainingResult. If there was a mid-iteration error, we still
+    // process and write partial results before returning the error.
     let training_result = training_outcome.result;
 
     let events: Vec<TrainingEvent> = match (progress_handle, quiet_rx) {
@@ -485,6 +477,48 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     };
     if !quiet && is_root {
         crate::summary::print_training_summary(&stderr, &training_summary);
+    }
+
+    // Write training outputs immediately after training completes (before
+    // simulation), so training artifacts are persisted even if simulation fails.
+    if is_root {
+        let config = root_config.take().ok_or_else(|| CliError::Internal {
+            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+        })?;
+
+        write_training_outputs(&WriteTrainingArgs {
+            output_dir: &output_dir,
+            system: &system,
+            config: &config,
+            training_output: &training_output,
+            setup: &setup,
+            training_result: &training_result,
+            quiet,
+            stderr: &stderr,
+        })?;
+
+        drop(config);
+    }
+
+    // If training failed mid-iteration, report the error after writing partial
+    // outputs. All ranks return here — simulation is skipped.
+    if let Some(ref training_error) = training_outcome.error {
+        if is_root {
+            tracing::error!(
+                "training failed after {} iterations: {training_error}",
+                training_result.iterations
+            );
+            if !quiet {
+                let _ = stderr.write_line(&format!(
+                    "Training failed after {} iterations. Partial outputs written to {}.",
+                    training_result.iterations,
+                    output_dir.display()
+                ));
+            }
+        }
+        return Err(CliError::Internal {
+            message: format!("training error: {training_error}"),
+        });
     }
 
     let should_simulate = setup.n_scenarios() > 0;
@@ -584,10 +618,6 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         }
 
         if is_root {
-            let config = root_config.ok_or_else(|| CliError::Internal {
-                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-            })?;
-
             let parquet_config = cobre_io::ParquetWriterConfig::default();
             let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
                 &output_dir,
@@ -609,36 +639,14 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             let mut sim_output = sim_writer.finalize(sim_time_ms);
             sim_output.failed = failed;
 
-            write_outputs(&WriteOutputsArgs {
+            write_simulation_outputs(&WriteSimulationArgs {
                 output_dir: &output_dir,
-                system: &system,
-                config: &config,
-                training_output: &training_output,
-                sim_output: Some(&sim_output),
-                setup: &setup,
-                training_result: &training_result,
-                sim_solver_stats: Some(&sim_run_result.solver_stats),
+                sim_output: &sim_output,
+                sim_solver_stats: &sim_run_result.solver_stats,
                 quiet,
                 stderr: &stderr,
             })?;
         }
-    } else if is_root {
-        let config = root_config.ok_or_else(|| CliError::Internal {
-            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-        })?;
-
-        write_outputs(&WriteOutputsArgs {
-            output_dir: &output_dir,
-            system: &system,
-            config: &config,
-            training_output: &training_output,
-            sim_output: None,
-            setup: &setup,
-            training_result: &training_result,
-            sim_solver_stats: None,
-            quiet,
-            stderr: &stderr,
-        })?;
     }
 
     Ok(())
@@ -743,29 +751,25 @@ fn delta_to_stats_row(
     }
 }
 
-/// Arguments for [`write_outputs`], grouping everything needed to write
-/// training and simulation results to disk.
-struct WriteOutputsArgs<'a> {
+/// Arguments for [`write_training_outputs`].
+struct WriteTrainingArgs<'a> {
     output_dir: &'a Path,
     system: &'a System,
     config: &'a cobre_io::Config,
     training_output: &'a cobre_io::TrainingOutput,
-    sim_output: Option<&'a cobre_io::SimulationOutput>,
     setup: &'a StudySetup,
     training_result: &'a cobre_sddp::TrainingResult,
-    sim_solver_stats: Option<&'a [(u32, cobre_sddp::SolverStatsDelta)]>,
     quiet: bool,
     stderr: &'a Term,
 }
 
-/// Extracted from `execute()` to give the output-writing step a clear boundary.
-/// Handles both the with-simulation path (`sim_output = Some(...)`) and the
-/// training-only path (`sim_output = None`). Prints "Writing outputs..." and
-/// the output path with timing when `quiet` is false.
-fn write_outputs(args: &WriteOutputsArgs<'_>) -> Result<(), CliError> {
+/// Write training artifacts: policy checkpoint, training results, solver stats,
+/// and cut selection records. Called immediately after training completes, before
+/// simulation starts.
+fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> {
     if !args.quiet {
         use std::io::Write;
-        let _ = args.stderr.write_line("Writing outputs...");
+        let _ = args.stderr.write_line("Writing training outputs...");
         let _ = std::io::stderr().flush();
     }
     let write_start = std::time::Instant::now();
@@ -782,10 +786,9 @@ fn write_outputs(args: &WriteOutputsArgs<'_>) -> Result<(), CliError> {
         },
     )?;
 
-    write_results(
+    cobre_io::write_training_results(
         args.output_dir,
         args.training_output,
-        args.sim_output,
         args.system,
         args.config,
     )
@@ -816,18 +819,43 @@ fn write_outputs(args: &WriteOutputsArgs<'_>) -> Result<(), CliError> {
         .map_err(CliError::from)?;
     }
 
+    if !args.quiet {
+        let write_secs = write_start.elapsed().as_secs_f64();
+        crate::summary::print_output_path(args.stderr, args.output_dir, write_secs);
+    }
+
+    Ok(())
+}
+
+/// Arguments for [`write_simulation_outputs`].
+struct WriteSimulationArgs<'a> {
+    output_dir: &'a Path,
+    sim_output: &'a cobre_io::SimulationOutput,
+    sim_solver_stats: &'a [(u32, cobre_sddp::SolverStatsDelta)],
+    quiet: bool,
+    stderr: &'a Term,
+}
+
+/// Write simulation artifacts: simulation results manifest and solver stats.
+/// Called after simulation completes.
+fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliError> {
+    if !args.quiet {
+        use std::io::Write;
+        let _ = args.stderr.write_line("Writing simulation outputs...");
+        let _ = std::io::stderr().flush();
+    }
+    let write_start = std::time::Instant::now();
+
+    cobre_io::write_simulation_results(args.output_dir, args.sim_output).map_err(CliError::from)?;
+
     // Write simulation solver stats to simulation/solver/iterations.parquet.
-    if let Some(stats) = args.sim_solver_stats {
-        if !stats.is_empty() {
-            let rows: Vec<cobre_io::SolverStatsRow> = stats
-                .iter()
-                .map(|(scenario_id, delta)| {
-                    delta_to_stats_row(*scenario_id, "simulation", -1, delta)
-                })
-                .collect();
-            cobre_io::write_simulation_solver_stats(args.output_dir, &rows)
-                .map_err(CliError::from)?;
-        }
+    if !args.sim_solver_stats.is_empty() {
+        let rows: Vec<cobre_io::SolverStatsRow> = args
+            .sim_solver_stats
+            .iter()
+            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .collect();
+        cobre_io::write_simulation_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
     }
 
     if !args.quiet {

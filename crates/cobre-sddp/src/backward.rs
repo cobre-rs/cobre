@@ -570,7 +570,7 @@ fn process_stage_backward<S: SolverInterface + Send>(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `spec.risk_measures.len() != num_stages`
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &BasisStore,
@@ -2246,7 +2246,7 @@ mod tests {
 
     /// Multi-opening P3b behavior: given 3 openings at the same successor stage,
     /// the first opening cold-starts (store slot is None via `solve()`), and
-    /// openings 1 and 2 use HiGHS internal hot-start via `solve()` instead of
+    /// openings 1 and 2 use `HiGHS` internal hot-start via `solve()` instead of
     /// `solve_with_basis(working_basis)`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
@@ -3181,7 +3181,7 @@ mod tests {
     ///    without sync, because single-rank sync is a no-op that does not change
     ///    results but exercises the code path.
     /// 3. Using `LocalBackend` (the production single-rank communicator) instead
-    ///    of `StubComm` exercises the full sync_cuts → allgatherv → deserialize
+    ///    of `StubComm` exercises the full `sync_cuts` → allgatherv → deserialize
     ///    path, confirming no panics or data corruption.
     ///
     /// True multi-rank correctness testing requires actual MPI and is out of

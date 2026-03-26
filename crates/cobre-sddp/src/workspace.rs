@@ -263,7 +263,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
 /// current LP row layout.
 ///
 /// **Current behavior (option 1):** We accept the degraded warm-start.
-/// HiGHS detects the dimension mismatch when `solve_with_basis` is called
+/// `HiGHS` detects the dimension mismatch when `solve_with_basis` is called
 /// with a basis whose row count differs from the current LP row count and
 /// falls back to a crash start. This is tracked as a `basis_rejection` in
 /// [`SolverStatistics`]. The template (non-cut) row statuses remain valid;

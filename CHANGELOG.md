@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-26
+
+### Added
+
+- **Cut selection observability** -- New `CutSelectionRecord` and
+  `StageSelectionRecord` data model in `cobre-core`. Per-stage cut selection
+  statistics (cuts populated, active before/after, deactivated) are written to
+  `training/cut_selection/iterations.parquet` by both CLI and Python bindings.
+  Dictionary and schema definitions added to `cobre-io`.
+- **Configurable simplex strategy** -- `simplex_strategy: Option<u32>` in
+  `TrainingSolverConfig` allows benchmarking HiGHS strategies (0=auto, 1=dual,
+  4=primal) without code changes. Threaded through `BroadcastConfig`.
+- **Backward pass instrumentation** -- New timing columns in solver statistics:
+  `cut_sync_ms`, `state_exchange_ms`, `cut_batch_build_ms`, `rayon_overhead_ms`,
+  and `solve_with_basis` overhead tracking. All propagated to Parquet output.
+- **Cut selection integration tests** -- D17 (Level1) and D18 (Lml1) regression
+  tests validating convergence with bounded pool growth, re-deactivation safety,
+  and `memory_window` boundary behavior.
+- **Documentation overhaul** -- Slimmed README (218→74 lines), rewrote book
+  introduction with audience paths, added NEWAVE migration guide, "What Cobre
+  Solves" page, and Python quickstart. Brand CSS with copper headings and
+  flow-blue links.
+- **Quality tooling** -- Pre-commit hook (`scripts/pre-commit`), Python parity
+  checker (`scripts/check_python_parity.py`), CLAUDE.md version currency checker
+  (`scripts/check_claudemd_version.py`). Release checklist added to
+  `CONTRIBUTING.md`.
+
+### Changed
+
+- **Backward pass performance** -- Sparse cut injection precomputes nonzero
+  state index masks from per-hydro AR orders, skipping structurally zero
+  coefficients (~29.5% NNZ reduction). Openings 1+ use `solver.solve()` (HiGHS
+  internal hot-start) instead of `solve_with_basis`, eliminating ~95% of basis
+  installation overhead. `HashMap<usize, u64>` binding slot increments replaced
+  with `Vec<u64>` indexed by pool slot. Backward coefficient buffers
+  pre-allocated and overwritten in-place via `copy_from_slice`.
+
+### Fixed
+
+- **Multi-rank cut sync** -- Per-stage cut sync (`allgatherv`) moved from
+  post-sweep loop into the backward per-stage loop, fixing a correctness
+  violation (DEC-009) for multi-rank MPI runs.
+- **Cut selection** -- Fixed cut selection event propagation and Parquet output
+  wiring.
+- **Python parity** -- Added 3 missing output writes to `cobre-python`
+  (scaling report, training solver stats, simulation solver stats).
+- **Clippy compliance** -- Removed 3 dead code items (unused import, dead field,
+  dead method), reduced `too_many_arguments` suppressions from 15 to 12,
+  fixed `cast_possible_wrap` and doc backtick warnings.
+
 ## [0.1.11] - 2026-03-23
 
 ### Added

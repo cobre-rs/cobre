@@ -288,7 +288,7 @@ pub fn write_cut_selection_records(
     let mut deactivated_builder = Int32Builder::with_capacity(n);
     let mut active_after_builder = Int32Builder::with_capacity(n);
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     for r in records {
         iteration_builder.append_value(r.iteration as i32);
         stage_builder.append_value(r.stage as i32);

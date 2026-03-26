@@ -203,9 +203,9 @@ The following features were delivered in v0.1.11:
 - **HiGHS internal scaling disabled** -- `simplex_scale_strategy` set to 0 (off)
   in default solver options; Cobre's own prescaler handles conditioning.
 
-## v0.1.12 Deliverables (unreleased)
+## v0.2.0 Deliverables
 
-The following features are included in the upcoming v0.1.12 release:
+The following features were delivered in v0.2.0:
 
 - **Backward-pass performance program** -- A series of optimizations targeting
   the backward pass hot path: cut selection with domination-count tracking,
@@ -232,4 +232,4 @@ The roadmap is organized into four areas:
 - **Algorithm Extensions** -- Deferred solver variants: multi-cut formulation
   and infinite-horizon policy graphs. (CVaR risk measure was delivered in
   v0.1.1. Cut selection wiring was delivered in v0.1.2. Cut selection
-  observability was delivered in v0.1.12.)
+  observability was delivered in v0.2.0.)

@@ -326,6 +326,7 @@ fn arrow_type_str(dt: &DataType) -> &'static str {
 /// Return the physical unit string for a given (file, column) pair.
 ///
 /// Returns `""` for dimensionless columns or columns without a defined unit.
+#[allow(clippy::too_many_lines)]
 fn unit_for(file: &str, column: &str) -> &'static str {
     // Columns whose unit is independent of which file they appear in.
     match column {

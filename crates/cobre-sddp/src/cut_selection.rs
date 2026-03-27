@@ -39,7 +39,8 @@
 //!     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
 //!                   active_count: 3, last_active_iter: 5, domination_count: 0 },
 //! ];
-//! let deact = strategy.select(&metadata, 10);
+//! let active = vec![true, true];
+//! let deact = strategy.select(&metadata, &active, 10);
 //! assert_eq!(deact.indices, vec![0]);
 //! ```
 
@@ -221,6 +222,10 @@ impl CutSelectionStrategy {
     /// `stage_index` identifies which stage this selection runs for (used to
     /// populate [`DeactivationSet::stage_index`]).
     ///
+    /// Only slots where `active[i]` is `true` are considered. Slots that are
+    /// already inactive (e.g. unpopulated slots below the high-water mark or
+    /// previously deactivated cuts) are unconditionally skipped.
+    ///
     /// # Variant behavior
     ///
     /// - **Level1**: deactivates cuts with `active_count <= threshold`.
@@ -240,12 +245,18 @@ impl CutSelectionStrategy {
     ///     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
     ///                   active_count: 2, last_active_iter: 5, domination_count: 0 },
     /// ];
-    /// let deact = strategy.select(&metadata, 10);
+    /// let active = vec![true, true];
+    /// let deact = strategy.select(&metadata, &active, 10);
     /// assert_eq!(deact.indices, vec![0]);
     /// ```
     #[must_use]
-    pub fn select(&self, metadata: &[CutMetadata], current_iteration: u64) -> DeactivationSet {
-        self.select_for_stage(metadata, current_iteration, 0)
+    pub fn select(
+        &self,
+        metadata: &[CutMetadata],
+        active: &[bool],
+        current_iteration: u64,
+    ) -> DeactivationSet {
+        self.select_for_stage(metadata, active, current_iteration, 0)
     }
 
     /// Scan the cut pool metadata for a specific stage and identify cuts to
@@ -258,9 +269,15 @@ impl CutSelectionStrategy {
     pub fn select_for_stage(
         &self,
         metadata: &[CutMetadata],
+        active: &[bool],
         current_iteration: u64,
         stage_index: u32,
     ) -> DeactivationSet {
+        debug_assert_eq!(
+            metadata.len(),
+            active.len(),
+            "metadata and active slices must have the same length"
+        );
         // Cut pool capacity is bounded by a u32 field in the pool header, so
         // enumerate indices always fit in u32. The cast is safe by structural
         // invariant established at pool construction time.
@@ -269,8 +286,10 @@ impl CutSelectionStrategy {
             Self::Level1 { threshold, .. } => metadata
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| {
-                    m.active_count <= *threshold && m.iteration_generated < current_iteration
+                .filter(|(i, m)| {
+                    active[*i]
+                        && m.active_count <= *threshold
+                        && m.iteration_generated < current_iteration
                 })
                 .map(|(i, _)| i as u32)
                 .collect(),
@@ -278,8 +297,9 @@ impl CutSelectionStrategy {
             Self::Lml1 { memory_window, .. } => metadata
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| {
-                    m.iteration_generated < current_iteration
+                .filter(|(i, m)| {
+                    active[*i]
+                        && m.iteration_generated < current_iteration
                         && current_iteration.saturating_sub(m.last_active_iter) > *memory_window
                 })
                 .map(|(i, _)| i as u32)
@@ -480,7 +500,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0)];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true, true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert_eq!(
             deact.indices,
             vec![0],
@@ -495,7 +516,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(3, 1, 0), make_meta(7, 5, 0)];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true, true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert!(
             deact.indices.is_empty(),
             "no cuts should be deactivated when all have activity"
@@ -509,7 +531,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0), make_meta(2, 8, 0)];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true, true, true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert_eq!(deact.indices, vec![0, 1]);
     }
 
@@ -519,7 +542,7 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let deact = strategy.select(&[], 10);
+        let deact = strategy.select(&[], &[], 10);
         assert!(deact.indices.is_empty());
     }
 
@@ -530,7 +553,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 5, 0)]; // last_active_iter = 5
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert_eq!(deact.indices, vec![0]);
     }
 
@@ -543,7 +567,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 12, 0)];
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert!(deact.indices.is_empty());
     }
 
@@ -554,7 +579,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 10, 0)];
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert!(
             deact.indices.is_empty(),
             "boundary case: exactly at window edge, retained"
@@ -568,7 +594,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 5, 0), make_meta(0, 12, 0), make_meta(0, 1, 0)];
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true, true, true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert_eq!(deact.indices, vec![0, 2]);
     }
 
@@ -581,7 +608,8 @@ mod tests {
             check_frequency: 10,
         };
         let metadata = vec![make_meta(0, 1, 5), make_meta(0, 1, 10)];
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true, true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert!(deact.indices.is_empty());
     }
 
@@ -672,7 +700,8 @@ mod tests {
             last_active_iter: 1,
             domination_count: 0,
         }];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert!(deact.indices.contains(&0));
     }
 
@@ -689,7 +718,8 @@ mod tests {
             last_active_iter: 5,
             domination_count: 0,
         }];
-        let deact = strategy.select(&metadata, 20);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 20);
         assert!(deact.indices.contains(&0));
     }
 
@@ -700,7 +730,8 @@ mod tests {
             check_frequency: 5,
         };
         let metadata = vec![make_meta(0, 1, 0)];
-        let deact = strategy.select_for_stage(&metadata, 10, 7);
+        let active = vec![true];
+        let deact = strategy.select_for_stage(&metadata, &active, 10, 7);
         assert_eq!(deact.stage_index, 7);
     }
 
@@ -711,7 +742,7 @@ mod tests {
             check_frequency: 5,
         };
         let metadata: Vec<CutMetadata> = vec![];
-        let deact = strategy.select(&metadata, 10);
+        let deact = strategy.select(&metadata, &[], 10);
         assert_eq!(deact.stage_index, 0);
     }
 
@@ -898,7 +929,7 @@ mod tests {
     /// deactivated, `CutPool::deactivate` must skip the decrement. This test
     /// verifies the safety invariant via the cut pool directly.
     #[test]
-    fn redeactivation_of_inactive_cut_is_noop() {
+    fn select_skips_already_inactive_slots() {
         use crate::cut::pool::CutPool;
 
         let mut pool = CutPool::new(10, 1, 1, 0);
@@ -915,31 +946,18 @@ mod tests {
         pool.deactivate(&[0]);
         assert_eq!(pool.active_count(), 2);
 
-        // Level1 selection: slot 0 still has active_count == 0 in metadata,
-        // so it appears in the deactivation set again. Slots 1 and 2 have
-        // active_count > 0 and are retained.
+        // Level1 selection: slot 0 is already inactive and must be skipped.
+        // Slots 1 and 2 have active_count > 0 and are retained.
         let strategy = CutSelectionStrategy::Level1 {
             threshold: 0,
             check_frequency: 1,
         };
-        let deact = strategy.select_for_stage(&pool.metadata[..pool.populated_count], 5, 0);
-        // Slot 0 is in the deactivation set (active_count == 0).
+        let pc = pool.populated_count;
+        let deact = strategy.select_for_stage(&pool.metadata[..pc], &pool.active[..pc], 5, 0);
         assert!(
-            deact.indices.contains(&0),
-            "slot 0 should be selected for deactivation"
-        );
-        assert_eq!(
-            deact.indices.len(),
-            1,
-            "only slot 0 should be selected (slots 1,2 have activity)"
-        );
-
-        // Re-apply deactivation — must not double-decrement.
-        pool.deactivate(&deact.indices);
-        assert_eq!(
-            pool.active_count(),
-            2,
-            "active_count must not change when re-deactivating an already-inactive cut"
+            deact.indices.is_empty(),
+            "no cuts should be selected: slot 0 is already inactive, \
+             slots 1 and 2 have activity"
         );
     }
 
@@ -966,7 +984,8 @@ mod tests {
             make_meta(0, 10, 0), // last_active_iter = 10
         ];
 
-        let deact = strategy.select_for_stage(&metadata, 10, 0);
+        let active = vec![true; 5];
+        let deact = strategy.select_for_stage(&metadata, &active, 10, 0);
 
         // Slots 0 and 1 deactivated, slots 2-4 retained.
         assert_eq!(
@@ -1002,7 +1021,8 @@ mod tests {
                 domination_count: 0,
             },
         ];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true, true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert_eq!(
             deact.indices,
             vec![1],
@@ -1027,7 +1047,8 @@ mod tests {
             last_active_iter: 10,
             domination_count: 0,
         }];
-        let deact = strategy.select(&metadata, 10);
+        let active = vec![true];
+        let deact = strategy.select(&metadata, &active, 10);
         assert!(
             deact.indices.is_empty(),
             "current-iteration cut must not be deactivated even with memory_window=0"

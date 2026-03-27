@@ -592,6 +592,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     let stage_u32 = stage as u32;
                     let deact = strategy.select_for_stage(
                         &pool.metadata[..pool.populated_count],
+                        &pool.active[..pool.populated_count],
                         iteration,
                         stage_u32,
                     );

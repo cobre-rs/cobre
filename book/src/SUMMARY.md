@@ -29,7 +29,7 @@
   - [Configuration](./guide/configuration.md)
   - [CLI Reference](./guide/cli-reference.md)
   - [Interpreting Results](./guide/interpreting-results.md)
-- [NEWAVE Migration](./guide/newave-migration.md)
+- [Case Conversion (cobre-bridge)](./guide/cobre-bridge.md)
 - [Python Quickstart](./guide/python-quickstart.md)
 
 ---

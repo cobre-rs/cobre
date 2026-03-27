@@ -444,9 +444,9 @@ productivity value normally comes from the entity's `productivity_mw_per_m3s` fi
 in `hydros.json`. The optional `productivity_override` field on a stage range or
 season entry replaces this base value for the stages covered by that entry.
 
-This is useful when external data (e.g., NEWAVE MODIF.DAT temporal overrides of
-tailrace or forebay elevations) changes the effective head drop at specific stages,
-requiring a different productivity coefficient.
+This is useful when external data (e.g., temporal overrides of tailrace or
+forebay elevations from other planning tools) changes the effective head drop
+at specific stages, requiring a different productivity coefficient.
 
 ```json
 {

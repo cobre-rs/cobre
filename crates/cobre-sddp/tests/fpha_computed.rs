@@ -354,9 +354,9 @@ fn fpha_computed_case_converges() {
         .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
         .expect("train must succeed");
     assert!(
-        training_result.iterations <= 256,
+        training_result.result.iterations <= 256,
         "training convergence within 256 iterations; got {}",
-        training_result.iterations
+        training_result.result.iterations
     );
 
     let mut pool = setup
@@ -371,7 +371,7 @@ fn fpha_computed_case_converges() {
             &comm,
             &result_tx,
             None,
-            &training_result.basis_cache,
+            &training_result.result.basis_cache,
         )
         .expect("simulate must succeed");
     drop(result_tx);

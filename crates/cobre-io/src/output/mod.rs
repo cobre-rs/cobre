@@ -270,6 +270,52 @@ pub struct SimulationOutput {
     pub partitions_written: Vec<String>,
 }
 
+impl SimulationOutput {
+    /// Combine multiple per-rank simulation outputs into a single aggregate.
+    ///
+    /// Merge rules:
+    /// - `n_scenarios`: sum across all outputs.
+    /// - `completed`: sum across all outputs.
+    /// - `failed`: sum across all outputs.
+    /// - `total_time_ms`: max across all outputs (wall-clock = slowest rank).
+    /// - `partitions_written`: concatenation of all outputs' partitions, sorted
+    ///   for deterministic ordering regardless of input order.
+    ///
+    /// Returns a zeroed [`SimulationOutput`] with empty partitions when the
+    /// input slice is empty.
+    #[must_use]
+    pub fn merge(outputs: &[Self]) -> Self {
+        if outputs.is_empty() {
+            return Self {
+                n_scenarios: 0,
+                completed: 0,
+                failed: 0,
+                total_time_ms: 0,
+                partitions_written: Vec::new(),
+            };
+        }
+
+        let n_scenarios = outputs.iter().map(|o| o.n_scenarios).sum();
+        let completed = outputs.iter().map(|o| o.completed).sum();
+        let failed = outputs.iter().map(|o| o.failed).sum();
+        let total_time_ms = outputs.iter().map(|o| o.total_time_ms).max().unwrap_or(0);
+
+        let mut partitions_written: Vec<String> = outputs
+            .iter()
+            .flat_map(|o| o.partitions_written.iter().cloned())
+            .collect();
+        partitions_written.sort();
+
+        Self {
+            n_scenarios,
+            completed,
+            failed,
+            total_time_ms,
+            partitions_written,
+        }
+    }
+}
+
 /// Write all output artifacts to `output_dir`.
 ///
 /// This function is the symmetric counterpart of [`crate::load_case`]: it
@@ -350,15 +396,19 @@ pub struct SimulationOutput {
 /// # Ok(())
 /// # }
 /// ```
-#[allow(
-    clippy::too_many_lines,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation
-)]
-pub fn write_results(
+/// Write training artifacts to the output directory.
+///
+/// Creates the `training/` subdirectory structure (dictionaries, convergence
+/// Parquet, timing, manifest, metadata) and writes the `training/_SUCCESS`
+/// marker on completion. Also creates an empty `simulation/` directory so
+/// downstream code can unconditionally write into it.
+///
+/// This function is one half of the split from [`write_results`]; it can be
+/// called independently to persist training outputs before simulation starts.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+pub fn write_training_results(
     output_dir: &Path,
     training_output: &TrainingOutput,
-    simulation_output: Option<&SimulationOutput>,
     system: &System,
     config: &Config,
 ) -> Result<(), OutputError> {
@@ -447,32 +497,69 @@ pub fn write_results(
         &training_metadata,
     )?;
 
-    if let Some(sim_output) = simulation_output {
-        let sim_manifest = SimulationManifest {
-            version: "2.0.0".to_string(),
-            status: "complete".to_string(),
-            started_at: None,
-            completed_at: None,
-            duration_seconds: Some(sim_output.total_time_ms as f64 / 1_000.0),
-            scenarios: ManifestScenarios {
-                total: sim_output.n_scenarios,
-                completed: sim_output.completed,
-                failed: sim_output.failed,
-            },
-            partitions_written: sim_output.partitions_written.clone(),
-            checksum: None,
-            mpi_info: ManifestMpiInfo::default(),
-        };
-        write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
-    }
-
     std::fs::write(output_dir.join("training/_SUCCESS"), b"")
         .map_err(|e| OutputError::io(output_dir.join("training/_SUCCESS"), e))?;
-    if simulation_output.is_some() {
-        std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
-            .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
-    }
 
+    Ok(())
+}
+
+/// Write simulation artifacts to the output directory.
+///
+/// Writes `simulation/_manifest.json` and the `simulation/_SUCCESS` marker.
+/// The `simulation/` directory must already exist (created by
+/// [`write_training_results`]).
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if manifest serialization or file I/O fails.
+#[allow(clippy::cast_precision_loss)]
+pub fn write_simulation_results(
+    output_dir: &Path,
+    simulation_output: &SimulationOutput,
+) -> Result<(), OutputError> {
+    let sim_manifest = SimulationManifest {
+        version: "2.0.0".to_string(),
+        status: "complete".to_string(),
+        started_at: None,
+        completed_at: None,
+        duration_seconds: Some(simulation_output.total_time_ms as f64 / 1_000.0),
+        scenarios: ManifestScenarios {
+            total: simulation_output.n_scenarios,
+            completed: simulation_output.completed,
+            failed: simulation_output.failed,
+        },
+        partitions_written: simulation_output.partitions_written.clone(),
+        checksum: None,
+        mpi_info: ManifestMpiInfo::default(),
+    };
+    write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
+
+    std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
+        .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
+
+    Ok(())
+}
+
+/// Write all output artifacts (training + simulation) to the output directory.
+///
+/// Convenience wrapper that calls [`write_training_results`] followed by
+/// [`write_simulation_results`] (when simulation output is present).
+/// Retained for backward compatibility.
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if any file I/O or serialization step fails.
+pub fn write_results(
+    output_dir: &Path,
+    training_output: &TrainingOutput,
+    simulation_output: Option<&SimulationOutput>,
+    system: &System,
+    config: &Config,
+) -> Result<(), OutputError> {
+    write_training_results(output_dir, training_output, system, config)?;
+    if let Some(sim) = simulation_output {
+        write_simulation_results(output_dir, sim)?;
+    }
     Ok(())
 }
 
@@ -995,5 +1082,183 @@ mod tests {
             exports: ExportsConfig::default(),
             estimation: EstimationConfig::default(),
         }
+    }
+
+    fn make_simulation_output() -> SimulationOutput {
+        SimulationOutput {
+            n_scenarios: 10,
+            completed: 10,
+            failed: 0,
+            total_time_ms: 1_000,
+            partitions_written: vec!["simulation/costs/part-00.parquet".to_string()],
+        }
+    }
+
+    #[test]
+    fn write_training_results_produces_complete_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(3);
+
+        write_training_results(tmp.path(), &training, &make_system(), &make_config())
+            .expect("write_training_results must succeed");
+
+        assert!(tmp.path().join("training").is_dir());
+        assert!(tmp.path().join("training/dictionaries").is_dir());
+        assert!(tmp.path().join("training/timing").is_dir());
+        assert!(tmp.path().join("training/_manifest.json").is_file());
+        assert!(tmp.path().join("training/metadata.json").is_file());
+        assert!(tmp.path().join("training/_SUCCESS").is_file());
+        assert!(
+            tmp.path().join("simulation").is_dir(),
+            "simulation/ directory must be created by write_training_results"
+        );
+    }
+
+    #[test]
+    fn write_simulation_results_produces_manifest_and_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Simulation dir must exist (normally created by write_training_results).
+        std::fs::create_dir_all(tmp.path().join("simulation")).unwrap();
+        let sim = make_simulation_output();
+
+        write_simulation_results(tmp.path(), &sim).expect("write_simulation_results must succeed");
+
+        assert!(tmp.path().join("simulation/_manifest.json").is_file());
+        assert!(tmp.path().join("simulation/_SUCCESS").is_file());
+    }
+
+    #[test]
+    fn split_functions_match_write_results_output() {
+        let tmp_combined = tempfile::tempdir().unwrap();
+        let tmp_split = tempfile::tempdir().unwrap();
+        let training = make_training_output(2);
+        let sim = make_simulation_output();
+
+        // Write combined.
+        write_results(
+            tmp_combined.path(),
+            &training,
+            Some(&sim),
+            &make_system(),
+            &make_config(),
+        )
+        .expect("write_results must succeed");
+
+        // Write split.
+        write_training_results(tmp_split.path(), &training, &make_system(), &make_config())
+            .expect("write_training_results must succeed");
+        write_simulation_results(tmp_split.path(), &sim)
+            .expect("write_simulation_results must succeed");
+
+        // Both should produce the same file set.
+        let combined_training_success = tmp_combined.path().join("training/_SUCCESS").is_file();
+        let split_training_success = tmp_split.path().join("training/_SUCCESS").is_file();
+        assert_eq!(combined_training_success, split_training_success);
+
+        let combined_sim_success = tmp_combined.path().join("simulation/_SUCCESS").is_file();
+        let split_sim_success = tmp_split.path().join("simulation/_SUCCESS").is_file();
+        assert_eq!(combined_sim_success, split_sim_success);
+
+        let combined_manifest = tmp_combined
+            .path()
+            .join("training/_manifest.json")
+            .is_file();
+        let split_manifest = tmp_split.path().join("training/_manifest.json").is_file();
+        assert_eq!(combined_manifest, split_manifest);
+
+        let combined_sim_manifest = tmp_combined
+            .path()
+            .join("simulation/_manifest.json")
+            .is_file();
+        let split_sim_manifest = tmp_split.path().join("simulation/_manifest.json").is_file();
+        assert_eq!(combined_sim_manifest, split_sim_manifest);
+    }
+
+    #[test]
+    fn test_merge_empty_slice() {
+        let merged = SimulationOutput::merge(&[]);
+        assert_eq!(merged.n_scenarios, 0);
+        assert_eq!(merged.completed, 0);
+        assert_eq!(merged.failed, 0);
+        assert_eq!(merged.total_time_ms, 0);
+        assert!(merged.partitions_written.is_empty());
+    }
+
+    #[test]
+    fn test_merge_single_output() {
+        let output = SimulationOutput {
+            n_scenarios: 5,
+            completed: 4,
+            failed: 1,
+            total_time_ms: 1000,
+            partitions_written: vec!["simulation/costs/scenario_id=0000/data.parquet".to_string()],
+        };
+        let merged = SimulationOutput::merge(std::slice::from_ref(&output));
+        assert_eq!(merged.n_scenarios, 5);
+        assert_eq!(merged.completed, 4);
+        assert_eq!(merged.failed, 1);
+        assert_eq!(merged.total_time_ms, 1000);
+        assert_eq!(merged.partitions_written, output.partitions_written);
+    }
+
+    #[test]
+    fn test_merge_two_outputs() {
+        let a = SimulationOutput {
+            n_scenarios: 3,
+            completed: 3,
+            failed: 0,
+            total_time_ms: 500,
+            partitions_written: vec![
+                "simulation/costs/scenario_id=0000/data.parquet".to_string(),
+                "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+            ],
+        };
+        let b = SimulationOutput {
+            n_scenarios: 2,
+            completed: 1,
+            failed: 1,
+            total_time_ms: 800,
+            partitions_written: vec!["simulation/costs/scenario_id=0002/data.parquet".to_string()],
+        };
+        let merged = SimulationOutput::merge(&[a, b]);
+        assert_eq!(merged.n_scenarios, 5);
+        assert_eq!(merged.completed, 4);
+        assert_eq!(merged.failed, 1);
+        // total_time_ms uses max, not sum
+        assert_eq!(merged.total_time_ms, 800);
+        assert_eq!(merged.partitions_written.len(), 3);
+    }
+
+    #[test]
+    fn test_merge_partitions_sorted() {
+        let a = SimulationOutput {
+            n_scenarios: 1,
+            completed: 1,
+            failed: 0,
+            total_time_ms: 100,
+            partitions_written: vec![
+                "simulation/hydros/scenario_id=0002/data.parquet".to_string(),
+                "simulation/costs/scenario_id=0002/data.parquet".to_string(),
+            ],
+        };
+        let b = SimulationOutput {
+            n_scenarios: 1,
+            completed: 1,
+            failed: 0,
+            total_time_ms: 200,
+            partitions_written: vec![
+                "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+                "simulation/hydros/scenario_id=0001/data.parquet".to_string(),
+            ],
+        };
+        let merged = SimulationOutput::merge(&[a, b]);
+        // Partitions must be sorted regardless of input order
+        let expected = vec![
+            "simulation/costs/scenario_id=0001/data.parquet".to_string(),
+            "simulation/costs/scenario_id=0002/data.parquet".to_string(),
+            "simulation/hydros/scenario_id=0001/data.parquet".to_string(),
+            "simulation/hydros/scenario_id=0002/data.parquet".to_string(),
+        ];
+        assert_eq!(merged.partitions_written, expected);
     }
 }

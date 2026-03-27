@@ -116,7 +116,7 @@ pub use stochastic_summary::{
     estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
 };
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
-pub use training::{TrainingResult, train};
+pub use training::{TrainingOutcome, TrainingResult, train};
 pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
 pub use workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace, WorkspacePool};

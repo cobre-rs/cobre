@@ -106,10 +106,11 @@ fn run_deterministic_with_solver(case_dir: &Path) -> (cobre_sddp::TrainingResult
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
 
-    let result = setup
+    let outcome = setup
         .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
         .expect("train must return Ok");
-    (result, solver)
+    assert!(outcome.error.is_none(), "expected no training error");
+    (outcome.result, solver)
 }
 
 /// Execute the full training pipeline for a case directory and return the
@@ -134,9 +135,11 @@ fn run_deterministic(case_dir: &Path) -> cobre_sddp::TrainingResult {
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
 
-    setup
+    let outcome = setup
         .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
-        .expect("train must return Ok")
+        .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+    outcome.result
 }
 
 /// Assert that `actual` is within `tolerance` of `expected`.
@@ -867,9 +870,11 @@ fn d12_checkpoint_round_trip() {
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
 
-    let result = setup
+    let outcome = setup
         .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
         .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+    let result = outcome.result;
 
     assert_cost(result.final_lb, D02_EXPECTED_COST, 1e-4, "D12-train");
     assert!(

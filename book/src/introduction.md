@@ -10,9 +10,9 @@ workflows.
 
 ## Choose Your Path
 
-> **Coming from NEWAVE?**
-> If you already work with hydrothermal dispatch tools and want to see how Cobre
-> compares, start with the [NEWAVE Migration Guide](./guide/newave-migration.md).
+> **Coming from other energy optimization software?**
+> If you already work with hydrothermal dispatch tools and want to convert
+> existing case data, see the [cobre-bridge](./guide/cobre-bridge.md) conversion guide.
 
 > **New to SDDP?**
 > If you want to understand the algorithm before diving into code, read

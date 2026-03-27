@@ -551,11 +551,11 @@ fn train_converges_with_mock_solver() {
     )
     .unwrap();
 
-    assert!(result.iterations <= 10);
-    assert!(result.final_lb >= 0.0);
-    assert!(result.final_ub >= 0.0);
-    assert!(result.final_gap.is_finite());
-    assert!(!result.reason.is_empty());
+    assert!(result.result.iterations <= 10);
+    assert!(result.result.final_lb >= 0.0);
+    assert!(result.result.final_ub >= 0.0);
+    assert!(result.result.final_gap.is_finite());
+    assert!(!result.result.reason.is_empty());
 }
 
 /// Run `train` twice with identical configuration and verify bit-for-bit
@@ -657,9 +657,15 @@ fn train_deterministic_with_same_seed() {
     )
     .unwrap();
 
-    assert_eq!(result1.final_lb.to_bits(), result2.final_lb.to_bits());
-    assert_eq!(result1.final_ub.to_bits(), result2.final_ub.to_bits());
-    assert_eq!(result1.iterations, result2.iterations);
+    assert_eq!(
+        result1.result.final_lb.to_bits(),
+        result2.result.final_lb.to_bits()
+    );
+    assert_eq!(
+        result1.result.final_ub.to_bits(),
+        result2.result.final_ub.to_bits()
+    );
+    assert_eq!(result1.result.iterations, result2.result.iterations);
 }
 
 /// Verify `lb[k] >= lb[k-1]` for all consecutive iterations from
@@ -866,8 +872,8 @@ fn train_stops_at_iteration_limit() {
     )
     .unwrap();
 
-    assert_eq!(result.iterations, 3);
-    assert_eq!(result.reason, "iteration_limit");
+    assert_eq!(result.result.iterations, 3);
+    assert_eq!(result.result.reason, "iteration_limit");
 }
 
 /// Verify `train` terminates with `reason == "graceful_shutdown"` when an
@@ -931,8 +937,8 @@ fn train_stops_on_graceful_shutdown() {
     )
     .unwrap();
 
-    assert_eq!(result.reason, "graceful_shutdown");
-    assert!(result.iterations <= 2);
+    assert_eq!(result.result.reason, "graceful_shutdown");
+    assert!(result.result.iterations <= 2);
 }
 
 /// Verify `train` propagates `SddpError::Infeasible` when the solver returns
@@ -985,10 +991,18 @@ fn train_propagates_infeasible_error() {
         1,
     );
 
-    assert!(matches!(
-        result,
-        Err(SddpError::Infeasible { stage: 0, .. })
-    ));
+    let outcome = result.expect("train must return Ok(TrainingOutcome) with captured error");
+    assert!(outcome.error.is_some(), "expected error in TrainingOutcome");
+    assert!(
+        matches!(outcome.error, Some(SddpError::Infeasible { stage: 0, .. })),
+        "expected SddpError::Infeasible at stage 0, got: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        outcome.result.iterations, 0,
+        "no iterations should have completed"
+    );
+    assert_eq!(outcome.result.reason, "error");
 }
 
 /// D17: Level1 cut selection produces convergent results with bounded pool.
@@ -1063,7 +1077,7 @@ fn d17_level1_cut_selection_convergence() {
     .unwrap();
 
     assert!(
-        result.iterations <= 10,
+        result.result.iterations <= 10,
         "training must complete within limit"
     );
 
@@ -1109,10 +1123,10 @@ fn d17_level1_cut_selection_convergence() {
     // The populated count may include a warm-start slot, so we check
     // that active is at least (iterations * forward_passes).
     assert!(
-        fcf.pools[0].active_count() >= result.iterations as usize,
+        fcf.pools[0].active_count() >= result.result.iterations as usize,
         "stage 0 must be exempt: expected at least {} active cuts, got {} \
          (populated={})",
-        result.iterations,
+        result.result.iterations,
         fcf.pools[0].active_count(),
         fcf.pools[0].populated_count,
     );
@@ -1205,7 +1219,7 @@ fn d18_lml1_cut_selection_convergence() {
     .unwrap();
 
     assert!(
-        result.iterations <= 10,
+        result.result.iterations <= 10,
         "training must complete within limit"
     );
 
@@ -1251,10 +1265,10 @@ fn d18_lml1_cut_selection_convergence() {
     // The populated count may include a warm-start slot, so we check
     // that active is at least (iterations * forward_passes).
     assert!(
-        fcf.pools[0].active_count() >= result.iterations as usize,
+        fcf.pools[0].active_count() >= result.result.iterations as usize,
         "stage 0 must be exempt: expected at least {} active cuts, got {} \
          (populated={})",
-        result.iterations,
+        result.result.iterations,
         fcf.pools[0].active_count(),
         fcf.pools[0].populated_count,
     );

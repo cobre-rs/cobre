@@ -91,8 +91,8 @@ pub use output::{
     TrainingOutput, TrainingParquetWriter, read_convergence_summary, read_simulation_manifest,
     read_training_manifest, write_cut_selection_records, write_dictionaries,
     write_fpha_hyperplanes, write_metadata, write_results, write_scaling_report,
-    write_simulation_manifest, write_simulation_solver_stats, write_solver_stats,
-    write_training_manifest,
+    write_simulation_manifest, write_simulation_results, write_simulation_solver_stats,
+    write_solver_stats, write_training_manifest, write_training_results,
 };
 pub use penalties::parse_penalties;
 pub use report::{ReportEntry, ValidationReport, generate_report};

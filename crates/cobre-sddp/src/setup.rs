@@ -54,8 +54,8 @@ use cobre_stochastic::{StochasticContext, context::OpeningTree};
 use crate::{
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
     SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
-    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingResult, WorkspacePool,
-    build_stage_templates,
+    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
+    WorkspacePool, build_stage_templates,
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
@@ -830,7 +830,7 @@ impl StudySetup {
         solver_factory: impl Fn() -> Result<S, SolverError>,
         event_sender: Option<Sender<TrainingEvent>>,
         shutdown_flag: Option<&Arc<AtomicBool>>,
-    ) -> Result<TrainingResult, SddpError> {
+    ) -> Result<TrainingOutcome, SddpError> {
         let training_config = TrainingConfig {
             forward_passes: self.forward_passes,
             max_iterations: self.max_iterations,
@@ -1897,14 +1897,14 @@ mod tests {
             .expect("train");
 
         assert!(
-            result.iterations <= 3,
+            result.result.iterations <= 3,
             "expected iterations <= 3, got {}",
-            result.iterations
+            result.result.iterations
         );
         assert!(
-            result.iterations >= 1,
+            result.result.iterations >= 1,
             "expected at least 1 iteration, got {}",
-            result.iterations
+            result.result.iterations
         );
     }
 
@@ -2042,7 +2042,7 @@ mod tests {
 
         let events: Vec<cobre_core::TrainingEvent> = event_rx.try_iter().collect();
 
-        let output = setup.build_training_output(&result, &events);
+        let output = setup.build_training_output(&result.result, &events);
         assert!(
             !output.convergence_records.is_empty(),
             "convergence_records must be non-empty after training"

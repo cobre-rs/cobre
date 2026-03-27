@@ -219,6 +219,29 @@ The following features were delivered in v0.2.0:
   `training/solver/iterations.parquet`, `simulation/solver/scenarios.parquet`)
   added to the Python bindings, closing all known CLI/Python output gaps.
 
+## v0.2.1 Deliverables
+
+The following features were delivered in v0.2.1:
+
+- **Cut selection phantom deactivation fix** -- `select_for_stage` now receives
+  the pool's `active` slice and skips already-inactive slots. Previously,
+  unpopulated slots below the high-water mark matched the deactivation filter,
+  inflating `cuts_deactivated` counts in the convergence output. The actual cut
+  pool was unaffected (the `deactivate` guard prevented double-decrements), but
+  the convergence record's `cuts_active` field systematically underestimated the
+  true count.
+- **Book documentation audit** -- Version references updated to v0.2.0. Four
+  undocumented `config.json` sections added (`modeling`, `cut_selection`,
+  `estimation`, `checkpointing`). `simulation` stopping rule documented. CVaR
+  `risk_measure` field documented in `stages.json`. Incorrect "only supported
+  model" claim corrected (three models: constant productivity, linearized head,
+  FPHA). Expanded case directory layout documented for production cases.
+- **cobre-bridge documentation** -- The "NEWAVE Migration" page replaced with a
+  comprehensive reference for the `cobre-bridge` conversion package, documenting
+  the CLI, Python API, entity mapping, output structure, and bounds comparison
+  workflow. Explicit references to external software names removed from the
+  introduction and guide pages.
+
 ## Sections
 
 The roadmap is organized into four areas:

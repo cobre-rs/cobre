@@ -62,6 +62,25 @@ use crate::{
 // TrainingResult
 // ---------------------------------------------------------------------------
 
+/// Result of a training run that always carries partial results.
+///
+/// When training completes normally, `error` is `None` and `result` contains
+/// the full training statistics. When training fails mid-iteration, `error`
+/// carries the failure cause and `result` contains statistics from all
+/// fully completed iterations (the failing iteration is excluded).
+#[derive(Debug)]
+pub struct TrainingOutcome {
+    /// Training result from completed iterations. Always populated, even when
+    /// `error` is `Some` -- in that case, `result.iterations` reflects only
+    /// the iterations that completed without error.
+    pub result: TrainingResult,
+
+    /// If training was interrupted by an error, the cause. `None` when
+    /// training completed normally (convergence, iteration limit, or
+    /// time limit).
+    pub error: Option<SddpError>,
+}
+
 /// Summary statistics produced when the training loop terminates.
 #[derive(Debug, Clone)]
 pub struct TrainingResult {
@@ -136,7 +155,7 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
 ///
 /// Allocates all workspace buffers, runs the iteration loop until a stopping
 /// rule triggers or `config.max_iterations` is reached, and returns a
-/// [`TrainingResult`] summarising the final convergence statistics.
+/// [`TrainingOutcome`] summarising the final convergence statistics.
 ///
 /// ## Error handling
 ///
@@ -191,7 +210,7 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
 ///     1, || HiggsBackend::new(),
 /// )?;
 ///
-/// println!("converged in {} iterations, gap={:.4}", result.iterations, result.final_gap);
+/// println!("converged in {} iterations, gap={:.4}", result.result.iterations, result.result.final_gap);
 /// ```
 ///
 /// # Panics (debug builds only)
@@ -220,7 +239,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     n_fwd_threads: usize,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
     max_blocks: usize,
-) -> Result<TrainingResult, SddpError> {
+) -> Result<TrainingOutcome, SddpError> {
     let horizon = training_ctx.horizon;
     let indexer = training_ctx.indexer;
     let initial_state = training_ctx.initial_state;
@@ -340,6 +359,45 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Track iterations since last full rebuild for the LB solver.
     let mut lb_iterations_since_rebuild: u64 = 0;
 
+    // Macro to handle mid-iteration errors: emit TrainingFinished, build
+    // partial result, and return Ok(TrainingOutcome { error: Some(e) }).
+    macro_rules! on_error {
+        ($e:expr) => {{
+            #[allow(clippy::cast_possible_truncation)]
+            emit(
+                event_sender.as_ref(),
+                TrainingEvent::TrainingFinished {
+                    reason: "error".to_string(),
+                    iterations: completed_iterations,
+                    final_lb,
+                    final_ub,
+                    total_time_ms: (start_time.elapsed().as_millis() as u64).max(1),
+                    total_cuts: fcf.total_active_cuts() as u64,
+                },
+            );
+            let last_scenario = my_actual_fwd.saturating_sub(1);
+            #[allow(clippy::cast_possible_truncation)]
+            let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
+            let basis_cache = (0..num_stages)
+                .map(|t| basis_store.get(last_scenario, t).cloned())
+                .collect();
+            return Ok(TrainingOutcome {
+                result: TrainingResult {
+                    final_lb,
+                    final_ub,
+                    final_ub_std,
+                    final_gap,
+                    iterations: completed_iterations,
+                    reason: "error".to_string(),
+                    total_time_ms,
+                    basis_cache,
+                    solver_stats_log,
+                },
+                error: Some($e),
+            });
+        }};
+    }
+
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
@@ -367,7 +425,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             aggregate_solver_statistics(&pool_stats)
         };
 
-        let forward_result = run_forward_pass(
+        let forward_result = match run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
             stage_ctx,
@@ -376,7 +434,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             training_ctx,
             &fwd_batch,
             &mut records[..fwd_record_len],
-        )?;
+        ) {
+            Ok(r) => r,
+            Err(e) => on_error!(e),
+        };
 
         // Snapshot pool stats after forward pass and compute delta.
         let fwd_delta = {
@@ -410,7 +471,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 elapsed_ms: forward_elapsed_ms,
             },
         );
-        let sync_result = sync_forward(&forward_result, comm, total_forward_passes)?;
+        let sync_result = match sync_forward(&forward_result, comm, total_forward_passes) {
+            Ok(r) => r,
+            Err(e) => on_error!(e),
+        };
 
         emit(
             event_sender.as_ref(),
@@ -432,7 +496,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             cut_sync_bufs: &mut cut_sync_bufs,
         };
 
-        let backward_result = run_backward_pass(
+        let backward_result = match run_backward_pass(
             &mut fwd_pool.workspaces,
             &basis_store,
             stage_ctx,
@@ -441,7 +505,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             training_ctx,
             &mut bwd_spec,
             comm,
-        )?;
+        ) {
+            Ok(r) => r,
+            Err(e) => on_error!(e),
+        };
 
         // Store per-stage backward deltas and compute aggregate solve time.
         let bwd_solve_time_ms = {
@@ -525,6 +592,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     let stage_u32 = stage as u32;
                     let deact = strategy.select_for_stage(
                         &pool.metadata[..pool.populated_count],
+                        &pool.active[..pool.populated_count],
                         iteration,
                         stage_u32,
                     );
@@ -590,7 +658,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             block_count: stage_ctx.block_counts_per_stage[0],
             ncs_generation: indexer.ncs_generation.clone(),
         };
-        let lb = evaluate_lower_bound(
+        let lb = match evaluate_lower_bound(
             solver,
             fcf,
             initial_state,
@@ -600,7 +668,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &lb_spec,
             comm,
             Some(&mut lb_cut_row_map),
-        )?;
+        ) {
+            Ok(r) => r,
+            Err(e) => on_error!(e),
+        };
 
         // Snapshot solver stats after lower bound and compute delta.
         let lb_stats_after = solver.statistics();
@@ -686,16 +757,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         .map(|t| basis_store.get(last_scenario, t).cloned())
         .collect();
 
-    Ok(TrainingResult {
-        final_lb,
-        final_ub,
-        final_ub_std,
-        final_gap,
-        iterations: completed_iterations,
-        reason: termination_reason,
-        total_time_ms,
-        basis_cache,
-        solver_stats_log,
+    Ok(TrainingOutcome {
+        result: TrainingResult {
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            iterations: completed_iterations,
+            reason: termination_reason,
+            total_time_ms,
+            basis_cache,
+            solver_stats_log,
+        },
+        error: None,
     })
 }
 
@@ -1198,17 +1272,19 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.iterations, 5, "expected 5 iterations");
-        assert_eq!(result.reason, "iteration_limit");
+        assert!(result.error.is_none(), "expected no error");
+        assert_eq!(result.result.iterations, 5, "expected 5 iterations");
+        assert_eq!(result.result.reason, "iteration_limit");
     }
 
-    /// AC: `train_returns_error_on_infeasible`
+    /// AC: `train_returns_partial_on_infeasible`
     ///
     /// Given a mock solver that returns `SolverError::Infeasible` on the first
     /// forward pass solve, when the function is called, then it returns
-    /// `Err(SddpError::Infeasible { stage: 0, .. })`.
+    /// `Ok(TrainingOutcome)` with `error: Some(SddpError::Infeasible { .. })`
+    /// and `result.iterations == 0`.
     #[test]
-    fn ac_train_returns_error_on_infeasible() {
+    fn ac_train_returns_partial_on_infeasible() {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
@@ -1268,10 +1344,21 @@ mod tests {
             1,
         );
 
+        let outcome = result.unwrap();
         assert!(
-            matches!(result, Err(SddpError::Infeasible { stage: 0, .. })),
-            "expected SddpError::Infeasible at stage 0, got: {result:?}"
+            outcome.error.is_some(),
+            "expected error in TrainingOutcome, got: {outcome:?}"
         );
+        assert!(
+            matches!(outcome.error, Some(SddpError::Infeasible { stage: 0, .. })),
+            "expected SddpError::Infeasible at stage 0, got: {:?}",
+            outcome.error
+        );
+        assert_eq!(
+            outcome.result.iterations, 0,
+            "no iterations should have completed"
+        );
+        assert_eq!(outcome.result.reason, "error");
     }
 
     /// AC: `train_emits_correct_event_sequence`
@@ -1474,8 +1561,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.iterations, 5);
-        assert!(!result.reason.is_empty(), "reason must not be empty");
+        assert!(result.error.is_none(), "expected no error");
+        assert_eq!(result.result.iterations, 5);
+        assert!(!result.result.reason.is_empty(), "reason must not be empty");
     }
 
     /// AC: `train_with_no_event_sender`
@@ -1612,10 +1700,11 @@ mod tests {
         )
         .unwrap();
 
+        assert!(result.error.is_none(), "expected no error");
         assert!(
-            result.total_time_ms > 0,
+            result.result.total_time_ms > 0,
             "total_time_ms must be > 0, got {}",
-            result.total_time_ms,
+            result.result.total_time_ms,
         );
     }
 
@@ -1980,7 +2069,110 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.iterations, 3);
-        assert_eq!(result.reason, "iteration_limit");
+        assert!(result.error.is_none(), "expected no error");
+        assert_eq!(result.result.iterations, 3);
+        assert_eq!(result.result.reason, "iteration_limit");
+    }
+
+    /// AC: `train_partial_result_on_mid_iteration_failure`
+    ///
+    /// Given a mock solver that fails on the 3rd solve call (which occurs
+    /// during iteration 1 since each iteration performs multiple solves),
+    /// when `train` is called, it returns `Ok(TrainingOutcome)` with
+    /// `error: Some(...)`, `result.iterations == 0` (no completed iterations),
+    /// `result.reason == "error"`, and `solver_stats_log` containing entries
+    /// from the phases that completed before the error.
+    #[test]
+    fn ac_train_partial_result_on_mid_iteration_failure() {
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let opening_tree = make_opening_tree(1);
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 5,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: Some(tx),
+        };
+
+        // Mock solver that fails on the Nth call. With 2 stages and 1 forward
+        // pass, the forward pass solves 2 LPs (stage 0, stage 1). A failure
+        // on the 1st call (index 0) means failure in the forward pass of
+        // iteration 1.
+        let mut solver = MockSolver::infeasible();
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+        };
+        let outcome = train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &opening_tree,
+            &risk_measures,
+            iteration_limit_rules(5),
+            None,
+            0.0,
+            None,
+            &comm,
+            1,
+            || Ok(MockSolver::infeasible()),
+            1,
+        )
+        .unwrap();
+
+        // Verify partial result semantics.
+        assert!(outcome.error.is_some(), "expected error in TrainingOutcome");
+        assert_eq!(
+            outcome.result.iterations, 0,
+            "no iterations should have completed (failure in iteration 1)"
+        );
+        assert_eq!(outcome.result.reason, "error");
+        assert!(
+            outcome.result.total_time_ms > 0,
+            "total_time_ms must be > 0"
+        );
+
+        // Verify TrainingFinished event was emitted with reason "error".
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+        let finished = events
+            .iter()
+            .find(|e| matches!(e, TrainingEvent::TrainingFinished { .. }));
+        assert!(
+            finished.is_some(),
+            "TrainingFinished event must be emitted even on error"
+        );
+        if let Some(TrainingEvent::TrainingFinished { reason, .. }) = finished {
+            assert_eq!(reason, "error", "TrainingFinished reason must be 'error'");
+        }
     }
 }

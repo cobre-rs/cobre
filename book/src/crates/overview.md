@@ -56,8 +56,8 @@ The ecosystem delivers a full SDDP training and simulation pipeline:
 - **PAR(p) inflow models** with deterministic correlated scenario generation and inflow non-negativity enforcement (`cobre-stochastic`)
 - **SDDP training loop** with forward/backward passes, Benders cut generation, cut synchronization, and composite stopping rules (`cobre-sddp`)
 - **Simulation pipeline** with Hive-partitioned Parquet output and FlatBuffers policy checkpointing (`cobre-sddp`)
-- **CLI** with six subcommands (`run`, `validate`, `report`, `init`, `schema`, `summary`, `version`), rayon-based intra-rank thread parallelism, progress bars, and post-run summary (`cobre-cli`)
+- **CLI** with seven subcommands (`run`, `validate`, `report`, `init`, `schema`, `summary`, `version`), rayon-based intra-rank thread parallelism, progress bars, and post-run summary (`cobre-cli`)
 - **Python bindings** via PyO3 with Arrow zero-copy result loading (`cobre-python`)
 - **JSON Schema** files for all input types, hosted for `$schema` editor integration
 
-The workspace is verified by over 2,800 tests.
+The workspace is verified by over 3,000 tests.

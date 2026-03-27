@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-03-27
+
+### Fixed
+
+- **Solver safeguards against stuck LP solves** -- Added iteration limits
+  (simplex: `max(100K, 50 × num_cols)`, IPM: 10K) and wall-clock budgets
+  (15s/30s per-level, 120s overall) to the retry escalation sequence.
+  `ITERATION_LIMIT` and `TIME_LIMIT` from the initial solve are now retryable.
+  Production runs with large, numerically difficult LPs could previously hang
+  indefinitely. HiGHS `time_limit` option is not used because HiGHS tracks
+  time cumulatively from instance creation, not per-`run()` call.
+
+### Changed
+
+- **Architecture degradation cleanup** -- Extracted grouping structs for 7
+  functions, reducing `#[allow(clippy::too_many_arguments)]` suppressions from
+  17 to 9. Absorbed 3 parameters into `TrainingConfig`, reducing `train()`
+  from 15 to 12 parameters. Split 3 oversized functions (`execute`, `solve`,
+  `estimate_correlation_with_season_map`) into focused sub-functions.
+- **ferrompi dependency** bumped to 0.2.1 (removes RPATH from MPI binaries
+  for HPC cluster compatibility).
+
 ## [0.2.1] - 2026-03-26
 
 ### Fixed
@@ -514,7 +536,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 
-[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/cobre-rs/cobre/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/cobre-rs/cobre/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/cobre-rs/cobre/compare/v0.1.11...v0.2.0
 [0.1.11]: https://github.com/cobre-rs/cobre/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/cobre-rs/cobre/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/cobre-rs/cobre/compare/v0.1.8...v0.1.9

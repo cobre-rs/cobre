@@ -318,8 +318,161 @@ fn delta_to_stats_row(
     }
 }
 
+/// Result of the training phase within `run_inner`.
+struct TrainingPhaseResult {
+    result: cobre_sddp::TrainingResult,
+    output: cobre_io::TrainingOutput,
+    error: Option<cobre_sddp::SddpError>,
+}
+
+/// Run the training phase: solver init, train, write outputs.
+fn run_training_phase_py(
+    setup: &mut StudySetup,
+    n_threads: usize,
+) -> Result<TrainingPhaseResult, String> {
+    let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
+    let (event_tx, event_rx) = mpsc::channel();
+    let training_outcome = setup
+        .train(
+            &mut solver,
+            &LocalBackend,
+            n_threads,
+            HighsSolver::new,
+            Some(event_tx),
+            None,
+        )
+        .map_err(|e| format!("training error: {e}"))?;
+    let training_result = training_outcome.result;
+
+    let events: Vec<_> = event_rx.try_iter().collect();
+    let training_output = setup.build_training_output(&training_result, &events);
+
+    Ok(TrainingPhaseResult {
+        result: training_result,
+        output: training_output,
+        error: training_outcome.error,
+    })
+}
+
+/// Write all training artifacts: policy checkpoint, training results, solver stats,
+/// and cut selection records.
+fn write_training_artifacts(
+    output_dir: &std::path::Path,
+    system: &cobre_core::System,
+    config: &cobre_io::Config,
+    setup: &StudySetup,
+    training: &TrainingPhaseResult,
+    seed: u64,
+) -> Result<(), String> {
+    write_policy_checkpoint(
+        &output_dir.join(setup.policy_path()),
+        setup.fcf(),
+        &training.result,
+        setup.max_iterations(),
+        setup.forward_passes(),
+        seed,
+    )
+    .map_err(|e| format!("policy checkpoint error: {e}"))?;
+
+    if !training.result.solver_stats_log.is_empty() {
+        let rows: Vec<SolverStatsRow> = training
+            .result
+            .solver_stats_log
+            .iter()
+            .map(|(iter, phase, stage, delta)| {
+                #[allow(clippy::cast_possible_truncation)]
+                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            })
+            .collect();
+        cobre_io::write_solver_stats(output_dir, &rows)
+            .map_err(|e| format!("solver stats output: {e}"))?;
+    }
+
+    if !training.output.cut_selection_records.is_empty() {
+        cobre_io::write_cut_selection_records(
+            output_dir,
+            &training.output.cut_selection_records,
+            &ParquetWriterConfig::default(),
+        )
+        .map_err(|e| format!("cut selection output: {e}"))?;
+    }
+
+    cobre_io::write_training_results(output_dir, &training.output, system, config)
+        .map_err(|e| format!("training results output: {e}"))?;
+
+    Ok(())
+}
+
+/// Run the simulation phase: workspace pool, Parquet writing, and output.
+fn run_simulation_phase_py(
+    setup: &mut StudySetup,
+    output_dir: &std::path::Path,
+    system: &cobre_core::System,
+    training_result: &cobre_sddp::TrainingResult,
+    n_threads: usize,
+) -> Result<SimSummary, String> {
+    let io_capacity = setup.simulation_config().io_channel_capacity;
+    let mut sim_pool = setup
+        .create_workspace_pool(n_threads, HighsSolver::new)
+        .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
+    let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
+
+    let sim_writer =
+        SimulationParquetWriter::new(output_dir, system, &ParquetWriterConfig::default())
+            .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
+
+    let drain_handle = std::thread::spawn(move || {
+        let mut writer = sim_writer;
+        let mut failed: u32 = 0;
+        for scenario_result in result_rx {
+            if let Err(e) = writer.write_scenario(ScenarioWritePayload::from(scenario_result)) {
+                eprintln!("cobre-python: simulation write warning: {e}");
+                failed += 1;
+            }
+        }
+        (writer, failed)
+    });
+
+    let sim_result = setup
+        .simulate(
+            &mut sim_pool.workspaces,
+            &LocalBackend,
+            &result_tx,
+            None,
+            &training_result.basis_cache,
+        )
+        .map_err(|e| format!("simulation error: {e}"));
+    drop(result_tx);
+
+    let (sim_writer, write_failures) = drain_handle
+        .join()
+        .map_err(|_| "drain thread panicked".to_string())?;
+    let sim_run_result = sim_result?;
+
+    let mut sim_out = sim_writer.finalize(0);
+    sim_out.failed = write_failures;
+
+    if !sim_run_result.solver_stats.is_empty() {
+        let rows: Vec<SolverStatsRow> = sim_run_result
+            .solver_stats
+            .iter()
+            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .collect();
+        cobre_io::write_simulation_solver_stats(output_dir, &rows)
+            .map_err(|e| format!("simulation solver stats output: {e}"))?;
+    }
+
+    let sim_summary = SimSummary {
+        n_scenarios: sim_out.n_scenarios,
+        completed: sim_out.completed,
+    };
+    cobre_io::write_simulation_results(output_dir, &sim_out)
+        .map_err(|e| format!("simulation results output: {e}"))?;
+
+    Ok(sim_summary)
+}
+
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
-#[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
     output_dir: PathBuf,
@@ -333,7 +486,6 @@ fn run_inner(
     let config = cobre_io::parse_config(&case_dir.join("config.json"))
         .map_err(|e| format!("config parse error: {e}"))?;
 
-    // Seed must be extracted before config is moved into StudySetup.
     let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
@@ -349,7 +501,6 @@ fn run_inner(
     let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
         .map_err(|e| e.to_string())?;
 
-    // Export stochastic artifacts when requested.
     if config.exports.stochastic {
         export_stochastic_artifacts_py(
             &output_dir,
@@ -359,44 +510,20 @@ fn run_inner(
         );
     }
 
-    // Write scaling report (before training starts).
     let scaling_path = output_dir.join("training/scaling_report.json");
     cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
-    let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
-    let (event_tx, event_rx) = mpsc::channel();
-    let training_outcome = setup
-        .train(
-            &mut solver,
-            &LocalBackend,
-            n_threads,
-            HighsSolver::new,
-            Some(event_tx),
-            None,
-        )
-        .map_err(|e| format!("training error: {e}"))?;
-    let training_error = training_outcome.error;
-    let training_result = training_outcome.result;
+    let training = run_training_phase_py(&mut setup, n_threads)?;
 
-    let events: Vec<_> = event_rx.try_iter().collect();
-    let training_output = setup.build_training_output(&training_result, &events);
+    write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
 
-    write_policy_checkpoint(
-        &output_dir.join(setup.policy_path()),
-        setup.fcf(),
-        &training_result,
-        setup.max_iterations(),
-        setup.forward_passes(),
-        seed,
-    )
-    .map_err(|e| format!("policy checkpoint error: {e}"))?;
-
-    let converged = training_output.converged;
-    let iterations = training_result.iterations;
-    let lower_bound = training_result.final_lb;
-    let gap_percent = Some(training_result.final_gap * 100.0);
-    let total_time_ms = training_result.total_time_ms;
+    if let Some(ref e) = training.error {
+        return Err(format!(
+            "training failed after {} iterations: {e}",
+            training.result.iterations
+        ));
+    }
 
     let stochastic_summary = build_stochastic_summary(
         &system,
@@ -404,139 +531,32 @@ fn run_inner(
         estimation_report.as_ref(),
         seed,
     );
-
     let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
-    // Write training solver stats to training/solver/iterations.parquet.
-    if !training_result.solver_stats_log.is_empty() {
-        let rows: Vec<SolverStatsRow> = training_result
-            .solver_stats_log
-            .iter()
-            .map(|(iter, phase, stage, delta)| {
-                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
-                delta_to_stats_row(*iter as u32, phase, *stage, delta)
-            })
-            .collect();
-        cobre_io::write_solver_stats(&output_dir, &rows)
-            .map_err(|e| format!("solver stats output: {e}"))?;
-    }
-
-    // Write per-stage cut selection records (training-only, no simulation dependency).
-    if !training_output.cut_selection_records.is_empty() {
-        cobre_io::write_cut_selection_records(
+    let simulation = if should_simulate {
+        Some(run_simulation_phase_py(
+            &mut setup,
             &output_dir,
-            &training_output.cut_selection_records,
-            &ParquetWriterConfig::default(),
-        )
-        .map_err(|e| format!("cut selection output: {e}"))?;
-    }
-
-    // Write training results (convergence, dictionaries, manifests, metadata)
-    // immediately — before simulation starts. This ensures training artifacts
-    // are persisted even if simulation fails.
-    cobre_io::write_training_results(&output_dir, &training_output, &system, &config)
-        .map_err(|e| format!("training results output: {e}"))?;
-
-    // If training failed mid-iteration, return the error after writing partial
-    // outputs. All training artifacts are persisted; simulation is skipped.
-    if let Some(ref e) = training_error {
-        return Err(format!(
-            "training failed after {} iterations: {e}",
-            training_result.iterations
-        ));
-    }
-
-    if should_simulate {
-        let io_capacity = setup.simulation_config().io_channel_capacity;
-        let mut sim_pool = setup
-            .create_workspace_pool(n_threads, HighsSolver::new)
-            .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
-        let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
-
-        // Create the writer before spawning the drain thread so initialization
-        // errors surface on the main thread.
-        let sim_writer =
-            SimulationParquetWriter::new(&output_dir, &system, &ParquetWriterConfig::default())
-                .map_err(|e| format!("simulation writer initialisation error: {e}"))?;
-
-        // Drain thread writes scenarios directly to Parquet (matches CLI flow).
-        let drain_handle = std::thread::spawn(move || {
-            let mut writer = sim_writer;
-            let mut failed: u32 = 0;
-            for scenario_result in result_rx {
-                if let Err(e) = writer.write_scenario(ScenarioWritePayload::from(scenario_result)) {
-                    eprintln!("cobre-python: simulation write warning: {e}");
-                    failed += 1;
-                }
-            }
-            (writer, failed)
-        });
-
-        let sim_result = setup
-            .simulate(
-                &mut sim_pool.workspaces,
-                &LocalBackend,
-                &result_tx,
-                None,
-                &training_result.basis_cache,
-            )
-            .map_err(|e| format!("simulation error: {e}"));
-        drop(result_tx);
-
-        let (sim_writer, write_failures) = drain_handle
-            .join()
-            .map_err(|_| "drain thread panicked".to_string())?;
-        let sim_run_result = sim_result?;
-
-        let mut sim_out = sim_writer.finalize(0);
-        sim_out.failed = write_failures;
-
-        // Write simulation solver stats to simulation/solver/scenarios.parquet.
-        if !sim_run_result.solver_stats.is_empty() {
-            let rows: Vec<SolverStatsRow> = sim_run_result
-                .solver_stats
-                .iter()
-                .map(|(scenario_id, delta)| {
-                    delta_to_stats_row(*scenario_id, "simulation", -1, delta)
-                })
-                .collect();
-            cobre_io::write_simulation_solver_stats(&output_dir, &rows)
-                .map_err(|e| format!("simulation solver stats output: {e}"))?;
-        }
-
-        let sim_summary = SimSummary {
-            n_scenarios: sim_out.n_scenarios,
-            completed: sim_out.completed,
-        };
-        cobre_io::write_simulation_results(&output_dir, &sim_out)
-            .map_err(|e| format!("simulation results output: {e}"))?;
-
-        Ok(RunSummary {
-            converged,
-            iterations,
-            lower_bound,
-            upper_bound: Some(training_result.final_ub),
-            gap_percent,
-            total_time_ms,
-            output_dir,
-            simulation: Some(sim_summary),
-            stochastic: Some(stochastic_summary),
-            hydro_models: hydro_models_summary,
-        })
+            &system,
+            &training.result,
+            n_threads,
+        )?)
     } else {
-        Ok(RunSummary {
-            converged,
-            iterations,
-            lower_bound,
-            upper_bound: Some(training_result.final_ub),
-            gap_percent,
-            total_time_ms,
-            output_dir,
-            simulation: None,
-            stochastic: Some(stochastic_summary),
-            hydro_models: hydro_models_summary,
-        })
-    }
+        None
+    };
+
+    Ok(RunSummary {
+        converged: training.output.converged,
+        iterations: training.result.iterations,
+        lower_bound: training.result.final_lb,
+        upper_bound: Some(training.result.final_ub),
+        gap_percent: Some(training.result.final_gap * 100.0),
+        total_time_ms: training.result.total_time_ms,
+        output_dir,
+        simulation,
+        stochastic: Some(stochastic_summary),
+        hydro_models: hydro_models_summary,
+    })
 }
 
 /// Convert a [`StochasticSource`] enum variant to a Python string or `None`.

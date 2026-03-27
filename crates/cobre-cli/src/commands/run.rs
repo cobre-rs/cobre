@@ -134,6 +134,51 @@ fn load_case_and_config(
     Ok((prepared, hydro_models, bcast, config))
 }
 
+/// Shared context threaded through the `execute` phase functions.
+///
+/// Constructed once during communicator setup and passed by reference to
+/// each subsequent phase. Avoids threading 6+ separate values individually.
+struct RunContext<C: Communicator> {
+    /// The MPI (or local) communicator.
+    comm: C,
+    /// Whether this rank is rank 0.
+    is_root: bool,
+    /// Whether terminal output is suppressed.
+    quiet: bool,
+    /// Number of rayon worker threads.
+    n_threads: usize,
+    /// Resolved output directory.
+    output_dir: PathBuf,
+    /// Terminal width for progress bars.
+    term_width: u16,
+    /// Terminal handle for stderr output.
+    stderr: Term,
+}
+
+/// Result of the load-and-broadcast phase.
+///
+/// Bundles the values produced by [`broadcast_and_build_setup`] that are
+/// consumed by subsequent training and output phases.
+struct LoadBroadcastResult {
+    system: System,
+    setup: StudySetup,
+    /// Root-only config for output writing (None on non-root ranks).
+    root_config: Option<cobre_io::Config>,
+    /// Root-only estimation report for summaries (None on non-root ranks).
+    root_estimation_report: Option<Option<EstimationReport>>,
+}
+
+/// Result of the training phase.
+///
+/// Bundles the values produced by [`run_training_phase`] that are consumed
+/// by the simulation phase and the post-training error check.
+struct TrainingPhaseResult {
+    result: cobre_sddp::TrainingResult,
+    output: cobre_io::TrainingOutput,
+    /// Mid-iteration training error, if any. Partial results are still valid.
+    error: Option<cobre_sddp::SddpError>,
+}
+
 /// Execute the `run` subcommand.
 ///
 /// Runs the full lifecycle: load → build templates → train → simulate → write.
@@ -153,8 +198,77 @@ fn load_case_and_config(
 ///
 /// Returns [`CliError`] when loading, training, simulation, or I/O fails.
 /// The exit code indicates the category of failure.
-#[allow(clippy::too_many_lines)]
 pub fn execute(args: RunArgs) -> Result<(), CliError> {
+    let ctx = setup_communicator(&args)?;
+
+    let LoadBroadcastResult {
+        system,
+        mut setup,
+        mut root_config,
+        root_estimation_report,
+    } = broadcast_and_build_setup(&ctx, &args)?;
+
+    run_pre_training(
+        &ctx,
+        &system,
+        &setup,
+        root_config.as_ref(),
+        root_estimation_report.as_ref(),
+    )?;
+
+    let training = run_training_phase(&ctx, &mut setup)?;
+
+    // Write training outputs immediately (before simulation), so training
+    // artifacts are persisted even if simulation fails.
+    if ctx.is_root {
+        let config = root_config.take().ok_or_else(|| CliError::Internal {
+            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+        })?;
+
+        write_training_outputs(&WriteTrainingArgs {
+            output_dir: &ctx.output_dir,
+            system: &system,
+            config: &config,
+            training_output: &training.output,
+            setup: &setup,
+            training_result: &training.result,
+            quiet: ctx.quiet,
+            stderr: &ctx.stderr,
+        })?;
+
+        drop(config);
+    }
+
+    // If training failed mid-iteration, report the error after writing
+    // partial outputs. All ranks return here — simulation is skipped.
+    if let Some(ref training_error) = training.error {
+        if ctx.is_root {
+            tracing::error!(
+                "training failed after {} iterations: {training_error}",
+                training.result.iterations
+            );
+            if !ctx.quiet {
+                let _ = ctx.stderr.write_line(&format!(
+                    "Training failed after {} iterations. Partial outputs written to {}.",
+                    training.result.iterations,
+                    ctx.output_dir.display()
+                ));
+            }
+        }
+        return Err(CliError::Internal {
+            message: format!("training error: {training_error}"),
+        });
+    }
+
+    if setup.n_scenarios() > 0 {
+        run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+    }
+
+    Ok(())
+}
+
+/// Set up the communicator, terminal, rayon pool, and resolve the output directory.
+fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, CliError> {
     let comm = create_communicator()?;
     let is_root = comm.rank() == 0;
     let quiet = args.quiet || !is_root;
@@ -181,6 +295,28 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
 
+    let output_dir: PathBuf = args
+        .output
+        .clone()
+        .unwrap_or_else(|| args.case_dir.join("output"));
+    let term_width = crate::progress::resolve_term_width();
+
+    Ok(RunContext {
+        comm,
+        is_root,
+        quiet,
+        n_threads,
+        output_dir,
+        term_width,
+        stderr,
+    })
+}
+
+/// Load the case on rank 0, broadcast system/config/tree, and build `StudySetup` on all ranks.
+fn broadcast_and_build_setup(
+    ctx: &RunContext<impl Communicator>,
+    args: &RunArgs,
+) -> Result<LoadBroadcastResult, CliError> {
     // Rank 0 loads from disk; system and config are broadcast to all ranks.
     let (
         raw_system,
@@ -191,12 +327,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         raw_bcast_tree,
         root_hydro_models,
         load_err,
-    ) = if is_root {
-        match load_case_and_config(&args, quiet, &stderr) {
+    ) = if ctx.is_root {
+        match load_case_and_config(args, ctx.quiet, &ctx.stderr) {
             Ok((prepared, hydro_models, bcast, config)) => {
-                // Extract the opening tree for broadcast to non-root ranks.
-                // If the stochastic context was built from a user-supplied tree,
-                // re-serialize it into BroadcastOpeningTree; otherwise broadcast None.
                 let bcast_tree = if prepared.stochastic.provenance().opening_tree
                     == ComponentProvenance::UserSupplied
                 {
@@ -232,14 +365,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     };
     let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
 
-    let system_result = broadcast_value(raw_system, &comm);
-    let bcast_config_result = broadcast_value(raw_bcast_config, &comm);
+    let system_result = broadcast_value(raw_system, &ctx.comm);
+    let bcast_config_result = broadcast_value(raw_bcast_config, &ctx.comm);
     let root_hydro_models: Option<PrepareHydroModelsResult> = root_hydro_models;
 
-    // Broadcast the optional opening tree. Wrap in Option<BroadcastOpeningTree> so that
-    // both the "no user tree" (None) and "user tree present" (Some) cases can be broadcast
-    // as a single postcard-serializable value. postcard supports Option natively.
-    let tree_result = broadcast_value(raw_bcast_tree, &comm);
+    let tree_result = broadcast_value(raw_bcast_tree, &ctx.comm);
 
     if let Some(e) = load_err {
         return Err(e);
@@ -247,16 +377,11 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
     let system = system_result?;
     let mut bcast_config = bcast_config_result?;
 
-    // Consume args here — no fields are needed after output_dir is resolved.
-    let output_dir: PathBuf = args.output.unwrap_or_else(|| args.case_dir.join("output"));
-
     let seed = bcast_config.seed;
 
     // Rank 0 uses the stochastic context already built by `prepare_stochastic`.
     // Non-root ranks reconstruct it from the broadcast opening tree.
-    let stochastic = if is_root {
-        // tree_result was produced by the broadcast collective above; discard it here
-        // since rank 0 already has the stochastic context from `prepare_stochastic`.
+    let stochastic = if ctx.is_root {
         drop(tree_result);
         root_stochastic.ok_or_else(|| CliError::Internal {
             message: "stochastic context missing on rank 0 after successful load".to_string(),
@@ -273,9 +398,7 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     // Rank 0 uses the hydro models result already built by `prepare_hydro_models`.
     // Non-root ranks reconstruct it independently from the system and case_dir.
-    // All ranks have access to the same shared filesystem, so independent loading
-    // produces identical results.
-    let hydro_models = if is_root {
+    let hydro_models = if ctx.is_root {
         root_hydro_models.ok_or_else(|| CliError::Internal {
             message: "hydro models missing on rank 0 after successful load".to_string(),
         })?
@@ -285,17 +408,31 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         })?
     };
 
-    // Construct StudySetup on all ranks from broadcast parameters.
-    // Ownership of stochastic moves into setup; use setup.stochastic() for all
-    // subsequent stochastic references.
-    let stopping_rule_set = stopping_rules_from_broadcast(&bcast_config);
+    let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
+
+    Ok(LoadBroadcastResult {
+        system,
+        setup,
+        root_config: root_config.take(),
+        root_estimation_report,
+    })
+}
+
+/// Construct `StudySetup` on all ranks from broadcast parameters.
+fn build_study_setup(
+    system: &System,
+    bcast_config: &mut BroadcastConfig,
+    stochastic: cobre_stochastic::StochasticContext,
+    hydro_models: PrepareHydroModelsResult,
+) -> Result<StudySetup, CliError> {
+    let stopping_rule_set = stopping_rules_from_broadcast(bcast_config);
     let cut_selection = std::mem::replace(
         &mut bcast_config.cut_selection,
         BroadcastCutSelection::Disabled,
     )
     .into_strategy();
-    let mut setup = StudySetup::from_broadcast_params(
-        &system,
+    StudySetup::from_broadcast_params(
+        system,
         stochastic,
         bcast_config.seed,
         bcast_config.forward_passes,
@@ -308,33 +445,40 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         bcast_config.cut_activity_tolerance,
         hydro_models,
     )
-    .map_err(CliError::from)?;
+    .map_err(CliError::from)
+}
 
-    // Print stochastic preprocessing summary on rank 0 before training starts.
-    if !quiet && is_root {
-        let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
+/// Print summaries, export stochastic artifacts, and write the scaling report.
+fn run_pre_training(
+    ctx: &RunContext<impl Communicator>,
+    system: &System,
+    setup: &StudySetup,
+    root_config: Option<&cobre_io::Config>,
+    root_estimation_report: Option<&Option<EstimationReport>>,
+) -> Result<(), CliError> {
+    if !ctx.quiet && ctx.is_root {
+        let estimation = root_estimation_report.and_then(|r| r.as_ref());
         let stochastic_summary =
-            build_stochastic_summary(&system, setup.stochastic(), estimation, seed);
-        crate::summary::print_stochastic_summary(&stderr, &stochastic_summary);
-        let hydro_summary = build_hydro_model_summary(setup.hydro_models(), &system);
-        crate::summary::print_hydro_model_summary(&stderr, &hydro_summary);
+            build_stochastic_summary(system, setup.stochastic(), estimation, setup.seed());
+        crate::summary::print_stochastic_summary(&ctx.stderr, &stochastic_summary);
+        let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
+        crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
     }
 
-    // Export stochastic preprocessing artifacts when requested (rank 0 only).
-    if is_root && root_config.as_ref().is_some_and(|c| c.exports.stochastic) {
-        let estimation = root_estimation_report.as_ref().and_then(|r| r.as_ref());
+    if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {
+        let estimation = root_estimation_report.and_then(|r| r.as_ref());
         export_stochastic_artifacts(
-            &output_dir,
+            &ctx.output_dir,
             setup.stochastic(),
-            &system,
+            system,
             estimation,
-            quiet,
-            &stderr,
+            ctx.quiet,
+            &ctx.stderr,
         );
     }
-    // Write scaling report (rank 0 only, before training starts).
-    if is_root {
-        let scaling_path = output_dir.join("training/scaling_report.json");
+
+    if ctx.is_root {
+        let scaling_path = ctx.output_dir.join("training/scaling_report.json");
         cobre_io::write_scaling_report(&scaling_path, setup.scaling_report()).map_err(|e| {
             CliError::Internal {
                 message: format!("failed to write scaling report: {e}"),
@@ -342,10 +486,18 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         })?;
     }
 
-    comm.barrier().map_err(|e| CliError::Internal {
+    ctx.comm.barrier().map_err(|e| CliError::Internal {
         message: format!("post-export barrier error: {e}"),
     })?;
 
+    Ok(())
+}
+
+/// Run training and collect results, events, and summary stats.
+fn run_training_phase(
+    ctx: &RunContext<impl Communicator>,
+    setup: &mut StudySetup,
+) -> Result<TrainingPhaseResult, CliError> {
     let solver_factory = HighsSolver::new;
 
     let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
@@ -354,9 +506,8 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
 
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
-    let term_width = crate::progress::resolve_term_width();
     let quiet_rx: Option<mpsc::Receiver<TrainingEvent>>;
-    let progress_handle = if quiet {
+    let progress_handle = if ctx.quiet {
         quiet_rx = Some(event_rx);
         None
     } else {
@@ -364,29 +515,26 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         Some(crate::progress::run_progress_thread(
             event_rx,
             setup.max_iterations(),
-            term_width,
+            ctx.term_width,
         ))
     };
 
     let training_outcome = match setup.train(
         &mut solver,
-        &comm,
-        n_threads,
+        &ctx.comm,
+        ctx.n_threads,
         solver_factory,
         Some(event_tx),
         None,
     ) {
         Ok(outcome) => outcome,
         Err(e) => {
-            // Truly unrecoverable (pre-iteration). No partial results to write.
             if let Some(handle) = progress_handle {
                 let _ = handle.join();
             }
             return Err(CliError::from(e));
         }
     };
-    // Extract the TrainingResult. If there was a mid-iteration error, we still
-    // process and write partial results before returning the error.
     let training_result = training_outcome.result;
 
     let events: Vec<TrainingEvent> = match (progress_handle, quiet_rx) {
@@ -402,13 +550,14 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         .map(|r| u64::from(r.lp_solves))
         .sum();
     let mut global_lp_solves = [0u64];
-    comm.allreduce(&[local_lp_solves], &mut global_lp_solves, ReduceOp::Sum)
+    ctx.comm
+        .allreduce(&[local_lp_solves], &mut global_lp_solves, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
             message: format!("LP solve count allreduce error: {e}"),
         })?;
     let global_lp_solves = global_lp_solves[0];
 
-    comm.barrier().map_err(|e| CliError::Internal {
+    ctx.comm.barrier().map_err(|e| CliError::Internal {
         message: format!("post-training barrier error: {e}"),
     })?;
 
@@ -421,35 +570,9 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         total_basis_offered,
         total_basis_rejections,
         total_simplex_iter,
-    ) = {
-        let mut first_try = 0u64;
-        let mut retried = 0u64;
-        let mut failed = 0u64;
-        let mut solve_time = 0.0_f64;
-        let mut basis_offered = 0u64;
-        let mut basis_rejections = 0u64;
-        let mut simplex = 0u64;
-        for (_, _, _, delta) in &training_result.solver_stats_log {
-            first_try += delta.first_try_successes;
-            retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
-            failed += delta.lp_failures;
-            solve_time += delta.solve_time_ms;
-            basis_offered += delta.basis_offered;
-            basis_rejections += delta.basis_rejections;
-            simplex += delta.simplex_iterations;
-        }
-        (
-            first_try,
-            retried,
-            failed,
-            solve_time / 1000.0,
-            basis_offered,
-            basis_rejections,
-            simplex,
-        )
-    };
+    ) = aggregate_solver_stats(&training_result.solver_stats_log);
 
-    // Print training summary immediately after training completes.
+    // Print training summary on rank 0.
     let training_summary = TrainingSummary {
         iterations: training_result.iterations,
         converged: training_output.converged,
@@ -475,187 +598,186 @@ pub fn execute(args: RunArgs) -> Result<(), CliError> {
         total_basis_rejections,
         total_simplex_iterations: total_simplex_iter,
     };
-    if !quiet && is_root {
-        crate::summary::print_training_summary(&stderr, &training_summary);
+    if !ctx.quiet && ctx.is_root {
+        crate::summary::print_training_summary(&ctx.stderr, &training_summary);
     }
 
-    // Write training outputs immediately after training completes (before
-    // simulation), so training artifacts are persisted even if simulation fails.
-    if is_root {
-        let config = root_config.take().ok_or_else(|| CliError::Internal {
-            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-        })?;
+    Ok(TrainingPhaseResult {
+        result: training_result,
+        output: training_output,
+        error: training_outcome.error,
+    })
+}
 
-        write_training_outputs(&WriteTrainingArgs {
-            output_dir: &output_dir,
-            system: &system,
-            config: &config,
-            training_output: &training_output,
-            setup: &setup,
-            training_result: &training_result,
-            quiet,
-            stderr: &stderr,
-        })?;
-
-        drop(config);
+/// Aggregate solver statistics from the training stats log.
+fn aggregate_solver_stats(
+    stats_log: &[(u64, String, i32, cobre_sddp::SolverStatsDelta)],
+) -> (u64, u64, u64, f64, u64, u64, u64) {
+    let mut first_try = 0u64;
+    let mut retried = 0u64;
+    let mut failed = 0u64;
+    let mut solve_time = 0.0_f64;
+    let mut basis_offered = 0u64;
+    let mut basis_rejections = 0u64;
+    let mut simplex = 0u64;
+    for (_, _, _, delta) in stats_log {
+        first_try += delta.first_try_successes;
+        retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
+        failed += delta.lp_failures;
+        solve_time += delta.solve_time_ms;
+        basis_offered += delta.basis_offered;
+        basis_rejections += delta.basis_rejections;
+        simplex += delta.simplex_iterations;
     }
+    (
+        first_try,
+        retried,
+        failed,
+        solve_time / 1000.0,
+        basis_offered,
+        basis_rejections,
+        simplex,
+    )
+}
 
-    // If training failed mid-iteration, report the error after writing partial
-    // outputs. All ranks return here — simulation is skipped.
-    if let Some(ref training_error) = training_outcome.error {
-        if is_root {
-            tracing::error!(
-                "training failed after {} iterations: {training_error}",
-                training_result.iterations
-            );
-            if !quiet {
-                let _ = stderr.write_line(&format!(
-                    "Training failed after {} iterations. Partial outputs written to {}.",
-                    training_result.iterations,
-                    output_dir.display()
-                ));
+/// Run the simulation phase: workspace pool, Parquet writing, and output.
+fn run_simulation_phase(
+    ctx: &RunContext<impl Communicator>,
+    system: &System,
+    setup: &mut StudySetup,
+    training_result: &cobre_sddp::TrainingResult,
+) -> Result<(), CliError> {
+    let solver_factory = HighsSolver::new;
+    let n_scenarios = setup.n_scenarios();
+    let sim_config = setup.simulation_config();
+
+    let mut sim_pool = setup
+        .create_workspace_pool(ctx.n_threads, solver_factory)
+        .map_err(|e| CliError::Solver {
+            message: format!("HiGHS initialisation failed for simulation pool: {e}"),
+        })?;
+
+    let (sim_event_tx, sim_event_rx) = mpsc::channel::<TrainingEvent>();
+    let sim_progress_handle = if ctx.quiet {
+        drop(sim_event_rx);
+        None
+    } else {
+        Some(crate::progress::run_progress_thread(
+            sim_event_rx,
+            u64::from(n_scenarios),
+            ctx.term_width,
+        ))
+    };
+
+    let io_capacity = sim_config.io_channel_capacity;
+    let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
+
+    let parquet_config = cobre_io::ParquetWriterConfig::default();
+    let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
+        &ctx.output_dir,
+        system,
+        &parquet_config,
+    )
+    .map_err(CliError::from)?;
+
+    // The drain thread writes scenarios directly to Parquet instead of
+    // collecting into a Vec. This avoids the need to gather all results
+    // on rank 0 via MPI (which overflows i32 on large cases).
+    let drain_handle = std::thread::spawn(move || {
+        let mut failed: u32 = 0;
+        for scenario_result in result_rx {
+            let payload =
+                cobre_io::output::simulation_writer::ScenarioWritePayload::from(scenario_result);
+            if let Err(e) = sim_writer.write_scenario(payload) {
+                tracing::error!("simulation write error: {e}");
+                failed += 1;
             }
         }
-        return Err(CliError::Internal {
-            message: format!("training error: {training_error}"),
-        });
-    }
+        (sim_writer, failed)
+    });
 
-    let should_simulate = setup.n_scenarios() > 0;
+    let sim_start = std::time::Instant::now();
 
-    if should_simulate {
-        let n_scenarios = setup.n_scenarios();
-        let sim_config = setup.simulation_config();
-
-        let mut sim_pool = setup
-            .create_workspace_pool(n_threads, solver_factory)
-            .map_err(|e| CliError::Solver {
-                message: format!("HiGHS initialisation failed for simulation pool: {e}"),
-            })?;
-
-        let (sim_event_tx, sim_event_rx) = mpsc::channel::<TrainingEvent>();
-        let sim_progress_handle = if quiet {
-            drop(sim_event_rx);
-            None
-        } else {
-            Some(crate::progress::run_progress_thread(
-                sim_event_rx,
-                u64::from(n_scenarios),
-                term_width,
-            ))
-        };
-
-        let io_capacity = sim_config.io_channel_capacity;
-        let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
-
-        // Every rank creates its own writer (Strategy B: each rank calls
-        // create_dir_all independently — idempotent, no synchronisation needed).
-        let parquet_config = cobre_io::ParquetWriterConfig::default();
-        let mut sim_writer = cobre_io::output::simulation_writer::SimulationParquetWriter::new(
-            &output_dir,
-            &system,
-            &parquet_config,
+    let sim_result = setup
+        .simulate(
+            &mut sim_pool.workspaces,
+            &ctx.comm,
+            &result_tx,
+            Some(sim_event_tx),
+            &training_result.basis_cache,
         )
-        .map_err(CliError::from)?;
+        .map_err(CliError::from);
+    if let Some(handle) = sim_progress_handle {
+        let _ = handle.join();
+    }
 
-        // The drain thread writes scenarios directly to Parquet instead of
-        // collecting into a Vec. This avoids the need to gather all results
-        // on rank 0 via MPI (which overflows i32 on large cases).
-        let drain_handle = std::thread::spawn(move || {
-            let mut failed: u32 = 0;
-            for scenario_result in result_rx {
-                let payload = cobre_io::output::simulation_writer::ScenarioWritePayload::from(
-                    scenario_result,
-                );
-                if let Err(e) = sim_writer.write_scenario(payload) {
-                    tracing::error!("simulation write error: {e}");
-                    failed += 1;
-                }
-            }
-            (sim_writer, failed)
-        });
+    drop(result_tx);
 
-        let sim_start = std::time::Instant::now();
+    #[allow(clippy::expect_used)]
+    let (sim_writer, write_failures) = drain_handle.join().expect("drain thread panicked");
 
-        let sim_result = setup
-            .simulate(
-                &mut sim_pool.workspaces,
-                &comm,
-                &result_tx,
-                Some(sim_event_tx),
-                &training_result.basis_cache,
-            )
-            .map_err(CliError::from);
-        if let Some(handle) = sim_progress_handle {
-            let _ = handle.join();
-        }
+    let sim_run_result = sim_result?;
 
-        drop(result_tx);
+    #[allow(clippy::cast_possible_truncation)]
+    let sim_time_ms = sim_start.elapsed().as_millis() as u64;
 
-        #[allow(clippy::expect_used)]
-        let (sim_writer, write_failures) = drain_handle.join().expect("drain thread panicked");
+    let mut local_sim_output = sim_writer.finalize(sim_time_ms);
+    local_sim_output.failed = write_failures;
 
-        let sim_run_result = sim_result?;
+    let merged_sim_output = merge_simulation_metadata(&ctx.comm, &local_sim_output)?;
 
-        #[allow(clippy::cast_possible_truncation)]
-        let sim_time_ms = sim_start.elapsed().as_millis() as u64;
+    ctx.comm.barrier().map_err(|e| CliError::Internal {
+        message: format!("post-simulation barrier error: {e}"),
+    })?;
 
-        let mut local_sim_output = sim_writer.finalize(sim_time_ms);
-        local_sim_output.failed = write_failures;
-
-        // Merge per-rank simulation metadata using lightweight MPI collectives.
-        // For single-rank runs this is a no-op passthrough; for multi-rank runs
-        // it uses allreduce (counts, time) and allgatherv (partition paths).
-        let merged_sim_output = merge_simulation_metadata(&comm, &local_sim_output)?;
-
-        comm.barrier().map_err(|e| CliError::Internal {
-            message: format!("post-simulation barrier error: {e}"),
-        })?;
-
-        // Aggregate solver stats from per-scenario deltas for the summary display.
-        let sim_solver_agg = cobre_sddp::SolverStatsDelta::aggregate(
+    if !ctx.quiet && ctx.is_root {
+        let agg = cobre_sddp::SolverStatsDelta::aggregate(
             &sim_run_result
                 .solver_stats
                 .iter()
                 .map(|(_, delta)| delta.clone())
                 .collect::<Vec<_>>(),
         );
+        print_sim_summary(&ctx.stderr, n_scenarios, sim_time_ms, &agg);
+    }
 
-        // Print the simulation summary now — before I/O starts.
-        if !quiet && is_root {
-            crate::summary::print_simulation_summary(
-                &stderr,
-                &SimulationSummary {
-                    n_scenarios,
-                    completed: n_scenarios,
-                    failed: 0,
-                    total_time_ms: sim_time_ms,
-                    total_lp_solves: sim_solver_agg.lp_solves,
-                    total_first_try: sim_solver_agg.first_try_successes,
-                    total_retried: sim_solver_agg
-                        .lp_successes
-                        .saturating_sub(sim_solver_agg.first_try_successes),
-                    total_failed_solves: sim_solver_agg.lp_failures,
-                    total_solve_time_seconds: sim_solver_agg.solve_time_ms / 1000.0,
-                    total_basis_offered: sim_solver_agg.basis_offered,
-                    total_basis_rejections: sim_solver_agg.basis_rejections,
-                    total_simplex_iterations: sim_solver_agg.simplex_iterations,
-                },
-            );
-        }
-
-        if is_root {
-            write_simulation_outputs(&WriteSimulationArgs {
-                output_dir: &output_dir,
-                sim_output: &merged_sim_output,
-                sim_solver_stats: &sim_run_result.solver_stats,
-                quiet,
-                stderr: &stderr,
-            })?;
-        }
+    if ctx.is_root {
+        write_simulation_outputs(&WriteSimulationArgs {
+            output_dir: &ctx.output_dir,
+            sim_output: &merged_sim_output,
+            sim_solver_stats: &sim_run_result.solver_stats,
+            quiet: ctx.quiet,
+            stderr: &ctx.stderr,
+        })?;
     }
 
     Ok(())
+}
+
+/// Print the simulation summary from aggregated solver stats.
+fn print_sim_summary(
+    stderr: &Term,
+    n_scenarios: u32,
+    sim_time_ms: u64,
+    agg: &cobre_sddp::SolverStatsDelta,
+) {
+    crate::summary::print_simulation_summary(
+        stderr,
+        &SimulationSummary {
+            n_scenarios,
+            completed: n_scenarios,
+            failed: 0,
+            total_time_ms: sim_time_ms,
+            total_lp_solves: agg.lp_solves,
+            total_first_try: agg.first_try_successes,
+            total_retried: agg.lp_successes.saturating_sub(agg.first_try_successes),
+            total_failed_solves: agg.lp_failures,
+            total_solve_time_seconds: agg.solve_time_ms / 1000.0,
+            total_basis_offered: agg.basis_offered,
+            total_basis_rejections: agg.basis_rejections,
+            total_simplex_iterations: agg.simplex_iterations,
+        },
+    );
 }
 
 /// Merge per-rank simulation metadata using lightweight MPI collective operations.

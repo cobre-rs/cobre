@@ -444,6 +444,46 @@ pub struct StageIndexer {
     pub nonzero_state_indices: Vec<usize>,
 }
 
+/// Equipment counts for constructing a [`StageIndexer`].
+///
+/// Groups the entity counts that determine the LP column layout for a single stage.
+pub struct EquipmentCounts {
+    /// Number of hydro plants.
+    pub hydro_count: usize,
+    /// Maximum PAR model order across all hydros.
+    pub max_par_order: usize,
+    /// Number of thermal units.
+    pub n_thermals: usize,
+    /// Number of transmission lines.
+    pub n_lines: usize,
+    /// Number of buses.
+    pub n_buses: usize,
+    /// Number of demand blocks in the stage.
+    pub n_blks: usize,
+    /// Whether to include inflow penalty slack columns.
+    pub has_inflow_penalty: bool,
+    /// Maximum number of deficit segments across all buses.
+    pub max_deficit_segments: usize,
+}
+
+/// FPHA (Piecewise-linear Hydro Approximation) configuration.
+///
+/// Groups the per-hydro FPHA data needed for column layout computation.
+pub struct FphaConfig {
+    /// Indices of hydros using FPHA production models.
+    pub hydro_indices: Vec<usize>,
+    /// Number of FPHA planes for each hydro in `hydro_indices`.
+    ///
+    /// Must have the same length as `hydro_indices`.
+    pub planes_per_hydro: Vec<usize>,
+}
+
+/// Evaporation configuration for hydro plants.
+pub struct EvapConfig {
+    /// Indices of hydros with evaporation modeling enabled.
+    pub hydro_indices: Vec<usize>,
+}
+
 impl StageIndexer {
     /// Construct a [`StageIndexer`] from `hydro_count` (N) and `max_par_order` (L).
     ///
@@ -606,7 +646,12 @@ impl StageIndexer {
     /// // line_rev:  10..11  (1 line * 1 block)
     /// // deficit:   11..13  (2 buses * 1 block)
     /// // excess:    13..15  (2 buses * 1 block)
-    /// let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
+    /// let counts = cobre_sddp::EquipmentCounts {
+    ///     hydro_count: 1, max_par_order: 0, n_thermals: 2, n_lines: 1,
+    ///     n_buses: 2, n_blks: 1, has_inflow_penalty: false, max_deficit_segments: 1,
+    /// };
+    /// let fpha = cobre_sddp::FphaConfig { hydro_indices: vec![], planes_per_hydro: vec![] };
+    /// let idx = StageIndexer::with_equipment(&counts, &fpha);
     /// assert_eq!(idx.turbine,    4..5);
     /// assert_eq!(idx.spillage,   5..6);
     /// assert_eq!(idx.diversion,  6..7);
@@ -623,30 +668,13 @@ impl StageIndexer {
     /// assert_eq!(idx.n_buses, 2);
     /// ```
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_equipment(
-        hydro_count: usize,
-        max_par_order: usize,
-        n_thermals: usize,
-        n_lines: usize,
-        n_buses: usize,
-        n_blks: usize,
-        has_inflow_penalty: bool,
-        fpha_hydro_indices: Vec<usize>,
-        fpha_planes_per_hydro: &[usize],
-    ) -> Self {
+    pub fn with_equipment(counts: &EquipmentCounts, fpha: &FphaConfig) -> Self {
         Self::with_equipment_and_evaporation(
-            hydro_count,
-            max_par_order,
-            n_thermals,
-            n_lines,
-            n_buses,
-            n_blks,
-            has_inflow_penalty,
-            fpha_hydro_indices,
-            fpha_planes_per_hydro,
-            vec![],
-            1,
+            counts,
+            fpha,
+            &EvapConfig {
+                hydro_indices: vec![],
+            },
         )
     }
 
@@ -659,29 +687,30 @@ impl StageIndexer {
     ///
     /// # Arguments
     ///
-    /// - `evap_hydro_indices` — system-level hydro positions of hydros with
-    ///   linearized evaporation at this stage, in ascending order.
-    /// - `max_deficit_segments` — maximum number of deficit segments across all
-    ///   buses.  The deficit region spans `B * max_deficit_segments * K` columns.
-    ///   Pass `1` for backward compatibility when all buses have a single segment.
+    /// - `counts` — equipment counts grouped into [`EquipmentCounts`]
+    /// - `fpha` — FPHA configuration grouped into [`FphaConfig`]
+    /// - `evap` — evaporation configuration grouped into [`EvapConfig`]
     ///
-    /// When `evap_hydro_indices` is empty this produces the same result as
+    /// When `evap.hydro_indices` is empty this produces the same result as
     /// [`StageIndexer::with_equipment`].
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
     pub fn with_equipment_and_evaporation(
-        hydro_count: usize,
-        max_par_order: usize,
-        n_thermals: usize,
-        n_lines: usize,
-        n_buses: usize,
-        n_blks: usize,
-        has_inflow_penalty: bool,
-        fpha_hydro_indices: Vec<usize>,
-        fpha_planes_per_hydro: &[usize],
-        evap_hydro_indices: Vec<usize>,
-        max_deficit_segments: usize,
+        counts: &EquipmentCounts,
+        fpha: &FphaConfig,
+        evap: &EvapConfig,
     ) -> Self {
+        let hydro_count = counts.hydro_count;
+        let max_par_order = counts.max_par_order;
+        let n_thermals = counts.n_thermals;
+        let n_lines = counts.n_lines;
+        let n_buses = counts.n_buses;
+        let n_blks = counts.n_blks;
+        let has_inflow_penalty = counts.has_inflow_penalty;
+        let max_deficit_segments = counts.max_deficit_segments;
+        let fpha_hydro_indices = fpha.hydro_indices.clone();
+        let fpha_planes_per_hydro = &fpha.planes_per_hydro;
+        let evap_hydro_indices = evap.hydro_indices.clone();
+
         debug_assert_eq!(
             fpha_hydro_indices.len(),
             fpha_planes_per_hydro.len(),
@@ -941,7 +970,42 @@ const _: () = {
 mod tests {
     use cobre_solver::StageTemplate;
 
-    use super::{FphaRowRange, StageIndexer};
+    use super::{EquipmentCounts, EvapConfig, FphaConfig, FphaRowRange, StageIndexer};
+
+    /// Test helper: construct `EquipmentCounts` with `max_deficit_segments = 1`.
+    fn eq(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_thermals: usize,
+        n_lines: usize,
+        n_buses: usize,
+        n_blks: usize,
+        has_inflow_penalty: bool,
+    ) -> EquipmentCounts {
+        EquipmentCounts {
+            hydro_count,
+            max_par_order,
+            n_thermals,
+            n_lines,
+            n_buses,
+            n_blks,
+            has_inflow_penalty,
+            max_deficit_segments: 1,
+        }
+    }
+
+    /// Test helper: construct `FphaConfig`.
+    fn fpha(hydro_indices: Vec<usize>, planes_per_hydro: Vec<usize>) -> FphaConfig {
+        FphaConfig {
+            hydro_indices,
+            planes_per_hydro,
+        }
+    }
+
+    /// Test helper: construct `EvapConfig`.
+    fn evap(hydro_indices: Vec<usize>) -> EvapConfig {
+        EvapConfig { hydro_indices }
+    }
 
     // Worked example from spec SS5.5.3: N = 3, L = 2
 
@@ -1190,7 +1254,7 @@ mod tests {
     // excess:    [13,13+2*1)  = 13..15
     #[test]
     fn with_equipment_doctest_n1_l0_t2_l1_b2_k1() {
-        let idx = StageIndexer::with_equipment(1, 0, 2, 1, 2, 1, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(1, 0, 2, 1, 2, 1, false), &fpha(vec![], vec![]));
 
         // State ranges are identical to new(1, 0)
         assert_eq!(idx.storage, 0..1);
@@ -1231,7 +1295,7 @@ mod tests {
     // excess:    [43, 43+4*2)  = 43..51
     #[test]
     fn with_equipment_n2_l1_t3_l2_b4_k2() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(2, 1, 3, 2, 4, 2, false), &fpha(vec![], vec![]));
 
         // State ranges identical to new(2, 1)
         assert_eq!(idx.theta, 8);
@@ -1251,7 +1315,8 @@ mod tests {
     // with_equipment: no equipment (all counts zero), matches new() state layout
     #[test]
     fn with_equipment_all_counts_zero_matches_new() {
-        let with_eq = StageIndexer::with_equipment(3, 2, 0, 0, 0, 0, false, vec![], &[]);
+        let with_eq =
+            StageIndexer::with_equipment(&eq(3, 2, 0, 0, 0, 0, false), &fpha(vec![], vec![]));
         let base = StageIndexer::new(3, 2);
 
         assert_eq!(with_eq.storage, base.storage);
@@ -1273,7 +1338,7 @@ mod tests {
     // with_equipment: adjacency invariant — ranges must be contiguous and non-overlapping
     #[test]
     fn with_equipment_ranges_are_contiguous() {
-        let idx = StageIndexer::with_equipment(2, 1, 3, 2, 4, 2, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(2, 1, 3, 2, 4, 2, false), &fpha(vec![], vec![]));
 
         // turbine immediately follows theta
         assert_eq!(idx.turbine.start, idx.theta + 1);
@@ -1291,7 +1356,8 @@ mod tests {
     #[test]
     fn with_equipment_column_index_formulas() {
         let n_blks = 3_usize;
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, n_blks, false, vec![], &[]);
+        let idx =
+            StageIndexer::with_equipment(&eq(2, 1, 1, 1, 1, n_blks, false), &fpha(vec![], vec![]));
 
         // turbine[h=0, b=0] = turbine.start (no offset for h=0, b=0)
         assert_eq!(idx.turbine.start, idx.turbine.start);
@@ -1319,7 +1385,7 @@ mod tests {
     // inflow_slack: [20, 22)  <- excess_end..excess_end+N
     #[test]
     fn with_equipment_inflow_penalty_appends_slack() {
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(2, 1, 1, 1, 1, 1, true), &fpha(vec![], vec![]));
 
         assert!(idx.has_inflow_penalty, "has_inflow_penalty must be true");
         // inflow_slack must start exactly where excess ends
@@ -1340,7 +1406,8 @@ mod tests {
             "inflow_slack_rows must remain empty"
         );
         // without penalty the slack range is empty
-        let no_penalty = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
+        let no_penalty =
+            StageIndexer::with_equipment(&eq(2, 1, 1, 1, 1, 1, false), &fpha(vec![], vec![]));
         assert!(!no_penalty.has_inflow_penalty);
         assert!(no_penalty.inflow_slack.is_empty());
     }
@@ -1359,7 +1426,7 @@ mod tests {
     // generation: empty (no FPHA hydros)
     #[test]
     fn fpha_no_hydros_generation_is_empty() {
-        let idx = StageIndexer::with_equipment(4, 0, 0, 0, 1, 1, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(4, 0, 0, 0, 1, 1, false), &fpha(vec![], vec![]));
 
         assert!(
             idx.generation.is_empty(),
@@ -1393,7 +1460,8 @@ mod tests {
     // fpha_rows[0].planes_per_block = 3
     #[test]
     fn fpha_one_hydro_one_block_three_planes() {
-        let idx = StageIndexer::with_equipment(2, 0, 1, 0, 1, 1, false, vec![0], &[3]);
+        let idx =
+            StageIndexer::with_equipment(&eq(2, 0, 1, 0, 1, 1, false), &fpha(vec![0], vec![3]));
 
         // AC-1: generation spans 1 column (1 FPHA hydro * 1 block)
         assert_eq!(idx.generation.len(), 1, "generation must span 1 column");
@@ -1423,7 +1491,10 @@ mod tests {
     // generation: [41, 45) (2 FPHA hydros * 2 blocks = 4 columns)
     #[test]
     fn fpha_two_hydros_two_blocks_different_planes() {
-        let idx = StageIndexer::with_equipment(4, 0, 0, 0, 1, 2, false, vec![1, 3], &[5, 4]);
+        let idx = StageIndexer::with_equipment(
+            &eq(4, 0, 0, 0, 1, 2, false),
+            &fpha(vec![1, 3], vec![5, 4]),
+        );
 
         // AC-3: generation spans 4 columns (2 FPHA hydros * 2 blocks)
         assert_eq!(idx.generation.len(), 4, "generation must span 4 columns");
@@ -1457,14 +1528,16 @@ mod tests {
     #[test]
     fn fpha_generation_contiguous_with_prior_region() {
         // No penalty case: generation.start == excess.end
-        let no_penalty = StageIndexer::with_equipment(2, 0, 0, 0, 1, 1, false, vec![0], &[2]);
+        let no_penalty =
+            StageIndexer::with_equipment(&eq(2, 0, 0, 0, 1, 1, false), &fpha(vec![0], vec![2]));
         assert_eq!(
             no_penalty.generation.start, no_penalty.excess.end,
             "generation.start must equal excess.end when no penalty"
         );
 
         // With penalty case: generation.start == inflow_slack.end
-        let with_penalty = StageIndexer::with_equipment(2, 0, 0, 0, 1, 1, true, vec![0], &[2]);
+        let with_penalty =
+            StageIndexer::with_equipment(&eq(2, 0, 0, 0, 1, 1, true), &fpha(vec![0], vec![2]));
         assert_eq!(
             with_penalty.generation.start, with_penalty.inflow_slack.end,
             "generation.start must equal inflow_slack.end when penalty active"
@@ -1474,7 +1547,10 @@ mod tests {
     // FPHA rows are contiguous with load_balance (start at load_balance.end).
     #[test]
     fn fpha_rows_contiguous_with_load_balance() {
-        let idx = StageIndexer::with_equipment(3, 1, 2, 0, 2, 3, false, vec![0, 2], &[4, 6]);
+        let idx = StageIndexer::with_equipment(
+            &eq(3, 1, 2, 0, 2, 3, false),
+            &fpha(vec![0, 2], vec![4, 6]),
+        );
 
         // First FPHA hydro starts at load_balance.end
         assert_eq!(
@@ -1497,7 +1573,7 @@ mod tests {
     // AC (ticket-010): 0 evaporation hydros → evap_indices is empty.
     #[test]
     fn evap_no_hydros_indices_empty() {
-        let idx = StageIndexer::with_equipment(3, 0, 1, 0, 1, 1, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(3, 0, 1, 0, 1, 1, false), &fpha(vec![], vec![]));
 
         assert_eq!(idx.n_evap_hydros, 0);
         assert!(idx.evap_hydro_indices.is_empty());
@@ -1527,17 +1603,9 @@ mod tests {
     #[test]
     fn evap_one_hydro_column_row_positions() {
         let idx = StageIndexer::with_equipment_and_evaporation(
-            2,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &eq(2, 0, 0, 0, 1, 1, false),
+            &fpha(vec![], vec![]),
+            &evap(vec![0]),
         );
 
         assert_eq!(idx.n_evap_hydros, 1);
@@ -1580,17 +1648,9 @@ mod tests {
     #[test]
     fn evap_two_hydros_with_fpha_contiguous() {
         let idx = StageIndexer::with_equipment_and_evaporation(
-            4,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![0],
-            &[3],
-            vec![1, 2],
-            1,
+            &eq(4, 0, 0, 0, 1, 1, false),
+            &fpha(vec![0], vec![3]),
+            &evap(vec![1, 2]),
         );
 
         assert_eq!(idx.n_evap_hydros, 2);
@@ -1644,17 +1704,9 @@ mod tests {
     #[test]
     fn withdrawal_slack_with_equipment_and_evaporation_n3_evap1() {
         let idx = StageIndexer::with_equipment_and_evaporation(
-            3,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &eq(3, 0, 0, 0, 1, 1, false),
+            &fpha(vec![], vec![]),
+            &evap(vec![0]),
         );
 
         assert!(idx.has_withdrawal);
@@ -1676,17 +1728,9 @@ mod tests {
     #[test]
     fn withdrawal_slack_zero_hydros_is_empty() {
         let idx = StageIndexer::with_equipment_and_evaporation(
-            0,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![],
-            1,
+            &eq(0, 0, 0, 0, 1, 1, false),
+            &fpha(vec![], vec![]),
+            &evap(vec![]),
         );
 
         assert!(!idx.has_withdrawal);
@@ -1706,17 +1750,18 @@ mod tests {
     fn withdrawal_slack_length_equals_hydro_count() {
         for n in [1_usize, 5] {
             let idx = StageIndexer::with_equipment_and_evaporation(
-                n,
-                0,
-                0,
-                0,
-                1,
-                1,
-                false,
-                vec![],
-                &[],
-                vec![],
-                1,
+                &EquipmentCounts {
+                    hydro_count: n,
+                    max_par_order: 0,
+                    n_thermals: 0,
+                    n_lines: 0,
+                    n_buses: 1,
+                    n_blks: 1,
+                    has_inflow_penalty: false,
+                    max_deficit_segments: 1,
+                },
+                &fpha(vec![], vec![]),
+                &evap(vec![]),
             );
 
             assert!(idx.has_withdrawal, "has_withdrawal must be true for n={n}");
@@ -1736,17 +1781,9 @@ mod tests {
     #[test]
     fn withdrawal_slack_immediately_after_evap_columns() {
         let idx = StageIndexer::with_equipment_and_evaporation(
-            2,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &eq(2, 0, 0, 0, 1, 1, false),
+            &fpha(vec![], vec![]),
+            &evap(vec![0]),
         );
 
         // evap_col_end = evap_col_start + n_evap_hydros * 3
@@ -1814,7 +1851,8 @@ mod tests {
         // turbine:[9,11), spillage:[11,13), diversion:[13,15), thermal:[15,16),
         // line_fwd:[16,17), line_rev:[17,18), deficit:[18,19), excess:[19,20)
         // generation:[20,21) (1 FPHA * 1 block, after excess.end since no penalty)
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![0], &[3]);
+        let idx =
+            StageIndexer::with_equipment(&eq(2, 1, 1, 1, 1, 1, false), &fpha(vec![0], vec![3]));
 
         assert_eq!(idx.turbine.start, idx.theta + 1);
         assert_eq!(idx.spillage.start, idx.turbine.end);
@@ -1834,7 +1872,7 @@ mod tests {
     // Diversion range: N=3, K=2 → diversion.len() = 6, contiguous with spillage.
     #[test]
     fn test_diversion_range_n3_l0_k2() {
-        let idx = StageIndexer::with_equipment(3, 0, 0, 0, 1, 2, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(3, 0, 0, 0, 1, 2, false), &fpha(vec![], vec![]));
 
         assert_eq!(idx.diversion.start, idx.spillage.end);
         assert_eq!(idx.diversion.len(), 3 * 2);
@@ -1844,7 +1882,7 @@ mod tests {
     // Diversion range: N=0 → diversion is empty.
     #[test]
     fn test_diversion_zero_hydros() {
-        let idx = StageIndexer::with_equipment(0, 0, 1, 0, 1, 1, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(0, 0, 1, 0, 1, 1, false), &fpha(vec![], vec![]));
 
         assert!(idx.diversion.is_empty());
     }
@@ -1882,7 +1920,7 @@ mod tests {
     // z_inflow has correct length and rows for with_equipment constructor.
     #[test]
     fn z_inflow_range_with_equipment() {
-        let idx = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
+        let idx = StageIndexer::with_equipment(&eq(2, 1, 1, 1, 1, 1, false), &fpha(vec![], vec![]));
         // N*(1+L) = 2*(1+1) = 4
         assert_eq!(idx.z_inflow, 4..6);
         assert_eq!(idx.z_inflow.len(), 2);

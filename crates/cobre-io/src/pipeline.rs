@@ -12,6 +12,7 @@ use cobre_core::{SystemBuilder, scenario::CorrelationModel};
 use crate::{
     LoadError,
     resolution::{
+        BoundsEntitySlices, BoundsOverrides, PenaltiesEntitySlices, PenaltiesOverrides,
         resolve_bounds, resolve_exchange_factors, resolve_generic_constraint_bounds,
         resolve_load_factors, resolve_ncs_bounds, resolve_ncs_factors, resolve_penalties,
     },
@@ -86,31 +87,39 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .collect();
 
     let penalties = resolve_penalties(
-        &data.hydros,
-        &data.buses,
-        &data.lines,
-        &data.non_controllable_sources,
+        &PenaltiesEntitySlices {
+            hydros: &data.hydros,
+            buses: &data.buses,
+            lines: &data.lines,
+            ncs_sources: &data.non_controllable_sources,
+        },
         n_stages,
         &stage_index,
-        &data.penalty_overrides_hydro,
-        &data.penalty_overrides_bus,
-        &data.penalty_overrides_line,
-        &data.penalty_overrides_ncs,
+        &PenaltiesOverrides {
+            hydro: &data.penalty_overrides_hydro,
+            bus: &data.penalty_overrides_bus,
+            line: &data.penalty_overrides_line,
+            ncs: &data.penalty_overrides_ncs,
+        },
     );
 
     let bounds = resolve_bounds(
-        &data.hydros,
-        &data.thermals,
-        &data.lines,
-        &data.pumping_stations,
-        &data.energy_contracts,
+        &BoundsEntitySlices {
+            hydros: &data.hydros,
+            thermals: &data.thermals,
+            lines: &data.lines,
+            pumping_stations: &data.pumping_stations,
+            contracts: &data.energy_contracts,
+        },
         n_stages,
         &stage_index,
-        &data.hydro_bounds,
-        &data.thermal_bounds,
-        &data.line_bounds,
-        &data.pumping_bounds,
-        &data.contract_bounds,
+        &BoundsOverrides {
+            hydro: &data.hydro_bounds,
+            thermal: &data.thermal_bounds,
+            line: &data.line_bounds,
+            pumping: &data.pumping_bounds,
+            contract: &data.contract_bounds,
+        },
     );
 
     let resolved_generic_bounds = resolve_generic_constraint_bounds(

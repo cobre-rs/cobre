@@ -373,6 +373,34 @@ pub struct ResolvedPenalties {
     ncs: Vec<NcsStagePenalties>,
 }
 
+/// Entity counts for constructing a [`ResolvedPenalties`] table.
+#[derive(Debug, Clone)]
+pub struct PenaltiesCountsSpec {
+    /// Number of hydro plants.
+    pub n_hydros: usize,
+    /// Number of buses.
+    pub n_buses: usize,
+    /// Number of transmission lines.
+    pub n_lines: usize,
+    /// Number of non-controllable sources.
+    pub n_ncs: usize,
+    /// Number of time stages.
+    pub n_stages: usize,
+}
+
+/// Default per-stage penalty values for each entity type.
+#[derive(Debug, Clone)]
+pub struct PenaltiesDefaults {
+    /// Default hydro penalties for all (hydro, stage) cells.
+    pub hydro: HydroStagePenalties,
+    /// Default bus penalties for all (bus, stage) cells.
+    pub bus: BusStagePenalties,
+    /// Default line penalties for all (line, stage) cells.
+    pub line: LineStagePenalties,
+    /// Default NCS penalties for all (ncs, stage) cells.
+    pub ncs: NcsStagePenalties,
+}
+
 impl ResolvedPenalties {
     /// Return an empty penalty table with zero entities and zero stages.
     ///
@@ -415,24 +443,13 @@ impl ResolvedPenalties {
     /// * `line_default` — initial value for all (line, stage) cells
     /// * `ncs_default` — initial value for all (ncs, stage) cells
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        n_hydros: usize,
-        n_buses: usize,
-        n_lines: usize,
-        n_ncs: usize,
-        n_stages: usize,
-        hydro_default: HydroStagePenalties,
-        bus_default: BusStagePenalties,
-        line_default: LineStagePenalties,
-        ncs_default: NcsStagePenalties,
-    ) -> Self {
+    pub fn new(counts: &PenaltiesCountsSpec, defaults: &PenaltiesDefaults) -> Self {
         Self {
-            n_stages,
-            hydro: vec![hydro_default; n_hydros * n_stages],
-            bus: vec![bus_default; n_buses * n_stages],
-            line: vec![line_default; n_lines * n_stages],
-            ncs: vec![ncs_default; n_ncs * n_stages],
+            n_stages: counts.n_stages,
+            hydro: vec![defaults.hydro; counts.n_hydros * counts.n_stages],
+            bus: vec![defaults.bus; counts.n_buses * counts.n_stages],
+            line: vec![defaults.line; counts.n_lines * counts.n_stages],
+            ncs: vec![defaults.ncs; counts.n_ncs * counts.n_stages],
         }
     }
 
@@ -571,6 +588,38 @@ pub struct ResolvedBounds {
     contract: Vec<ContractStageBounds>,
 }
 
+/// Entity counts for constructing a [`ResolvedBounds`] table.
+#[derive(Debug, Clone)]
+pub struct BoundsCountsSpec {
+    /// Number of hydro plants.
+    pub n_hydros: usize,
+    /// Number of thermal units.
+    pub n_thermals: usize,
+    /// Number of transmission lines.
+    pub n_lines: usize,
+    /// Number of pumping stations.
+    pub n_pumping: usize,
+    /// Number of energy contracts.
+    pub n_contracts: usize,
+    /// Number of time stages.
+    pub n_stages: usize,
+}
+
+/// Default per-stage bound values for each entity type.
+#[derive(Debug, Clone)]
+pub struct BoundsDefaults {
+    /// Default hydro bounds for all (hydro, stage) cells.
+    pub hydro: HydroStageBounds,
+    /// Default thermal bounds for all (thermal, stage) cells.
+    pub thermal: ThermalStageBounds,
+    /// Default line bounds for all (line, stage) cells.
+    pub line: LineStageBounds,
+    /// Default pumping bounds for all (pumping, stage) cells.
+    pub pumping: PumpingStageBounds,
+    /// Default contract bounds for all (contract, stage) cells.
+    pub contract: ContractStageBounds,
+}
+
 impl ResolvedBounds {
     /// Return an empty bounds table with zero entities and zero stages.
     ///
@@ -600,43 +649,21 @@ impl ResolvedBounds {
 
     /// Allocate a new resolved-bounds table filled with the given defaults.
     ///
-    /// `n_stages` must be `> 0`. Entity counts may be `0`.
+    /// `counts.n_stages` must be `> 0`. Entity counts may be `0`.
     ///
     /// # Arguments
     ///
-    /// * `n_hydros` — number of hydro plants
-    /// * `n_thermals` — number of thermal units
-    /// * `n_lines` — number of transmission lines
-    /// * `n_pumping` — number of pumping stations
-    /// * `n_contracts` — number of energy contracts
-    /// * `n_stages` — number of study stages
-    /// * `hydro_default` — initial value for all (hydro, stage) cells
-    /// * `thermal_default` — initial value for all (thermal, stage) cells
-    /// * `line_default` — initial value for all (line, stage) cells
-    /// * `pumping_default` — initial value for all (pumping, stage) cells
-    /// * `contract_default` — initial value for all (contract, stage) cells
+    /// * `counts` — entity counts grouped into [`BoundsCountsSpec`]
+    /// * `defaults` — default per-stage bound values grouped into [`BoundsDefaults`]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        n_hydros: usize,
-        n_thermals: usize,
-        n_lines: usize,
-        n_pumping: usize,
-        n_contracts: usize,
-        n_stages: usize,
-        hydro_default: HydroStageBounds,
-        thermal_default: ThermalStageBounds,
-        line_default: LineStageBounds,
-        pumping_default: PumpingStageBounds,
-        contract_default: ContractStageBounds,
-    ) -> Self {
+    pub fn new(counts: &BoundsCountsSpec, defaults: &BoundsDefaults) -> Self {
         Self {
-            n_stages,
-            hydro: vec![hydro_default; n_hydros * n_stages],
-            thermal: vec![thermal_default; n_thermals * n_stages],
-            line: vec![line_default; n_lines * n_stages],
-            pumping: vec![pumping_default; n_pumping * n_stages],
-            contract: vec![contract_default; n_contracts * n_stages],
+            n_stages: counts.n_stages,
+            hydro: vec![defaults.hydro; counts.n_hydros * counts.n_stages],
+            thermal: vec![defaults.thermal; counts.n_thermals * counts.n_stages],
+            line: vec![defaults.line; counts.n_lines * counts.n_stages],
+            pumping: vec![defaults.pumping; counts.n_pumping * counts.n_stages],
+            contract: vec![defaults.contract; counts.n_contracts * counts.n_stages],
         }
     }
 
@@ -1506,7 +1533,21 @@ mod tests {
             curtailment_cost: 50.0,
         };
 
-        let table = ResolvedPenalties::new(2, 1, 1, 1, 3, hp, bp, lp, np);
+        let table = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 2,
+                n_buses: 1,
+                n_lines: 1,
+                n_ncs: 1,
+                n_stages: 3,
+            },
+            &PenaltiesDefaults {
+                hydro: hp,
+                bus: bp,
+                line: lp,
+                ncs: np,
+            },
+        );
 
         for hydro_idx in 0..2 {
             for stage_idx in 0..3 {
@@ -1530,7 +1571,21 @@ mod tests {
             curtailment_cost: 5.0,
         };
 
-        let table = ResolvedPenalties::new(3, 0, 0, 0, 5, hp, bp, lp, np);
+        let table = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 3,
+                n_buses: 0,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: 5,
+            },
+            &PenaltiesDefaults {
+                hydro: hp,
+                bus: bp,
+                line: lp,
+                ncs: np,
+            },
+        );
         assert_eq!(table.n_stages(), 5);
 
         let p = table.hydro_penalties(1, 3);
@@ -1547,7 +1602,21 @@ mod tests {
             curtailment_cost: 5.0,
         };
 
-        let mut table = ResolvedPenalties::new(2, 2, 1, 1, 3, hp, bp, lp, np);
+        let mut table = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 2,
+                n_buses: 2,
+                n_lines: 1,
+                n_ncs: 1,
+                n_stages: 3,
+            },
+            &PenaltiesDefaults {
+                hydro: hp,
+                bus: bp,
+                line: lp,
+                ncs: np,
+            },
+        );
 
         table.hydro_penalties_mut(0, 1).spillage_cost = 99.0;
 
@@ -1581,7 +1650,23 @@ mod tests {
             price_per_mwh: 80.0,
         };
 
-        let table = ResolvedBounds::new(1, 2, 1, 1, 1, 3, hb, tb, lb, pb, cb);
+        let table = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 2,
+                n_lines: 1,
+                n_pumping: 1,
+                n_contracts: 1,
+                n_stages: 3,
+            },
+            &BoundsDefaults {
+                hydro: hb,
+                thermal: tb,
+                line: lb,
+                pumping: pb,
+                contract: cb,
+            },
+        );
 
         let b = table.hydro_bounds(0, 2);
         assert!((b.min_storage_hm3 - 10.0).abs() < f64::EPSILON);
@@ -1620,7 +1705,23 @@ mod tests {
             price_per_mwh: 60.0,
         };
 
-        let mut table = ResolvedBounds::new(2, 1, 1, 1, 1, 3, hb, tb, lb, pb, cb);
+        let mut table = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 2,
+                n_thermals: 1,
+                n_lines: 1,
+                n_pumping: 1,
+                n_contracts: 1,
+                n_stages: 3,
+            },
+            &BoundsDefaults {
+                hydro: hb,
+                thermal: tb,
+                line: lb,
+                pumping: pb,
+                contract: cb,
+            },
+        );
 
         let cell = table.hydro_bounds_mut(1, 0);
         cell.min_storage_hm3 = 25.0;
@@ -1667,7 +1768,21 @@ mod tests {
             curtailment_cost: 50.0,
         };
 
-        let original = ResolvedPenalties::new(2, 1, 1, 1, 3, hp, bp, lp, np);
+        let original = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 2,
+                n_buses: 1,
+                n_lines: 1,
+                n_ncs: 1,
+                n_stages: 3,
+            },
+            &PenaltiesDefaults {
+                hydro: hp,
+                bus: bp,
+                line: lp,
+                ncs: np,
+            },
+        );
         let json = serde_json::to_string(&original).expect("serialize");
         let restored: ResolvedPenalties = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(original, restored);
@@ -1695,7 +1810,23 @@ mod tests {
             price_per_mwh: 80.0,
         };
 
-        let original = ResolvedBounds::new(1, 1, 1, 1, 1, 3, hb, tb, lb, pb, cb);
+        let original = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 1,
+                n_pumping: 1,
+                n_contracts: 1,
+                n_stages: 3,
+            },
+            &BoundsDefaults {
+                hydro: hb,
+                thermal: tb,
+                line: lb,
+                pumping: pb,
+                contract: cb,
+            },
+        );
         let json = serde_json::to_string(&original).expect("serialize");
         let restored: ResolvedBounds = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(original, restored);

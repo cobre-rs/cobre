@@ -983,8 +983,8 @@ mod tests {
         HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
         resolved::{
-            ContractStageBounds, HydroStageBounds, LineStageBounds, PumpingStageBounds,
-            ResolvedBounds, ThermalStageBounds,
+            BoundsCountsSpec, BoundsDefaults, ContractStageBounds, HydroStageBounds,
+            LineStageBounds, PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
         },
     };
 
@@ -1129,17 +1129,21 @@ mod tests {
             price_per_mwh: 0.0,
         };
         let bounds = ResolvedBounds::new(
-            2,
-            1,
-            0,
-            0,
-            0,
-            1,
-            hydro_bounds_default,
-            thermal_bounds_default,
-            line_default,
-            pumping_default,
-            contract_default,
+            &BoundsCountsSpec {
+                n_hydros: 2,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 1,
+            },
+            &BoundsDefaults {
+                hydro: hydro_bounds_default,
+                thermal: thermal_bounds_default,
+                line: line_default,
+                pumping: pumping_default,
+                contract: contract_default,
+            },
         );
 
         SystemBuilder::new()
@@ -1190,17 +1194,21 @@ mod tests {
             price_per_mwh: 0.0,
         };
         let bounds = ResolvedBounds::new(
-            1,
-            0,
-            0,
-            0,
-            0,
-            2,
-            hydro_bounds_default,
-            thermal_default,
-            line_default,
-            pumping_default,
-            contract_default,
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 0,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: hydro_bounds_default,
+                thermal: thermal_default,
+                line: line_default,
+                pumping: pumping_default,
+                contract: contract_default,
+            },
         );
 
         SystemBuilder::new()

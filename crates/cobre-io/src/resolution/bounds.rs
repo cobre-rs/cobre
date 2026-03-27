@@ -25,6 +25,34 @@ use crate::constraints::{
     ContractBoundsRow, HydroBoundsRow, LineBoundsRow, PumpingBoundsRow, ThermalBoundsRow,
 };
 
+/// Entity slices needed for bounds resolution.
+pub struct BoundsEntitySlices<'a> {
+    /// Hydro plants sorted by ID.
+    pub hydros: &'a [Hydro],
+    /// Thermal units sorted by ID.
+    pub thermals: &'a [Thermal],
+    /// Transmission lines sorted by ID.
+    pub lines: &'a [Line],
+    /// Pumping stations sorted by ID.
+    pub pumping_stations: &'a [PumpingStation],
+    /// Energy contracts sorted by ID.
+    pub contracts: &'a [EnergyContract],
+}
+
+/// Per-entity-type override rows for bounds resolution.
+pub struct BoundsOverrides<'a> {
+    /// Stage-varying overrides for hydro bounds.
+    pub hydro: &'a [HydroBoundsRow],
+    /// Stage-varying overrides for thermal bounds.
+    pub thermal: &'a [ThermalBoundsRow],
+    /// Stage-varying overrides for line bounds.
+    pub line: &'a [LineBoundsRow],
+    /// Stage-varying overrides for pumping bounds.
+    pub pumping: &'a [PumpingBoundsRow],
+    /// Stage-varying overrides for contract bounds.
+    pub contract: &'a [ContractBoundsRow],
+}
+
 /// Pre-compute the full bound table from entity base values and stage-varying overrides.
 ///
 /// Entity slices must already be sorted by ID (declaration-order invariance). This
@@ -36,18 +64,10 @@ use crate::constraints::{
 ///
 /// # Arguments
 ///
-/// * `hydros` — hydro plants sorted by ID
-/// * `thermals` — thermal units sorted by ID
-/// * `lines` — transmission lines sorted by ID
-/// * `pumping_stations` — pumping stations sorted by ID
-/// * `contracts` — energy contracts sorted by ID
+/// * `entities` — entity slices grouped into [`BoundsEntitySlices`]
 /// * `n_stages` — total number of study stages
 /// * `stage_index` — mapping from domain-level `stage_id` to positional 0-based index
-/// * `hydro_overrides` — stage-varying overrides from `constraints/hydro_bounds.parquet`
-/// * `thermal_overrides` — stage-varying overrides from `constraints/thermal_bounds.parquet`
-/// * `line_overrides` — stage-varying overrides from `constraints/line_bounds.parquet`
-/// * `pumping_overrides` — stage-varying overrides from `constraints/pumping_bounds.parquet`
-/// * `contract_overrides` — stage-varying overrides from `constraints/contract_bounds.parquet`
+/// * `overrides` — per-entity-type override rows grouped into [`BoundsOverrides`]
 ///
 /// # Examples
 ///
@@ -58,7 +78,7 @@ use crate::constraints::{
 ///     Line, PumpingStation, Thermal, ThermalCostSegment,
 /// };
 /// use cobre_io::constraints::HydroBoundsRow;
-/// use cobre_io::resolution::resolve_bounds;
+/// use cobre_io::resolution::{resolve_bounds, BoundsEntitySlices, BoundsOverrides};
 ///
 /// let penalties = HydroPenalties {
 ///     spillage_cost: 0.01,
@@ -119,8 +139,22 @@ use crate::constraints::{
 /// let stage_index: std::collections::HashMap<i32, usize> =
 ///     [(0, 0), (1, 1), (2, 2)].into_iter().collect();
 /// let result = resolve_bounds(
-///     &[hydro], &[], &[], &[], &[], 3, &stage_index,
-///     &[override_row], &[], &[], &[], &[],
+///     &BoundsEntitySlices {
+///         hydros: &[hydro],
+///         thermals: &[],
+///         lines: &[],
+///         pumping_stations: &[],
+///         contracts: &[],
+///     },
+///     3,
+///     &stage_index,
+///     &BoundsOverrides {
+///         hydro: &[override_row],
+///         thermal: &[],
+///         line: &[],
+///         pumping: &[],
+///         contract: &[],
+///     },
 /// );
 ///
 /// // Stage 0: base value.
@@ -135,25 +169,24 @@ use crate::constraints::{
 /// assert!((result.hydro_bounds(0, 2).max_storage_hm3 - 200.0).abs() < f64::EPSILON);
 /// ```
 #[must_use]
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::implicit_hasher
-)]
+#[allow(clippy::too_many_lines, clippy::implicit_hasher)]
 pub fn resolve_bounds(
-    hydros: &[Hydro],
-    thermals: &[Thermal],
-    lines: &[Line],
-    pumping_stations: &[PumpingStation],
-    contracts: &[EnergyContract],
+    entities: &BoundsEntitySlices<'_>,
     n_stages: usize,
     stage_index: &HashMap<i32, usize>,
-    hydro_overrides: &[HydroBoundsRow],
-    thermal_overrides: &[ThermalBoundsRow],
-    line_overrides: &[LineBoundsRow],
-    pumping_overrides: &[PumpingBoundsRow],
-    contract_overrides: &[ContractBoundsRow],
+    overrides: &BoundsOverrides<'_>,
 ) -> ResolvedBounds {
+    let hydros = entities.hydros;
+    let thermals = entities.thermals;
+    let lines = entities.lines;
+    let pumping_stations = entities.pumping_stations;
+    let contracts = entities.contracts;
+    let hydro_overrides = overrides.hydro;
+    let thermal_overrides = overrides.thermal;
+    let line_overrides = overrides.line;
+    let pumping_overrides = overrides.pumping;
+    let contract_overrides = overrides.contract;
+
     let hydro_index: HashMap<EntityId, usize> = hydros
         .iter()
         .enumerate()
@@ -237,17 +270,21 @@ pub fn resolve_bounds(
     let alloc_stages = if n_stages == 0 { 1 } else { n_stages };
 
     let mut table = ResolvedBounds::new(
-        hydros.len(),
-        thermals.len(),
-        lines.len(),
-        pumping_stations.len(),
-        contracts.len(),
-        alloc_stages,
-        hydro_default,
-        thermal_default,
-        line_default,
-        pumping_default,
-        contract_default,
+        &cobre_core::BoundsCountsSpec {
+            n_hydros: hydros.len(),
+            n_thermals: thermals.len(),
+            n_lines: lines.len(),
+            n_pumping: pumping_stations.len(),
+            n_contracts: contracts.len(),
+            n_stages: alloc_stages,
+        },
+        &cobre_core::BoundsDefaults {
+            hydro: hydro_default,
+            thermal: thermal_default,
+            line: line_default,
+            pumping: pumping_default,
+            contract: contract_default,
+        },
     );
 
     if n_stages == 0 {
@@ -513,18 +550,22 @@ mod tests {
         contract_overrides: &[ContractBoundsRow],
     ) -> ResolvedBounds {
         super::resolve_bounds(
-            hydros,
-            thermals,
-            lines,
-            pumping_stations,
-            contracts,
+            &super::BoundsEntitySlices {
+                hydros,
+                thermals,
+                lines,
+                pumping_stations,
+                contracts,
+            },
             n_stages,
             &si(n_stages),
-            hydro_overrides,
-            thermal_overrides,
-            line_overrides,
-            pumping_overrides,
-            contract_overrides,
+            &super::BoundsOverrides {
+                hydro: hydro_overrides,
+                thermal: thermal_overrides,
+                line: line_overrides,
+                pumping: pumping_overrides,
+                contract: contract_overrides,
+            },
         )
     }
 

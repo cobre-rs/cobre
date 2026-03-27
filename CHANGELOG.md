@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-26
+
+### Fixed
+
+- **Cut selection phantom deactivation** -- `select_for_stage` now receives
+  the pool's `active` slice and skips already-inactive slots. Previously,
+  unpopulated slots below the high-water mark matched the deactivation filter,
+  inflating `cuts_deactivated` counts in the convergence output. The actual cut
+  pool was unaffected (the `deactivate` guard prevented double-decrements), but
+  the convergence record's `cuts_active` field systematically underestimated the
+  true count.
+
+### Changed
+
+- **Book documentation audit** -- Version references updated to v0.2.0. Four
+  undocumented `config.json` sections added to the guide (`modeling`,
+  `cut_selection`, `estimation`, `checkpointing`). `simulation` stopping rule
+  documented. CVaR `risk_measure` field documented in stages.json coverage.
+  Incorrect "only supported model" claim corrected. Expanded case directory
+  layout documented for production cases. Test and subcommand counts updated.
+- **cobre-bridge documentation** -- Replaced the "NEWAVE Migration" page with
+  a comprehensive reference for the `cobre-bridge` conversion package,
+  documenting CLI, Python API, entity mapping, output structure, and bounds
+  comparison. Removed explicit references to external software names from the
+  introduction and guide pages.
+
 ## [0.2.0] - 2026-03-26
 
 ### Added

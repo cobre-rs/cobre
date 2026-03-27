@@ -50,7 +50,6 @@ when to stop, whether to follow training with a simulation pass, and more.
 
 ```json
 {
-  "version": "1.0.0",
   "training": {
     "forward_passes": 1,
     "stopping_rules": [
@@ -66,8 +65,6 @@ when to stop, whether to follow training with a simulation pass, and more.
   }
 }
 ```
-
-`version` is an informational string; it does not affect behavior.
 
 The `training` section is mandatory. `forward_passes: 1` means each training
 iteration draws one scenario trajectory. The `stopping_rules` array must contain
@@ -234,6 +231,18 @@ power (MW) to energy (MWh) in the LP objective.
 `num_scenarios: 10` means 10 scenario trajectories are sampled at each stage during
 training forward passes. A small number like 10 is sufficient for a tutorial; real
 studies typically use 50 or more.
+
+Each stage can optionally include a `risk_measure` field. When omitted (as in
+the 1dtoy example), it defaults to `"expectation"` (risk-neutral expected value).
+To use CVaR (Conditional Value at Risk), specify an object:
+
+```json
+"risk_measure": { "cvar": { "alpha": 0.50, "lambda": 0.25 } }
+```
+
+`alpha` is the CVaR confidence level (0, 1] and `lambda` is the weight on the
+CVaR component in the convex combination `(1 - lambda) * E[Z] + lambda * CVaR_alpha[Z]`.
+Setting `lambda: 0` or `alpha: 1` reduces to expectation.
 
 ---
 
@@ -494,6 +503,47 @@ Expected columns:
 The 1dtoy file has 4 rows, one for each stage, for the single bus `SIN`
 (bus_id = 0). The load mean and standard deviation determine how much demand
 the system must serve in each scenario and how uncertain that demand is.
+
+---
+
+## Additional Files in Production Cases
+
+The 1dtoy example uses 10 input files. Larger cases may include additional files
+that are not needed for this minimal example:
+
+```
+my_real_case/
+  config.json
+  initial_conditions.json
+  penalties.json
+  stages.json
+  system/
+    buses.json
+    hydros.json
+    lines.json
+    thermals.json
+    non_controllable_sources.json      NCS plant definitions (wind, solar)
+    hydro_production_models.json       Per-stage productivity overrides
+  scenarios/
+    inflow_seasonal_stats.parquet      Inflow PAR(p) statistics
+    inflow_ar_coefficients.parquet     Pre-computed AR coefficients (optional)
+    inflow_history.parquet             Historical inflow records for auto-estimation
+    load_seasonal_stats.parquet        Load PAR(p) statistics
+    non_controllable_stats.parquet     NCS stochastic availability factors
+    non_controllable_factors.json      NCS per-block availability factors
+    load_factors.json                  Per-bus, per-block load demand factors
+    hydro_geometry.parquet             Forebay/tailrace curves for FPHA model
+  constraints/
+    generic_constraints.json           User-defined generic LP constraints
+    generic_constraint_bounds.parquet  Per-stage bounds for generic constraints
+    hydro_bounds.parquet               Per-stage hydro operational bounds
+    thermal_bounds.parquet             Per-stage thermal generation bounds
+    line_bounds.parquet                Per-stage transmission capacity bounds
+    exchange_factors.json              Per-block exchange capacity factors
+```
+
+Not all of these files are required. Cobre loads them if present and skips
+them if absent (except for the 8 core files which are always mandatory).
 
 ---
 

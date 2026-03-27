@@ -81,6 +81,31 @@ Stop when the relative improvement in the lower bound falls below a threshold.
 | `iterations` | integer | Window size: the number of past iterations over which to compute the relative improvement.               |
 | `tolerance`  | float   | Relative improvement threshold. Training stops when the improvement over the window is below this value. |
 
+#### `simulation`
+
+Stop when both the lower bound and a Monte Carlo policy cost estimate have
+stabilized. Periodically runs a batch of forward simulations and compares
+the result against previous evaluations.
+
+```json
+{
+  "type": "simulation",
+  "replications": 100,
+  "period": 10,
+  "bound_window": 5,
+  "distance_tol": 0.01,
+  "bound_tol": 0.0001
+}
+```
+
+| Field          | Type    | Description                                                           |
+| -------------- | ------- | --------------------------------------------------------------------- |
+| `replications` | integer | Number of Monte Carlo forward simulations per check.                  |
+| `period`       | integer | Iterations between simulation checks.                                 |
+| `bound_window` | integer | Number of past iterations for bound stability check.                  |
+| `distance_tol` | float   | Normalized distance threshold between consecutive simulation results. |
+| `bound_tol`    | float   | Relative tolerance for bound stability.                               |
+
 ### `stopping_mode`
 
 When multiple stopping rules are listed, `stopping_mode` controls how they
@@ -130,6 +155,110 @@ Example:
 
 ---
 
+## `modeling`
+
+Controls physical modeling options.
+
+| Field                   | Type   | Default   | Description                                            |
+| ----------------------- | ------ | --------- | ------------------------------------------------------ |
+| `inflow_non_negativity` | object | see below | Strategy for handling negative PAR model inflow draws. |
+
+### `inflow_non_negativity`
+
+| Field          | Type   | Default     | Description                                                                        |
+| -------------- | ------ | ----------- | ---------------------------------------------------------------------------------- |
+| `method`       | string | `"penalty"` | One of `"none"`, `"penalty"`, or `"truncation"`.                                   |
+| `penalty_cost` | float  | `1000.0`    | Penalty coefficient applied to negative inflow slack when `method` is `"penalty"`. |
+
+- `"none"` -- no treatment; negative inflows are passed through to the LP.
+- `"penalty"` -- adds a penalty variable to the LP that penalizes negative inflow
+  draws at the specified cost per unit.
+- `"truncation"` -- clamps negative PAR model draws to zero before applying noise.
+
+Example:
+
+```json
+{
+  "modeling": {
+    "inflow_non_negativity": {
+      "method": "penalty",
+      "penalty_cost": 100.0
+    }
+  }
+}
+```
+
+---
+
+## `cut_selection`
+
+Controls the cut selection strategy for managing cut pool growth. Cut
+selection periodically scans the cut pool and deactivates cuts that are
+unlikely to improve the policy, reducing LP size without sacrificing
+convergence quality.
+
+| Field                    | Type    | Default | Description                                                                       |
+| ------------------------ | ------- | ------- | --------------------------------------------------------------------------------- |
+| `enabled`                | boolean | `false` | Enable cut pruning.                                                               |
+| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                        |
+| `threshold`              | integer | `0`     | Activity threshold. For Level1: deactivate cuts with `active_count <= threshold`. |
+| `check_frequency`        | integer | `1`     | Iterations between pruning checks.                                                |
+| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                            |
+
+**Methods:**
+
+- `"level1"` -- deactivates cuts that have never been binding (cumulative
+  binding count at or below `threshold`). Least aggressive; preserves
+  convergence guarantee.
+- `"lml1"` -- deactivates cuts that have not been binding within a sliding
+  window of `threshold` iterations.
+- `"domination"` -- stub; not yet implemented.
+
+Example:
+
+```json
+{
+  "training": {
+    "cut_selection": {
+      "enabled": true,
+      "method": "level1",
+      "threshold": 0,
+      "check_frequency": 5,
+      "cut_activity_tolerance": 1e-6
+    }
+  }
+}
+```
+
+---
+
+## `estimation`
+
+Controls the PAR(p) model estimation pipeline. When the case provides
+`inflow_history.parquet`, Cobre can automatically estimate AR coefficients
+instead of requiring pre-computed `inflow_ar_coefficients.parquet`.
+
+| Field                         | Type    | Default  | Description                                                                      |
+| ----------------------------- | ------- | -------- | -------------------------------------------------------------------------------- |
+| `max_order`                   | integer | `6`      | Maximum lag order considered during autoregressive model fitting.                |
+| `order_selection`             | string  | `"pacf"` | Order selection criterion: `"pacf"` (PACF-based) or `"fixed"` (use `max_order`). |
+| `min_observations_per_season` | integer | `30`     | Minimum observations per (entity, season) group to proceed with estimation.      |
+| `max_coefficient_magnitude`   | float   | `null`   | Safety net: reduce to order 0 if any coefficient exceeds this magnitude.         |
+
+Example:
+
+```json
+{
+  "estimation": {
+    "max_order": 6,
+    "order_selection": "pacf",
+    "min_observations_per_season": 30
+  }
+}
+```
+
+---
+
 ## `policy`
 
 Controls policy persistence (checkpoint saving and warm-start loading).
@@ -139,6 +268,16 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 | `path`                   | string                                   | `"./policy"` | Directory where policy data (cuts, states) is stored.                                                                                       |
 | `mode`                   | `"fresh"`, `"warm_start"`, or `"resume"` | `"fresh"`    | Initialization mode. `"fresh"` starts from scratch; `"warm_start"` loads cuts from a previous run; `"resume"` continues an interrupted run. |
 | `validate_compatibility` | boolean                                  | `true`       | When loading a policy, verify that entity counts, stage counts, and cut dimensions match the current system.                                |
+
+### `checkpointing`
+
+| Field                 | Type    | Default | Description                                     |
+| --------------------- | ------- | ------- | ----------------------------------------------- |
+| `enabled`             | boolean | `false` | Enable periodic checkpointing during training.  |
+| `initial_iteration`   | integer | `null`  | First iteration to write a checkpoint.          |
+| `interval_iterations` | integer | `null`  | Iterations between checkpoints.                 |
+| `store_basis`         | boolean | `false` | Include LP basis in checkpoints for warm-start. |
+| `compress`            | boolean | `false` | Compress checkpoint files.                      |
 
 ---
 
@@ -165,7 +304,6 @@ Controls which outputs are written to the results directory.
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
-  "version": "2.0.0",
   "training": {
     "seed": 42,
     "forward_passes": 50,
@@ -173,7 +311,20 @@ Controls which outputs are written to the results directory.
       { "type": "iteration_limit", "limit": 200 },
       { "type": "bound_stalling", "iterations": 20, "tolerance": 0.0001 }
     ],
-    "stopping_mode": "any"
+    "stopping_mode": "any",
+    "cut_selection": {
+      "enabled": true,
+      "method": "level1",
+      "threshold": 0,
+      "check_frequency": 5,
+      "cut_activity_tolerance": 1e-6
+    }
+  },
+  "modeling": {
+    "inflow_non_negativity": {
+      "method": "penalty",
+      "penalty_cost": 1000.0
+    }
   },
   "simulation": {
     "enabled": true,

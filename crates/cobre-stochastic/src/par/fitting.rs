@@ -730,7 +730,7 @@ fn compute_ar_per_group(
     Ok(result)
 }
 
-/// Compute cross-seasonal autocorrelations rho_m(1)..rho_m(p) for a single
+/// Compute cross-seasonal autocorrelations `rho_m(1)..rho_m(p)` for a single
 /// (hydro, season) pair using positional lag lookup.
 ///
 /// Returns the autocorrelation vector and the effective order (may be truncated
@@ -1065,11 +1065,11 @@ fn compute_hydro_residuals(
     hydro_residuals
 }
 
-/// Compute the n_hydros x n_hydros Pearson correlation matrix from residuals.
+/// Compute the `n_hydros` x `n_hydros` Pearson correlation matrix from residuals.
 ///
 /// For each pair `(i, j)`, collects time steps where both have residuals,
 /// then applies the standard Pearson formula with Bessel correction (N-1).
-/// Pairs are sorted for deterministic iteration across HashMap orderings.
+/// Pairs are sorted for deterministic iteration across `HashMap` orderings.
 fn compute_pearson_correlation_matrix(
     hydro_residuals: &[HashMap<NaiveDate, f64>],
 ) -> Vec<Vec<f64>> {

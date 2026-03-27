@@ -165,7 +165,7 @@ struct LoadBroadcastResult {
     /// Root-only config for output writing (None on non-root ranks).
     root_config: Option<cobre_io::Config>,
     /// Root-only estimation report for summaries (None on non-root ranks).
-    root_estimation_report: Option<Option<EstimationReport>>,
+    root_estimation_report: Option<EstimationReport>,
 }
 
 /// Result of the training phase.
@@ -198,15 +198,15 @@ struct TrainingPhaseResult {
 ///
 /// Returns [`CliError`] when loading, training, simulation, or I/O fails.
 /// The exit code indicates the category of failure.
-pub fn execute(args: RunArgs) -> Result<(), CliError> {
-    let ctx = setup_communicator(&args)?;
+pub fn execute(args: &RunArgs) -> Result<(), CliError> {
+    let ctx = setup_communicator(args)?;
 
     let LoadBroadcastResult {
         system,
         mut setup,
         mut root_config,
         root_estimation_report,
-    } = broadcast_and_build_setup(&ctx, &args)?;
+    } = broadcast_and_build_setup(&ctx, args)?;
 
     run_pre_training(
         &ctx,
@@ -352,7 +352,7 @@ fn broadcast_and_build_setup(
                     Some(bcast),
                     Some(config),
                     Some(stochastic),
-                    Some(estimation_report),
+                    estimation_report,
                     Some(bcast_tree),
                     Some(hydro_models),
                     None,
@@ -363,7 +363,7 @@ fn broadcast_and_build_setup(
     } else {
         (None, None, None, None, None, None, None, None)
     };
-    let root_estimation_report: Option<Option<EstimationReport>> = root_estimation_report;
+    let root_estimation_report: Option<EstimationReport> = root_estimation_report;
 
     let system_result = broadcast_value(raw_system, &ctx.comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &ctx.comm);
@@ -454,24 +454,26 @@ fn run_pre_training(
     system: &System,
     setup: &StudySetup,
     root_config: Option<&cobre_io::Config>,
-    root_estimation_report: Option<&Option<EstimationReport>>,
+    root_estimation_report: Option<&EstimationReport>,
 ) -> Result<(), CliError> {
     if !ctx.quiet && ctx.is_root {
-        let estimation = root_estimation_report.and_then(|r| r.as_ref());
-        let stochastic_summary =
-            build_stochastic_summary(system, setup.stochastic(), estimation, setup.seed());
+        let stochastic_summary = build_stochastic_summary(
+            system,
+            setup.stochastic(),
+            root_estimation_report,
+            setup.seed(),
+        );
         crate::summary::print_stochastic_summary(&ctx.stderr, &stochastic_summary);
         let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
         crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
     }
 
     if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {
-        let estimation = root_estimation_report.and_then(|r| r.as_ref());
         export_stochastic_artifacts(
             &ctx.output_dir,
             setup.stochastic(),
             system,
-            estimation,
+            root_estimation_report,
             ctx.quiet,
             &ctx.stderr,
         );

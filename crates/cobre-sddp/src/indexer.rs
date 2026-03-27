@@ -762,38 +762,16 @@ impl StageIndexer {
         let n_evap_hydros = evap_hydro_indices.len();
         let evap_col_start = generation_end;
 
-        let mut evap_indices_vec: Vec<EvaporationIndices> = Vec::with_capacity(n_evap_hydros);
-
         // Row layout: [storage_fixing | lag_fixing | z_inflow | water_balance | load_balance | fpha_rows]
-        // z_inflow rows at N*(1+L)..N*(2+L) (from base constructor)
-        // water_balance_start = N*(2+L) = n_state + hydro_count
-        // load_balance_start = water_balance_start + hydro_count
         let water_balance_start = base.n_state + hydro_count;
         let load_balance_start = water_balance_start + hydro_count;
         let load_balance_end = load_balance_start + n_buses * n_blks;
 
-        // FPHA constraint rows are placed after load_balance, one block per FPHA hydro
-        // containing planes_per_block * n_blks rows.
-        let mut fpha_rows: Vec<FphaRowRange> = Vec::with_capacity(n_fpha_hydros);
-        let mut fpha_row_cursor = load_balance_end;
-        for &planes in fpha_planes_per_hydro {
-            fpha_rows.push(FphaRowRange {
-                start: fpha_row_cursor,
-                planes_per_block: planes,
-            });
-            fpha_row_cursor += planes * n_blks;
-        }
+        let (fpha_rows, fpha_row_cursor) =
+            Self::build_fpha_rows(fpha_planes_per_hydro, n_blks, load_balance_end);
 
-        // Evaporation rows: 1 per evaporation hydro, placed after FPHA rows.
-        let evap_row_start = fpha_row_cursor;
-        for i in 0..n_evap_hydros {
-            evap_indices_vec.push(EvaporationIndices {
-                q_ev_col: evap_col_start + i * 3,
-                f_evap_plus_col: evap_col_start + i * 3 + 1,
-                f_evap_minus_col: evap_col_start + i * 3 + 2,
-                evap_row: evap_row_start + i,
-            });
-        }
+        let evap_indices_vec =
+            Self::build_evap_indices(n_evap_hydros, evap_col_start, fpha_row_cursor);
 
         let evap_col_end = evap_col_start + n_evap_hydros * 3;
         let (withdrawal_slack, has_withdrawal) = if hydro_count > 0 {
@@ -855,6 +833,40 @@ impl StageIndexer {
             self.n_evap_hydros
         );
         &self.evap_indices[local_idx]
+    }
+
+    /// Build FPHA constraint row ranges from per-hydro plane counts.
+    fn build_fpha_rows(
+        planes_per_hydro: &[usize],
+        n_blks: usize,
+        start_row: usize,
+    ) -> (Vec<FphaRowRange>, usize) {
+        let mut rows = Vec::with_capacity(planes_per_hydro.len());
+        let mut cursor = start_row;
+        for &planes in planes_per_hydro {
+            rows.push(FphaRowRange {
+                start: cursor,
+                planes_per_block: planes,
+            });
+            cursor += planes * n_blks;
+        }
+        (rows, cursor)
+    }
+
+    /// Build evaporation column/row indices for each evaporation hydro.
+    fn build_evap_indices(
+        n_evap_hydros: usize,
+        col_start: usize,
+        row_start: usize,
+    ) -> Vec<EvaporationIndices> {
+        (0..n_evap_hydros)
+            .map(|i| EvaporationIndices {
+                q_ev_col: col_start + i * 3,
+                f_evap_plus_col: col_start + i * 3 + 1,
+                f_evap_minus_col: col_start + i * 3 + 2,
+                evap_row: row_start + i,
+            })
+            .collect()
     }
 
     /// Construct a [`StageIndexer`] from a [`StageTemplate`].

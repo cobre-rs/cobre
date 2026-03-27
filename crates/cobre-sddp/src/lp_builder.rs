@@ -2045,7 +2045,6 @@ fn fill_evaporation_entries(
 /// Unknown entity IDs in variable refs produce zero contributions (the empty
 /// vec returned by `resolve_variable_ref` is skipped), which is the
 /// defense-in-depth fallback for referential validation gaps.
-
 /// Mutable LP matrix buffers for stage template construction.
 ///
 /// Groups the column and row arrays that are filled during template building.

@@ -523,7 +523,6 @@ pub struct ArCoefficientEstimate {
 /// let estimates = estimate_ar_coefficients(&obs, &stats, &stages_vec, &entity_ids, 1).unwrap();
 /// assert_eq!(estimates.len(), 2);
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn estimate_ar_coefficients(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -901,7 +900,6 @@ pub fn estimate_ar_coefficients_with_season_map(
 /// assert!(corr.profiles.contains_key("default"));
 /// assert_eq!(corr.profiles["default"].groups[0].matrix.len(), 1);
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn estimate_correlation(
     observations: &[(EntityId, NaiveDate, f64)],
     ar_estimates: &[ArCoefficientEstimate],

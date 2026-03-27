@@ -55,7 +55,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
-#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
     check_hydro_bounds(data, ctx);
@@ -469,7 +468,6 @@ fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut ValidationContex
 /// Rules 12-13 are only checked when `data.inflow_seasonal_stats` is non-empty.
 /// Rules 14-16 are only checked when `data.correlation` is `Some`.
 /// Rules 17-18 are only checked when `data.load_factors` is non-empty.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_semantic_stages_penalties_scenarios(
     data: &ParsedData,
     ctx: &mut ValidationContext,

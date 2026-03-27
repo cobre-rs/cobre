@@ -31,26 +31,58 @@ use super::{ErrorKind, ValidationContext, schema::ParsedData};
 ///
 /// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
 /// * `ctx`  — mutable validation context that accumulates diagnostics.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut ValidationContext) {
     // ── Build O(1) lookup sets for each entity registry ───────────────────────
 
-    let bus_ids: HashSet<i32> = data.buses.iter().map(|b| b.id.0).collect();
-    let hydro_ids: HashSet<i32> = data.hydros.iter().map(|h| h.id.0).collect();
-    let thermal_ids: HashSet<i32> = data.thermals.iter().map(|t| t.id.0).collect();
-    let line_ids: HashSet<i32> = data.lines.iter().map(|l| l.id.0).collect();
-    let pumping_ids: HashSet<i32> = data.pumping_stations.iter().map(|p| p.id.0).collect();
-    let contract_ids: HashSet<i32> = data.energy_contracts.iter().map(|c| c.id.0).collect();
-    let ncs_ids: HashSet<i32> = data
-        .non_controllable_sources
-        .iter()
-        .map(|n| n.id.0)
-        .collect();
-    let generic_constraint_ids: HashSet<i32> =
-        data.generic_constraints.iter().map(|g| g.id.0).collect();
+    let ids = LookupSets {
+        bus: data.buses.iter().map(|b| b.id.0).collect(),
+        hydro: data.hydros.iter().map(|h| h.id.0).collect(),
+        thermal: data.thermals.iter().map(|t| t.id.0).collect(),
+        line: data.lines.iter().map(|l| l.id.0).collect(),
+        pumping: data.pumping_stations.iter().map(|p| p.id.0).collect(),
+        contract: data.energy_contracts.iter().map(|c| c.id.0).collect(),
+        ncs: data
+            .non_controllable_sources
+            .iter()
+            .map(|n| n.id.0)
+            .collect(),
+        generic_constraint: data.generic_constraints.iter().map(|g| g.id.0).collect(),
+    };
 
-    // ── Rules 1–2: Line -> bus references ────────────────────────────────────
+    // ── Dispatch to per-entity-group validators ─────────────────────────────
 
+    check_line_references(data, ctx, &ids.bus);
+    check_hydro_references(data, ctx, &ids.bus, &ids.hydro);
+    check_thermal_references(data, ctx, &ids.bus);
+    check_ncs_references(data, ctx, &ids.bus, &ids.ncs);
+    check_pumping_references(data, ctx, &ids.bus, &ids.hydro);
+    check_contract_references(data, ctx, &ids.bus);
+    check_extension_references(data, ctx, &ids.hydro);
+    check_scenario_references(data, ctx, &ids.bus, &ids.hydro, &ids.ncs);
+    check_bounds_references(data, ctx, &ids);
+    check_penalty_override_references(data, ctx, &ids.bus, &ids.hydro, &ids.line, &ids.ncs);
+    check_load_factor_references(data, ctx, &ids.bus);
+    check_generic_constraint_expression_references(data, ctx, &ids);
+    check_generic_constraint_bounds_validity(data, ctx);
+    check_ncs_bounds_and_factors(data, ctx, &ids.ncs);
+}
+
+/// O(1) lookup sets for all entity registries, built once and shared across helpers.
+struct LookupSets {
+    bus: HashSet<i32>,
+    hydro: HashSet<i32>,
+    thermal: HashSet<i32>,
+    line: HashSet<i32>,
+    pumping: HashSet<i32>,
+    contract: HashSet<i32>,
+    ncs: HashSet<i32>,
+    generic_constraint: HashSet<i32>,
+}
+
+// ── Per-entity-group helper functions ─────────────────────────────────────────
+
+/// Rules 1-2: Line -> bus references (`source_bus_id`, `target_bus_id`).
+fn check_line_references(data: &ParsedData, ctx: &mut ValidationContext, bus_ids: &HashSet<i32>) {
     for line in &data.lines {
         let entity_str = format!("Line {}", line.id.0);
 
@@ -78,12 +110,19 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 3: Hydro -> bus reference ───────────────────────────────────────
-
+/// Rules 3, 7-8: Hydro -> bus, downstream hydro, and diversion references.
+fn check_hydro_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+    hydro_ids: &HashSet<i32>,
+) {
     for hydro in &data.hydros {
         let entity_str = format!("Hydro {}", hydro.id.0);
 
+        // Rule 3: bus reference.
         if !bus_ids.contains(&hydro.bus_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
@@ -95,10 +134,45 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
+
+        // Rule 7: downstream hydro reference (optional).
+        if let Some(downstream_id) = hydro.downstream_id {
+            if !hydro_ids.contains(&downstream_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    "system/hydros.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str} references non-existent Hydro {} via field 'downstream_id'",
+                        downstream_id.0
+                    ),
+                );
+            }
+        }
+
+        // Rule 8: diversion downstream hydro reference.
+        if let Some(ref diversion) = hydro.diversion {
+            if !hydro_ids.contains(&diversion.downstream_id.0) {
+                ctx.add_error(
+                    ErrorKind::InvalidReference,
+                    "system/hydros.json",
+                    Some(&entity_str),
+                    format!(
+                        "{entity_str} references non-existent Hydro {} via field 'diversion.downstream_id'",
+                        diversion.downstream_id.0
+                    ),
+                );
+            }
+        }
     }
+}
 
-    // ── Rule 4: Thermal -> bus reference ─────────────────────────────────────
-
+/// Rule 4: Thermal -> bus reference.
+fn check_thermal_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+) {
     for thermal in &data.thermals {
         let entity_str = format!("Thermal {}", thermal.id.0);
 
@@ -114,9 +188,15 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 5: NonControllableSource -> bus reference ────────────────────────
-
+/// Rules 5, 19b: NCS -> bus reference and NCS model references.
+fn check_ncs_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+    ncs_ids: &HashSet<i32>,
+) {
     for ncs in &data.non_controllable_sources {
         let entity_str = format!("NonControllableSource {}", ncs.id.0);
 
@@ -133,8 +213,28 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 6: PumpingStation -> bus reference ───────────────────────────────
+    for (i, model) in data.ncs_models.iter().enumerate() {
+        if !ncs_ids.contains(&model.ncs_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/non_controllable_stats.parquet",
+                Some(format!("NcsModel[{i}]")),
+                format!(
+                    "NcsModel[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
+                    model.ncs_id.0
+                ),
+            );
+        }
+    }
+}
 
+/// Rules 6, 9-10: `PumpingStation` -> bus and hydro references.
+fn check_pumping_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+    hydro_ids: &HashSet<i32>,
+) {
     for station in &data.pumping_stations {
         let entity_str = format!("PumpingStation {}", station.id.0);
 
@@ -149,52 +249,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                 ),
             );
         }
-    }
-
-    // ── Rule 7: Hydro -> downstream hydro reference (optional field) ──────────
-
-    for hydro in &data.hydros {
-        if let Some(downstream_id) = hydro.downstream_id {
-            let entity_str = format!("Hydro {}", hydro.id.0);
-
-            if !hydro_ids.contains(&downstream_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
-                    "system/hydros.json",
-                    Some(&entity_str),
-                    format!(
-                        "{entity_str} references non-existent Hydro {} via field 'downstream_id'",
-                        downstream_id.0
-                    ),
-                );
-            }
-        }
-    }
-
-    // ── Rule 8: Hydro.diversion -> downstream hydro reference ────────────────
-
-    for hydro in &data.hydros {
-        if let Some(ref diversion) = hydro.diversion {
-            let entity_str = format!("Hydro {}", hydro.id.0);
-
-            if !hydro_ids.contains(&diversion.downstream_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
-                    "system/hydros.json",
-                    Some(&entity_str),
-                    format!(
-                        "{entity_str} references non-existent Hydro {} via field 'diversion.downstream_id'",
-                        diversion.downstream_id.0
-                    ),
-                );
-            }
-        }
-    }
-
-    // ── Rules 9–10: PumpingStation -> hydro references ───────────────────────
-
-    for station in &data.pumping_stations {
-        let entity_str = format!("PumpingStation {}", station.id.0);
 
         if !hydro_ids.contains(&station.source_hydro_id.0) {
             ctx.add_error(
@@ -220,9 +274,14 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 11: EnergyContract -> bus reference ──────────────────────────────
-
+/// Rule 11: `EnergyContract` -> bus reference.
+fn check_contract_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+) {
     for contract in &data.energy_contracts {
         let entity_str = format!("EnergyContract {}", contract.id.0);
 
@@ -238,9 +297,14 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 12: HydroGeometryRow -> hydro reference ──────────────────────────
-
+/// Rules 12-14: Extension data -> hydro references (geometry, production models, FPHA).
+fn check_extension_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    hydro_ids: &HashSet<i32>,
+) {
     for (i, row) in data.hydro_geometry.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -254,8 +318,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
-
-    // ── Rule 13: ProductionModelConfig -> hydro reference ─────────────────────
 
     for (i, model) in data.production_models.iter().enumerate() {
         if !hydro_ids.contains(&model.hydro_id.0) {
@@ -271,8 +333,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 14: FphaHyperplaneRow -> hydro reference ─────────────────────────
-
     for (i, row) in data.fpha_hyperplanes.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -286,9 +346,16 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 15: InflowSeasonalStatsRow -> hydro reference ────────────────────
-
+/// Rules 15-20: Scenario data references.
+fn check_scenario_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+    hydro_ids: &HashSet<i32>,
+    ncs_ids: &HashSet<i32>,
+) {
     for (i, row) in data.inflow_seasonal_stats.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -302,8 +369,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
-
-    // ── Rule 16: InflowArCoefficientRow -> hydro reference ────────────────────
 
     for (i, row) in data.inflow_ar_coefficients.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
@@ -319,8 +384,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 17: InflowHistoryRow -> hydro reference ──────────────────────────
-
     for (i, row) in data.inflow_history.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -334,8 +397,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
-
-    // ── Rule 18: LoadSeasonalStatsRow -> bus reference ────────────────────────
 
     for (i, row) in data.load_seasonal_stats.iter().enumerate() {
         if !bus_ids.contains(&row.bus_id.0) {
@@ -351,14 +412,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 19: CorrelationEntity entity_type -> entity registry ──────────────
-    //
-    // Validates that each correlation entity references an existing entity of the
-    // correct type:
-    //   - "inflow" -> Hydro (hydro_ids)
-    //   - "load"   -> Bus (bus_ids)
-    //   - "ncs"    -> NonControllableSource (ncs_ids)
-
     if let Some(ref correlation) = data.correlation {
         for profile in correlation.profiles.values() {
             for group in &profile.groups {
@@ -372,7 +425,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                             "NonControllableSource",
                         ),
                         _ => {
-                            // Unknown entity type — skip validation (forward compat)
                             continue;
                         }
                     };
@@ -394,24 +446,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 19b: NcsModel.ncs_id -> NonControllableSource reference ───────────
-
-    for (i, model) in data.ncs_models.iter().enumerate() {
-        if !ncs_ids.contains(&model.ncs_id.0) {
-            ctx.add_error(
-                ErrorKind::InvalidReference,
-                "scenarios/non_controllable_stats.parquet",
-                Some(format!("NcsModel[{i}]")),
-                format!(
-                    "NcsModel[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
-                    model.ncs_id.0
-                ),
-            );
-        }
-    }
-
-    // ── Rule 20: ExternalScenarioRow -> hydro reference ───────────────────────
-
     for (i, row) in data.external_scenarios.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -425,11 +459,12 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 21: ThermalBoundsRow -> thermal reference ────────────────────────
-
+/// Rules 21-26: Bounds rows -> entity references.
+fn check_bounds_references(data: &ParsedData, ctx: &mut ValidationContext, ids: &LookupSets) {
     for (i, row) in data.thermal_bounds.iter().enumerate() {
-        if !thermal_ids.contains(&row.thermal_id.0) {
+        if !ids.thermal.contains(&row.thermal_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/thermal_bounds.parquet",
@@ -442,10 +477,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 22: HydroBoundsRow -> hydro reference ────────────────────────────
-
     for (i, row) in data.hydro_bounds.iter().enumerate() {
-        if !hydro_ids.contains(&row.hydro_id.0) {
+        if !ids.hydro.contains(&row.hydro_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/hydro_bounds.parquet",
@@ -458,10 +491,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 23: LineBoundsRow -> line reference ──────────────────────────────
-
     for (i, row) in data.line_bounds.iter().enumerate() {
-        if !line_ids.contains(&row.line_id.0) {
+        if !ids.line.contains(&row.line_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/line_bounds.parquet",
@@ -474,10 +505,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 24: PumpingBoundsRow -> pumping station reference ────────────────
-
     for (i, row) in data.pumping_bounds.iter().enumerate() {
-        if !pumping_ids.contains(&row.station_id.0) {
+        if !ids.pumping.contains(&row.station_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/pumping_bounds.parquet",
@@ -490,10 +519,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 25: ContractBoundsRow -> contract reference ─────────────────────
-
     for (i, row) in data.contract_bounds.iter().enumerate() {
-        if !contract_ids.contains(&row.contract_id.0) {
+        if !ids.contract.contains(&row.contract_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/contract_bounds.parquet",
@@ -506,10 +533,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 26: GenericConstraintBoundsRow -> generic constraint reference ───
-
     for (i, row) in data.generic_constraint_bounds.iter().enumerate() {
-        if !generic_constraint_ids.contains(&row.constraint_id) {
+        if !ids.generic_constraint.contains(&row.constraint_id) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
                 "constraints/generic_constraint_bounds.parquet",
@@ -521,9 +546,17 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 27: BusPenaltyOverrideRow -> bus reference ──────────────────────
-
+/// Rules 27-30: Penalty override rows -> entity references.
+fn check_penalty_override_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+    hydro_ids: &HashSet<i32>,
+    line_ids: &HashSet<i32>,
+    ncs_ids: &HashSet<i32>,
+) {
     for (i, row) in data.penalty_overrides_bus.iter().enumerate() {
         if !bus_ids.contains(&row.bus_id.0) {
             ctx.add_error(
@@ -537,8 +570,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
-
-    // ── Rule 28: LinePenaltyOverrideRow -> line reference ────────────────────
 
     for (i, row) in data.penalty_overrides_line.iter().enumerate() {
         if !line_ids.contains(&row.line_id.0) {
@@ -554,8 +585,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 29: HydroPenaltyOverrideRow -> hydro reference ──────────────────
-
     for (i, row) in data.penalty_overrides_hydro.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
@@ -570,8 +599,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         }
     }
 
-    // ── Rule 30: NcsPenaltyOverrideRow -> NCS source reference ───────────────
-
     for (i, row) in data.penalty_overrides_ncs.iter().enumerate() {
         if !ncs_ids.contains(&row.source_id.0) {
             ctx.add_error(
@@ -585,9 +612,14 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rules 31-32: LoadFactorEntry -> bus and stage references ─────────────
-
+/// Rules 31-32: `LoadFactorEntry` -> bus and stage references.
+fn check_load_factor_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    bus_ids: &HashSet<i32>,
+) {
     let study_stage_ids: HashSet<i32> = data
         .stages
         .stages
@@ -597,7 +629,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
         .collect();
 
     for (i, entry) in data.load_factors.iter().enumerate() {
-        // Rule 31: bus_id must exist in the bus registry.
         if !bus_ids.contains(&entry.bus_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
@@ -610,7 +641,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
 
-        // Rule 32: stage_id must match a study stage id (id >= 0).
         if !study_stage_ids.contains(&entry.stage_id) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
@@ -623,17 +653,22 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
+}
 
-    // ── Rule 33: GenericConstraint expression entity ID existence ────────────
-
+/// Rule 33: `GenericConstraint` expression entity ID existence.
+fn check_generic_constraint_expression_references(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    ids: &LookupSets,
+) {
     let entity_ids = EntityIdSets {
-        hydro: &hydro_ids,
-        thermal: &thermal_ids,
-        line: &line_ids,
-        bus: &bus_ids,
-        pumping: &pumping_ids,
-        contract: &contract_ids,
-        ncs: &ncs_ids,
+        hydro: &ids.hydro,
+        thermal: &ids.thermal,
+        line: &ids.line,
+        bus: &ids.bus,
+        pumping: &ids.pumping,
+        contract: &ids.contract,
+        ncs: &ids.ncs,
     };
     for constraint in &data.generic_constraints {
         let gc_label = format!("GenericConstraint {}", constraint.id.0);
@@ -642,10 +677,10 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             validate_variable_ref_entity(&term.variable, &label, &entity_ids, ctx);
         }
     }
+}
 
-    // ── Rule 34: GenericConstraintBoundsRow block_id validity ────────────────
-
-    // Build a map from stage_id to block count for study stages.
+/// Rules 34-35: `GenericConstraintBoundsRow` `block_id` validity and duplicate key detection.
+fn check_generic_constraint_bounds_validity(data: &ParsedData, ctx: &mut ValidationContext) {
     let stage_block_counts: std::collections::HashMap<i32, usize> = data
         .stages
         .stages
@@ -671,12 +706,8 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
                     );
                 }
             }
-            // If stage_id is invalid, Rule 26 already catches the constraint_id
-            // and the stage reference is implicitly invalid; skip block validation.
         }
     }
-
-    // ── Rule 35: Duplicate (constraint_id, stage_id, block_id) key detection ─
 
     {
         let mut seen_keys: HashSet<(i32, i32, Option<i32>)> = HashSet::new();
@@ -695,8 +726,21 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             }
         }
     }
+}
 
-    // ── Rules 36-38: NcsBoundsRow reference, stage, and value checks ─────
+/// Rules 36-41: NCS bounds and NCS factor entry checks.
+fn check_ncs_bounds_and_factors(
+    data: &ParsedData,
+    ctx: &mut ValidationContext,
+    ncs_ids: &HashSet<i32>,
+) {
+    let study_stage_ids: HashSet<i32> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
 
     for (i, row) in data.ncs_bounds.iter().enumerate() {
         if !ncs_ids.contains(&row.ncs_id.0) {
@@ -733,8 +777,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             );
         }
     }
-
-    // ── Rules 39-41: NcsFactorEntry reference, stage, and value checks ───
 
     for (i, entry) in data.non_controllable_factors.iter().enumerate() {
         if !ncs_ids.contains(&entry.ncs_id.0) {

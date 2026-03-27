@@ -24,7 +24,13 @@ def find_production_suppressions(
     root: Path,
     lint: str,
 ) -> list[tuple[str, int, str]]:
-    """Return (filepath, line_number, line_text) for each suppression in production code."""
+    """Return (filepath, line_number, line_text) for each suppression in production code.
+
+    Uses a state machine to detect multi-line ``#[allow(...)]`` blocks where
+    the opening ``#[allow(`` and the target lint appear on different lines.
+    The reported line number is always the line containing ``#[allow(`` (or
+    ``#[expect(``).
+    """
     target = f"clippy::{lint}"
     results = []
 
@@ -45,12 +51,42 @@ def find_production_suppressions(
                 test_start = i
                 break
 
-        # Search only production portion (lines 0..test_start)
+        # State machine for multi-line #[allow(...)] / #[expect(...)] blocks
+        collecting = False
+        block_start = 0
+        block_buf = ""
+
         for i in range(test_start):
             line = lines[i]
-            if "allow" in line and target in line:
-                rel_path = rs_file.relative_to(root)
-                results.append((str(rel_path), i + 1, line.strip()))
+
+            if collecting:
+                block_buf += " " + line.strip()
+                if ")" in line:
+                    # Block complete — check for target
+                    if target in block_buf:
+                        rel_path = rs_file.relative_to(root)
+                        results.append(
+                            (
+                                str(rel_path),
+                                block_start + 1,
+                                block_buf.strip(),
+                            )
+                        )
+                    collecting = False
+                    block_buf = ""
+            elif "allow" in line or "expect" in line:
+                stripped = line.strip()
+                if target in stripped:
+                    # Single-line match
+                    rel_path = rs_file.relative_to(root)
+                    results.append((str(rel_path), i + 1, stripped))
+                elif (
+                    "allow(" in stripped or "expect(" in stripped
+                ) and ")" not in stripped:
+                    # Multi-line block starts here
+                    collecting = True
+                    block_start = i
+                    block_buf = stripped
 
     return results
 

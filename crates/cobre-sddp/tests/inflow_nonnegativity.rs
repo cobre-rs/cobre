@@ -555,6 +555,9 @@ fn train_fixture(
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks,
         },
         &mut fcf,
         &stage_ctx,
@@ -572,12 +575,9 @@ fn train_fixture(
             mode: StoppingMode::Any,
         },
         None,
-        0.0,
         None,
         &comm,
-        1,
         HighsSolver::new,
-        max_blocks,
     )
 }
 

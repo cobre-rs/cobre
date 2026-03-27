@@ -843,6 +843,9 @@ impl StudySetup {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender,
+            cut_activity_tolerance: self.cut_activity_tolerance,
+            n_fwd_threads: n_threads,
+            max_blocks: self.max_blocks,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -876,12 +879,9 @@ impl StudySetup {
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             self.cut_selection.as_ref(),
-            self.cut_activity_tolerance,
             shutdown_flag,
             comm,
-            n_threads,
             solver_factory,
-            self.max_blocks,
         )
     }
 

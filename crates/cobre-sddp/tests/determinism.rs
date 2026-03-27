@@ -543,6 +543,9 @@ fn run_training(
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: None,
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts
@@ -581,12 +584,9 @@ fn run_training(
                 &fx.risk_measures,
                 iteration_limit(n_iterations),
                 None,
-                0.0,
                 None,
                 &comm,
-                n_workspaces,
                 || Ok(MockSolver3H::new(100.0)),
-                1,
             )
         })
         .unwrap();

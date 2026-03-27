@@ -41,14 +41,14 @@ Available context structs:
 
 ## Function Signature Budgets
 
-| Function                   | Max args | Current | Location                 | Status      |
-| -------------------------- | -------- | ------- | ------------------------ | ----------- |
-| `run_forward_pass`         | 8        | 8       | `forward.rs`             | at budget   |
-| `run_backward_pass`        | 8        | 8       | `backward.rs`            | at budget   |
-| `simulate`                 | 8        | 8       | `simulation/pipeline.rs` | at budget   |
-| `train`                    | 12       | 15      | `training.rs`            | OVER BUDGET |
-| `evaluate_lower_bound`     | 9        | 9       | `lower_bound.rs`         | at budget   |
-| `build_row_lower_unscaled` | 8        | 8       | `simulation/pipeline.rs` | at budget   |
+| Function                   | Max args | Current | Location                 | Status    |
+| -------------------------- | -------- | ------- | ------------------------ | --------- |
+| `run_forward_pass`         | 8        | 8       | `forward.rs`             | at budget |
+| `run_backward_pass`        | 8        | 8       | `backward.rs`            | at budget |
+| `simulate`                 | 8        | 8       | `simulation/pipeline.rs` | at budget |
+| `train`                    | 12       | 12      | `training.rs`            | at budget |
+| `evaluate_lower_bound`     | 9        | 9       | `lower_bound.rs`         | at budget |
+| `build_row_lower_unscaled` | 8        | 8       | `simulation/pipeline.rs` | at budget |
 
 If a function exceeds its budget, the correct response is to refactor, not to
 add `#[allow(clippy::too_many_arguments)]`.

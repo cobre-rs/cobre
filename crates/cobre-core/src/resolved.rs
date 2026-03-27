@@ -329,7 +329,7 @@ pub struct ContractStageBounds {
 /// ```
 /// use cobre_core::resolved::{
 ///     BusStagePenalties, HydroStagePenalties, LineStagePenalties,
-///     NcsStagePenalties, ResolvedPenalties,
+///     NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, ResolvedPenalties,
 /// };
 ///
 /// let hydro_default = HydroStagePenalties {
@@ -350,8 +350,8 @@ pub struct ContractStageBounds {
 /// let ncs_default = NcsStagePenalties { curtailment_cost: 50.0 };
 ///
 /// let table = ResolvedPenalties::new(
-///     3, 2, 1, 4, 5,
-///     hydro_default, bus_default, line_default, ncs_default,
+///     &PenaltiesCountsSpec { n_hydros: 3, n_buses: 2, n_lines: 1, n_ncs: 4, n_stages: 5 },
+///     &PenaltiesDefaults { hydro: hydro_default, bus: bus_default, line: line_default, ncs: ncs_default },
 /// );
 ///
 /// // Hydro 1, stage 2 returns the default penalties.
@@ -546,8 +546,8 @@ impl ResolvedPenalties {
 ///
 /// ```
 /// use cobre_core::resolved::{
-///     ContractStageBounds, HydroStageBounds, LineStageBounds,
-///     PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
+///     BoundsCountsSpec, BoundsDefaults, ContractStageBounds, HydroStageBounds,
+///     LineStageBounds, PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
 /// };
 ///
 /// let hydro_default = HydroStageBounds {
@@ -564,8 +564,8 @@ impl ResolvedPenalties {
 /// let contract_default = ContractStageBounds { min_mw: 0.0, max_mw: 50.0, price_per_mwh: 80.0 };
 ///
 /// let table = ResolvedBounds::new(
-///     2, 1, 1, 1, 1, 3,
-///     hydro_default, thermal_default, line_default, pumping_default, contract_default,
+///     &BoundsCountsSpec { n_hydros: 2, n_thermals: 1, n_lines: 1, n_pumping: 1, n_contracts: 1, n_stages: 3 },
+///     &BoundsDefaults { hydro: hydro_default, thermal: thermal_default, line: line_default, pumping: pumping_default, contract: contract_default },
 /// );
 ///
 /// let b = table.hydro_bounds(0, 2);

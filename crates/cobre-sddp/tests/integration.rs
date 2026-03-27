@@ -513,6 +513,9 @@ fn train_converges_with_mock_solver() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: None,
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let stage_ctx = StageContext {
@@ -542,12 +545,9 @@ fn train_converges_with_mock_solver() {
         &fx.risk_measures,
         iteration_limit(10),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -587,6 +587,9 @@ fn train_deterministic_with_same_seed() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf1,
         &stage_ctx,
@@ -601,12 +604,9 @@ fn train_deterministic_with_same_seed() {
         &fx.risk_measures,
         iteration_limit(5),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(50.0)),
-        1,
     )
     .unwrap();
 
@@ -634,6 +634,9 @@ fn train_deterministic_with_same_seed() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf2,
         &stage_ctx2,
@@ -648,12 +651,9 @@ fn train_deterministic_with_same_seed() {
         &fx.risk_measures,
         iteration_limit(5),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(50.0)),
-        1,
     )
     .unwrap();
 
@@ -686,6 +686,9 @@ fn train_lb_monotonically_nondecreasing() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let stage_ctx = StageContext {
@@ -715,12 +718,9 @@ fn train_lb_monotonically_nondecreasing() {
         &fx.risk_measures,
         iteration_limit(6),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -759,6 +759,9 @@ fn train_emits_correct_event_sequence() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let stage_ctx = StageContext {
@@ -789,12 +792,9 @@ fn train_emits_correct_event_sequence() {
         // Limit to exactly 3 iterations.
         iteration_limit(3),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -849,6 +849,9 @@ fn train_stops_at_iteration_limit() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf,
         &stage_ctx,
@@ -863,12 +866,9 @@ fn train_stops_at_iteration_limit() {
         &fx.risk_measures,
         iteration_limit(3),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -914,6 +914,9 @@ fn train_stops_on_graceful_shutdown() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf,
         &stage_ctx,
@@ -928,12 +931,9 @@ fn train_stops_on_graceful_shutdown() {
         &fx.risk_measures,
         rules,
         None,
-        0.0,
         Some(&shutdown_flag),
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -969,6 +969,9 @@ fn train_propagates_infeasible_error() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf,
         &stage_ctx,
@@ -983,12 +986,9 @@ fn train_propagates_infeasible_error() {
         &fx.risk_measures,
         iteration_limit(10),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::infeasible_on_first()),
-        1,
     );
 
     let outcome = result.expect("train must return Ok(TrainingOutcome) with captured error");
@@ -1033,6 +1033,9 @@ fn d17_level1_cut_selection_convergence() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let strategy = CutSelectionStrategy::Level1 {
@@ -1067,12 +1070,9 @@ fn d17_level1_cut_selection_convergence() {
         &fx.risk_measures,
         iteration_limit(10),
         Some(&strategy),
-        1e-8,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 
@@ -1175,6 +1175,9 @@ fn d18_lml1_cut_selection_convergence() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let strategy = CutSelectionStrategy::Lml1 {
@@ -1209,12 +1212,9 @@ fn d18_lml1_cut_selection_convergence() {
         &fx.risk_measures,
         iteration_limit(10),
         Some(&strategy),
-        1e-8,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .unwrap();
 

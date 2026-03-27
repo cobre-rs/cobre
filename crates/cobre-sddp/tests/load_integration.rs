@@ -450,6 +450,9 @@ fn test_stochastic_load_training_completes() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -487,12 +490,9 @@ fn test_stochastic_load_training_completes() {
         &risk_measures,
         iteration_limit(3),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1, // max_blocks
     )
     .expect("train must succeed with stochastic load");
 
@@ -573,6 +573,9 @@ fn test_deterministic_load_training_matches_baseline() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         },
         &mut fcf,
         &stage_ctx,
@@ -587,12 +590,9 @@ fn test_deterministic_load_training_matches_baseline() {
         &risk_measures,
         iteration_limit(3),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1, // max_blocks
     )
     .expect("train must succeed with deterministic load");
 
@@ -636,6 +636,9 @@ fn test_stochastic_load_seed_determinism() {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -669,12 +672,9 @@ fn test_stochastic_load_seed_determinism() {
             &risk_measures,
             iteration_limit(3),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1, // max_blocks
         )
         .expect("train must succeed");
 

@@ -981,7 +981,7 @@ fn test_solver_highs_solve_iteration_limit() {
 /// SS limit row 3: internal safeguards ensure consistent solve across reset cycles.
 ///
 /// Verifies that `solve()` applies and restores safeguard limits correctly
-/// across multiple load_model/solve/reset cycles. External limit overrides
+/// across multiple `load_model`/`solve`/`reset` cycles. External limit overrides
 /// do not persist because `solve()` sets its own limits before each attempt
 /// and restores them afterward.
 #[cfg(feature = "test-support")]

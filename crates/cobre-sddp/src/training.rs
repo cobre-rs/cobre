@@ -233,13 +233,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     cut_selection: Option<&CutSelectionStrategy>,
-    cut_activity_tolerance: f64,
     shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
-    n_fwd_threads: usize,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
-    max_blocks: usize,
 ) -> Result<TrainingOutcome, SddpError> {
+    let cut_activity_tolerance = config.cut_activity_tolerance;
+    let n_fwd_threads = config.n_fwd_threads;
+    let max_blocks = config.max_blocks;
     let horizon = training_ctx.horizon;
     let indexer = training_ctx.indexer;
     let initial_state = training_ctx.initial_state;
@@ -1231,6 +1231,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1263,12 +1266,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1304,6 +1304,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1336,12 +1339,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::infeasible()),
-            1,
         );
 
         let outcome = result.unwrap();
@@ -1395,6 +1395,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1427,12 +1430,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1520,6 +1520,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1552,12 +1555,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1591,6 +1591,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1623,12 +1626,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         );
 
         assert!(result.is_ok(), "train with no event_sender must not panic");
@@ -1659,6 +1659,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1691,12 +1694,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(1),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1735,6 +1735,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1767,12 +1770,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1818,6 +1818,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let strategy = CutSelectionStrategy::Level1 {
@@ -1855,12 +1858,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             Some(&strategy),
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -1916,6 +1916,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let strategy = CutSelectionStrategy::Level1 {
@@ -1953,12 +1956,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(2),
             Some(&strategy),
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -2028,6 +2028,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2060,12 +2063,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(3),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::with_fixed(100.0)),
-            1,
         )
         .unwrap();
 
@@ -2105,6 +2105,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2141,12 +2144,9 @@ mod tests {
             &risk_measures,
             iteration_limit_rules(5),
             None,
-            0.0,
             None,
             &comm,
-            1,
             || Ok(MockSolver::infeasible()),
-            1,
         )
         .unwrap();
 

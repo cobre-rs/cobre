@@ -35,6 +35,9 @@
 //!     checkpoint_interval: Some(50),
 //!     warm_start_cuts: 0,
 //!     event_sender: None,
+//!     cut_activity_tolerance: 1e-6,
+//!     n_fwd_threads: 1,
+//!     max_blocks: 1,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -60,6 +63,9 @@ use cobre_core::TrainingEvent;
 ///     checkpoint_interval: None,
 ///     warm_start_cuts: 0,
 ///     event_sender: None,
+///     cut_activity_tolerance: 1e-6,
+///     n_fwd_threads: 1,
+///     max_blocks: 1,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -107,6 +113,23 @@ pub struct TrainingConfig {
     /// The receiver end must be consumed on a separate thread or task to
     /// prevent the channel from filling and blocking the training loop.
     pub event_sender: Option<std::sync::mpsc::Sender<TrainingEvent>>,
+
+    /// Activity tolerance for cut selection deactivation.
+    ///
+    /// Cuts with activity (dual value) below this threshold across all openings
+    /// in a backward pass are candidates for deactivation. Typical value: `1e-6`.
+    pub cut_activity_tolerance: f64,
+
+    /// Number of rayon threads for forward pass parallelism.
+    ///
+    /// Controls how many worker threads execute forward scenarios in parallel.
+    /// Set to `1` for single-threaded execution.
+    pub n_fwd_threads: usize,
+
+    /// Maximum number of demand blocks across all stages.
+    ///
+    /// Used for pre-sizing buffers and determining the LP column layout.
+    pub max_blocks: usize,
 }
 
 #[cfg(test)]
@@ -124,6 +147,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -137,6 +163,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -146,6 +175,9 @@ mod tests {
             checkpoint_interval: Some(10),
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -158,6 +190,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 500,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -172,6 +207,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         assert!(config.event_sender.is_none());
     }
@@ -185,6 +223,9 @@ mod tests {
             checkpoint_interval: Some(50),
             warm_start_cuts: 100,
             event_sender: Some(tx),
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
 
         assert!(config.event_sender.is_some());
@@ -217,6 +258,9 @@ mod tests {
             checkpoint_interval: Some(100),
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 1e-6,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

@@ -1532,6 +1532,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
@@ -1614,6 +1617,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
@@ -1702,6 +1708,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
@@ -2075,6 +2084,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
@@ -2746,6 +2758,9 @@ mod tests {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
         };
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let templates = vec![

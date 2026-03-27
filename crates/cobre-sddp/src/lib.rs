@@ -87,7 +87,9 @@ pub use hydro_models::{
     build_hydro_model_summary, prepare_hydro_models, resolve_evaporation_models,
     resolve_production_models,
 };
-pub use indexer::{EvaporationIndices, FphaRowRange, StageIndexer};
+pub use indexer::{
+    EquipmentCounts, EvapConfig, EvaporationIndices, FphaConfig, FphaRowRange, StageIndexer,
+};
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{

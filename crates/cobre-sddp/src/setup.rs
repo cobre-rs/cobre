@@ -462,19 +462,25 @@ impl StudySetup {
             .max()
             .unwrap_or(0);
 
-        let mut indexer = StageIndexer::with_equipment_and_evaporation(
-            stage_templates_ref[0].n_hydro,
-            stage_templates_ref[0].max_par_order,
-            system.thermals().len(),
-            system.lines().len(),
-            system.buses().len(),
-            n_blks_stage0,
+        let eq_counts = crate::indexer::EquipmentCounts {
+            hydro_count: stage_templates_ref[0].n_hydro,
+            max_par_order: stage_templates_ref[0].max_par_order,
+            n_thermals: system.thermals().len(),
+            n_lines: system.lines().len(),
+            n_buses: system.buses().len(),
+            n_blks: n_blks_stage0,
             has_inflow_penalty,
-            fpha_hydro_indices,
-            &fpha_planes,
-            evap_hydro_indices,
             max_deficit_segments,
-        );
+        };
+        let fpha_cfg = crate::indexer::FphaConfig {
+            hydro_indices: fpha_hydro_indices,
+            planes_per_hydro: fpha_planes,
+        };
+        let evap_cfg = crate::indexer::EvapConfig {
+            hydro_indices: evap_hydro_indices,
+        };
+        let mut indexer =
+            StageIndexer::with_equipment_and_evaporation(&eq_counts, &fpha_cfg, &evap_cfg);
 
         // Wire NCS column range from the LP builder's stage-0 layout.
         if !stage_templates.ncs_col_starts.is_empty() {
@@ -837,6 +843,9 @@ impl StudySetup {
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender,
+            cut_activity_tolerance: self.cut_activity_tolerance,
+            n_fwd_threads: n_threads,
+            max_blocks: self.max_blocks,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -870,12 +879,9 @@ impl StudySetup {
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             self.cut_selection.as_ref(),
-            self.cut_activity_tolerance,
             shutdown_flag,
             comm,
-            n_threads,
             solver_factory,
-            self.max_blocks,
         )
     }
 
@@ -1362,8 +1368,9 @@ mod tests {
     use crate::hydro_models::PrepareHydroModelsResult;
 
     use cobre_core::{
-        BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties,
-        LineStageBounds, LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
         ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_core::{
@@ -1545,43 +1552,60 @@ mod tests {
         }
 
         let bounds = ResolvedBounds::new(
-            1, // n_hydros
-            1, // n_thermals
-            0, // n_lines
-            0, // n_pumping
-            0, // n_contracts
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: // n_hydros
+            1,
+                n_lines: // n_thermals
+            0,
+                n_pumping: // n_lines
+            0,
+                n_contracts: // n_pumping
+            0,
+                n_stages: // n_contracts
             n_st,
-            default_hydro_bounds(),
-            ThermalStageBounds {
-                min_generation_mw: 0.0,
-                max_generation_mw: 100.0,
             },
-            LineStageBounds {
-                direct_mw: 0.0,
-                reverse_mw: 0.0,
-            },
-            PumpingStageBounds {
-                min_flow_m3s: 0.0,
-                max_flow_m3s: 0.0,
-            },
-            ContractStageBounds {
-                min_mw: 0.0,
-                max_mw: 0.0,
-                price_per_mwh: 0.0,
+            &BoundsDefaults {
+                hydro: default_hydro_bounds(),
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
             },
         );
 
         let penalties = ResolvedPenalties::new(
-            1, // n_hydros
-            1, // n_buses
-            0, // n_lines
-            0, // n_ncs
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: // n_hydros
+            1,
+                n_lines: // n_buses
+            0,
+                n_ncs: // n_lines
+            0,
+                n_stages: // n_ncs
             n_st,
-            default_hydro_penalties(),
-            BusStagePenalties { excess_cost: 0.0 },
-            LineStagePenalties { exchange_cost: 0.0 },
-            NcsStagePenalties {
-                curtailment_cost: 0.0,
+            },
+            &PenaltiesDefaults {
+                hydro: default_hydro_penalties(),
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
             },
         );
 
@@ -2660,43 +2684,51 @@ mod tests {
         }
 
         let bounds = ResolvedBounds::new(
-            2,
-            0,
-            0,
-            0,
-            0,
-            n_st,
-            default_hydro_bounds(),
-            ThermalStageBounds {
-                min_generation_mw: 0.0,
-                max_generation_mw: 0.0,
+            &BoundsCountsSpec {
+                n_hydros: 2,
+                n_thermals: 0,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: n_st,
             },
-            LineStageBounds {
-                direct_mw: 0.0,
-                reverse_mw: 0.0,
-            },
-            PumpingStageBounds {
-                min_flow_m3s: 0.0,
-                max_flow_m3s: 0.0,
-            },
-            ContractStageBounds {
-                min_mw: 0.0,
-                max_mw: 0.0,
-                price_per_mwh: 0.0,
+            &BoundsDefaults {
+                hydro: default_hydro_bounds(),
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 0.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
             },
         );
 
         let penalties = ResolvedPenalties::new(
-            2,
-            1,
-            0,
-            0,
-            n_st,
-            default_hydro_penalties(),
-            BusStagePenalties { excess_cost: 0.0 },
-            LineStagePenalties { exchange_cost: 0.0 },
-            NcsStagePenalties {
-                curtailment_cost: 0.0,
+            &PenaltiesCountsSpec {
+                n_hydros: 2,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: n_st,
+            },
+            &PenaltiesDefaults {
+                hydro: default_hydro_penalties(),
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
             },
         );
 

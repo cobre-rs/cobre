@@ -1,6 +1,6 @@
 //! Variable reference to LP column index mapping for generic constraints.
 //!
-//! This module provides [`resolve_variable_ref`], which maps a [`VariableRef`]
+//! This module provides `resolve_variable_ref`, which maps a [`VariableRef`]
 //! and block index to a list of `(column_index, coefficient_multiplier)` pairs.
 //! The LP builder (ticket-004) calls this function for each [`cobre_core::LinearTerm`] in a
 //! generic constraint expression to produce the CSC matrix entries.
@@ -36,6 +36,22 @@ use cobre_core::{EntityId, VariableRef};
 use crate::hydro_models::{ProductionModelSet, ResolvedProductionModel};
 use crate::indexer::StageIndexer;
 
+/// Position maps for entity types, mapping entity IDs to their index in
+/// the system's entity arrays.
+///
+/// Used by [`resolve_variable_ref`] to translate `VariableRef` entity IDs
+/// into LP column offsets.
+pub(crate) struct EntityPositionMaps<'a, S: BuildHasher = std::hash::RandomState> {
+    /// Hydro plant ID to position index.
+    pub hydro: &'a HashMap<EntityId, usize, S>,
+    /// Thermal unit ID to position index.
+    pub thermal: &'a HashMap<EntityId, usize, S>,
+    /// Bus ID to position index.
+    pub bus: &'a HashMap<EntityId, usize, S>,
+    /// Line ID to position index.
+    pub line: &'a HashMap<EntityId, usize, S>,
+}
+
 /// Map a [`VariableRef`] and block index to LP column indices with multipliers.
 ///
 /// Returns a `Vec<(column_index, coefficient_multiplier)>`. The caller scales
@@ -52,10 +68,7 @@ use crate::indexer::StageIndexer;
 /// - `indexer` — column layout for the current stage LP.
 /// - `production_models` — resolved production model set, used to distinguish
 ///   FPHA hydros from constant-productivity hydros for `HydroGeneration`.
-/// - `hydro_pos` — map from hydro [`EntityId`] to system-level hydro position.
-/// - `thermal_pos` — map from thermal [`EntityId`] to system-level thermal position.
-/// - `bus_pos` — map from bus [`EntityId`] to system-level bus position.
-/// - `line_pos` — map from line [`EntityId`] to system-level line position.
+/// - `positions` — entity position maps grouped into [`EntityPositionMaps`].
 ///
 /// # Returns
 ///
@@ -65,20 +78,20 @@ use crate::indexer::StageIndexer;
 /// - The variable type references a stub entity with no LP columns (pumping
 ///   stations, contracts, non-controllable sources, diversion, withdrawal).
 #[must_use]
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-pub fn resolve_variable_ref<S: BuildHasher>(
+pub(crate) fn resolve_variable_ref<S: BuildHasher>(
     var_ref: &VariableRef,
     block_idx: usize,
     n_blks: usize,
     stage_idx: usize,
     indexer: &StageIndexer,
     production_models: &ProductionModelSet,
-    hydro_pos: &HashMap<EntityId, usize, S>,
-    thermal_pos: &HashMap<EntityId, usize, S>,
-    bus_pos: &HashMap<EntityId, usize, S>,
-    line_pos: &HashMap<EntityId, usize, S>,
+    positions: &EntityPositionMaps<'_, S>,
 ) -> Vec<(usize, f64)> {
+    let hydro_pos = positions.hydro;
+    let thermal_pos = positions.thermal;
+    let bus_pos = positions.bus;
+    let line_pos = positions.line;
     match var_ref {
         // ── Stage-level hydro variables ────────────────────────────────────
         VariableRef::HydroStorage { hydro_id } => {
@@ -370,17 +383,23 @@ mod tests {
         // N=4, L=0, T=2, Ln=1, B=2, K=3, no penalty, 2 FPHA hydros at positions 0 and 2
         // (local FPHA indices 0 and 1), each with 3 planes.
         StageIndexer::with_equipment_and_evaporation(
-            4,          // hydro_count
-            0,          // max_par_order
-            2,          // n_thermals
-            1,          // n_lines
-            2,          // n_buses
-            3,          // n_blks
-            false,      // has_inflow_penalty
-            vec![0, 2], // fpha_hydro_indices: hydros at system positions 0 and 2
-            &[3, 3],    // fpha_planes_per_hydro
-            vec![],     // evap_hydro_indices (none for simplicity)
-            2,          // max_deficit_segments
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 4,
+                max_par_order: 0,
+                n_thermals: 2,
+                n_lines: 1,
+                n_buses: 2,
+                n_blks: 3,
+                has_inflow_penalty: false,
+                max_deficit_segments: 2,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![0, 2],
+                planes_per_hydro: vec![3, 3],
+            },
+            &crate::indexer::EvapConfig {
+                hydro_indices: vec![],
+            },
         )
     }
 
@@ -455,6 +474,12 @@ mod tests {
         bus_pos: &HashMap<EntityId, usize>,
         line_pos: &HashMap<EntityId, usize>,
     ) -> Vec<(usize, f64)> {
+        let positions = super::EntityPositionMaps {
+            hydro: hydro_pos,
+            thermal: thermal_pos,
+            bus: bus_pos,
+            line: line_pos,
+        };
         resolve_variable_ref(
             &var_ref,
             block_idx,
@@ -462,10 +487,7 @@ mod tests {
             0, // stage_idx = 0
             indexer,
             production_models,
-            hydro_pos,
-            thermal_pos,
-            bus_pos,
-            line_pos,
+            &positions,
         )
     }
 
@@ -792,17 +814,23 @@ mod tests {
     #[test]
     fn hydro_evaporation_maps_to_q_ev_col() {
         let evap_indexer = StageIndexer::with_equipment_and_evaporation(
-            2,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+            &crate::indexer::EvapConfig {
+                hydro_indices: vec![0],
+            },
         );
 
         let prod_models = ProductionModelSet::new(
@@ -820,6 +848,12 @@ mod tests {
         let bpos: HashMap<EntityId, usize> = [(EntityId(100), 0)].into_iter().collect();
         let lpos: HashMap<EntityId, usize> = HashMap::new();
 
+        let positions = super::EntityPositionMaps {
+            hydro: &hpos,
+            thermal: &tpos,
+            bus: &bpos,
+            line: &lpos,
+        };
         let result = resolve_variable_ref(
             &VariableRef::HydroEvaporation {
                 hydro_id: EntityId(10),
@@ -829,10 +863,7 @@ mod tests {
             0, // stage_idx
             &evap_indexer,
             &prod_models,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &positions,
         );
 
         assert_eq!(result, vec![(15, 1.0)]);
@@ -842,17 +873,23 @@ mod tests {
     #[test]
     fn hydro_evaporation_no_evap_model_returns_empty() {
         let evap_indexer = StageIndexer::with_equipment_and_evaporation(
-            2,
-            0,
-            0,
-            0,
-            1,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+            &crate::indexer::EvapConfig {
+                hydro_indices: vec![0],
+            },
         );
 
         let prod_models = ProductionModelSet::new(
@@ -871,6 +908,12 @@ mod tests {
         let lpos: HashMap<EntityId, usize> = HashMap::new();
 
         // Hydro 20 (pos=1) has no evaporation in evap_hydro_indices=[0]
+        let positions = super::EntityPositionMaps {
+            hydro: &hpos,
+            thermal: &tpos,
+            bus: &bpos,
+            line: &lpos,
+        };
         let result = resolve_variable_ref(
             &VariableRef::HydroEvaporation {
                 hydro_id: EntityId(20),
@@ -880,10 +923,7 @@ mod tests {
             0,
             &evap_indexer,
             &prod_models,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &positions,
         );
 
         assert!(result.is_empty());

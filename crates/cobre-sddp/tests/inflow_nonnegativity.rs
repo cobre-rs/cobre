@@ -38,9 +38,10 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, BusStagePenalties, ContractStageBounds, DeficitSegment, EntityId, HydroStageBounds,
-    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ThermalStageBounds,
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
+    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
+    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+    ResolvedPenalties, ThermalStageBounds,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -266,29 +267,37 @@ fn build_system() -> cobre_core::System {
         water_withdrawal_m3s: 0.0,
     };
     let resolved_bounds = ResolvedBounds::new(
-        N_HYDROS,
-        0, // n_thermals
-        0, // n_lines
-        0, // n_pumping
-        0, // n_contracts
+        &BoundsCountsSpec {
+            n_hydros: N_HYDROS,
+            n_thermals: 0,
+            n_lines: // n_thermals
+        0,
+            n_pumping: // n_lines
+        0,
+            n_contracts: // n_pumping
+        0,
+            n_stages: // n_contracts
         N_STAGES,
-        hydro_bounds_default,
-        ThermalStageBounds {
-            min_generation_mw: 0.0,
-            max_generation_mw: 0.0,
         },
-        LineStageBounds {
-            direct_mw: 0.0,
-            reverse_mw: 0.0,
-        },
-        PumpingStageBounds {
-            min_flow_m3s: 0.0,
-            max_flow_m3s: 0.0,
-        },
-        ContractStageBounds {
-            min_mw: 0.0,
-            max_mw: 0.0,
-            price_per_mwh: 0.0,
+        &BoundsDefaults {
+            hydro: hydro_bounds_default,
+            thermal: ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            line: LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping: PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract: ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
         },
     );
 
@@ -307,16 +316,23 @@ fn build_system() -> cobre_core::System {
         water_withdrawal_violation_cost: 0.0,
     };
     let resolved_penalties = ResolvedPenalties::new(
-        N_HYDROS,
-        1, // n_buses
-        0, // n_lines
-        0, // n_ncs
+        &PenaltiesCountsSpec {
+            n_hydros: N_HYDROS,
+            n_buses: 1,
+            n_lines: // n_buses
+        0,
+            n_ncs: // n_lines
+        0,
+            n_stages: // n_ncs
         N_STAGES,
-        hydro_penalties_default,
-        BusStagePenalties { excess_cost: 0.0 },
-        LineStagePenalties { exchange_cost: 0.0 },
-        NcsStagePenalties {
-            curtailment_cost: 0.0,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties_default,
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
         },
     );
 
@@ -450,15 +466,20 @@ fn build_fixture() -> Fixture {
     let n_blks = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
     let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
     let indexer = StageIndexer::with_equipment(
-        first_tmpl.n_hydro,
-        first_tmpl.max_par_order,
-        system.thermals().len(),
-        system.lines().len(),
-        system.buses().len(),
-        n_blks,
-        has_inflow_penalty,
-        vec![],
-        &[],
+        &cobre_sddp::EquipmentCounts {
+            hydro_count: first_tmpl.n_hydro,
+            max_par_order: first_tmpl.max_par_order,
+            n_thermals: system.thermals().len(),
+            n_lines: system.lines().len(),
+            n_buses: system.buses().len(),
+            n_blks,
+            has_inflow_penalty,
+            max_deficit_segments: 1,
+        },
+        &cobre_sddp::FphaConfig {
+            hydro_indices: vec![],
+            planes_per_hydro: vec![],
+        },
     );
     // z-inflow column and row ranges are set by StageIndexer::new at
     // fixed offset N*(1+L), no per-stage wiring needed.
@@ -534,6 +555,9 @@ fn train_fixture(
             checkpoint_interval: None,
             warm_start_cuts: 0,
             event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks,
         },
         &mut fcf,
         &stage_ctx,
@@ -551,12 +575,9 @@ fn train_fixture(
             mode: StoppingMode::Any,
         },
         None,
-        0.0,
         None,
         &comm,
-        1,
         HighsSolver::new,
-        max_blocks,
     )
 }
 

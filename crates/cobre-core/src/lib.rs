@@ -69,8 +69,9 @@ pub use penalty::{
     resolve_ncs_curtailment_cost,
 };
 pub use resolved::{
-    BusStagePenalties, ContractStageBounds, HydroStageBounds, HydroStagePenalties, LineStageBounds,
-    LineStagePenalties, NcsStagePenalties, PumpingStageBounds, ResolvedBounds,
+    BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+    HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+    PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
     ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
     ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, ThermalStageBounds,
 };

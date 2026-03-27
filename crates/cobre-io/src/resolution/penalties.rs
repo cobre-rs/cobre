@@ -30,6 +30,30 @@ use crate::constraints::{
     BusPenaltyOverrideRow, HydroPenaltyOverrideRow, LinePenaltyOverrideRow, NcsPenaltyOverrideRow,
 };
 
+/// Entity slices needed for penalties resolution.
+pub struct PenaltiesEntitySlices<'a> {
+    /// Hydro plants sorted by ID.
+    pub hydros: &'a [Hydro],
+    /// Buses sorted by ID.
+    pub buses: &'a [Bus],
+    /// Transmission lines sorted by ID.
+    pub lines: &'a [Line],
+    /// Non-controllable sources sorted by ID.
+    pub ncs_sources: &'a [NonControllableSource],
+}
+
+/// Per-entity-type override rows for penalties resolution.
+pub struct PenaltiesOverrides<'a> {
+    /// Stage-varying overrides for hydro penalties.
+    pub hydro: &'a [HydroPenaltyOverrideRow],
+    /// Stage-varying overrides for bus penalties.
+    pub bus: &'a [BusPenaltyOverrideRow],
+    /// Stage-varying overrides for line penalties.
+    pub line: &'a [LinePenaltyOverrideRow],
+    /// Stage-varying overrides for NCS penalties.
+    pub ncs: &'a [NcsPenaltyOverrideRow],
+}
+
 /// Pre-compute the full penalty table by applying the three-tier cascade.
 ///
 /// Entity slices must already be sorted by ID (declaration-order invariance). This
@@ -45,15 +69,10 @@ use crate::constraints::{
 ///
 /// # Arguments
 ///
-/// * `hydros` — hydro plants sorted by ID
-/// * `buses` — buses sorted by ID
-/// * `lines` — transmission lines sorted by ID
-/// * `ncs_sources` — non-controllable sources sorted by ID
+/// * `entities` — entity slices grouped into [`PenaltiesEntitySlices`]
 /// * `n_stages` — total number of study stages
-/// * `hydro_overrides` — tier-3 rows from `penalty_overrides_hydro.parquet`
-/// * `bus_overrides` — tier-3 rows from `penalty_overrides_bus.parquet`
-/// * `line_overrides` — tier-3 rows from `penalty_overrides_line.parquet`
-/// * `ncs_overrides` — tier-3 rows from `penalty_overrides_ncs.parquet`
+/// * `stage_index` — mapping from domain-level `stage_id` to positional 0-based index
+/// * `overrides` — per-entity-type override rows grouped into [`PenaltiesOverrides`]
 ///
 /// # Examples
 ///
@@ -61,7 +80,7 @@ use crate::constraints::{
 /// use cobre_core::EntityId;
 /// use cobre_core::entities::{Bus, DeficitSegment, Hydro, HydroPenalties, HydroGenerationModel, Line, NonControllableSource};
 /// use cobre_io::constraints::HydroPenaltyOverrideRow;
-/// use cobre_io::resolution::resolve_penalties;
+/// use cobre_io::resolution::{resolve_penalties, PenaltiesEntitySlices, PenaltiesOverrides};
 ///
 /// // Two hydros with the same entity-level spillage_cost.
 /// let penalties = HydroPenalties {
@@ -123,7 +142,12 @@ use crate::constraints::{
 ///
 /// let stage_index: std::collections::HashMap<i32, usize> =
 ///     [(0, 0), (1, 1), (2, 2)].into_iter().collect();
-/// let result = resolve_penalties(&hydros, &[], &[], &[], 3, &stage_index, &[override_row], &[], &[], &[]);
+/// let result = resolve_penalties(
+///     &PenaltiesEntitySlices { hydros: &hydros, buses: &[], lines: &[], ncs_sources: &[] },
+///     3,
+///     &stage_index,
+///     &PenaltiesOverrides { hydro: &[override_row], bus: &[], line: &[], ncs: &[] },
+/// );
 ///
 /// // Stage 0: unchanged — entity-level value.
 /// assert!((result.hydro_penalties(0, 0).spillage_cost - 0.01).abs() < f64::EPSILON);
@@ -135,23 +159,22 @@ use crate::constraints::{
 /// assert!((result.hydro_penalties(1, 1).spillage_cost - 0.01).abs() < f64::EPSILON);
 /// ```
 #[must_use]
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::implicit_hasher
-)]
+#[allow(clippy::too_many_lines, clippy::implicit_hasher)]
 pub fn resolve_penalties(
-    hydros: &[Hydro],
-    buses: &[Bus],
-    lines: &[Line],
-    ncs_sources: &[NonControllableSource],
+    entities: &PenaltiesEntitySlices<'_>,
     n_stages: usize,
     stage_index: &HashMap<i32, usize>,
-    hydro_overrides: &[HydroPenaltyOverrideRow],
-    bus_overrides: &[BusPenaltyOverrideRow],
-    line_overrides: &[LinePenaltyOverrideRow],
-    ncs_overrides: &[NcsPenaltyOverrideRow],
+    overrides: &PenaltiesOverrides<'_>,
 ) -> ResolvedPenalties {
+    let hydros = entities.hydros;
+    let buses = entities.buses;
+    let lines = entities.lines;
+    let ncs_sources = entities.ncs_sources;
+    let hydro_overrides = overrides.hydro;
+    let bus_overrides = overrides.bus;
+    let line_overrides = overrides.line;
+    let ncs_overrides = overrides.ncs;
+
     let hydro_index: HashMap<EntityId, usize> = hydros
         .iter()
         .enumerate()
@@ -223,15 +246,19 @@ pub fn resolve_penalties(
     let alloc_stages = if n_stages == 0 { 1 } else { n_stages };
 
     let mut table = ResolvedPenalties::new(
-        hydros.len(),
-        buses.len(),
-        lines.len(),
-        ncs_sources.len(),
-        alloc_stages,
-        hydro_default,
-        bus_default,
-        line_default,
-        ncs_default,
+        &cobre_core::PenaltiesCountsSpec {
+            n_hydros: hydros.len(),
+            n_buses: buses.len(),
+            n_lines: lines.len(),
+            n_ncs: ncs_sources.len(),
+            n_stages: alloc_stages,
+        },
+        &cobre_core::PenaltiesDefaults {
+            hydro: hydro_default,
+            bus: bus_default,
+            line: line_default,
+            ncs: ncs_default,
+        },
     );
 
     if n_stages == 0 {
@@ -423,16 +450,20 @@ mod tests {
         ncs_overrides: &[NcsPenaltyOverrideRow],
     ) -> ResolvedPenalties {
         super::resolve_penalties(
-            hydros,
-            buses,
-            lines,
-            ncs_sources,
+            &super::PenaltiesEntitySlices {
+                hydros,
+                buses,
+                lines,
+                ncs_sources,
+            },
             n_stages,
             &si(n_stages),
-            hydro_overrides,
-            bus_overrides,
-            line_overrides,
-            ncs_overrides,
+            &super::PenaltiesOverrides {
+                hydro: hydro_overrides,
+                bus: bus_overrides,
+                line: line_overrides,
+                ncs: ncs_overrides,
+            },
         )
     }
 

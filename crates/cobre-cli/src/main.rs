@@ -126,7 +126,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Init(args) => init::execute(args),
-        Command::Run(args) => run::execute(args),
+        Command::Run(ref args) => run::execute(args),
         Command::Validate(args) => validate::execute(args),
         Command::Report(args) => report::execute(args),
         Command::Summary(args) => summary_cmd::execute(args),

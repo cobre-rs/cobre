@@ -1596,7 +1596,22 @@ mod tests {
     #[test]
     fn extract_equipment_reads_primal_when_with_equipment() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 1,
+                n_thermals: 1,
+                n_lines: 1,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
         // theta = 8, equipment starts at 9
         assert_eq!(indexer.theta, 8);
         assert_eq!(indexer.turbine, 9..11);
@@ -1961,7 +1976,22 @@ mod tests {
     #[test]
     fn test_slack_extraction_with_penalty_active() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=true
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, true, vec![], &[]);
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 1,
+                n_thermals: 1,
+                n_lines: 1,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: true,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
 
         assert!(
             indexer.has_inflow_penalty,
@@ -2052,7 +2082,22 @@ mod tests {
     #[test]
     fn test_slack_extraction_without_penalty_is_zero() {
         // N=2, L=1, T=1, Ln=1, B=1, K=1, has_inflow_penalty=false
-        let indexer = StageIndexer::with_equipment(2, 1, 1, 1, 1, 1, false, vec![], &[]);
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 1,
+                n_thermals: 1,
+                n_lines: 1,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
         assert!(
             !indexer.has_inflow_penalty,
             "has_inflow_penalty must be false"
@@ -2116,7 +2161,22 @@ mod tests {
         // Use StageIndexer::new (no equipment) but manually set has_inflow_penalty
         // by using with_equipment with zero blocks — turbine.is_empty() triggers fallback.
         // N=2, L=1, T=0, Ln=0, B=0, K=0, has_inflow_penalty=true
-        let indexer = StageIndexer::with_equipment(2, 1, 0, 0, 0, 0, true, vec![], &[]);
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 1,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 0,
+                n_blks: 0,
+                has_inflow_penalty: true,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
 
         // turbine is empty (n_blks=0) → fallback path
         assert!(
@@ -2209,7 +2269,22 @@ mod tests {
     /// ```
     fn make_indexer_2h_1fpha_1blk() -> StageIndexer {
         // h0 is FPHA (system index 0), h1 is constant-productivity (system index 1)
-        StageIndexer::with_equipment(2, 0, 0, 0, 0, 1, false, vec![0], &[2])
+        StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 2,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 0,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![0],
+                planes_per_hydro: vec![2],
+            },
+        )
     }
 
     /// Acceptance criterion: FPHA hydro's `generation_mw` equals the LP generation
@@ -2369,17 +2444,23 @@ mod tests {
     /// ```
     fn make_indexer_1h_evap_1blk() -> StageIndexer {
         StageIndexer::with_equipment_and_evaporation(
-            1,
-            0,
-            0,
-            0,
-            0,
-            1,
-            false,
-            vec![],
-            &[],
-            vec![0],
-            1,
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 0,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaConfig {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+            &crate::indexer::EvapConfig {
+                hydro_indices: vec![0],
+            },
         )
     }
 

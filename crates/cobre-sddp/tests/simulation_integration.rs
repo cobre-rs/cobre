@@ -580,6 +580,9 @@ fn train_simulate_write_cycle() {
         checkpoint_interval: None,
         warm_start_cuts: 0,
         event_sender: Some(tx),
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -610,12 +613,9 @@ fn train_simulate_write_cycle() {
         &fx.risk_measures,
         iteration_limit(3),
         None,
-        0.0,
         None,
         &comm,
-        1,
         || Ok(MockSolver::with_fixed(100.0)),
-        1,
     )
     .expect("train must succeed");
 

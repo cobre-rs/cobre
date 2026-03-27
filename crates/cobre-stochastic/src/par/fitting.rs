@@ -523,7 +523,6 @@ pub struct ArCoefficientEstimate {
 /// let estimates = estimate_ar_coefficients(&obs, &stats, &stages_vec, &entity_ids, 1).unwrap();
 /// assert_eq!(estimates.len(), 2);
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn estimate_ar_coefficients(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -541,86 +540,67 @@ pub fn estimate_ar_coefficients(
     )
 }
 
-/// Estimate AR coefficients with an optional [`SeasonMap`] fallback for
-/// historical observations that predate the study horizon.
+// ---------------------------------------------------------------------------
+// Shared data-preparation helpers for season-aware estimation functions
+// ---------------------------------------------------------------------------
+
+/// Pre-computed lookups for season-aware PAR estimation functions.
 ///
-/// # Errors
-///
-/// Returns [`StochasticError::InsufficientData`] when insufficient
-/// observations exist for any `(entity, season)` group.
-#[allow(clippy::too_many_lines)]
-pub fn estimate_ar_coefficients_with_season_map(
+/// Both [`estimate_ar_coefficients_with_season_map`] and
+/// [`estimate_correlation_with_season_map`] require the same date-to-season
+/// mapping, stats lookups, and per-entity observation indices. This struct
+/// is built once and shared to avoid code duplication.
+struct SeasonLookups<'a> {
+    stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)>,
+    stats_lookup: HashMap<(EntityId, usize), &'a SeasonalStats>,
+    entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>>,
+    entity_date_index: HashMap<EntityId, HashMap<NaiveDate, usize>>,
+    n_seasons: usize,
+}
+
+/// Build the shared season lookups from observations, seasonal stats, and stages.
+fn build_season_lookups<'a>(
     observations: &[(EntityId, NaiveDate, f64)],
-    seasonal_stats: &[SeasonalStats],
+    seasonal_stats: &'a [SeasonalStats],
     stages: &[Stage],
-    hydro_ids: &[EntityId],
-    max_order: usize,
-    season_map: Option<&SeasonMap>,
-) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
-    // -----------------------------------------------------------------------
-    // Step 1: Build date-to-season mapping (same as estimate_seasonal_stats).
-    // -----------------------------------------------------------------------
+) -> SeasonLookups<'a> {
+    // Step 1: Build date-to-season mapping (stage index sorted by start_date).
     let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
         .collect();
     stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
 
-    // -----------------------------------------------------------------------
-    // Step 2: Build (entity_id, season_id) -> SeasonalStats lookup.
-    // -----------------------------------------------------------------------
-    let stats_lookup: HashMap<(EntityId, usize), &SeasonalStats> = {
-        // Determine season_id for each SeasonalStats entry from stage_index.
-        // We use the stage_id stored in SeasonalStats to find the season_id of
-        // the matching stage.
-        let stage_id_to_season: HashMap<i32, usize> = stage_index
-            .iter()
-            .map(|&(_, _, stage_id, season_id)| (stage_id, season_id))
-            .collect();
+    // Build stage_id -> season_id lookup.
+    let stage_id_to_season: HashMap<i32, usize> = stage_index
+        .iter()
+        .map(|&(_, _, stage_id, season_id)| (stage_id, season_id))
+        .collect();
 
-        seasonal_stats
-            .iter()
-            .filter_map(|s| {
-                let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
-                Some(((s.entity_id, season_id), s))
-            })
-            .collect()
-    };
+    // Step 2: Build (entity_id, season_id) -> SeasonalStats lookup.
+    let stats_lookup: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
+        .iter()
+        .filter_map(|s| {
+            let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
+            Some(((s.entity_id, season_id), s))
+        })
+        .collect();
 
     // Determine the total number of distinct seasons (M).
-    let n_seasons: usize = {
-        let mut max_season = 0usize;
-        for &(_, _, _, season_id) in &stage_index {
-            if season_id >= max_season {
-                max_season = season_id + 1;
-            }
-        }
-        max_season
-    };
+    let n_seasons: usize = stage_index
+        .iter()
+        .map(|&(_, _, _, sid)| sid + 1)
+        .max()
+        .unwrap_or(0);
 
-    // -----------------------------------------------------------------------
-    // Step 3: For each (entity, season), collect observations and their
-    // time-ordered lagged values.
-    //
-    // We build a map: (entity_id, season_id) -> Vec<(value_at_t, [lag_values])>
-    // where lag_values[l-1] = value at t-l (for l in 1..=max_order).
-    //
-    // To find the lagged value a_{t-l}, we need the observations sorted by date
-    // for each entity, so we can look up the value `l` positions back.
-    // -----------------------------------------------------------------------
-
-    // Collect all observations for each entity in date order (input is sorted).
-    // For each entity, map NaiveDate -> value for O(1) lag lookup.
+    // Step 3: Group observations by entity in chronological order.
     let mut entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>> = HashMap::new();
     for &(entity_id, date, value) in observations {
         entity_obs.entry(entity_id).or_default().push((date, value));
     }
-    // Ensure each entity's observations are sorted by date.
     for obs_vec in entity_obs.values_mut() {
         obs_vec.sort_unstable_by_key(|(d, _)| *d);
     }
-
-    // Build a date->index map per entity for O(1) lag lookup by position.
     let entity_date_index: HashMap<EntityId, HashMap<NaiveDate, usize>> = entity_obs
         .iter()
         .map(|(&eid, obs_vec)| {
@@ -633,17 +613,40 @@ pub fn estimate_ar_coefficients_with_season_map(
         })
         .collect();
 
-    // -----------------------------------------------------------------------
-    // Step 4: Group observations by (entity_id, season_id), recording only
-    // the date and value (for lag lookups we use the entity_obs position map).
-    // -----------------------------------------------------------------------
+    SeasonLookups {
+        stage_index,
+        stats_lookup,
+        entity_obs,
+        entity_date_index,
+        n_seasons,
+    }
+}
+
+/// Estimate AR coefficients with an optional [`SeasonMap`] fallback for
+/// historical observations that predate the study horizon.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when insufficient
+/// observations exist for any `(entity, season)` group.
+pub fn estimate_ar_coefficients_with_season_map(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    max_order: usize,
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
+    let lookups = build_season_lookups(observations, seasonal_stats, stages);
+
+    // Group observations by (entity_id, season_id).
     let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
     let mut group_obs: HashMap<(EntityId, usize), Vec<(NaiveDate, f64)>> = HashMap::new();
     for &(entity_id, date, value) in observations {
         if !entity_set.contains(&entity_id) {
             continue;
         }
-        let Some(season_id) = find_season_for_date(&stage_index, date)
+        let Some(season_id) = find_season_for_date(&lookups.stage_index, date)
             .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
         else {
             continue;
@@ -654,23 +657,28 @@ pub fn estimate_ar_coefficients_with_season_map(
             .push((date, value));
     }
 
-    // -----------------------------------------------------------------------
-    // Step 5: For each (hydro, season) pair, compute autocorrelations and
-    // call levinson_durbin.
-    // -----------------------------------------------------------------------
+    compute_ar_per_group(&lookups, &group_obs, hydro_ids, max_order)
+}
+
+/// Compute AR coefficients for each (hydro, season) pair via Levinson-Durbin.
+fn compute_ar_per_group(
+    lookups: &SeasonLookups<'_>,
+    group_obs: &HashMap<(EntityId, usize), Vec<(NaiveDate, f64)>>,
+    hydro_ids: &[EntityId],
+    max_order: usize,
+) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
     let mut result: Vec<ArCoefficientEstimate> = Vec::new();
 
     for &hydro_id in hydro_ids {
-        for season_id in 0..n_seasons {
+        for season_id in 0..lookups.n_seasons {
             let key = (hydro_id, season_id);
 
-            // Retrieve seasonal stats for this pair (skip if absent).
-            let Some(stats_m) = stats_lookup.get(&key) else {
+            let Some(stats_m) = lookups.stats_lookup.get(&key) else {
                 continue;
             };
 
-            // If max_order == 0, emit white noise immediately.
-            if max_order == 0 {
+            // max_order == 0 or constant inflow → white noise.
+            if max_order == 0 || stats_m.std == 0.0 {
                 result.push(ArCoefficientEstimate {
                     hydro_id,
                     season_id,
@@ -680,24 +688,11 @@ pub fn estimate_ar_coefficients_with_season_map(
                 continue;
             }
 
-            // If s_m == 0.0, constant inflow — white noise.
-            if stats_m.std == 0.0 {
-                result.push(ArCoefficientEstimate {
-                    hydro_id,
-                    season_id,
-                    coefficients: Vec::new(),
-                    residual_std_ratio: 1.0,
-                });
-                continue;
-            }
-
-            // Get observations for this (entity, season) pair.
             let Some(pair_obs) = group_obs.get(&key) else {
                 continue;
             };
 
             let n_m = pair_obs.len();
-            // Need at least max_order + 1 observations to compute max_order autocorrelations.
             if n_m < max_order + 1 {
                 return Err(StochasticError::InsufficientData {
                     context: format!(
@@ -708,78 +703,18 @@ pub fn estimate_ar_coefficients_with_season_map(
                 });
             }
 
-            // Retrieve the entity's full sorted observation vector for lag lookups.
-            let Some(all_obs) = entity_obs.get(&hydro_id) else {
+            let Some(all_obs) = lookups.entity_obs.get(&hydro_id) else {
                 continue;
             };
-            let Some(date_index) = entity_date_index.get(&hydro_id) else {
+            let Some(date_index) = lookups.entity_date_index.get(&hydro_id) else {
                 continue;
             };
 
-            // Compute cross-seasonal autocorrelations rho_m(1)..rho_m(effective_order).
-            let mut autocorrelations: Vec<f64> = Vec::with_capacity(max_order);
-            let mut effective_order = max_order;
+            let (autocorrelations, effective_order) = compute_cross_seasonal_autocorrelations(
+                lookups, stats_m, pair_obs, all_obs, date_index, hydro_id, season_id, max_order,
+            );
 
-            'lag_loop: for lag in 1..=max_order {
-                // The lagged season is (season_id - lag) mod n_seasons.
-                let lag_season = season_id
-                    .wrapping_add(n_seasons)
-                    .wrapping_sub(lag % n_seasons)
-                    % n_seasons;
-
-                // Look up lag-season stats.
-                let lag_key = (hydro_id, lag_season);
-                let Some(stats_lag) = stats_lookup.get(&lag_key) else {
-                    // No stats for lag season — truncate.
-                    effective_order = lag - 1;
-                    break 'lag_loop;
-                };
-
-                // If s_{m-l} == 0.0, autocorrelation undefined — truncate.
-                if stats_lag.std == 0.0 {
-                    effective_order = lag - 1;
-                    break 'lag_loop;
-                }
-
-                // Compute gamma_m(lag) = (1/(N_m - 1)) * Σ (a_t - μ_m)(a_{t-lag} - μ_{lag_season})
-                // iterating over all observations in season m, looking up the lag-l predecessor.
-                let mu_m = stats_m.mean;
-                let mu_lag = stats_lag.mean;
-
-                let mut cross_sum = 0.0_f64;
-                let mut valid_count = 0usize;
-
-                for &(date, value) in pair_obs {
-                    // Find the position of this observation in the entity's full list.
-                    let Some(&pos) = date_index.get(&date) else {
-                        continue;
-                    };
-                    // The lag-l predecessor must exist and be at least `lag` positions back.
-                    if pos < lag {
-                        continue;
-                    }
-                    let (_, lagged_value) = all_obs[pos - lag];
-                    cross_sum += (value - mu_m) * (lagged_value - mu_lag);
-                    valid_count += 1;
-                }
-
-                if valid_count < 2 {
-                    // Not enough paired observations for this lag — truncate.
-                    effective_order = lag - 1;
-                    break 'lag_loop;
-                }
-
-                // Bessel-corrected cross-covariance: divide by (N_m - 1).
-                #[allow(clippy::cast_precision_loss)]
-                let gamma = cross_sum / (valid_count - 1) as f64;
-                let rho = (gamma / (stats_m.std * stats_lag.std)).clamp(-1.0, 1.0);
-                autocorrelations.push(rho);
-            }
-
-            // Call Levinson-Durbin with the computed autocorrelations.
             let ld_result = levinson_durbin(&autocorrelations, effective_order);
-
-            // residual_std_ratio = sqrt(sigma2), since sigma2 = (sigma_m / s_m)^2.
             let residual_std_ratio = ld_result.sigma2.sqrt().max(f64::EPSILON.sqrt());
 
             result.push(ArCoefficientEstimate {
@@ -791,10 +726,75 @@ pub fn estimate_ar_coefficients_with_season_map(
         }
     }
 
-    // Sort by (hydro_id, season_id) ascending.
     result.sort_unstable_by_key(|e| (e.hydro_id.0, e.season_id));
-
     Ok(result)
+}
+
+/// Compute cross-seasonal autocorrelations `rho_m(1)..rho_m(p)` for a single
+/// (hydro, season) pair using positional lag lookup.
+///
+/// Returns the autocorrelation vector and the effective order (may be truncated
+/// if lag-season stats are missing or have zero std).
+#[allow(clippy::too_many_arguments)]
+fn compute_cross_seasonal_autocorrelations(
+    lookups: &SeasonLookups<'_>,
+    stats_m: &SeasonalStats,
+    pair_obs: &[(NaiveDate, f64)],
+    all_obs: &[(NaiveDate, f64)],
+    date_index: &HashMap<NaiveDate, usize>,
+    hydro_id: EntityId,
+    season_id: usize,
+    max_order: usize,
+) -> (Vec<f64>, usize) {
+    let mut autocorrelations: Vec<f64> = Vec::with_capacity(max_order);
+    let mut effective_order = max_order;
+
+    for lag in 1..=max_order {
+        let lag_season = season_id
+            .wrapping_add(lookups.n_seasons)
+            .wrapping_sub(lag % lookups.n_seasons)
+            % lookups.n_seasons;
+
+        let lag_key = (hydro_id, lag_season);
+        let Some(stats_lag) = lookups.stats_lookup.get(&lag_key) else {
+            effective_order = lag - 1;
+            break;
+        };
+
+        if stats_lag.std == 0.0 {
+            effective_order = lag - 1;
+            break;
+        }
+
+        let mu_m = stats_m.mean;
+        let mu_lag = stats_lag.mean;
+        let mut cross_sum = 0.0_f64;
+        let mut valid_count = 0usize;
+
+        for &(date, value) in pair_obs {
+            let Some(&pos) = date_index.get(&date) else {
+                continue;
+            };
+            if pos < lag {
+                continue;
+            }
+            let (_, lagged_value) = all_obs[pos - lag];
+            cross_sum += (value - mu_m) * (lagged_value - mu_lag);
+            valid_count += 1;
+        }
+
+        if valid_count < 2 {
+            effective_order = lag - 1;
+            break;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let gamma = cross_sum / (valid_count - 1) as f64;
+        let rho = (gamma / (stats_m.std * stats_lag.std)).clamp(-1.0, 1.0);
+        autocorrelations.push(rho);
+    }
+
+    (autocorrelations, effective_order)
 }
 
 // ---------------------------------------------------------------------------
@@ -901,7 +901,6 @@ pub fn estimate_ar_coefficients_with_season_map(
 /// assert!(corr.profiles.contains_key("default"));
 /// assert_eq!(corr.profiles["default"].groups[0].matrix.len(), 1);
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn estimate_correlation(
     observations: &[(EntityId, NaiveDate, f64)],
     ar_estimates: &[ArCoefficientEstimate],
@@ -925,7 +924,6 @@ pub fn estimate_correlation(
 ///
 /// Returns [`StochasticError::InsufficientData`] when seasonal stats are
 /// empty but hydros are present, or when residual computation fails.
-#[allow(clippy::too_many_lines)]
 pub fn estimate_correlation_with_season_map(
     observations: &[(EntityId, NaiveDate, f64)],
     ar_estimates: &[ArCoefficientEstimate],
@@ -948,7 +946,6 @@ pub fn estimate_correlation_with_season_map(
         });
     }
 
-    // Guard: seasonal_stats must be non-empty if hydro_ids is non-empty.
     if seasonal_stats.is_empty() {
         return Err(StochasticError::InsufficientData {
             context: "seasonal_stats is empty but hydro_ids is non-empty; \
@@ -957,116 +954,62 @@ pub fn estimate_correlation_with_season_map(
         });
     }
 
-    // -----------------------------------------------------------------------
-    // Step 1: Build date-to-season mapping (stage index sorted by start_date).
-    // -----------------------------------------------------------------------
-    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
-        .iter()
-        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
-        .collect();
-    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
-
-    // Build stage_id -> season_id lookup.
-    let stage_id_to_season: HashMap<i32, usize> = stage_index
-        .iter()
-        .map(|&(_, _, stage_id, season_id)| (stage_id, season_id))
-        .collect();
-
-    // -----------------------------------------------------------------------
-    // Step 2: Build lookup maps for seasonal stats and AR estimates.
-    //
-    // Key: (entity_id, season_id).
-    // -----------------------------------------------------------------------
-    let stats_lookup: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
-        .iter()
-        .filter_map(|s| {
-            let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
-            Some(((s.entity_id, season_id), s))
-        })
-        .collect();
+    let lookups = build_season_lookups(observations, seasonal_stats, stages);
 
     let ar_lookup: HashMap<(EntityId, usize), &ArCoefficientEstimate> = ar_estimates
         .iter()
         .map(|e| ((e.hydro_id, e.season_id), e))
         .collect();
 
-    // -----------------------------------------------------------------------
-    // Step 3: Group observations by entity in chronological order.
-    //
-    // For each entity, build:
-    //   - a sorted Vec<(NaiveDate, f64)> for positional lag lookup,
-    //   - a HashMap<NaiveDate, usize> for O(1) position lookup by date.
-    // -----------------------------------------------------------------------
-    let mut entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>> = HashMap::new();
-    for &(entity_id, date, value) in observations {
-        entity_obs.entry(entity_id).or_default().push((date, value));
-    }
-    for obs_vec in entity_obs.values_mut() {
-        obs_vec.sort_unstable_by_key(|(d, _)| *d);
-    }
-    let entity_date_index: HashMap<EntityId, HashMap<NaiveDate, usize>> = entity_obs
-        .iter()
-        .map(|(&eid, obs_vec)| {
-            let idx_map: HashMap<NaiveDate, usize> = obs_vec
-                .iter()
-                .enumerate()
-                .map(|(i, (d, _))| (*d, i))
-                .collect();
-            (eid, idx_map)
-        })
-        .collect();
+    let residuals = compute_hydro_residuals(&lookups, &ar_lookup, hydro_ids, season_map);
+    let matrix = compute_pearson_correlation_matrix(&residuals);
 
-    // -----------------------------------------------------------------------
-    // Step 4: Compute standardized residuals for each hydro.
-    //
-    // For each hydro and each observation date, if the AR model for its season
-    // is available and sufficient lag history exists, compute:
-    //   z_t   = (a_t - mu_m) / s_m
-    //   z_t-l = (a_{t-l} - mu_{m-l}) / s_{m-l}   for l in 1..=p
-    //   ε_t   = z_t - Σ ψ*_{m,l} * z_{t-l}
-    //
-    // The number of distinct seasons M is needed for cyclic lag wrapping.
-    // -----------------------------------------------------------------------
-    let n_seasons: usize = stage_index
-        .iter()
-        .map(|&(_, _, _, sid)| sid + 1)
-        .max()
-        .unwrap_or(0);
+    Ok(assemble_correlation_model(hydro_ids, matrix))
+}
 
-    // residuals: hydro index -> HashMap<NaiveDate, f64>
+/// Compute standardized AR innovation residuals for each hydro.
+///
+/// For each hydro and each observation date where the AR model has sufficient
+/// lag history, computes:
+///   `epsilon_t = z_t - sum(psi_{m,l} * z_{t-l})` for l in 1..=p
+///
+/// Returns one `HashMap<NaiveDate, f64>` per hydro (indexed by position in
+/// `hydro_ids`).
+fn compute_hydro_residuals(
+    lookups: &SeasonLookups<'_>,
+    ar_lookup: &HashMap<(EntityId, usize), &ArCoefficientEstimate>,
+    hydro_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Vec<HashMap<NaiveDate, f64>> {
     let n_hydros = hydro_ids.len();
     let mut hydro_residuals: Vec<HashMap<NaiveDate, f64>> =
         (0..n_hydros).map(|_| HashMap::new()).collect();
 
     for (hidx, &hydro_id) in hydro_ids.iter().enumerate() {
-        let Some(all_obs) = entity_obs.get(&hydro_id) else {
+        let Some(all_obs) = lookups.entity_obs.get(&hydro_id) else {
             continue;
         };
-        let Some(date_index) = entity_date_index.get(&hydro_id) else {
+        let Some(date_index) = lookups.entity_date_index.get(&hydro_id) else {
             continue;
         };
 
         for &(date, value) in all_obs {
-            // Determine the season for this observation.
-            let Some(season_id) = find_season_for_date(&stage_index, date)
+            let Some(season_id) = find_season_for_date(&lookups.stage_index, date)
                 .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
             else {
                 continue;
             };
 
-            // Look up seasonal stats for this entity+season.
-            let Some(stats_m) = stats_lookup.get(&(hydro_id, season_id)) else {
+            let Some(stats_m) = lookups.stats_lookup.get(&(hydro_id, season_id)) else {
                 continue;
             };
 
-            // If std is zero (constant inflow), standardized deviation is 0; residual = 0.
             let z_t = if stats_m.std == 0.0 {
                 0.0
             } else {
                 (value - stats_m.mean) / stats_m.std
             };
 
-            // Retrieve AR coefficients for this entity+season.
             let ar_order;
             let ar_coeffs: &[f64];
             let empty_coeffs: Vec<f64> = Vec::new();
@@ -1074,20 +1017,14 @@ pub fn estimate_correlation_with_season_map(
                 ar_order = ar_est.coefficients.len();
                 ar_coeffs = &ar_est.coefficients;
             } else {
-                // No AR estimate for this pair — treat as AR(0), residual = z_t.
                 ar_order = 0;
                 ar_coeffs = &empty_coeffs;
             }
 
-            // Compute Σ ψ*_{m,l} * z_{t-l} for l in 1..=ar_order.
-            // This requires positional lookup of the lag-l predecessor.
             let Some(&pos) = date_index.get(&date) else {
                 continue;
             };
-
-            // Check that we have enough lag history.
             if pos < ar_order {
-                // Not enough history for all lags — skip this time step.
                 continue;
             }
 
@@ -1095,12 +1032,14 @@ pub fn estimate_correlation_with_season_map(
             let mut lag_ok = true;
 
             for lag in 1..=ar_order {
-                let lag_season = season_id
-                    .wrapping_add(n_seasons)
-                    .wrapping_sub(lag % if n_seasons == 0 { 1 } else { n_seasons })
-                    % if n_seasons == 0 { 1 } else { n_seasons };
+                let n_s = if lookups.n_seasons == 0 {
+                    1
+                } else {
+                    lookups.n_seasons
+                };
+                let lag_season = season_id.wrapping_add(n_s).wrapping_sub(lag % n_s) % n_s;
 
-                let Some(stats_lag) = stats_lookup.get(&(hydro_id, lag_season)) else {
+                let Some(stats_lag) = lookups.stats_lookup.get(&(hydro_id, lag_season)) else {
                     lag_ok = false;
                     break;
                 };
@@ -1123,31 +1062,33 @@ pub fn estimate_correlation_with_season_map(
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Step 5: Compute Pearson correlation matrix (n_hydros x n_hydros).
-    //
-    // For each pair (i, j), collect time steps where both have residuals,
-    // then apply the standard Pearson formula with Bessel correction.
-    // -----------------------------------------------------------------------
-    let mut matrix: Vec<Vec<f64>> = vec![vec![0.0_f64; n_hydros]; n_hydros];
+    hydro_residuals
+}
 
-    for i in 0..n_hydros {
-        // Diagonal is always 1.0.
+/// Compute the `n_hydros` x `n_hydros` Pearson correlation matrix from residuals.
+///
+/// For each pair `(i, j)`, collects time steps where both have residuals,
+/// then applies the standard Pearson formula with Bessel correction (N-1).
+/// Pairs are sorted for deterministic iteration across `HashMap` orderings.
+fn compute_pearson_correlation_matrix(
+    hydro_residuals: &[HashMap<NaiveDate, f64>],
+) -> Vec<Vec<f64>> {
+    let n = hydro_residuals.len();
+    let mut matrix: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n];
+
+    for i in 0..n {
         matrix[i][i] = 1.0;
 
-        for j in (i + 1)..n_hydros {
-            // Find overlapping dates.
+        for j in (i + 1)..n {
             let r_i = &hydro_residuals[i];
             let r_j = &hydro_residuals[j];
 
-            // Collect aligned pairs (ε_i, ε_j) where both are present.
             let mut pairs: Vec<(f64, f64)> = r_i
                 .iter()
                 .filter_map(|(date, &ei)| r_j.get(date).map(|&ej| (ei, ej)))
                 .collect();
 
             if pairs.len() < 2 {
-                // Not enough overlap — set correlation to 0.0.
                 matrix[i][j] = 0.0;
                 matrix[j][i] = 0.0;
                 continue;
@@ -1157,9 +1098,9 @@ pub fn estimate_correlation_with_season_map(
             pairs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             #[allow(clippy::cast_precision_loss)]
-            let n = pairs.len() as f64;
-            let mean_i = pairs.iter().map(|(ei, _)| ei).sum::<f64>() / n;
-            let mean_j = pairs.iter().map(|(_, ej)| ej).sum::<f64>() / n;
+            let np = pairs.len() as f64;
+            let mean_i = pairs.iter().map(|(ei, _)| ei).sum::<f64>() / np;
+            let mean_j = pairs.iter().map(|(_, ej)| ej).sum::<f64>() / np;
 
             let mut cov = 0.0_f64;
             let mut var_i = 0.0_f64;
@@ -1172,29 +1113,27 @@ pub fn estimate_correlation_with_season_map(
                 var_j += dj * dj;
             }
 
-            // Bessel correction: divide by (N - 1).
-            let denom = n - 1.0;
+            let denom = np - 1.0;
             let std_i = (var_i / denom).sqrt();
             let std_j = (var_j / denom).sqrt();
 
             let rho = if std_i < f64::EPSILON || std_j < f64::EPSILON {
-                // Degenerate case: constant residuals — treat as uncorrelated.
                 0.0
             } else {
                 (cov / denom) / (std_i * std_j)
             };
 
-            // Clamp to [-1, 1] to correct for floating-point rounding.
             let rho = rho.clamp(-1.0, 1.0);
-
             matrix[i][j] = rho;
             matrix[j][i] = rho;
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Step 6: Assemble the CorrelationModel.
-    // -----------------------------------------------------------------------
+    matrix
+}
+
+/// Assemble a [`CorrelationModel`] from hydro IDs and a correlation matrix.
+fn assemble_correlation_model(hydro_ids: &[EntityId], matrix: Vec<Vec<f64>>) -> CorrelationModel {
     let entities: Vec<CorrelationEntity> = hydro_ids
         .iter()
         .map(|&id| CorrelationEntity {
@@ -1216,11 +1155,11 @@ pub fn estimate_correlation_with_season_map(
     let mut profiles = BTreeMap::new();
     profiles.insert("default".to_string(), profile);
 
-    Ok(CorrelationModel {
+    CorrelationModel {
         method: "cholesky".to_string(),
         profiles,
         schedule: Vec::new(),
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------

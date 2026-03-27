@@ -2032,7 +2032,7 @@ fn fill_evaporation_entries(
 ///    - `==`: `row_lower = bound`, `row_upper = bound`
 ///
 /// 2. Iterates over the constraint expression terms, calls
-///    [`resolve_variable_ref`] for each [`LinearTerm`], and pushes
+///    `resolve_variable_ref` for each [`LinearTerm`], and pushes
 ///    `(row_index, coefficient * multiplier)` entries into `col_entries`.
 ///
 /// 3. When `slack.enabled = true`, sets slack column bounds to `[0, +INF)` and
@@ -8122,7 +8122,7 @@ mod tests {
         let penalties = ResolvedPenalties::new(
             &PenaltiesCountsSpec {
                 n_hydros: 0,
-                n_buses: n_buses,
+                n_buses,
                 n_lines: 0,
                 n_ncs: 0,
                 n_stages: 1,

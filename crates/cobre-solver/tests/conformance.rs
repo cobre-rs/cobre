@@ -906,16 +906,20 @@ fn make_larger_lp_template() -> StageTemplate {
     }
 }
 
-/// SS limit row 1: `time_limit=0.0` triggers `TimeLimitExceeded` with partial solution.
+/// SS limit row 1: external `time_limit=0` causes graceful failure.
 ///
-/// Crash heuristic completes before the time check fires, populating solution buffers
-/// with the crash-point values (all xi=0, objective=0.0).
+/// `HiGHS` tracks elapsed time cumulatively from instance creation —
+/// `time_limit` is not used by the safeguard system (iteration limits
+/// and wall-clock checks are used instead). An externally-set
+/// `time_limit=0` causes immediate `TIME_LIMIT` on every `run_once()`,
+/// exhausting all retry levels and returning `NumericalDifficulty`.
 #[cfg(feature = "test-support")]
 #[test]
 fn test_solver_highs_solve_time_limit() {
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&make_larger_lp_template());
 
+    // External time_limit=0 persists through all retry levels.
     unsafe {
         test_support::cobre_highs_set_double_option(
             solver.raw_handle(),
@@ -924,29 +928,31 @@ fn test_solver_highs_solve_time_limit() {
         );
     }
 
-    let result = solver.solve().map(|s| s.objective);
-    assert!(matches!(result, Err(SolverError::TimeLimitExceeded { .. })));
-
-    if let Err(SolverError::TimeLimitExceeded { elapsed_seconds }) = result {
-        assert!(elapsed_seconds >= 0.0);
-    }
+    let result = solver.solve();
+    assert!(result.is_err(), "time_limit=0 must exhaust all retries");
 
     let stats = solver.statistics();
     assert_eq!(stats.solve_count, 1);
     assert_eq!(stats.failure_count, 1);
-    assert_eq!(stats.success_count, 0);
+    assert!(
+        stats.retry_count > 0,
+        "retry escalation must have been attempted"
+    );
 }
 
-/// SS limit row 2: `simplex_iteration_limit=0` triggers `IterationLimit` with presolve="off".
+/// SS limit row 2: internal safeguard iteration limits override externally-set limits.
 ///
-/// Crash heuristic completes before iteration check, providing crash-point solution.
-/// Presolve disabled to prevent trivial pre-simplex solution.
+/// `solve()` applies its own `simplex_iteration_limit` (derived from LP dimensions)
+/// before `run_once()`, overriding any externally-set `simplex_iteration_limit`.
+/// This ensures the LP solves successfully even if an external caller sets
+/// `simplex_iteration_limit=0`.
 #[cfg(feature = "test-support")]
 #[test]
 fn test_solver_highs_solve_iteration_limit() {
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&make_larger_lp_template());
 
+    // Set an impossibly tight external limit — internal safeguards must override it.
     unsafe {
         test_support::cobre_highs_set_string_option(
             solver.raw_handle(),
@@ -960,29 +966,30 @@ fn test_solver_highs_solve_iteration_limit() {
         );
     }
 
-    let result = solver.solve().map(|s| s.objective);
-    assert!(matches!(result, Err(SolverError::IterationLimit { .. })));
-
-    if let Err(SolverError::IterationLimit { iterations }) = result {
-        assert_eq!(iterations, 0, "no pivots before iteration_limit=0");
-    }
+    // Solve succeeds because internal safeguards override the external limit.
+    let result = solver.solve();
+    assert!(
+        result.is_ok(),
+        "internal safeguard limits must override external simplex_iteration_limit=0"
+    );
 
     let stats = solver.statistics();
     assert_eq!(stats.solve_count, 1);
-    assert_eq!(stats.failure_count, 1);
-    assert_eq!(stats.success_count, 0);
+    assert_eq!(stats.success_count, 1);
 }
 
-/// SS limit row 3: after limit error, reset and restore options allow clean solve.
+/// SS limit row 3: internal safeguards ensure consistent solve across reset cycles.
 ///
-/// Verifies that `restore_default_settings` (called inside retry loop) and manual
-/// cleanup of non-default options (e.g., `simplex_iteration_limit`) allow recovery.
+/// Verifies that `solve()` applies and restores safeguard limits correctly
+/// across multiple load_model/solve/reset cycles. External limit overrides
+/// do not persist because `solve()` sets its own limits before each attempt
+/// and restores them afterward.
 #[cfg(feature = "test-support")]
 #[test]
 fn test_solver_highs_restore_defaults_after_limit() {
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
 
-    // Trigger ITERATION_LIMIT on the larger LP.
+    // First solve succeeds despite external iter_limit=0 (internal safeguards override).
     solver.load_model(&make_larger_lp_template());
     unsafe {
         test_support::cobre_highs_set_int_option(
@@ -991,33 +998,24 @@ fn test_solver_highs_restore_defaults_after_limit() {
             0,
         );
     }
-    assert!(matches!(
-        solver.solve().map(|s| s.objective),
-        Err(SolverError::IterationLimit { .. })
-    ));
+    assert!(
+        solver.solve().is_ok(),
+        "internal safeguards must override external simplex_iteration_limit=0"
+    );
 
-    // Reset and restore simplex_iteration_limit (not in restore_default_settings).
+    // Reset and reload a different LP — solve must still work because
+    // safeguard limits are restored after each solve.
     solver.reset();
-    unsafe {
-        test_support::cobre_highs_set_int_option(
-            solver.raw_handle(),
-            c"simplex_iteration_limit".as_ptr(),
-            i32::MAX,
-        );
-    }
-
-    // Reload SS1.1 and solve cleanly.
     solver.load_model(&make_fixture_stage_template());
     let objective = solver
         .solve()
-        .expect("solve() must succeed after restore")
+        .expect("solve() must succeed after reset")
         .objective;
     assert!((objective - 100.0).abs() < 1e-8);
 
     let stats = solver.statistics();
-    assert!(stats.solve_count >= 2);
-    assert!(stats.failure_count >= 1);
-    assert!(stats.success_count >= 1);
+    assert_eq!(stats.solve_count, 2);
+    assert_eq!(stats.success_count, 2);
 }
 
 // ─── Retry escalation note ────────────────────────────────────────────────────

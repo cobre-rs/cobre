@@ -265,6 +265,26 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
+/// Push one negated, scaled coefficient entry into the cut row batch.
+///
+/// Shared by the sparse and dense paths in [`build_cut_row_batch_into`] to
+/// prevent the two branches from drifting apart during maintenance.
+#[inline]
+fn push_scaled_coefficient(batch: &mut RowBatch, j: usize, coeff: f64, col_scale: &[f64]) {
+    debug_assert!(
+        i32::try_from(j).is_ok(),
+        "column index j={j} exceeds i32::MAX"
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    batch.col_indices.push(j as i32);
+    let d = if col_scale.is_empty() {
+        1.0
+    } else {
+        col_scale[j]
+    };
+    batch.values.push(-coeff * d);
+}
+
 /// Fill a pre-allocated [`RowBatch`] with Benders cut rows from the FCF.
 ///
 /// Clears `batch` and repopulates it with active cuts from `fcf` at the
@@ -272,6 +292,11 @@ pub fn sync_forward<C: Communicator>(
 /// across calls, eliminating heap allocation on the hot path.
 ///
 /// This is the allocation-free core used by `build_cut_row_batch`.
+///
+/// # Panics
+///
+/// Panics if the total number of non-zeros exceeds `i32::MAX` (the `HiGHS`
+/// API limit for CSR indices).
 pub fn build_cut_row_batch_into(
     batch: &mut RowBatch,
     fcf: &FutureCostFunction,
@@ -316,37 +341,16 @@ pub fn build_cut_row_batch_into(
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch.row_starts.push(nz_offset as i32);
 
+        // Unified state coefficient loop: sparse iterates over the nonzero
+        // mask, dense iterates over all state indices. Both yield (col_index,
+        // coefficient) pairs and share the same push logic.
         if is_sparse {
-            // Sparse path: iterate only over nonzero state indices.
             for &j in mask {
-                debug_assert!(
-                    i32::try_from(j).is_ok(),
-                    "column index j={j} exceeds i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                batch.col_indices.push(j as i32);
-                let d = if col_scale.is_empty() {
-                    1.0
-                } else {
-                    col_scale[j]
-                };
-                batch.values.push(-coefficients[j] * d);
+                push_scaled_coefficient(batch, j, coefficients[j], col_scale);
             }
         } else {
-            // Dense path: iterate over all state indices (backward compatible).
             for (j, &c) in coefficients.iter().enumerate() {
-                debug_assert!(
-                    i32::try_from(j).is_ok(),
-                    "column index j={j} exceeds i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                batch.col_indices.push(j as i32);
-                let d = if col_scale.is_empty() {
-                    1.0
-                } else {
-                    col_scale[j]
-                };
-                batch.values.push(-c * d);
+                push_scaled_coefficient(batch, j, c, col_scale);
             }
         }
 

@@ -196,6 +196,8 @@ struct RetryOutcome {
     attempts: u64,
     solve_time: f64,
     iterations: u64,
+    /// The retry level (0..11) at which the solve succeeded.
+    level: u32,
 }
 
 impl HighsSolver {
@@ -528,6 +530,7 @@ impl HighsSolver {
         let mut found_optimal = false;
         let mut optimal_time = 0.0_f64;
         let mut optimal_iterations: u64 = 0;
+        let mut optimal_level = 0_u32;
 
         for level in 0..num_retry_levels {
             // Check overall wall-clock budget before starting a new level.
@@ -552,6 +555,7 @@ impl HighsSolver {
                 found_optimal = true;
                 optimal_time = retry_time;
                 optimal_iterations = iters;
+                optimal_level = level;
                 break;
             }
 
@@ -594,6 +598,7 @@ impl HighsSolver {
                 attempts: retry_attempts,
                 solve_time: optimal_time,
                 iterations: optimal_iterations,
+                level: optimal_level,
             });
         }
 
@@ -1059,6 +1064,7 @@ impl SolverInterface for HighsSolver {
                 self.stats.success_count += 1;
                 self.stats.total_iterations += outcome.iterations;
                 self.stats.total_solve_time_seconds += outcome.solve_time;
+                self.stats.retry_level_histogram[outcome.level as usize] += 1;
                 Ok(self.extract_solution_view(outcome.solve_time))
             }
             Err((attempts, err)) => {

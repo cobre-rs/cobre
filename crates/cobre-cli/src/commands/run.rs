@@ -903,6 +903,7 @@ fn delta_to_stats_row(
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        retry_level_histogram: delta.retry_level_histogram,
     }
 }
 

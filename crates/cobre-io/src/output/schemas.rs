@@ -281,6 +281,18 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
+        Field::new("retry_l0", DataType::UInt64, false),
+        Field::new("retry_l1", DataType::UInt64, false),
+        Field::new("retry_l2", DataType::UInt64, false),
+        Field::new("retry_l3", DataType::UInt64, false),
+        Field::new("retry_l4", DataType::UInt64, false),
+        Field::new("retry_l5", DataType::UInt64, false),
+        Field::new("retry_l6", DataType::UInt64, false),
+        Field::new("retry_l7", DataType::UInt64, false),
+        Field::new("retry_l8", DataType::UInt64, false),
+        Field::new("retry_l9", DataType::UInt64, false),
+        Field::new("retry_l10", DataType::UInt64, false),
+        Field::new("retry_l11", DataType::UInt64, false),
     ])
 }
 

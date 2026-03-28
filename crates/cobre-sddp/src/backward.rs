@@ -76,7 +76,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelI
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
-    cut_sync::{CutSyncBuffers, collect_local_cuts_for_stage},
+    cut_sync::CutSyncBuffers,
     forward::{build_cut_row_batch_into, partition},
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
@@ -205,6 +205,14 @@ pub struct BackwardPassSpec<'a> {
     /// is called to distribute cuts across all ranks. For single-rank runs
     /// the `allgatherv` is a no-op and completes immediately.
     pub cut_sync_bufs: &'a mut CutSyncBuffers,
+
+    /// Pre-allocated buffer for uniform opening probabilities. Reused per stage
+    /// via `clear()` + `resize()` to avoid per-stage allocation.
+    pub probabilities_buf: Vec<f64>,
+
+    /// Pre-allocated buffer for successor active cut slot indices. Reused per
+    /// stage via `clear()` + `extend()` to avoid per-stage allocation.
+    pub successor_active_slots_buf: Vec<usize>,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -608,6 +616,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     #[allow(clippy::cast_precision_loss)]
     let n_workers = workspaces.len() as f64;
     let tree_view = stochastic.tree_view();
+    let mut staged_cuts_buf: Vec<StagedCut> = Vec::new();
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
         // When the caller supplies forward-pass records, perform the per-stage
@@ -632,8 +641,10 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         };
 
         let n_openings = tree_view.n_openings(successor);
+        spec.probabilities_buf.clear();
         #[allow(clippy::cast_precision_loss)]
-        let probabilities: Vec<f64> = vec![1.0_f64 / n_openings as f64; n_openings];
+        spec.probabilities_buf
+            .resize(n_openings, 1.0_f64 / n_openings as f64);
 
         let batch_start = Instant::now();
         build_cut_row_batch_into(
@@ -649,20 +660,19 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         }
         let num_cuts_at_successor = cut_batches[successor].num_rows;
         let template_num_rows = ctx.templates[successor].num_rows;
-        let successor_active_slots: Vec<usize> = fcf
-            .active_cuts(successor)
-            .map(|(slot, _, _)| slot)
-            .collect();
+        spec.successor_active_slots_buf.clear();
+        spec.successor_active_slots_buf
+            .extend(fcf.active_cuts(successor).map(|(slot, _, _)| slot));
 
         let succ_spec = SuccessorSpec {
             t,
             successor,
             my_rank,
-            probabilities: &probabilities,
+            probabilities: &spec.probabilities_buf,
             cut_batch: &cut_batches[successor],
             num_cuts_at_successor,
             template_num_rows,
-            successor_active_slots: &successor_active_slots,
+            successor_active_slots: &spec.successor_active_slots_buf,
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,
             successor_populated_count: fcf.pools[successor].populated_count,
@@ -670,21 +680,21 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
 
-        let mut all_staged: Vec<StagedCut> = Vec::with_capacity(spec.local_work);
+        staged_cuts_buf.clear();
         for worker_result in worker_staged {
-            all_staged.extend(worker_result?);
+            staged_cuts_buf.extend(worker_result?);
         }
         // Ordering invariant: each worker processes a contiguous index range
         // [start_m, end_m) in ascending order, and rayon's indexed collect()
         // preserves worker order, so concatenation is globally sorted.
         debug_assert!(
-            all_staged
+            staged_cuts_buf
                 .windows(2)
                 .all(|w| w[0].trial_point_idx <= w[1].trial_point_idx),
             "backward pass cuts must be sorted by trial_point_idx after worker concatenation"
         );
 
-        for cut in all_staged {
+        for cut in &staged_cuts_buf {
             fcf.add_cut(
                 t,
                 spec.iteration,
@@ -693,7 +703,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 &cut.coefficients,
             );
             cuts_generated += 1;
-            for (slot, increment) in cut.binding_increments {
+            for &(slot, increment) in &cut.binding_increments {
                 fcf.pools[successor].metadata[slot].active_count += increment;
                 fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
             }
@@ -702,14 +712,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // Per-stage cut sync: allgatherv distributes this stage's local cuts
         // to all ranks so every rank sees the same FCF before the next stage.
         let sync_start = Instant::now();
-        let owned_cuts = collect_local_cuts_for_stage(fcf, t, spec.iteration);
-        let local_cuts: Vec<(u32, u32, u32, f64, &[f64])> = owned_cuts
-            .iter()
-            .map(|(slot, iter, fp, intercept, coeffs)| {
-                (*slot, *iter, *fp, *intercept, coeffs.as_slice())
-            })
-            .collect();
-        spec.cut_sync_bufs.sync_cuts(t, &local_cuts, fcf, comm)?;
+        let n_local = spec.cut_sync_bufs.pack_local_cuts(fcf, t, spec.iteration);
+        spec.cut_sync_bufs.sync_packed_cuts(t, n_local, fcf, comm)?;
         #[allow(clippy::cast_possible_truncation)]
         {
             cut_sync_ms += sync_start.elapsed().as_millis() as u64;
@@ -1308,6 +1312,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1383,6 +1389,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1458,6 +1466,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1529,6 +1539,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1600,6 +1612,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1669,6 +1683,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         );
@@ -1782,6 +1798,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1873,6 +1891,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -1969,6 +1989,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2052,6 +2074,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2144,6 +2168,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2231,6 +2257,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2312,6 +2340,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2400,6 +2430,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         );
@@ -2514,6 +2546,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2568,6 +2602,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -2890,6 +2926,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -3017,6 +3055,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -3149,6 +3189,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )
@@ -3247,6 +3289,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
+                probabilities_buf: Vec::new(),
+                successor_active_slots_buf: Vec::new(),
             },
             &comm,
         )

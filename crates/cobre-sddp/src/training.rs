@@ -398,6 +398,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         }};
     }
 
+    // Pre-allocated backward-pass buffers, reused across iterations to avoid
+    // per-iteration allocation. Declared outside the loop so capacity persists.
+    let mut bwd_probabilities_buf: Vec<f64> = Vec::new();
+    let mut bwd_successor_active_slots_buf: Vec<usize> = Vec::new();
+
     for iteration in 1..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
@@ -494,6 +499,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             risk_measures,
             cut_activity_tolerance,
             cut_sync_bufs: &mut cut_sync_bufs,
+            probabilities_buf: std::mem::take(&mut bwd_probabilities_buf),
+            successor_active_slots_buf: std::mem::take(&mut bwd_successor_active_slots_buf),
         };
 
         let backward_result = match run_backward_pass(
@@ -509,6 +516,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             Ok(r) => r,
             Err(e) => on_error!(e),
         };
+
+        // Recover buffers so their capacity is reused in the next iteration.
+        bwd_probabilities_buf = bwd_spec.probabilities_buf;
+        bwd_successor_active_slots_buf = bwd_spec.successor_active_slots_buf;
 
         // Store per-stage backward deltas and compute aggregate solve time.
         let bwd_solve_time_ms = {

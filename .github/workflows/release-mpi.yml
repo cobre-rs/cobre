@@ -29,7 +29,7 @@ on:
       - "**[0-9]+.[0-9]+.[0-9]+*"
 
 env:
-  MPICH_VERSION: "4.3.0"
+  MPICH_VERSION: "4.3.2"
 
 jobs:
   build-mpi:
@@ -41,11 +41,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
             mpi_source: source
-          # aarch64-unknown-linux-gnu is disabled until ferrompi 0.2.x fixes
-          # the c_char signedness issue on aarch64 (i8 vs u8).
-          # - target: aarch64-unknown-linux-gnu
-          #   runner: ubuntu-24.04-arm
-          #   mpi_source: source
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            mpi_source: source
           - target: aarch64-apple-darwin
             runner: macos-14
             mpi_source: brew

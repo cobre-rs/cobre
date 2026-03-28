@@ -472,7 +472,7 @@ impl StudySetup {
             has_inflow_penalty,
             max_deficit_segments,
         };
-        let fpha_cfg = crate::indexer::FphaConfig {
+        let fpha_cfg = crate::indexer::FphaColumnLayout {
             hydro_indices: fpha_hydro_indices,
             planes_per_hydro: fpha_planes,
         };

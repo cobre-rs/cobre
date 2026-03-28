@@ -466,10 +466,10 @@ pub struct EquipmentCounts {
     pub max_deficit_segments: usize,
 }
 
-/// FPHA (Piecewise-linear Hydro Approximation) configuration.
+/// FPHA (Piecewise-linear Hydro Approximation) column layout.
 ///
 /// Groups the per-hydro FPHA data needed for column layout computation.
-pub struct FphaConfig {
+pub struct FphaColumnLayout {
     /// Indices of hydros using FPHA production models.
     pub hydro_indices: Vec<usize>,
     /// Number of FPHA planes for each hydro in `hydro_indices`.
@@ -650,7 +650,7 @@ impl StageIndexer {
     ///     hydro_count: 1, max_par_order: 0, n_thermals: 2, n_lines: 1,
     ///     n_buses: 2, n_blks: 1, has_inflow_penalty: false, max_deficit_segments: 1,
     /// };
-    /// let fpha = cobre_sddp::FphaConfig { hydro_indices: vec![], planes_per_hydro: vec![] };
+    /// let fpha = cobre_sddp::FphaColumnLayout { hydro_indices: vec![], planes_per_hydro: vec![] };
     /// let idx = StageIndexer::with_equipment(&counts, &fpha);
     /// assert_eq!(idx.turbine,    4..5);
     /// assert_eq!(idx.spillage,   5..6);
@@ -668,7 +668,7 @@ impl StageIndexer {
     /// assert_eq!(idx.n_buses, 2);
     /// ```
     #[must_use]
-    pub fn with_equipment(counts: &EquipmentCounts, fpha: &FphaConfig) -> Self {
+    pub fn with_equipment(counts: &EquipmentCounts, fpha: &FphaColumnLayout) -> Self {
         Self::with_equipment_and_evaporation(
             counts,
             fpha,
@@ -688,7 +688,7 @@ impl StageIndexer {
     /// # Arguments
     ///
     /// - `counts` — equipment counts grouped into [`EquipmentCounts`]
-    /// - `fpha` — FPHA configuration grouped into [`FphaConfig`]
+    /// - `fpha` — FPHA column layout grouped into [`FphaColumnLayout`]
     /// - `evap` — evaporation configuration grouped into [`EvapConfig`]
     ///
     /// When `evap.hydro_indices` is empty this produces the same result as
@@ -696,7 +696,7 @@ impl StageIndexer {
     #[must_use]
     pub fn with_equipment_and_evaporation(
         counts: &EquipmentCounts,
-        fpha: &FphaConfig,
+        fpha: &FphaColumnLayout,
         evap: &EvapConfig,
     ) -> Self {
         let hydro_count = counts.hydro_count;
@@ -982,7 +982,7 @@ const _: () = {
 mod tests {
     use cobre_solver::StageTemplate;
 
-    use super::{EquipmentCounts, EvapConfig, FphaConfig, FphaRowRange, StageIndexer};
+    use super::{EquipmentCounts, EvapConfig, FphaColumnLayout, FphaRowRange, StageIndexer};
 
     /// Test helper: construct `EquipmentCounts` with `max_deficit_segments = 1`.
     fn eq(
@@ -1006,9 +1006,9 @@ mod tests {
         }
     }
 
-    /// Test helper: construct `FphaConfig`.
-    fn fpha(hydro_indices: Vec<usize>, planes_per_hydro: Vec<usize>) -> FphaConfig {
-        FphaConfig {
+    /// Test helper: construct `FphaColumnLayout`.
+    fn fpha(hydro_indices: Vec<usize>, planes_per_hydro: Vec<usize>) -> FphaColumnLayout {
+        FphaColumnLayout {
             hydro_indices,
             planes_per_hydro,
         }

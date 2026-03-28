@@ -88,7 +88,7 @@ pub use hydro_models::{
     resolve_production_models,
 };
 pub use indexer::{
-    EquipmentCounts, EvapConfig, EvaporationIndices, FphaConfig, FphaRowRange, StageIndexer,
+    EquipmentCounts, EvapConfig, EvaporationIndices, FphaColumnLayout, FphaRowRange, StageIndexer,
 };
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};

@@ -16,11 +16,12 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.2.0)
+## Current State (v0.2.2)
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,024 tests, including 16 deterministic regression cases (D01–D16).
+2,771 tests, including 16 deterministic regression cases (D01–D16) and
+2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
 cascade coupling, water withdrawal, inflow non-negativity, multi-segment
@@ -29,7 +30,8 @@ block factors, per-stage productivity override, CVaR risk measure, PAR(p)
 estimation (periodic YW, PACF), LP scaling, solver statistics instrumentation,
 LP setup optimisation (model persistence, incremental cuts, sparse cuts),
 simulation basis warm-start, cut selection with Parquet output, backward pass
-performance optimisations, MPI distribution, Python bindings with Arrow
+performance optimisations, solver safeguards (12-level retry escalation with
+wall-clock budgets), MPI distribution, Python bindings with Arrow
 zero-copy, CLI with 6 subcommands.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
@@ -74,7 +76,7 @@ into an existing context struct instead of adding a suppression. Read
 `.claude/architecture-rules.md` for the specific struct patterns.
 
 The current codebase has legacy suppressions that are being worked down.
-Until they reach zero, use `--max 12` as the threshold. The count must
+Until they reach zero, use `--max 10` as the threshold. The count must
 never increase.
 
 ---

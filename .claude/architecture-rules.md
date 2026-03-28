@@ -74,7 +74,7 @@ When clippy fires `too_many_arguments` on production code (code before
 called millions of times; their signatures are the public contract of the
 training loop.
 
-Run `python3 scripts/check_suppressions.py --check too_many_arguments --max 17`
+Run `python3 scripts/check_suppressions.py --check too_many_arguments --max 10`
 before committing. The count must never increase. The target is 0.
 
 ---

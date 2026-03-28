@@ -393,7 +393,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 2,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![0, 2],
                 planes_per_hydro: vec![3, 3],
             },
@@ -824,7 +824,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -883,7 +883,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },

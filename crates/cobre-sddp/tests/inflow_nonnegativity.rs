@@ -476,7 +476,7 @@ fn build_fixture() -> Fixture {
             has_inflow_penalty,
             max_deficit_segments: 1,
         },
-        &cobre_sddp::FphaConfig {
+        &cobre_sddp::FphaColumnLayout {
             hydro_indices: vec![],
             planes_per_hydro: vec![],
         },

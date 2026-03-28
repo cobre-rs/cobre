@@ -59,6 +59,21 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  quality-scripts:
+    name: Quality Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check Python parity
+        run: python3 scripts/check_python_parity.py --max 0
+      - name: Check suppression count
+        run: python3 scripts/check_suppressions.py --max 10
+      - name: Check CLAUDE.md version
+        run: python3 scripts/check_claudemd_version.py
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest

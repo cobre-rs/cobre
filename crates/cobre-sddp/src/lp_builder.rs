@@ -2092,7 +2092,7 @@ fn fill_generic_constraint_entries(
             has_inflow_penalty: ctx.has_penalty,
             max_deficit_segments: layout.max_deficit_segments,
         },
-        &crate::indexer::FphaConfig {
+        &crate::indexer::FphaColumnLayout {
             hydro_indices: layout.fpha_hydro_indices.clone(),
             planes_per_hydro: layout.fpha_planes_per_hydro.clone(),
         },

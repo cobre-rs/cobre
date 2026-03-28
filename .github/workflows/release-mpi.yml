@@ -6,6 +6,11 @@
 #
 # The archive contains the `cobre-mpi` binary and a README.
 #
+# Linux targets build MPICH from source (cached) to link against `libmpi.so`
+# (the upstream/universal name). Ubuntu's apt `libmpich-dev` package renames
+# the library to `libmpich.so`, which doesn't exist on HPC clusters where
+# MPICH is compiled from source, Spack, or module systems.
+#
 # aarch64-unknown-linux-gnu uses GitHub's free ARM64 runners (ubuntu-24.04-arm)
 # available for public repositories since January 2025.
 #
@@ -23,6 +28,9 @@ on:
     tags:
       - "**[0-9]+.[0-9]+.[0-9]+*"
 
+env:
+  MPICH_VERSION: "4.3.0"
+
 jobs:
   build-mpi:
     name: mpi (${{ matrix.target }})
@@ -32,15 +40,15 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
-            mpi_install: sudo apt-get update && sudo apt-get install -y libmpich-dev
+            mpi_source: source
           # aarch64-unknown-linux-gnu is disabled until ferrompi 0.2.x fixes
           # the c_char signedness issue on aarch64 (i8 vs u8).
           # - target: aarch64-unknown-linux-gnu
           #   runner: ubuntu-24.04-arm
-          #   mpi_install: sudo apt-get update && sudo apt-get install -y libmpich-dev
+          #   mpi_source: source
           - target: aarch64-apple-darwin
             runner: macos-14
-            mpi_install: brew install mpich
+            mpi_source: brew
     runs-on: ${{ matrix.runner }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,8 +63,43 @@ jobs:
         with:
           prefix-key: mpi-${{ matrix.target }}
 
-      - name: Install MPI
-        run: ${{ matrix.mpi_install }}
+      # --- MPICH from source (Linux) ---
+      # Cached by version+arch. Only headers and libmpi.so are needed at
+      # compile time — the user's own MPICH is loaded at runtime.
+      - name: Cache MPICH
+        if: matrix.mpi_source == 'source'
+        id: mpich-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/mpich
+          key: mpich-${{ env.MPICH_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build MPICH from source
+        if: matrix.mpi_source == 'source' && steps.mpich-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          wget -q "https://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz"
+          tar xzf "mpich-${MPICH_VERSION}.tar.gz"
+          cd "mpich-${MPICH_VERSION}"
+          ./configure --prefix=/opt/mpich \
+              --disable-fortran \
+              --disable-cxx \
+              --disable-romio \
+              --disable-doc \
+              --with-device=ch3:nemesis
+          make -j"$(nproc)"
+          make install
+
+      - name: Set MPICH environment (Linux)
+        if: matrix.mpi_source == 'source'
+        run: |
+          echo "/opt/mpich/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=/opt/mpich/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      # --- MPICH from Homebrew (macOS) ---
+      - name: Install MPICH (brew)
+        if: matrix.mpi_source == 'brew'
+        run: brew install mpich
 
       - name: Build cobre with MPI
         run: cargo build --release --features mpi -p cobre-cli
@@ -73,13 +116,17 @@ jobs:
           cat > staging/README.txt << 'EOF'
           cobre-mpi — Cobre SDDP solver with MPI communication backend.
 
-          This binary requires an MPI-4.0-compatible runtime at launch:
+          This binary links against libmpi.so.12 (MPICH 4.x ABI).
+          Compatible runtimes:
             - MPICH 4.0+  (recommended)
             - Intel MPI 2021+  (MPICH ABI compatible)
             - MVAPICH2 3.0+  (MPICH ABI compatible)
 
-          Usage:
+          Ensure libmpi.so.12 is discoverable at runtime:
+            export LD_LIBRARY_PATH=/path/to/mpich/lib:$LD_LIBRARY_PATH
             mpiexec -n <nprocs> ./cobre-mpi run <case-dir>
+
+          Or use your cluster's module system (e.g. `module load mpich`).
 
           For the single-process variant (no MPI dependency), download
           the standard 'cobre' binary from the same GitHub release.

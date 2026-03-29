@@ -20,7 +20,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-2,771 tests, including 16 deterministic regression cases (D01–D16) and
+3,034 tests, including 16 deterministic regression cases (D01–D16) and
 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
@@ -32,7 +32,7 @@ LP setup optimisation (model persistence, incremental cuts, sparse cuts),
 simulation basis warm-start, cut selection with Parquet output, backward pass
 performance optimisations, solver safeguards (12-level retry escalation with
 wall-clock budgets), MPI distribution, Python bindings with Arrow
-zero-copy, CLI with 6 subcommands.
+zero-copy, CLI with 7 subcommands.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 

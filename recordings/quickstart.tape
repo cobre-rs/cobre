@@ -19,14 +19,14 @@ Output quickstart.gif
 
 Type "cobre init --template 1dtoy demo/"
 Enter
-Sleep 2s
+Sleep 5s
 
 Type "cobre run demo/"
 Enter
-Sleep 5s
+Sleep 10s
 
 Type "cobre report demo/output/ | head -20"
 Enter
-Sleep 3s
+Sleep 5s
 
 Sleep 2s

@@ -19,7 +19,7 @@ Output validation.gif
 
 Type "cobre init --template 1dtoy demo/"
 Enter
-Sleep 2s
+Sleep 5s
 
 Type "cobre validate demo/"
 Enter

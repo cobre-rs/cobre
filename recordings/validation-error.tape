@@ -20,17 +20,17 @@ Output validation-error.gif
 
 Type "cobre init --template 1dtoy demo/"
 Enter
-Sleep 2s
+Sleep 5s
 
 # Schema error: remove the required 'reservoir' field from the first hydro
 Type "jq '.hydros[0] |= del(.reservoir)' demo/system/hydros.json > tmp.json && mv tmp.json demo/system/hydros.json"
 Enter
-Sleep 1s
+Sleep 5s
 
 # Semantic error: set a negative max_turbined_m3s to trigger a constraint violation
 Type "jq '.hydros[0].generation.max_turbined_m3s = -5.0' demo/system/hydros.json > tmp.json && mv tmp.json demo/system/hydros.json"
 Enter
-Sleep 1s
+Sleep 5s
 
 Type "cobre validate demo/"
 Enter

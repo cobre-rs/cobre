@@ -1004,4 +1004,220 @@ mod tests {
         assert_eq!(resolve_season_id(-4, 4), 0);
         assert_eq!(resolve_season_id(-1, 1), 0);
     }
+
+    // -----------------------------------------------------------------------
+    // Integration tests for AR conditioning at stage 0 (T006)
+    // -----------------------------------------------------------------------
+
+    /// Season stats helper: `mean = 100 + season*10`, `std = 20 + season*2`.
+    fn season_mean(season: usize) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let s = season as f64;
+        100.0 + s * 10.0
+    }
+
+    fn season_std(season: usize) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let s = season as f64;
+        20.0 + s * 2.0
+    }
+
+    #[test]
+    fn integration_ar_conditioning_at_stage_zero() {
+        // 12 monthly stages, 3 hydros with AR(1), AR(3), AR(6).
+        // NO pre-study entries -- simulates external-file code path.
+        let stages = make_monthly_stages();
+
+        let mut all_models = Vec::new();
+
+        // Hydro 1 (EntityId(1)): AR(1) at stage 0 only.
+        all_models.extend(make_monthly_models(1, 0, &[0.5], 0.9));
+
+        // Hydro 2 (EntityId(2)): AR(3) at stage 0 only.
+        let models_h2: Vec<InflowModel> = (0..12_i32)
+            .map(|i| {
+                let fi = f64::from(i);
+                let mean = 100.0 + fi * 10.0;
+                let std = 20.0 + fi * 2.0;
+                let (c, r) = if i == 0 {
+                    (vec![0.4, 0.25, 0.15], 0.85)
+                } else {
+                    (vec![], 1.0)
+                };
+                make_model(2, i, mean, std, c, r)
+            })
+            .collect();
+        all_models.extend(models_h2);
+
+        // Hydro 3 (EntityId(3)): AR(6) at stage 0 only.
+        let models_h3: Vec<InflowModel> = (0..12_i32)
+            .map(|i| {
+                let fi = f64::from(i);
+                let mean = 100.0 + fi * 10.0;
+                let std = 20.0 + fi * 2.0;
+                let (c, r) = if i == 0 {
+                    (vec![0.3, 0.2, 0.15, 0.1, 0.08, 0.05], 0.8)
+                } else {
+                    (vec![], 1.0)
+                };
+                make_model(3, i, mean, std, c, r)
+            })
+            .collect();
+        all_models.extend(models_h3);
+
+        let hydro_ids = [EntityId(1), EntityId(2), EntityId(3)];
+        let lp = PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap();
+
+        // 1. Non-zero coefficients at stage 0 for all hydros.
+        for (h_idx, order) in [(0, 1), (1, 3), (2, 6)] {
+            let psi = lp.psi_slice(0, h_idx);
+            for (lag, psi_lag) in psi.iter().enumerate().take(order) {
+                assert!(
+                    psi_lag.abs() > 1e-10,
+                    "hydro {h_idx} psi[{lag}] at stage 0 should be non-zero; got {psi_lag}",
+                );
+            }
+        }
+
+        // 2. Correct coefficient values for hydro 3 (AR(6)).
+        let s_0 = season_std(0);
+        let psi_star_h3 = [0.3, 0.2, 0.15, 0.1, 0.08, 0.05];
+        let psi_h3 = lp.psi_slice(0, 2);
+        for (lag, (&psi_val, &psi_star)) in psi_h3.iter().zip(&psi_star_h3).enumerate() {
+            let lag_i32 = i32::try_from(lag).unwrap();
+            let lag_season = resolve_season_id(-(lag_i32 + 1), 12);
+            let expected = psi_star * s_0 / season_std(lag_season);
+            assert!(
+                (psi_val - expected).abs() < 1e-10,
+                "h3 psi[{lag}]: expected {expected}, got {psi_val}",
+            );
+        }
+
+        // 3. Deterministic base correctness for hydro 3.
+        let mu_0 = season_mean(0);
+        let mut expected_base = mu_0;
+        for (lag, &psi_val) in psi_h3.iter().enumerate().take(6) {
+            let lag_i32 = i32::try_from(lag).unwrap();
+            let lag_season = resolve_season_id(-(lag_i32 + 1), 12);
+            expected_base -= psi_val * season_mean(lag_season);
+        }
+        assert!(
+            (lp.deterministic_base(0, 2) - expected_base).abs() < 1e-10,
+            "h3 base at stage 0: expected {expected_base}, got {}",
+            lp.deterministic_base(0, 2)
+        );
+
+        // 4. No regression at stage 6 (all lags hit study stages via exact match).
+        let psi_h3_s6 = lp.psi_slice(6, 2);
+        // Hydro 3 has AR(6) only at stage 0; stage 6 is AR(0), so psi should be zero.
+        for (lag, psi_lag) in psi_h3_s6.iter().enumerate().take(6) {
+            assert!(
+                psi_lag.abs() < 1e-10,
+                "h3 stage 6 psi[{lag}] should be zero (AR only at stage 0); got {psi_lag}",
+            );
+        }
+    }
+
+    #[test]
+    fn integration_multiyear_ar_conditioning() {
+        // 24 monthly stages (2 years), 2 hydros with AR(2).
+        // No pre-study entries.
+        let stages: Vec<Stage> = (0..24_usize)
+            .map(|i| make_stage(i, i32::try_from(i).unwrap(), Some(i % 12)))
+            .collect();
+
+        // Build models for both hydros across 24 stages.
+        let mut all_models = Vec::new();
+        for h_id in [1, 2] {
+            for i in 0..24_i32 {
+                #[allow(clippy::cast_sign_loss)] // i is always in 0..24
+                let season = (i % 12) as usize;
+                let mean = season_mean(season);
+                let std = season_std(season);
+                let (c, r) = if i == 0 {
+                    (vec![0.4, 0.25], 0.9)
+                } else {
+                    (vec![], 1.0)
+                };
+                all_models.push(make_model(h_id, i, mean, std, c, r));
+            }
+        }
+
+        let hydro_ids = [EntityId(1), EntityId(2)];
+        let lp = PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap();
+
+        // Stage 0: lag-1 (id=-1, season 11) and lag-2 (id=-2, season 10)
+        // resolve via season fallback.
+        let s_0 = season_std(0);
+        for h_idx in 0..2 {
+            let psi_s0 = lp.psi_slice(0, h_idx);
+            // lag 0: season 11 fallback
+            let expected_0 = 0.4 * s_0 / season_std(11);
+            assert!(
+                (psi_s0[0] - expected_0).abs() < 1e-10,
+                "h{h_idx} stage 0 psi[0]: expected {expected_0}, got {}",
+                psi_s0[0]
+            );
+            // lag 1: season 10 fallback
+            let expected_1 = 0.25 * s_0 / season_std(10);
+            assert!(
+                (psi_s0[1] - expected_1).abs() < 1e-10,
+                "h{h_idx} stage 0 psi[1]: expected {expected_1}, got {}",
+                psi_s0[1]
+            );
+        }
+
+        // Stage 12 has AR(0) in this setup (AR only at stage 0),
+        // so it won't have non-zero psi. Instead, verify that study-stage
+        // lag resolution (exact match) works at stage 1:
+        // Stage 1 (season 1): lag-1 = stage 0 (exact match, season 0).
+        // This should match the season 0 stats.
+        // But stage 1 is AR(0) too. Let me adjust the model to have
+        // AR at stage 12 as well.
+        //
+        // Actually, the multi-year test goal is to verify that stage 0
+        // and stage 12 (same season) produce the same psi when both
+        // have AR coefficients. Let me rebuild with AR at both stages.
+
+        let mut models_v2 = Vec::new();
+        for h_id in [1, 2] {
+            for i in 0..24_i32 {
+                #[allow(clippy::cast_sign_loss)] // i is always in 0..24
+                let season = (i % 12) as usize;
+                let mean = season_mean(season);
+                let std = season_std(season);
+                // AR(2) at stages 0 and 12 (both season 0).
+                let (c, r) = if i == 0 || i == 12 {
+                    (vec![0.4, 0.25], 0.9)
+                } else {
+                    (vec![], 1.0)
+                };
+                models_v2.push(make_model(h_id, i, mean, std, c, r));
+            }
+        }
+
+        let lp2 = PrecomputedPar::build(&models_v2, &stages, &hydro_ids).unwrap();
+
+        // Stage 12: lag-1 = stage 11 (exact match, season 11).
+        // Stage 0: lag-1 = stage -1 (season fallback, season 11).
+        // Both should produce the same psi[0] since they reference
+        // the same season's std.
+        for h_idx in 0..2 {
+            let psi_s0 = lp2.psi_slice(0, h_idx);
+            let psi_s12 = lp2.psi_slice(12, h_idx);
+
+            assert!(
+                (psi_s0[0] - psi_s12[0]).abs() < 1e-10,
+                "h{h_idx}: stage 0 psi[0] ({}) should equal stage 12 psi[0] ({})",
+                psi_s0[0],
+                psi_s12[0]
+            );
+            assert!(
+                (psi_s0[1] - psi_s12[1]).abs() < 1e-10,
+                "h{h_idx}: stage 0 psi[1] ({}) should equal stage 12 psi[1] ({})",
+                psi_s0[1],
+                psi_s12[1]
+            );
+        }
+    }
 }

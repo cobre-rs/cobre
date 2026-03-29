@@ -1588,13 +1588,19 @@ fn d19_multi_hydro_par_truncation() {
 
 /// Expected lower bound for D19 (2-hydro PAR(2) with truncation, 3 stages).
 ///
-/// Recorded empirically with the corrected lag-major indexing (T001 fix).
-/// The value depends on the PAR evaluation and truncation logic — it is not
-/// hand-computable due to the 2-hydro x 2-lag state space.
+/// Recorded empirically with the corrected lag-major indexing (T001 fix)
+/// and season-based fallback for pre-study lag stats. The value depends on
+/// the PAR evaluation and truncation logic -- it is not hand-computable
+/// due to the 2-hydro x 2-lag state space.
+///
+/// Updated from 1,603,530.894 after the pre-study lag stats fix: the old
+/// value was recorded with a bug that zeroed AR coefficients at stage 0
+/// when inflow_seasonal_stats.parquet lacked pre-study entries. The fix
+/// restores non-zero coefficients via season fallback, changing the optimal.
 ///
 /// If the lag-major/hydro-major indexing bug regresses, different lag values
 /// are read for each hydro during PAR evaluation, producing a different cost.
-pub const D19_EXPECTED_COST: f64 = 1_603_530.894;
+pub const D19_EXPECTED_COST: f64 = 1_218_090.894_148_668;
 
 /// Operational violation slacks: 1 hydro with active min_outflow, max_outflow,
 /// min_turbined, and min_generation bounds.

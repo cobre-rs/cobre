@@ -916,7 +916,7 @@ impl StageIndexer {
     /// `ar_orders` must have length `hydro_count`. Each entry is the actual AR
     /// order for that hydro (0 means no AR lags). Indices `[0, N)` (storage)
     /// are always included. For each hydro `h`, lag indices
-    /// `inflow_lags.start + h * max_par_order + l` are included for
+    /// `inflow_lags.start + l * hydro_count + h` are included for
     /// `l in 0..ar_orders[h]`.
     ///
     /// After calling, `nonzero_state_indices` is sorted in ascending order and

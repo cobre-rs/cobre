@@ -1,9 +1,10 @@
 //! Non-controllable generation source entity — intermittent wind/solar.
 //!
-//! A `NonControllableSource` represents intermittent generation (wind, solar, run-of-river)
-//! that cannot be dispatched. Curtailment may be optionally allowed. This entity is a
-//! NO-OP stub: the type exists in the registry but contributes zero LP
-//! variables or constraints.
+//! A [`NonControllableSource`] represents intermittent generation (wind, solar,
+//! run-of-river) that cannot be dispatched. Generation is injected into the
+//! network at stochastic availability levels, with optional curtailment.
+//! LP variables, forward/backward patching, and simulation extraction are
+//! fully integrated.
 
 use crate::EntityId;
 
@@ -11,8 +12,7 @@ use crate::EntityId;
 ///
 /// A `NonControllableSource` injects all available generation into the network.
 /// If curtailment is permitted, excess generation can be curtailed at a cost of
-/// `curtailment_cost` per `MWh`. In the minimal viable solver this entity is
-/// data-complete but contributes no LP variables or constraints.
+/// `curtailment_cost` per `MWh`.
 ///
 /// Source: `system/non_controllable.json`. See Input System Entities SS1.9.8.
 #[derive(Debug, Clone, PartialEq)]

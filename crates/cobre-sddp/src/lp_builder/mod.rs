@@ -136,13 +136,13 @@ pub(crate) use scaling::{apply_col_scale, apply_row_scale, compute_col_scale, co
 // Shared constants
 // ---------------------------------------------------------------------------
 
-/// Conversion factor from m³/s-per-block to hm³, assuming 30-day months.
+/// Per-hour conversion factor from m³/s to hm³.
 ///
-/// `zeta = seconds_per_hour * duration_hours / m3_per_hm3`
-/// `     = 3600 * 720 / 1_000_000 = 2.592` (30-day month, all hours)
+/// `M3S_TO_HM3 = seconds_per_hour / m³_per_hm³ = 3600 / 1_000_000 = 0.0036`
 ///
-/// This constant is overridden per block using the actual `Block::duration_hours`
-/// from the stage definition.
+/// Callers multiply by `Block::duration_hours` to get the full block
+/// conversion: `volume_hm3 = flow_m3s * M3S_TO_HM3 * duration_hours`.
+/// For a 30-day month (720 h): `0.0036 * 720 = 2.592`.
 const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 
 /// Divisor applied to all objective-function cost coefficients.

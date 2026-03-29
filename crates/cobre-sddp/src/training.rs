@@ -9,7 +9,7 @@
 //! Each iteration follows the corrected ordering from the LB plan fix (F-019):
 //!
 //! 1. Forward pass — scenario simulation, local UB statistics.
-//! 2. Forward sync — global `allreduce` for UB statistics.
+//! 2. Forward sync — global synchronization for UB statistics.
 //! 3. State exchange — `allgatherv` trial points for the backward pass.
 //! 4. Backward pass — Benders cut generation.
 //! 5. Cut sync — `allgatherv` new cuts across ranks.

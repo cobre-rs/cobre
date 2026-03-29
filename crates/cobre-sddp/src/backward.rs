@@ -263,12 +263,6 @@ struct TrialAccumulators {
     slot_increments: Vec<u64>,
 }
 
-/// Apply noise and state patches for one opening of the backward pass.
-///
-/// Loads the stage `s` template, appends cut rows, transforms inflow and load
-/// noise into the scratch buffers, fills the patch buffer, and calls
-/// `set_row_bounds`. After this call the solver is ready for `solve` /
-/// `solve_with_basis`.
 /// Load the stage LP template and append cuts once per trial point.
 ///
 /// Called once before the opening loop in [`process_trial_point_backward`].
@@ -449,6 +443,15 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             }
         }
         out.objective_value = objective;
+        // Intercept: alpha = Q_scaled - pi' * x_hat.
+        //
+        // `objective` is the LP objective in scaled cost units (divided by
+        // COST_SCALE_FACTOR). `coefficients` are unscaled duals (dual_i *
+        // row_scale_i). The product `pi' * x_hat` is also in scaled cost
+        // units because the LP duals inherit the cost scaling. The cut
+        // `theta >= alpha + pi'(x - x_hat)` is evaluated in the parent
+        // LP, where theta is also in scaled units, so all terms are
+        // consistently scaled.
         out.intercept = objective
             - out
                 .coefficients

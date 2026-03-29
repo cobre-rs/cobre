@@ -101,7 +101,7 @@ pub struct ForwardResult {
     pub lp_solves: u64,
 }
 
-/// Global upper bound statistics from forward synchronisation step (`allreduce`).
+/// Global upper bound statistics from forward synchronisation step.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct SyncResult {
@@ -114,7 +114,7 @@ pub struct SyncResult {
     /// 95% confidence interval half-width: `1.96 * std / sqrt(N)`.
     pub ci_95_half_width: f64,
 
-    /// Wall-clock time in milliseconds for the `allreduce` call.
+    /// Wall-clock time in milliseconds for the forward synchronization call.
     pub sync_time_ms: u64,
 }
 

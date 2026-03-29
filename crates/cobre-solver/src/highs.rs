@@ -14,7 +14,7 @@
 //! # Configuration
 //!
 //! The constructor applies performance-tuned defaults (`HiGHS` Implementation
-//! SS4.1): primal simplex, no presolve, no parallelism, suppressed output, and
+//! SS4.1): dual simplex, no presolve, no parallelism, suppressed output, and
 //! tight feasibility tolerances. These defaults are optimised for repeated
 //! solves of small-to-medium LPs. Per-run parameters (time limit, iteration
 //! limit) are not set here -- those are applied by the caller before each solve.
@@ -635,7 +635,7 @@ impl HighsSolver {
         match level {
             // -- Phase 1: Core cumulative sequence (levels 0-4) ---------------
             //
-            // Level 0: cold restart (clear solver state), primal simplex.
+            // Level 0: cold restart (clear solver state), dual simplex.
             0 => {
                 unsafe { ffi::cobre_highs_clear_solver(self.handle) };
                 self.set_iteration_limits();

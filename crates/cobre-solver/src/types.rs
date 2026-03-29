@@ -259,10 +259,11 @@ pub struct StageTemplate {
 
     /// Number of dual-relevant constraint rows (contiguous prefix of rows).
     ///
-    /// Equal to `N + N*L + n_fpha + n_gvc` per
-    /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// For constant-productivity-only hydros (no FPHA), this equals `n_state`.
-    /// Extracting cut coefficients reads `dual[0..n_dual_relevant]`.
+    /// Currently equal to `n_state` (= `N + N*L` where `N` is the number of
+    /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable
+    /// constraint rows are structural and not included in the dual-relevant set.
+    ///
+    /// Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
     pub n_dual_relevant: usize,
 
     /// Number of operating hydros at this stage.

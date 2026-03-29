@@ -14,7 +14,7 @@
 //!   MPI initialization with Python embedding. For distributed execution,
 //!   launch `mpiexec cobre` as a subprocess.
 //! - **GIL released during computation** — all Rust computation runs with
-//!   the GIL released via `py.allow_threads()`, allowing OpenMP threads
+//!   the GIL released via `py.detach()`, allowing worker threads
 //!   within `cobre-sddp` to run at full parallelism.
 //! - **No Python callbacks in the hot loop** — all customization is
 //!   via configuration structs, not Python callables.

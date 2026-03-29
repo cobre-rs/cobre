@@ -181,11 +181,16 @@ pub trait Communicator: Send + Sync {
     /// `op(send_0[i], send_1[i], ..., send_{R-1}[i])` for all `i`. After the
     /// call, all ranks have identical `recv` contents.
     ///
-    /// This operation is used to aggregate convergence statistics after each
-    /// forward pass. The payload is minimal (four `f64` scalars = 32 bytes)
-    /// but is on the critical path for convergence checking. Two separate calls
-    /// are issued per iteration: one with [`crate::ReduceOp::Min`] for the lower bound
-    /// and one with [`crate::ReduceOp::Sum`] for the remaining statistics.
+    /// This operation is used for scalar reductions: convergence bound
+    /// statistics during training and min/max cost aggregation during
+    /// simulation. It is NOT used for forward-pass scenario exchange
+    /// (which uses [`allgatherv`](Communicator::allgatherv)).
+    ///
+    /// During training, two calls are issued per iteration: one with
+    /// [`crate::ReduceOp::Min`] for the lower bound and one with
+    /// [`crate::ReduceOp::Sum`] for the remaining UB statistics. The payload
+    /// is minimal (four `f64` scalars = 32 bytes) but is on the critical
+    /// path for convergence checking.
     ///
     /// # Preconditions
     ///

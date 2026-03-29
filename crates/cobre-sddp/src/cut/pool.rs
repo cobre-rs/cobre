@@ -524,6 +524,99 @@ impl CutPool {
             cached_active_count,
         }
     }
+
+    /// Construct a `CutPool` with warm-start cuts plus capacity for training.
+    ///
+    /// The loaded cuts occupy the first `records.len()` slots. The remaining
+    /// `max_iterations * forward_passes` slots are allocated for new training
+    /// cuts. The slot formula `warm_start_count + iteration * forward_passes +
+    /// forward_pass_index` correctly offsets training cuts past the warm-start
+    /// region.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cobre_io::OwnedPolicyCutRecord;
+    /// use cobre_sddp::cut::pool::CutPool;
+    ///
+    /// let records = vec![
+    ///     OwnedPolicyCutRecord {
+    ///         cut_id: 0, slot_index: 0, iteration: 0, forward_pass_index: 0,
+    ///         intercept: 5.0, coefficients: vec![1.0, 2.0],
+    ///         is_active: true, domination_count: 0,
+    ///     },
+    /// ];
+    /// let pool = CutPool::new_with_warm_start(2, 4, 10, &records);
+    /// assert_eq!(pool.warm_start_count, 1);
+    /// assert_eq!(pool.capacity, 1 + 10 * 4); // 41
+    /// assert_eq!(pool.populated_count, 1);
+    /// assert_eq!(pool.active_count(), 1);
+    /// ```
+    #[must_use]
+    pub fn new_with_warm_start(
+        state_dimension: usize,
+        forward_passes: u32,
+        max_iterations: u64,
+        records: &[cobre_io::OwnedPolicyCutRecord],
+    ) -> Self {
+        let warm_start_count = records.len();
+        #[allow(clippy::cast_possible_truncation)]
+        let capacity = warm_start_count + (max_iterations as usize) * (forward_passes as usize);
+
+        let default_meta = CutMetadata {
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 0,
+            domination_count: 0,
+        };
+
+        let mut coefficients = vec![vec![0.0; state_dimension]; capacity];
+        let mut intercepts = vec![0.0; capacity];
+        let mut active = vec![false; capacity];
+        let mut metadata = vec![default_meta; capacity];
+        let mut cached_active_count = 0usize;
+
+        for (i, record) in records.iter().enumerate() {
+            debug_assert!(
+                record.coefficients.len() == state_dimension,
+                "new_with_warm_start: coefficients length {} != state_dimension {}",
+                record.coefficients.len(),
+                state_dimension
+            );
+            coefficients[i].copy_from_slice(&record.coefficients);
+            intercepts[i] = record.intercept;
+            active[i] = record.is_active;
+            if record.is_active {
+                cached_active_count += 1;
+            }
+            // Use u64::MAX as iteration_generated sentinel so warm-start cuts
+            // are never matched by pack_local_cuts (which filters on the
+            // current training iteration). This prevents double-counting
+            // warm-start cuts as new training cuts in cut sync.
+            metadata[i] = CutMetadata {
+                iteration_generated: u64::MAX,
+                forward_pass_index: record.forward_pass_index,
+                active_count: 0,
+                last_active_iter: u64::from(record.iteration),
+                domination_count: u64::from(record.domination_count),
+            };
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        Self {
+            coefficients,
+            intercepts,
+            metadata,
+            active,
+            populated_count: warm_start_count,
+            capacity,
+            state_dimension,
+            forward_passes,
+            warm_start_count: warm_start_count as u32,
+            cached_active_count,
+        }
+    }
 }
 
 /// Report of exact-zero sparsity across active cuts in a [`CutPool`].

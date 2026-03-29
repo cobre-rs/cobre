@@ -168,6 +168,8 @@ struct LoadBroadcastResult {
     root_estimation_report: Option<EstimationReport>,
     /// Whether the training phase is enabled (broadcast from rank 0).
     training_enabled: bool,
+    /// Policy initialization mode (broadcast from rank 0).
+    policy_mode: String,
 }
 
 /// Result of the training phase.
@@ -209,6 +211,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         mut root_config,
         root_estimation_report,
         training_enabled,
+        policy_mode,
     } = broadcast_and_build_setup(&ctx, args)?;
 
     // Pre-training outputs (estimation artifacts, scaling report) run
@@ -222,6 +225,62 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     )?;
 
     if training_enabled {
+        // Warm-start: load prior policy and inject cuts before training.
+        if policy_mode == "warm_start" {
+            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(CliError::Internal {
+                    message: format!(
+                        "Policy directory not found: {}. Cannot warm-start \
+                         without a prior policy.",
+                        policy_dir.display()
+                    ),
+                });
+            }
+
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Loading prior policy for warm-start training...");
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| CliError::Internal {
+                    message: format!("failed to read policy checkpoint: {e}"),
+                })?;
+
+            if let Some(ref config) = root_config {
+                if config.policy.validate_compatibility {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                    let state_dim = setup.fcf().state_dimension as u32;
+                    cobre_sddp::validate_policy_compatibility(
+                        &checkpoint.metadata,
+                        state_dim,
+                        n_stages,
+                        None,
+                        None,
+                    )
+                    .map_err(CliError::from)?;
+                }
+            }
+
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(CliError::from)?;
+            setup.replace_fcf(warm_fcf);
+
+            if ctx.is_root && !ctx.quiet {
+                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let _ = ctx.stderr.write_line(&format!(
+                    "Warm-start: loaded {warm_count} cuts per stage from prior policy."
+                ));
+            }
+        }
+
         let training = run_training_phase(&ctx, &mut setup)?;
 
         // Write training outputs immediately (before simulation), so training
@@ -496,6 +555,7 @@ fn broadcast_and_build_setup(
     };
 
     let training_enabled = bcast_config.training_enabled;
+    let policy_mode = bcast_config.policy_mode.clone();
     let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
 
     Ok(LoadBroadcastResult {
@@ -504,6 +564,7 @@ fn broadcast_and_build_setup(
         root_config: root_config.take(),
         root_estimation_report,
         training_enabled,
+        policy_mode,
     })
 }
 

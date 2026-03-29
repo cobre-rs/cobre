@@ -180,6 +180,59 @@ impl FutureCostFunction {
         })
     }
 
+    /// Build an FCF with warm-start cuts plus capacity for new training cuts.
+    ///
+    /// Each pool is constructed with [`CutPool::new_with_warm_start`], giving
+    /// capacity for both the loaded cuts and `max_iterations * forward_passes`
+    /// new training cuts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SddpError::Validation`] if `stage_results` is empty or if
+    /// `state_dimension` is inconsistent across stages.
+    ///
+    /// [`SddpError::Validation`]: crate::SddpError::Validation
+    pub fn new_with_warm_start(
+        stage_results: &[cobre_io::StageCutsReadResult],
+        forward_passes: u32,
+        max_iterations: u64,
+    ) -> Result<Self, crate::SddpError> {
+        if stage_results.is_empty() {
+            return Err(crate::SddpError::Validation(
+                "new_with_warm_start: stage_results is empty".to_string(),
+            ));
+        }
+
+        let state_dimension = stage_results[0].state_dimension as usize;
+        for sr in &stage_results[1..] {
+            if sr.state_dimension as usize != state_dimension {
+                return Err(crate::SddpError::Validation(format!(
+                    "new_with_warm_start: inconsistent state_dimension: stage {} has {}, \
+                     expected {} (from stage {})",
+                    sr.stage_id, sr.state_dimension, state_dimension, stage_results[0].stage_id
+                )));
+            }
+        }
+
+        let pools = stage_results
+            .iter()
+            .map(|sr| {
+                CutPool::new_with_warm_start(
+                    state_dimension,
+                    forward_passes,
+                    max_iterations,
+                    &sr.cuts,
+                )
+            })
+            .collect();
+
+        Ok(Self {
+            pools,
+            state_dimension,
+            forward_passes,
+        })
+    }
+
     /// Insert a Benders cut at the given stage.
     ///
     /// Delegates to `pools[stage].add_cut(...)`.
@@ -624,5 +677,80 @@ mod tests {
         assert_eq!(fcf.total_active_cuts(), 1);
         // 7 + 1*1 + 2*2 + 3*3 = 7 + 1 + 4 + 9 = 21
         assert_eq!(fcf.evaluate_at_state(0, &[1.0, 2.0, 3.0]), 21.0);
+    }
+
+    // ── new_with_warm_start tests ────────────────────────────────────────
+
+    #[test]
+    fn warm_start_capacity_includes_training_slots() {
+        let stages = vec![make_stage(
+            0,
+            2,
+            vec![
+                make_record(1.0, vec![1.0, 0.0], true),
+                make_record(2.0, vec![0.0, 1.0], true),
+            ],
+        )];
+
+        let fcf = FutureCostFunction::new_with_warm_start(&stages, 4, 10).unwrap();
+        assert_eq!(fcf.pools.len(), 1);
+        // capacity = 2 warm-start + 10*4 training = 42
+        assert_eq!(fcf.pools[0].capacity, 42);
+        assert_eq!(fcf.pools[0].warm_start_count, 2);
+        assert_eq!(fcf.pools[0].forward_passes, 4);
+        assert_eq!(fcf.pools[0].populated_count, 2);
+        assert_eq!(fcf.total_active_cuts(), 2);
+    }
+
+    #[test]
+    fn warm_start_training_cuts_at_correct_offset() {
+        let stages = vec![make_stage(0, 1, vec![make_record(10.0, vec![1.0], true)])];
+
+        let mut fcf = FutureCostFunction::new_with_warm_start(&stages, 2, 5).unwrap();
+        // warm_start_count = 1, forward_passes = 2
+        // Training cut at iteration=0, fwd_idx=0: slot = 1 + 0*2 + 0 = 1
+        fcf.add_cut(0, 0, 0, 20.0, &[2.0]);
+        // Training cut at iteration=0, fwd_idx=1: slot = 1 + 0*2 + 1 = 2
+        fcf.add_cut(0, 0, 1, 30.0, &[3.0]);
+
+        assert_eq!(fcf.total_active_cuts(), 3);
+        assert_eq!(fcf.pools[0].populated_count, 3);
+        // Warm-start cut at slot 0
+        assert_eq!(fcf.pools[0].intercepts[0], 10.0);
+        // Training cuts at slots 1 and 2
+        assert_eq!(fcf.pools[0].intercepts[1], 20.0);
+        assert_eq!(fcf.pools[0].intercepts[2], 30.0);
+    }
+
+    #[test]
+    fn warm_start_empty_stage_has_training_capacity() {
+        let stages = vec![
+            make_stage(0, 2, vec![make_record(1.0, vec![1.0, 0.0], true)]),
+            make_stage(1, 2, vec![]),
+        ];
+
+        let fcf = FutureCostFunction::new_with_warm_start(&stages, 3, 5).unwrap();
+        // Stage 0: warm_start=1, capacity=1+15=16
+        assert_eq!(fcf.pools[0].capacity, 16);
+        assert_eq!(fcf.pools[0].warm_start_count, 1);
+        // Stage 1: warm_start=0, capacity=0+15=15
+        assert_eq!(fcf.pools[1].capacity, 15);
+        assert_eq!(fcf.pools[1].warm_start_count, 0);
+    }
+
+    #[test]
+    fn warm_start_preserves_inactive_flags() {
+        let stages = vec![make_stage(
+            0,
+            2,
+            vec![
+                make_record(1.0, vec![1.0, 0.0], true),
+                make_record(2.0, vec![0.0, 1.0], false), // inactive
+            ],
+        )];
+
+        let fcf = FutureCostFunction::new_with_warm_start(&stages, 1, 5).unwrap();
+        assert_eq!(fcf.pools[0].warm_start_count, 2);
+        assert_eq!(fcf.total_active_cuts(), 1); // only the active one
     }
 }

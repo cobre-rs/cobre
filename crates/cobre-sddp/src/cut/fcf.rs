@@ -135,6 +135,51 @@ impl FutureCostFunction {
         }
     }
 
+    /// Reconstruct a `FutureCostFunction` from deserialized policy checkpoint data.
+    ///
+    /// Builds one [`CutPool::from_deserialized`] per stage. The pools are
+    /// tightly sized to hold exactly the loaded cuts, with no capacity for
+    /// additional training cuts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SddpError::Validation`] if:
+    /// - `stage_results` is empty
+    /// - `state_dimension` is inconsistent across stages
+    ///
+    /// [`SddpError::Validation`]: crate::SddpError::Validation
+    pub fn from_deserialized(
+        stage_results: &[cobre_io::StageCutsReadResult],
+    ) -> Result<Self, crate::SddpError> {
+        if stage_results.is_empty() {
+            return Err(crate::SddpError::Validation(
+                "from_deserialized: stage_results is empty".to_string(),
+            ));
+        }
+
+        let state_dimension = stage_results[0].state_dimension as usize;
+        for sr in &stage_results[1..] {
+            if sr.state_dimension as usize != state_dimension {
+                return Err(crate::SddpError::Validation(format!(
+                    "from_deserialized: inconsistent state_dimension: stage {} has {}, \
+                     expected {} (from stage {})",
+                    sr.stage_id, sr.state_dimension, state_dimension, stage_results[0].stage_id
+                )));
+            }
+        }
+
+        let pools = stage_results
+            .iter()
+            .map(|sr| CutPool::from_deserialized(state_dimension, &sr.cuts))
+            .collect();
+
+        Ok(Self {
+            pools,
+            state_dimension,
+            forward_passes: 0,
+        })
+    }
+
     /// Insert a Benders cut at the given stage.
     ///
     /// Delegates to `pools[stage].add_cut(...)`.
@@ -447,5 +492,137 @@ mod tests {
 
         let debug_str = format!("{fcf:?}");
         assert!(!debug_str.is_empty());
+    }
+
+    // ── from_deserialized tests ──────────────────────────────────────────
+
+    fn make_record(
+        intercept: f64,
+        coefficients: Vec<f64>,
+        is_active: bool,
+    ) -> cobre_io::OwnedPolicyCutRecord {
+        cobre_io::OwnedPolicyCutRecord {
+            cut_id: 0,
+            slot_index: 0,
+            iteration: 0,
+            forward_pass_index: 0,
+            intercept,
+            coefficients,
+            is_active,
+            domination_count: 0,
+        }
+    }
+
+    fn make_stage(
+        stage_id: u32,
+        state_dimension: u32,
+        cuts: Vec<cobre_io::OwnedPolicyCutRecord>,
+    ) -> cobre_io::StageCutsReadResult {
+        let populated_count = cuts.len() as u32;
+        cobre_io::StageCutsReadResult {
+            stage_id,
+            state_dimension,
+            capacity: populated_count,
+            warm_start_count: 0,
+            populated_count,
+            cuts,
+        }
+    }
+
+    #[test]
+    fn from_deserialized_empty_input_returns_err() {
+        let result = FutureCostFunction::from_deserialized(&[]);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("empty"), "{msg}");
+    }
+
+    #[test]
+    fn from_deserialized_inconsistent_dimensions_returns_err() {
+        let stages = vec![
+            make_stage(0, 2, vec![make_record(1.0, vec![1.0, 0.0], true)]),
+            make_stage(1, 3, vec![make_record(2.0, vec![1.0, 0.0, 0.0], true)]),
+        ];
+        let result = FutureCostFunction::from_deserialized(&stages);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("inconsistent"), "{msg}");
+    }
+
+    #[test]
+    fn from_deserialized_preserves_active_flags() {
+        let stages = vec![make_stage(
+            0,
+            2,
+            vec![
+                make_record(1.0, vec![1.0, 0.0], true),
+                make_record(2.0, vec![0.0, 1.0], false), // inactive
+                make_record(3.0, vec![1.0, 1.0], true),
+            ],
+        )];
+
+        let fcf = FutureCostFunction::from_deserialized(&stages).unwrap();
+        assert_eq!(fcf.pools.len(), 1);
+        assert_eq!(fcf.total_active_cuts(), 2);
+        assert_eq!(fcf.pools[0].populated_count, 3);
+    }
+
+    #[test]
+    fn from_deserialized_evaluate_at_state_matches_original() {
+        // Build original FCF with known cuts, then reconstruct via deserialized.
+        let mut original = FutureCostFunction::new(2, 2, 1, 10, 0);
+        original.add_cut(0, 0, 0, 10.0, &[1.0, 0.0]);
+        original.add_cut(0, 1, 0, 5.0, &[0.0, 2.0]);
+        original.add_cut(1, 0, 0, 3.0, &[1.0, 1.0]);
+
+        let state = [3.0, 4.0];
+        let orig_val_s0 = original.evaluate_at_state(0, &state);
+        let orig_val_s1 = original.evaluate_at_state(1, &state);
+
+        // Construct deserialized data matching the original cuts.
+        let stages = vec![
+            make_stage(
+                0,
+                2,
+                vec![
+                    make_record(10.0, vec![1.0, 0.0], true),
+                    make_record(5.0, vec![0.0, 2.0], true),
+                ],
+            ),
+            make_stage(1, 2, vec![make_record(3.0, vec![1.0, 1.0], true)]),
+        ];
+
+        let reconstructed = FutureCostFunction::from_deserialized(&stages).unwrap();
+        assert_eq!(reconstructed.evaluate_at_state(0, &state), orig_val_s0);
+        assert_eq!(reconstructed.evaluate_at_state(1, &state), orig_val_s1);
+    }
+
+    #[test]
+    fn from_deserialized_empty_stage_is_valid() {
+        let stages = vec![
+            make_stage(0, 2, vec![make_record(1.0, vec![1.0, 0.0], true)]),
+            make_stage(1, 2, vec![]), // empty stage
+        ];
+
+        let fcf = FutureCostFunction::from_deserialized(&stages).unwrap();
+        assert_eq!(fcf.pools.len(), 2);
+        assert_eq!(fcf.pools[1].capacity, 0);
+        assert_eq!(fcf.pools[1].active_count(), 0);
+        assert_eq!(fcf.evaluate_at_state(1, &[1.0, 1.0]), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn from_deserialized_single_cut_stage() {
+        let stages = vec![make_stage(
+            0,
+            3,
+            vec![make_record(7.0, vec![1.0, 2.0, 3.0], true)],
+        )];
+
+        let fcf = FutureCostFunction::from_deserialized(&stages).unwrap();
+        assert_eq!(fcf.state_dimension, 3);
+        assert_eq!(fcf.total_active_cuts(), 1);
+        // 7 + 1*1 + 2*2 + 3*3 = 7 + 1 + 4 + 9 = 21
+        assert_eq!(fcf.evaluate_at_state(0, &[1.0, 2.0, 3.0]), 21.0);
     }
 }

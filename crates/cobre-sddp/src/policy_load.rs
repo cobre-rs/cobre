@@ -1,13 +1,14 @@
 //! Policy loading and compatibility validation.
 //!
 //! This module contains the validation logic for checking whether a loaded
-//! policy checkpoint is compatible with the current system configuration.
-//! The reconstruction logic (building a [`FutureCostFunction`] from deserialized
-//! cuts) will be added in subsequent tickets.
+//! policy checkpoint is compatible with the current system configuration,
+//! and helpers for reconstructing solver state from deserialized checkpoint
+//! data.
 //!
 //! [`FutureCostFunction`]: crate::FutureCostFunction
 
 use cobre_io::PolicyCheckpointMetadata;
+use cobre_solver::Basis;
 
 use crate::SddpError;
 
@@ -106,6 +107,36 @@ pub fn validate_policy_compatibility(
     }
 
     Ok(())
+}
+
+/// Build a basis cache from deserialized checkpoint basis records.
+///
+/// Returns a `Vec<Option<Basis>>` with one entry per stage (0-based). Stages
+/// that have a matching record in `stage_bases` get `Some(Basis)` with the
+/// `u8` status codes widened to `i32`. Stages without a record get `None`.
+///
+/// # Parameters
+///
+/// - `num_stages`: total number of stages in the study.
+/// - `stage_bases`: deserialized basis records from the policy checkpoint.
+#[must_use]
+pub fn build_basis_cache_from_checkpoint(
+    num_stages: usize,
+    stage_bases: &[cobre_io::OwnedPolicyBasisRecord],
+) -> Vec<Option<Basis>> {
+    let mut cache: Vec<Option<Basis>> = vec![None; num_stages];
+    for record in stage_bases {
+        let stage = record.stage_id as usize;
+        if stage < num_stages {
+            let col_status: Vec<i32> = record.column_status.iter().map(|&c| i32::from(c)).collect();
+            let row_status: Vec<i32> = record.row_status.iter().map(|&r| i32::from(r)).collect();
+            cache[stage] = Some(Basis {
+                col_status,
+                row_status,
+            });
+        }
+    }
+    cache
 }
 
 #[cfg(test)]

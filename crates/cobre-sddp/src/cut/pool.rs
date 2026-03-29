@@ -441,6 +441,89 @@ impl CutPool {
             per_dimension_zeros,
         }
     }
+
+    /// Construct a `CutPool` from deserialized cut records.
+    ///
+    /// The pool capacity is set to `records.len()` (no room for new training
+    /// cuts). All loaded cuts are populated and their active flags are set
+    /// from the deserialized records.
+    ///
+    /// `forward_passes` is set to 0 and `warm_start_count` is set to
+    /// `records.len()` since this pool is not intended for incremental
+    /// training addition (only for FCF evaluation during simulation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cobre_io::OwnedPolicyCutRecord;
+    /// use cobre_sddp::cut::pool::CutPool;
+    ///
+    /// let records = vec![
+    ///     OwnedPolicyCutRecord {
+    ///         cut_id: 0,
+    ///         slot_index: 0,
+    ///         iteration: 0,
+    ///         forward_pass_index: 0,
+    ///         intercept: 5.0,
+    ///         coefficients: vec![1.0, 2.0],
+    ///         is_active: true,
+    ///         domination_count: 0,
+    ///     },
+    /// ];
+    ///
+    /// let pool = CutPool::from_deserialized(2, &records);
+    /// assert_eq!(pool.capacity, 1);
+    /// assert_eq!(pool.populated_count, 1);
+    /// assert_eq!(pool.active_count(), 1);
+    /// ```
+    #[must_use]
+    pub fn from_deserialized(
+        state_dimension: usize,
+        records: &[cobre_io::OwnedPolicyCutRecord],
+    ) -> Self {
+        let capacity = records.len();
+        let mut coefficients = Vec::with_capacity(capacity);
+        let mut intercepts = Vec::with_capacity(capacity);
+        let mut active = Vec::with_capacity(capacity);
+        let mut metadata = Vec::with_capacity(capacity);
+        let mut cached_active_count = 0usize;
+
+        for record in records {
+            debug_assert!(
+                record.coefficients.len() == state_dimension,
+                "from_deserialized: coefficients length {} != state_dimension {}",
+                record.coefficients.len(),
+                state_dimension
+            );
+            coefficients.push(record.coefficients.clone());
+            intercepts.push(record.intercept);
+            active.push(record.is_active);
+            if record.is_active {
+                cached_active_count += 1;
+            }
+            metadata.push(CutMetadata {
+                iteration_generated: u64::from(record.iteration),
+                forward_pass_index: record.forward_pass_index,
+                active_count: 0,
+                last_active_iter: u64::from(record.iteration),
+                domination_count: u64::from(record.domination_count),
+            });
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        Self {
+            coefficients,
+            intercepts,
+            metadata,
+            active,
+            populated_count: capacity,
+            capacity,
+            state_dimension,
+            forward_passes: 0,
+            warm_start_count: capacity as u32,
+            cached_active_count,
+        }
+    }
 }
 
 /// Report of exact-zero sparsity across active cuts in a [`CutPool`].

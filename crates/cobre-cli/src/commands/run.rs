@@ -272,27 +272,82 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     } else {
         // Training disabled: check if simulation is requested.
         if setup.n_scenarios() > 0 {
-            // Simulation-only mode requires a loaded policy (wired in Epic 2).
-            // For now, attempting simulation without training will fail with a
-            // meaningful error when the FCF has no cuts.
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
-                    .write_line("Training disabled. Attempting simulation with existing policy...");
+                    .write_line("Training disabled. Loading policy for simulation-only mode...");
             }
-            // Cannot run simulation without a trained policy yet — placeholder
-            // for Epic 2 (T007) which will wire FCF loading.
-            return Err(CliError::Internal {
-                message: "training disabled but simulation-only mode is not yet implemented \
-                         (requires a loaded policy)"
-                    .to_string(),
-            });
-        }
-        // Both training and simulation disabled — nothing to do.
-        if ctx.is_root && !ctx.quiet {
-            let _ = ctx
-                .stderr
-                .write_line("Training disabled, simulation disabled — nothing to do.");
+
+            // Load policy checkpoint from the output directory.
+            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(CliError::Internal {
+                    message: format!(
+                        "Policy directory not found: {}. Cannot run simulation-only \
+                         mode without a trained policy.",
+                        policy_dir.display()
+                    ),
+                });
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| CliError::Internal {
+                    message: format!("failed to read policy checkpoint: {e}"),
+                })?;
+
+            // Validate compatibility if configured.
+            if let Some(ref config) = root_config {
+                if config.policy.validate_compatibility {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                    let state_dim = setup.fcf().state_dimension as u32;
+                    cobre_sddp::validate_policy_compatibility(
+                        &checkpoint.metadata,
+                        state_dim,
+                        n_stages,
+                        None,
+                        None,
+                    )
+                    .map_err(CliError::from)?;
+                }
+            }
+
+            // Replace the empty FCF with the loaded one.
+            let loaded_fcf =
+                cobre_sddp::FutureCostFunction::from_deserialized(&checkpoint.stage_cuts)
+                    .map_err(CliError::from)?;
+            setup.replace_fcf(loaded_fcf);
+
+            // Build basis cache from loaded checkpoint for simulation warm-start.
+            let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
+                setup.num_stages(),
+                &checkpoint.stage_bases,
+            );
+
+            // Create a minimal TrainingResult to provide the basis cache.
+            let training_result = cobre_sddp::TrainingResult {
+                iterations: checkpoint.metadata.completed_iterations.into(),
+                final_lb: checkpoint.metadata.final_lower_bound,
+                final_ub: checkpoint
+                    .metadata
+                    .best_upper_bound
+                    .unwrap_or(f64::INFINITY),
+                final_ub_std: 0.0,
+                final_gap: 0.0,
+                total_time_ms: 0,
+                reason: "loaded from checkpoint".to_string(),
+                solver_stats_log: Vec::new(),
+                basis_cache,
+            };
+
+            run_simulation_phase(&ctx, &system, &mut setup, &training_result)?;
+        } else {
+            // Both training and simulation disabled — nothing to do.
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Training disabled, simulation disabled — nothing to do.");
+            }
         }
     }
 

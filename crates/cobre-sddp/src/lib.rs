@@ -98,7 +98,7 @@ pub use lp_builder::{
     GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
     build_stage_templates,
 };
-pub use policy_load::validate_policy_compatibility;
+pub use policy_load::{build_basis_cache_from_checkpoint, validate_policy_compatibility};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{

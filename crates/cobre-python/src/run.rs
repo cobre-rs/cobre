@@ -485,12 +485,82 @@ fn run_inner(
     } else {
         // Training disabled: check if simulation is requested.
         if should_simulate {
-            // Simulation-only mode requires a loaded policy (wired in T008).
-            return Err(
-                "training disabled but simulation-only mode is not yet implemented \
-                 (requires a loaded policy)"
-                    .to_string(),
+            // Simulation-only mode: load policy and run simulation.
+            let policy_dir = output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(format!(
+                    "Policy directory not found: {}. Cannot run simulation-only \
+                     mode without a trained policy.",
+                    policy_dir.display()
+                ));
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| format!("failed to read policy checkpoint: {e}"))?;
+
+            // Validate compatibility if configured.
+            if config.policy.validate_compatibility {
+                #[allow(clippy::cast_possible_truncation)]
+                let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                let state_dim = setup.fcf().state_dimension as u32;
+                cobre_sddp::validate_policy_compatibility(
+                    &checkpoint.metadata,
+                    state_dim,
+                    n_stages,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("policy validation error: {e}"))?;
+            }
+
+            // Replace the empty FCF with the loaded one.
+            let loaded_fcf =
+                cobre_sddp::FutureCostFunction::from_deserialized(&checkpoint.stage_cuts)
+                    .map_err(|e| format!("FCF reconstruction error: {e}"))?;
+            setup.replace_fcf(loaded_fcf);
+
+            // Build basis cache from loaded checkpoint.
+            let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
+                setup.num_stages(),
+                &checkpoint.stage_bases,
             );
+
+            // Create a minimal TrainingResult for simulation warm-start.
+            let training_result = cobre_sddp::TrainingResult {
+                iterations: checkpoint.metadata.completed_iterations.into(),
+                final_lb: checkpoint.metadata.final_lower_bound,
+                final_ub: checkpoint
+                    .metadata
+                    .best_upper_bound
+                    .unwrap_or(f64::INFINITY),
+                final_ub_std: 0.0,
+                final_gap: 0.0,
+                total_time_ms: 0,
+                reason: "loaded from checkpoint".to_string(),
+                solver_stats_log: Vec::new(),
+                basis_cache,
+            };
+
+            let simulation = Some(run_simulation_phase_py(
+                &mut setup,
+                &output_dir,
+                &system,
+                &training_result,
+                n_threads,
+            )?);
+
+            return Ok(RunSummary {
+                converged: false,
+                iterations: 0,
+                lower_bound: checkpoint.metadata.final_lower_bound,
+                upper_bound: checkpoint.metadata.best_upper_bound,
+                gap_percent: None,
+                total_time_ms: 0,
+                output_dir,
+                simulation,
+                stochastic: Some(stochastic_summary),
+                hydro_models: hydro_models_summary,
+            });
         }
 
         // Both training and simulation disabled — return zero-iteration summary.

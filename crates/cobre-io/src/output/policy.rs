@@ -554,7 +554,7 @@ pub fn write_policy_checkpoint(
 /// Unlike [`PolicyCutRecord<'a>`], this type owns its `coefficients` vector so it
 /// can be returned from a deserialization function that does not borrow from the
 /// input buffer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OwnedPolicyCutRecord {
     /// Unique identifier for this cut across all iterations.
     pub cut_id: u64,
@@ -578,7 +578,7 @@ pub struct OwnedPolicyCutRecord {
 ///
 /// Unlike [`PolicyBasisRecord<'a>`], this type owns its status byte vectors so it
 /// can be returned from a deserialization function.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OwnedPolicyBasisRecord {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -596,7 +596,7 @@ pub struct OwnedPolicyBasisRecord {
 ///
 /// Contains the stage-level fields stored in the `StageCuts` root table plus the
 /// vector of deserialized cut records.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StageCutsReadResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -613,7 +613,7 @@ pub struct StageCutsReadResult {
 }
 
 /// Complete deserialized policy checkpoint returned by [`read_policy_checkpoint`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PolicyCheckpoint {
     /// Policy metadata read from `metadata.json`.
     pub metadata: PolicyCheckpointMetadata,

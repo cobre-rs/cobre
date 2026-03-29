@@ -41,14 +41,34 @@
 //! [evap_end, evap_end+N)  withdrawal_slack — sigma^r_h (m³/s), one per hydro
 //! ```
 //!
-//! where H = `hydro_count`, K = `n_blks`, T = `n_thermals`, Ln = `n_lines`, B = `n_buses`,
-//! S = `max_deficit_segments`.
+//! After withdrawal slack columns, 4 operational violation slack column regions are
+//! appended when `hydro_count > 0` (one column per hydro in each region):
+//!
+//! ```text
+//! [ws_end,      ws_end+N)    outflow_below_slack    — min-outflow violation slack
+//! [ws_end+N,    ws_end+2*N)  outflow_above_slack    — max-outflow violation slack
+//! [ws_end+2*N,  ws_end+3*N)  turbine_below_slack    — min-turbine violation slack
+//! [ws_end+3*N,  ws_end+4*N)  generation_below_slack — min-generation violation slack
+//! ```
+//!
+//! where ws_end = `withdrawal_slack.end`, H = `hydro_count`, K = `n_blks`,
+//! T = `n_thermals`, Ln = `n_lines`, B = `n_buses`, S = `max_deficit_segments`.
 //!
 //! ## Row layout (Solver Abstraction SS2.2)
 //!
 //! ```text
 //! [0, N)          storage_fixing — storage-fixing constraints (RHS = incoming storage)
 //! [N, N*(1+L))    lag_fixing     — AR lag-fixing constraints (RHS = lagged inflows)
+//! ```
+//!
+//! After evaporation rows, 4 operational violation constraint row regions are
+//! appended when `hydro_count > 0` (one row per hydro in each region):
+//!
+//! ```text
+//! [evap_end,      evap_end+N)    min_outflow_rows    — min-outflow constraints
+//! [evap_end+N,    evap_end+2*N)  max_outflow_rows    — max-outflow constraints
+//! [evap_end+2*N,  evap_end+3*N)  min_turbine_rows    — min-turbine constraints
+//! [evap_end+3*N,  evap_end+4*N)  min_generation_rows — min-generation constraints
 //! ```
 //!
 //! ## Worked example (SS5.5.3): N = 3, L = 2
@@ -368,6 +388,64 @@ pub struct StageIndexer {
     /// [`StageIndexer::new`]).
     pub has_withdrawal: bool,
 
+    // ── Operational violation slack column ranges ─────────────────────────
+    // Populated only by the full build path; empty (`0..0`) when built via `new`.
+    /// Column range for outflow-below violation slacks, one per hydro.
+    ///
+    /// `outflow_below_slack.start + h` is the column for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub outflow_below_slack: Range<usize>,
+
+    /// Column range for outflow-above violation slacks, one per hydro.
+    ///
+    /// `outflow_above_slack.start + h` is the column for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub outflow_above_slack: Range<usize>,
+
+    /// Column range for turbine-below violation slacks, one per hydro.
+    ///
+    /// `turbine_below_slack.start + h` is the column for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub turbine_below_slack: Range<usize>,
+
+    /// Column range for generation-below violation slacks, one per hydro.
+    ///
+    /// `generation_below_slack.start + h` is the column for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub generation_below_slack: Range<usize>,
+
+    // ── Operational violation constraint row ranges ────────────────────────
+    // Populated only by the full build path; empty (`0..0`) when built via `new`.
+    /// Row range for min-outflow constraint rows, one per hydro.
+    ///
+    /// `min_outflow_rows.start + h` is the row for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub min_outflow_rows: Range<usize>,
+
+    /// Row range for max-outflow constraint rows, one per hydro.
+    ///
+    /// `max_outflow_rows.start + h` is the row for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub max_outflow_rows: Range<usize>,
+
+    /// Row range for min-turbine constraint rows, one per hydro.
+    ///
+    /// `min_turbine_rows.start + h` is the row for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub min_turbine_rows: Range<usize>,
+
+    /// Row range for min-generation constraint rows, one per hydro.
+    ///
+    /// `min_generation_rows.start + h` is the row for hydro `h`.
+    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    pub min_generation_rows: Range<usize>,
+
+    /// Whether operational violation slack columns are present.
+    ///
+    /// `true` when the full build path was used with `hydro_count > 0`.
+    /// `false` otherwise (including when built via [`StageIndexer::new`]).
+    pub has_operational_violations: bool,
+
     // ── Generic constraint row and column ranges ────────────────────────────
     // Populated only by `StageLayout::new` in lp_builder via the full build
     // path; empty (`0..0`, 0) when built via [`StageIndexer::new`].
@@ -581,6 +659,15 @@ impl StageIndexer {
             evap_indices: Vec::new(),
             withdrawal_slack: 0..0,
             has_withdrawal: false,
+            outflow_below_slack: 0..0,
+            outflow_above_slack: 0..0,
+            turbine_below_slack: 0..0,
+            generation_below_slack: 0..0,
+            min_outflow_rows: 0..0,
+            max_outflow_rows: 0..0,
+            min_turbine_rows: 0..0,
+            min_generation_rows: 0..0,
+            has_operational_violations: false,
             generic_constraint_rows: 0..0,
             generic_constraint_slack: 0..0,
             n_generic_constraints_active: 0,
@@ -780,6 +867,37 @@ impl StageIndexer {
             (0..0, false)
         };
 
+        // Operational violation slack columns: 4 per hydro, placed after withdrawal slack.
+        let evap_rows_end = fpha_row_cursor + n_evap_hydros;
+        let (
+            outflow_below_slack,
+            outflow_above_slack,
+            turbine_below_slack,
+            generation_below_slack,
+            min_outflow_rows,
+            max_outflow_rows,
+            min_turbine_rows,
+            min_generation_rows,
+            has_operational_violations,
+        ) = if hydro_count > 0 {
+            let ws_end = withdrawal_slack.end;
+            let ob = ws_end..ws_end + hydro_count;
+            let oa = ob.end..ob.end + hydro_count;
+            let tb = oa.end..oa.end + hydro_count;
+            let gb = tb.end..tb.end + hydro_count;
+
+            let r_min_out = evap_rows_end..evap_rows_end + hydro_count;
+            let r_max_out = r_min_out.end..r_min_out.end + hydro_count;
+            let r_min_turb = r_max_out.end..r_max_out.end + hydro_count;
+            let r_min_gen = r_min_turb.end..r_min_turb.end + hydro_count;
+
+            (
+                ob, oa, tb, gb, r_min_out, r_max_out, r_min_turb, r_min_gen, true,
+            )
+        } else {
+            (0..0, 0..0, 0..0, 0..0, 0..0, 0..0, 0..0, 0..0, false)
+        };
+
         // z_inflow columns are at fixed offset N*(1+L), inherited from base.
         // No re-computation needed; the base constructor already places them correctly.
 
@@ -811,6 +929,15 @@ impl StageIndexer {
             evap_indices: evap_indices_vec,
             withdrawal_slack,
             has_withdrawal,
+            outflow_below_slack,
+            outflow_above_slack,
+            turbine_below_slack,
+            generation_below_slack,
+            min_outflow_rows,
+            max_outflow_rows,
+            min_turbine_rows,
+            min_generation_rows,
+            has_operational_violations,
             // z_inflow, z_inflow_rows, z_inflow_row_start inherited from base
             // (fixed offset N*(1+L), stage-invariant)
             ..base

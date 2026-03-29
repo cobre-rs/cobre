@@ -984,9 +984,10 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 7 + 1 = 8.
-        // N=1 z-inflow column adds 1: 8 + 1 = 9.
-        // N=1 diversion column adds 1: 9 + 1 = 10.
-        assert_eq!(t.num_cols, 10, "num_cols mismatch for N=1 L=0");
+        // N=1 operational violation slacks add 4 columns: 8 + 4 = 12.
+        // N=1 z-inflow column adds 1: 12 + 1 = 13.
+        // N=1 diversion column adds 1: 13 + 1 = 14.
+        assert_eq!(t.num_cols, 14, "num_cols mismatch for N=1 L=0");
     }
 
     #[test]
@@ -1007,9 +1008,10 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1 withdrawal slack adds 1 column: 9 + 1 = 10.
-        // N=1 z-inflow column adds 1: 10 + 1 = 11.
-        // N=1 diversion column adds 1: 11 + 1 = 12.
-        assert_eq!(t.num_cols, 12, "num_cols mismatch for N=1 L=2");
+        // N=1 operational violation slacks add 4 columns: 10 + 4 = 14.
+        // N=1 z-inflow column adds 1: 14 + 1 = 15.
+        // N=1 diversion column adds 1: 15 + 1 = 16.
+        assert_eq!(t.num_cols, 16, "num_cols mismatch for N=1 L=2");
     }
 
     #[test]
@@ -1049,7 +1051,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // + 1 z-inflow row for N=1.
-        assert_eq!(t.num_rows, 4, "num_rows mismatch for N=1 L=0");
+        // + 4 operational violation rows for N=1.
+        assert_eq!(t.num_rows, 8, "num_rows mismatch for N=1 L=0");
     }
 
     #[test]
@@ -1070,7 +1073,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // + 1 z-inflow row for N=1.
-        assert_eq!(t.num_rows, 6, "num_rows mismatch for N=1 L=2");
+        // + 4 operational violation rows for N=1.
+        assert_eq!(t.num_rows, 10, "num_rows mismatch for N=1 L=2");
     }
 
     #[test]
@@ -2039,9 +2043,10 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1, L=0: theta=3, decision_start=4, turbine=4, spillage=5, diversion=6,
-        // deficit=7, excess=8, inflow_slack=9, withdrawal_slack=10.
-        // Inflow slack is before withdrawal (N=1 withdrawal columns at end).
-        let slack_col = t.num_cols - 1 - t.n_hydro; // inflow_slack (before withdrawal)
+        // deficit=7, excess=8, inflow_slack=9, withdrawal_slack=10,
+        // outflow_below=11, outflow_above=12, turbine_below=13, generation_below=14.
+        // Inflow slack is before withdrawal + 4 operational violation slack groups.
+        let slack_col = t.num_cols - 1 - 5 * t.n_hydro; // inflow_slack (before withdrawal + 4 op slacks)
         let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
         assert!(
             (t.objective[slack_col] - expected_obj).abs() < 1e-12,
@@ -2066,13 +2071,18 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
         // N=1, L=2: state+aux = N*(3+L)+1 = 6 (storage, lags, z_inflow, storage_in, theta);
-        // decisions = turb+spill+diversion+def+exc = 5; withdrawal = 1; total = 12.
+        // decisions = turb+spill+diversion+def+exc = 5; withdrawal = 1;
+        // operational violation slacks = 4; total = 16.
         assert_eq!(
-            t.num_cols, 12,
+            t.num_cols, 16,
             "method=none must not add extra penalty columns"
         );
         // num_rows = N*(1+L) fixing + N z_inflow + N water_balance + B*K load_balance = 3+1+1+1 = 6
-        assert_eq!(t.num_rows, 6, "method=none must not add extra penalty rows");
+        // + 4 operational violation rows = 10.
+        assert_eq!(
+            t.num_rows, 10,
+            "method=none must not add extra penalty rows"
+        );
     }
 
     // test_penalty_slack_in_water_balance:
@@ -2093,8 +2103,9 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        // Locate the inflow slack column. For N=1, L=0: it is before withdrawal.
-        let slack_col = t.num_cols - 1 - t.n_hydro;
+        // Locate the inflow slack column. For N=1, L=0: it is before
+        // withdrawal + 4 operational violation slack groups.
+        let slack_col = t.num_cols - 1 - 5 * t.n_hydro;
 
         // Iterate the CSC to find the entry for slack_col in the water balance row.
         // Water balance row for hydro 0: row_water_balance_start = n_state + n_hydros = N*(1+L) + N = 2.
@@ -2129,8 +2140,8 @@ mod tests {
         )
         .expect("constant productivity ok");
         let t = &result.templates[0];
-        // The inflow slack is before withdrawal column for N=1.
-        let slack_col = t.num_cols - 1 - t.n_hydro;
+        // The inflow slack is before withdrawal + 4 operational violation slack groups.
+        let slack_col = t.num_cols - 1 - 5 * t.n_hydro;
         assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
         assert!(
             t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
@@ -2164,8 +2175,8 @@ mod tests {
         .expect("constant productivity ok");
         let t = &result.templates[0];
 
-        // For N=1, L=0: inflow_slack is before withdrawal column.
-        let slack_col = t.num_cols - 1 - t.n_hydro;
+        // For N=1, L=0: inflow_slack is before withdrawal + 4 operational violation slack groups.
+        let slack_col = t.num_cols - 1 - 5 * t.n_hydro;
         let water_balance_row = 2_usize; // n_state + n_hydros = N*(1+L) + N = 2
         let zeta = 744.0 * (3_600.0 / 1_000_000.0);
         let expected_coeff = -zeta; // slack enters LHS with -ζ (virtual inflow)
@@ -2224,10 +2235,14 @@ mod tests {
     //   col 3: theta          col 4: turbine        col 5: spillage
     //   col 6: diversion      col 7: deficit        col 8: excess
     //   col 9: inflow_slack   col 10: withdrawal_slack
+    //   col 11: outflow_below col 12: outflow_above
+    //   col 13: turbine_below col 14: generation_below
     //
     // Row layout:
     //   row 0: storage_fixing  row 1: z_inflow_def  row 2: water_balance
     //   row 3: load_balance
+    //   row 4: min_outflow     row 5: max_outflow
+    //   row 6: min_turbine     row 7: min_generation
     //
     // To apply negative inflow noise we patch the water balance row (row 2)
     // to RHS = -5.0. Without the slack this would make the LP infeasible.
@@ -2248,8 +2263,8 @@ mod tests {
         .expect("constant productivity ok");
         let template = &result.templates[0];
 
-        // The inflow slack is before withdrawal column for N=1.
-        let col_inflow_slack_start = template.num_cols - 1 - template.n_hydro;
+        // The inflow slack is before withdrawal + 4 operational violation slack groups.
+        let col_inflow_slack_start = template.num_cols - 1 - 5 * template.n_hydro;
 
         // base_row for stage 0 is n_dual_relevant + n_hydro = n_state + N = 2 (for N=1, L=0).
         let base_row = result.base_rows[0];
@@ -3261,16 +3276,18 @@ mod tests {
         // (3 = turbine + spillage + diversion per hydro per block)
         // With FPHA: 27 + 2 = 29.
         // With withdrawal slack (N=4): 29 + 4 = 33.
+        // With operational violation slacks (4*N=16): 33 + 16 = 49.
         // z-inflow is now embedded in state region (not appended at end).
         // Base num_rows = n_state + N z_inflow + 4 water balance + 1*1 load balance = 4 + 4 + 4 + 1 = 13.
         // With FPHA: 13 + 2*1*3 = 13 + 6 = 19.
+        // With operational violation rows (4*N=16): 19 + 16 = 35.
         assert_eq!(
-            tmpl.num_cols, 33,
-            "4-hydro mixed system: num_cols should be 33 (includes diversion and withdrawal slack)"
+            tmpl.num_cols, 49,
+            "4-hydro mixed system: num_cols should be 49 (includes diversion, withdrawal, and operational slacks)"
         );
         assert_eq!(
-            tmpl.num_rows, 19,
-            "4-hydro mixed system: num_rows should be 19 (includes z_inflow rows)"
+            tmpl.num_rows, 35,
+            "4-hydro mixed system: num_rows should be 35 (includes z_inflow and operational violation rows)"
         );
 
         // Load balance row for the single bus, block 0: row = 12.
@@ -3885,8 +3902,8 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // Evaporation row is placed after all other structural rows (last row).
-        let evap_row = t.num_rows - 1;
+        // Evaporation row: followed by 4*N operational violation rows.
+        let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
         assert_eq!(
             t.row_lower[evap_row], k_evap0,
             "evaporation row_lower must equal k_evap0 = {k_evap0}, got {}",
@@ -3918,12 +3935,11 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // The 3 evaporation columns are followed by 1 withdrawal slack column (N=1).
-        // Since water_withdrawal_m3s == 0, the withdrawal slack at num_cols-1 is pinned at [0,0].
-        // Evaporation columns are at num_cols-4, num_cols-3, num_cols-2 (before withdrawal slack).
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
+        // The 3 evaporation columns are followed by 1 withdrawal slack + 4 operational
+        // violation slack columns (5*N=5 total for N=1).
+        let col_q_ev = t.num_cols - 4 - 4 * t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - 4 * t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - 4 * t.n_hydro;
 
         // All three columns have lower bound 0.0.
         for &col in &[col_q_ev, col_f_plus, col_f_minus] {
@@ -4035,20 +4051,19 @@ mod tests {
         //   col 0 = v (storage_out)  col 1 = z_inflow  col 2 = v_in  col 3 = theta
         //   col 4 = turbine  col 5 = spillage  col 6 = diversion
         //   col 7 = deficit  col 8 = excess
-        //   col_evap_start = num_cols - 4
+        //   col_evap_start = num_cols - 4 - 4*N
         // Row layout for N=1, L=0, B=1, K=1, no FPHA:
         //   row 0: storage-fixing
         //   row 1: z_inflow definition
         //   row 2: water balance (row_water_balance_start = n_state + n_hydros = 2)
         //   row 3: load balance
         //   row 4: evaporation constraint (row_evap_start = 4)
-        // Evaporation columns come before withdrawal slack (N=1 column).
-        // col_q_ev = col_evap_start + 0, col_f_plus = +1, col_f_minus = +2,
-        // followed by 1 withdrawal_slack column.
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
-        let evap_row = t.num_rows - 1;
+        //   rows 5-8: operational violation rows
+        // Evaporation columns come before withdrawal slack + 4*N operational slacks.
+        let col_q_ev = t.num_cols - 4 - 4 * t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - 4 * t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - 4 * t.n_hydro;
+        let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
         let water_balance_row = 2_usize; // row_water_balance_start = n_state + n_hydros = 2
 
         // After ticket-012, Q_ev has 2 entries: water balance row (+zeta) and
@@ -4155,7 +4170,7 @@ mod tests {
         .expect("evaporation system ok");
 
         let t = &result.templates[0];
-        let evap_row = t.num_rows - 1;
+        let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
         let expected_coeff = -k_evap_v / 2.0; // -0.02
 
         let entry_v = entries_for_col(t, 0)
@@ -4257,9 +4272,9 @@ mod tests {
         .expect("2-evap-hydro system ok");
 
         let t = &result.templates[0];
-        // 2 evap hydros: evap rows are the last 2 rows.
-        let evap_row_0 = t.num_rows - 2;
-        let evap_row_1 = t.num_rows - 1;
+        // 2 evap hydros: evap rows are followed by 4*N operational violation rows.
+        let evap_row_0 = t.num_rows - 2 - 4 * t.n_hydro;
+        let evap_row_1 = t.num_rows - 1 - 4 * t.n_hydro;
 
         // Hydro 0 (k_evap_v=0.02): v coefficient = -0.01.
         let entry_v_h0 = entries_for_col(t, 0)
@@ -4306,7 +4321,7 @@ mod tests {
         .expect("evaporation system ok");
 
         let t = &result.templates[0];
-        let evap_row = t.num_rows - 1;
+        let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
 
         let entry_v = entries_for_col(t, 0)
             .into_iter()
@@ -4360,8 +4375,8 @@ mod tests {
         // Hydro 0's water balance row = 2.
         let water_balance_row = 2_usize;
 
-        // Q_ev is the first of the 3 evaporation columns; before withdrawal slack.
-        let col_q_ev = t.num_cols - 4;
+        // Q_ev is the first of the 3 evaporation columns; before withdrawal + 4*N operational slacks.
+        let col_q_ev = t.num_cols - 4 - 4 * t.n_hydro;
 
         let entries = entries_for_col(t, col_q_ev);
         let entry = entries
@@ -4565,8 +4580,8 @@ mod tests {
         let water_balance_row_h1 = 5_usize;
 
         // Q_ev for hydro 1 (local_idx=0, since only hydro 1 is evap): col_evap_start + 0*3.
-        // N=2 withdrawal columns follow evap; z_inflow is embedded in state region.
-        let col_q_ev_h1 = t.num_cols - 5;
+        // N=2 withdrawal + 4*N operational slack columns follow evap.
+        let col_q_ev_h1 = t.num_cols - 5 - 4 * t.n_hydro;
 
         // Q_ev (h1) must have an entry at water balance row 3.
         let entries_h1 = entries_for_col(t, col_q_ev_h1);
@@ -4851,11 +4866,11 @@ mod tests {
 
         let t = &result.templates[0];
 
-        // Evaporation columns (Q_ev, f_plus, f_minus) are followed by 1 withdrawal slack (N=1).
-        // z_inflow is embedded in state region, not at end of columns.
-        let col_q_ev = t.num_cols - 4;
-        let col_f_plus = t.num_cols - 3;
-        let col_f_minus = t.num_cols - 2;
+        // Evaporation columns (Q_ev, f_plus, f_minus) are followed by
+        // 1 withdrawal slack + 4*N operational slacks.
+        let col_q_ev = t.num_cols - 4 - 4 * t.n_hydro;
+        let col_f_plus = t.num_cols - 3 - 4 * t.n_hydro;
+        let col_f_minus = t.num_cols - 2 - 4 * t.n_hydro;
 
         let expected_base = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
@@ -4895,8 +4910,8 @@ mod tests {
         .expect("evap system with zero k_evap builds ok");
 
         let t = &result.templates[0];
-        // N=1 withdrawal slack follows the 3 evap columns.
-        let col_q_ev = t.num_cols - 4;
+        // N=1 withdrawal + 4*N operational slacks follow the 3 evap columns.
+        let col_q_ev = t.num_cols - 4 - 4 * t.n_hydro;
 
         assert!(
             t.objective[col_q_ev].abs() < 1e-12,
@@ -4951,8 +4966,8 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        // Q_ev is the first evaporation column (before withdrawal slack).
-        let col_q_ev = template.num_cols - 4;
+        // Q_ev is the first evaporation column (before withdrawal + 4*N operational slacks).
+        let col_q_ev = template.num_cols - 4 - 4 * template.n_hydro;
         let q_ev = view.primal[col_q_ev];
 
         assert!(
@@ -5006,9 +5021,9 @@ mod tests {
             .solve()
             .expect("evaporation LP must be feasible and optimal");
 
-        // Evaporation violation slack columns are before withdrawal slack.
-        let col_f_plus = template.num_cols - 3;
-        let col_f_minus = template.num_cols - 2;
+        // Evaporation violation slack columns are before withdrawal + 4*N operational slacks.
+        let col_f_plus = template.num_cols - 3 - 4 * template.n_hydro;
+        let col_f_minus = template.num_cols - 2 - 4 * template.n_hydro;
         let f_plus = view.primal[col_f_plus];
         let f_minus = view.primal[col_f_minus];
 
@@ -5149,10 +5164,10 @@ mod tests {
         // col 0: v, col 1: z_inflow, col 2: v_in, col 3: theta,
         // col 4: turbine, col 5: spillage, col 6: diversion,
         // col 7: deficit, col 8: excess.
-        // Evaporation columns: Q_ev, f_plus, f_minus, then withdrawal slack.
+        // Evaporation columns: Q_ev, f_plus, f_minus, then withdrawal + 4*N operational slacks.
         let col_spillage = 5;
-        let col_q_ev = template.num_cols - 4;
-        let col_f_minus = template.num_cols - 2;
+        let col_q_ev = template.num_cols - 4 - 4 * template.n_hydro;
+        let col_f_minus = template.num_cols - 2 - 4 * template.n_hydro;
 
         let q_ev = view.primal[col_q_ev];
         let f_minus = view.primal[col_f_minus];
@@ -6002,8 +6017,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        // Withdrawal slack column is the last column for N=1.
-        let col_w = t.num_cols - 1;
+        // Withdrawal slack column: followed by 4*N operational violation slack columns.
+        let col_w = t.num_cols - 1 - 4 * t.n_hydro;
         // Water balance row for hydro 0: N=1, L=0 → row_water = n_state + n_hydros = 2.
         let row_water = 2_usize;
 
@@ -6047,7 +6062,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        let col_w = t.num_cols - 1;
+        // Withdrawal slack: followed by 4*N operational violation slack columns.
+        let col_w = t.num_cols - 1 - 4 * t.n_hydro;
         let expected_obj = violation_cost * total_hours / COST_SCALE_FACTOR;
         assert!(
             (t.objective[col_w] - expected_obj).abs() < 1e-12,
@@ -6071,8 +6087,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        // Withdrawal slack is the last column for N=1 (no NCS, no generic constraints).
-        let col_w = t.num_cols - 1;
+        // Withdrawal slack: followed by 4*N operational violation slack columns.
+        let col_w = t.num_cols - 1 - 4 * t.n_hydro;
         assert!(
             t.objective[col_w].abs() < 1e-15,
             "withdrawal slack objective must be 0 when cost=0, got {}",
@@ -6097,8 +6113,8 @@ mod tests {
         .expect("build ok");
 
         let t = &result.templates[0];
-        // Withdrawal slack is the last column for N=1 (no NCS, no generic constraints).
-        let col_w = t.num_cols - 1;
+        // Withdrawal slack: followed by 4*N operational violation slack columns.
+        let col_w = t.num_cols - 1 - 4 * t.n_hydro;
         assert!(
             (t.col_lower[col_w] - 0.0).abs() < 1e-15,
             "withdrawal slack lower bound must be 0.0, got {}",
@@ -6333,9 +6349,11 @@ mod tests {
         // N=2, L=0: state+aux = N*(3+L)+1 = 7 (storage, z_inflow, storage_in, theta).
         // col_turbine_start = 7, col_spillage_start = 9, col_diversion_start = 11,
         // col_deficit_start = 13, col_excess_start = 14,
-        // col_withdrawal_slack_start = 15, num_cols = 17.
-        let col_w0 = t.num_cols - 2;
-        let col_w1 = t.num_cols - 1;
+        // col_withdrawal_slack_start = 15,
+        // operational violation slacks = 4*2 = 8, num_cols = 25.
+        // Withdrawal slack columns: num_cols - 5*N = 25 - 10 = 15.
+        let col_w0 = t.num_cols - 5 * t.n_hydro;
+        let col_w1 = t.num_cols - 5 * t.n_hydro + 1;
 
         // N=2, L=0: row_water_balance_start = n_state + n_hydros = 2 + 2 = 4.
         let row_w0 = 4_usize; // water balance for hydro 0
@@ -6583,29 +6601,31 @@ mod tests {
         // inflow slack: 0 (no penalty config)
         // evap: 0
         // withdrawal slack: 3
-        // Total = 10 + 3 + 3 + 3 + 1 + 1 + 3 = 24
-        let expected_cols = 24_usize;
+        // operational violation slacks: 4*3 = 12
+        // Total = 10 + 3 + 3 + 3 + 1 + 1 + 3 + 12 = 36
+        let expected_cols = 36_usize;
         assert_eq!(
             t.num_cols, expected_cols,
             "3-hydro system: num_cols should be {expected_cols}, got {}",
             t.num_cols
         );
 
-        // Verify the withdrawal slack columns (the last N columns in the layout).
-        // withdrawal_slack is at [num_cols - n_h, num_cols).
+        // Verify the withdrawal slack columns. They are followed by
+        // 4 operational violation slack groups (4*N columns), so withdrawal
+        // starts at num_cols - 5*N.
         let n_h = t.n_hydro;
         assert_eq!(
-            t.col_upper[t.num_cols - n_h],
+            t.col_upper[t.num_cols - 5 * n_h],
             f64::INFINITY,
             "withdrawal slack column for hydro 0 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - n_h + 1],
+            t.col_upper[t.num_cols - 5 * n_h + 1],
             f64::INFINITY,
             "withdrawal slack column for hydro 1 should be unbounded above"
         );
         assert_eq!(
-            t.col_upper[t.num_cols - n_h + 2],
+            t.col_upper[t.num_cols - 5 * n_h + 2],
             f64::INFINITY,
             "withdrawal slack column for hydro 2 should be unbounded above"
         );

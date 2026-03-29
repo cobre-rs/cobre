@@ -62,7 +62,7 @@ pub(super) fn fill_stage_columns(
         };
         for blk in 0..layout.n_blks {
             let col = layout.col_turbine_start + h_idx * layout.n_blks + blk;
-            col_lower[col] = hb.min_turbined_m3s;
+            col_lower[col] = 0.0;
             col_upper[col] = turb_upper;
             if is_fpha {
                 let block_hours = stage.blocks[blk].duration_hours;
@@ -244,6 +244,63 @@ pub(super) fn fill_stage_columns(
         objective[col] = hp.water_withdrawal_violation_cost * total_stage_hours;
     }
 
+    // Operational violation slack columns: 4 regions of n_h columns each.
+    // Bounds [0, +inf) when the corresponding bound is active (positive for
+    // min constraints, Some for max outflow); pinned to [0, 0] when inactive.
+    // Objective cost: resolved penalty * total_stage_hours.
+
+    // Outflow-below-minimum slacks (sigma_outflow_below_h).
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_outflow_below_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.min_outflow_m3s > 0.0 {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.outflow_violation_below_cost * total_stage_hours;
+    }
+
+    // Outflow-above-maximum slacks (sigma_outflow_above_h).
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_outflow_above_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.max_outflow_m3s.is_some() {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.outflow_violation_above_cost * total_stage_hours;
+    }
+
+    // Turbine-below-minimum slacks (sigma_turbine_below_h).
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_turbine_below_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.min_turbined_m3s > 0.0 {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.turbined_violation_below_cost * total_stage_hours;
+    }
+
+    // Generation-below-minimum slacks (sigma_generation_below_h).
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_generation_below_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.min_generation_mw > 0.0 {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.generation_violation_below_cost * total_stage_hours;
+    }
+
     // NCS generation columns: one per active NCS per block.
     // col_lower[col] = 0.0 (from vec initialisation).
     // col_upper[col] = available_gen * ncs_factor.
@@ -373,6 +430,16 @@ pub(super) fn fill_stage_rows(
         }
     }
 
+    // Operational violation constraint rows (min/max outflow, min turbine, min generation).
+    fill_operational_violation_rows(
+        ctx,
+        stage,
+        stage_idx,
+        layout,
+        &mut row_lower,
+        &mut row_upper,
+    );
+
     // Z-inflow definition rows: equality constraints with RHS = base_h (m3/s).
     // The base is the deterministic PAR base inflow (before noise), NOT multiplied
     // by zeta and NOT reduced by withdrawal. The noise component (sigma * eta) is
@@ -389,6 +456,60 @@ pub(super) fn fill_stage_rows(
     }
 
     (row_lower, row_upper)
+}
+
+/// Fill row bounds for the 4 operational violation constraint families.
+///
+/// - **Min outflow** (`>=`): `row_lower = min_outflow_m3s * zeta`, `row_upper = +INF`.
+/// - **Max outflow** (`<=`): `row_lower = -INF`, `row_upper = max_outflow_m3s * zeta`
+///   (or `+INF` when the bound is absent, making the row non-binding).
+/// - **Min turbine** (`>=`): `row_lower = min_turbined_m3s * zeta`, `row_upper = +INF`.
+/// - **Min generation** (`>=`): `row_lower = min_generation_mw * total_stage_hours`,
+///   `row_upper = +INF` (`MWh` units, not hm3).
+fn fill_operational_violation_rows(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    row_lower: &mut [f64],
+    row_upper: &mut [f64],
+) {
+    // Min outflow rows (>= constraint): LHS + sigma >= min_outflow * zeta
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_min_outflow_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        let rhs = hb.min_outflow_m3s * layout.zeta;
+        row_lower[row] = rhs;
+        row_upper[row] = f64::INFINITY;
+    }
+
+    // Max outflow rows (<= constraint): LHS - sigma <= max_outflow * zeta
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_max_outflow_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        let rhs = hb.max_outflow_m3s.unwrap_or(f64::INFINITY) * layout.zeta;
+        row_lower[row] = f64::NEG_INFINITY;
+        row_upper[row] = rhs;
+    }
+
+    // Min turbine flow rows (>= constraint): LHS + sigma >= min_turbined * zeta
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_min_turbine_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        let rhs = hb.min_turbined_m3s * layout.zeta;
+        row_lower[row] = rhs;
+        row_upper[row] = f64::INFINITY;
+    }
+
+    // Min generation rows (>= constraint): LHS + sigma >= min_generation * total_hours
+    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+    for h_idx in 0..layout.n_h {
+        let row = layout.row_min_generation_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        let rhs = hb.min_generation_mw * total_stage_hours;
+        row_lower[row] = rhs;
+        row_upper[row] = f64::INFINITY;
+    }
 }
 
 /// Build the CSC matrix entries for one stage.
@@ -1010,6 +1131,124 @@ pub(super) fn fill_z_inflow_entries(
     }
 }
 
+/// Fill CSC matrix entries for the 4 operational violation constraint families.
+///
+/// Each constraint links decision variables (turbine, spillage, diversion, generation)
+/// to their respective slack columns via the constraint rows allocated in
+/// [`StageLayout`].
+///
+/// - **Min outflow** (`>=`): `sum_blk[tau * (q + s + d)] + sigma_below >= RHS`
+/// - **Max outflow** (`<=`): `sum_blk[tau * (q + s + d)] - sigma_above <= RHS`
+/// - **Min turbine** (`>=`): `sum_blk[tau * q] + sigma_below >= RHS`
+/// - **Min generation** (`>=`): `sum_blk[coeff * var * hours] + sigma_below >= RHS`
+///   where `coeff * var` is `rho * q` for constant-productivity hydros or `g` for FPHA.
+pub(super) fn fill_operational_violation_entries(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let n_blks = layout.n_blks;
+
+    // Build FPHA local-index lookup (same pattern as fill_load_balance_entries).
+    let mut fpha_local: Vec<Option<usize>> = vec![None; ctx.n_hydros];
+    for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
+        fpha_local[h_idx] = Some(local_idx);
+    }
+
+    for (h_idx, fpha_local_entry) in fpha_local.iter().enumerate() {
+        // ── Min outflow ──────────────────────────────────────────────────────
+        {
+            let row = layout.row_min_outflow_start + h_idx;
+            for blk in 0..n_blks {
+                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+                col_entries[col_q].push((row, tau));
+                let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
+                col_entries[col_s].push((row, tau));
+                let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
+                col_entries[col_d].push((row, tau));
+            }
+            let col_slack = layout.col_outflow_below_start + h_idx;
+            col_entries[col_slack].push((row, 1.0));
+        }
+
+        // ── Max outflow ──────────────────────────────────────────────────────
+        {
+            let row = layout.row_max_outflow_start + h_idx;
+            for blk in 0..n_blks {
+                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+                col_entries[col_q].push((row, tau));
+                let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
+                col_entries[col_s].push((row, tau));
+                let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
+                col_entries[col_d].push((row, tau));
+            }
+            let col_slack = layout.col_outflow_above_start + h_idx;
+            col_entries[col_slack].push((row, -1.0));
+        }
+
+        // ── Min turbine flow ─────────────────────────────────────────────────
+        {
+            let row = layout.row_min_turbine_start + h_idx;
+            for blk in 0..n_blks {
+                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+                col_entries[col_q].push((row, tau));
+            }
+            let col_slack = layout.col_turbine_below_start + h_idx;
+            col_entries[col_slack].push((row, 1.0));
+        }
+
+        // ── Min generation ───────────────────────────────────────────────────
+        {
+            let row = layout.row_min_generation_start + h_idx;
+            if let Some(&local_fpha_idx) = fpha_local_entry.as_ref() {
+                // FPHA: use generation variable g_{h,blk} with coefficient = block_hours.
+                for blk in 0..n_blks {
+                    let block_hours = stage.blocks[blk].duration_hours;
+                    let col_g = layout.col_generation_start + local_fpha_idx * n_blks + blk;
+                    col_entries[col_g].push((row, block_hours));
+                }
+            } else {
+                // Constant productivity: rho * q_{h,blk} * block_hours.
+                let rho = match &ctx.hydros[h_idx].generation_model {
+                    HydroGenerationModel::ConstantProductivity {
+                        productivity_mw_per_m3s,
+                    }
+                    | HydroGenerationModel::LinearizedHead {
+                        productivity_mw_per_m3s,
+                    } => *productivity_mw_per_m3s,
+                    HydroGenerationModel::Fpha => {
+                        // Entity model is Fpha but resolved model at this stage is
+                        // ConstantProductivity (fallback). Extract rho from the resolved model.
+                        if let ResolvedProductionModel::ConstantProductivity { productivity } =
+                            ctx.production_models.model(h_idx, stage_idx)
+                        {
+                            *productivity
+                        } else {
+                            debug_assert!(
+                                false,
+                                "Fpha entity model with non-Fpha resolved model and no local index for hydro {h_idx}"
+                            );
+                            0.0
+                        }
+                    }
+                };
+                for blk in 0..n_blks {
+                    let block_hours = stage.blocks[blk].duration_hours;
+                    let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+                    col_entries[col_q].push((row, rho * block_hours));
+                }
+            }
+            let col_slack = layout.col_generation_below_start + h_idx;
+            col_entries[col_slack].push((row, 1.0));
+        }
+    }
+}
+
 /// Build the unsorted CSC matrix entries for one stage.
 ///
 /// Returns one `Vec<(row, value)>` per column. Entries are in insertion
@@ -1029,6 +1268,7 @@ pub(super) fn build_stage_matrix_entries(
     fill_fpha_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_evaporation_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_z_inflow_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_operational_violation_entries(ctx, stage, stage_idx, layout, &mut col_entries);
 
     col_entries
 }

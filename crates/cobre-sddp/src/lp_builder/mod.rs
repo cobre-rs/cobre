@@ -143,7 +143,7 @@ pub(crate) use scaling::{apply_col_scale, apply_row_scale, compute_col_scale, co
 /// Callers multiply by `Block::duration_hours` to get the full block
 /// conversion: `volume_hm3 = flow_m3s * M3S_TO_HM3 * duration_hours`.
 /// For a 30-day month (720 h): `0.0036 * 720 = 2.592`.
-const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
+pub(crate) const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0; // multiply by hours to get hm³
 
 /// Divisor applied to all objective-function cost coefficients.
 ///

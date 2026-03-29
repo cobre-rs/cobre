@@ -7865,4 +7865,827 @@ mod tests {
             .build()
             .expect("one_bus_one_thermal_system: valid")
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Operational violation slack structural tests
+    // ─────────────────────────────────────────────────────────────────────
+
+    use crate::lp_builder::M3S_TO_HM3;
+
+    /// Build a system with 1 hydro, 1 bus, 2 blocks, active operational bounds.
+    ///
+    /// Block durations: 720.0h (heavy), 48.0h (light).
+    /// Hydro: min_outflow=50.0, max_outflow=Some(800.0), min_turbined=10.0,
+    ///         min_generation=5.0, productivity=0.5.
+    /// Penalties: outflow_below=1000, outflow_above=1000, turbined_below=1000,
+    ///            generation_below=1000.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    fn one_hydro_active_violations(n_stages: usize) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{InflowModel, LoadModel};
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let hydro = Hydro {
+            id: EntityId(2),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 50.0,
+            max_outflow_m3s: Some(800.0),
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.5,
+            },
+            min_turbined_m3s: 10.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 5.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 1000.0,
+                outflow_violation_below_cost: 1000.0,
+                outflow_violation_above_cost: 1000.0,
+                generation_violation_below_cost: 1000.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+        };
+
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![
+                    Block {
+                        index: 0,
+                        name: "Heavy".to_string(),
+                        duration_hours: 720.0,
+                    },
+                    Block {
+                        index: 1,
+                        name: "Light".to_string(),
+                        duration_hours: 48.0,
+                    },
+                ],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 0,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: n_st,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 10.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 50.0,
+                    max_outflow_m3s: Some(800.0),
+                    min_generation_mw: 5.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 0.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: n_st,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 0.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 1000.0,
+                    outflow_violation_below_cost: 1000.0,
+                    outflow_violation_above_cost: 1000.0,
+                    generation_violation_below_cost: 1000.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("one_hydro_active_violations: valid")
+    }
+
+    /// Helper: get CSC entries for column `col` as `(row, value)` pairs.
+    fn csc_entries_for_col(t: &StageTemplate, col: usize) -> Vec<(usize, f64)> {
+        let start = t.col_starts[col] as usize;
+        let end = t.col_starts[col + 1] as usize;
+        (start..end)
+            .map(|nz| (t.row_indices[nz] as usize, t.values[nz]))
+            .collect()
+    }
+
+    fn build_active_violations_template() -> super::StageTemplates {
+        let system = one_hydro_active_violations(1);
+        build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("active violations ok")
+    }
+
+    #[test]
+    fn operational_violation_row_col_counts() {
+        // 1 hydro, 2 blocks => 4 operational violation columns and 4 rows.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        // 4 slack column ranges each contain exactly 1 column (1 hydro).
+        assert_eq!(indexer.outflow_below_slack.len(), 1);
+        assert_eq!(indexer.outflow_above_slack.len(), 1);
+        assert_eq!(indexer.turbine_below_slack.len(), 1);
+        assert_eq!(indexer.generation_below_slack.len(), 1);
+        assert!(indexer.has_operational_violations);
+
+        // 4 row ranges each contain exactly 1 row (1 hydro).
+        assert_eq!(indexer.min_outflow_rows.len(), 1);
+        assert_eq!(indexer.max_outflow_rows.len(), 1);
+        assert_eq!(indexer.min_turbine_rows.len(), 1);
+        assert_eq!(indexer.min_generation_rows.len(), 1);
+
+        // All slack columns and constraint rows are within the template's range.
+        assert!(
+            indexer.generation_below_slack.end <= t.num_cols,
+            "operational slack cols exceed num_cols"
+        );
+        assert!(
+            indexer.min_generation_rows.end <= t.num_rows,
+            "operational violation rows exceed num_rows"
+        );
+    }
+
+    #[test]
+    fn min_outflow_active_col_bounds() {
+        // When min_outflow > 0, the slack column has lower=0, upper=+inf.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let col = indexer.outflow_below_slack.start;
+        assert_eq!(t.col_lower[col], 0.0, "outflow_below lower must be 0");
+        assert_eq!(
+            t.col_upper[col],
+            f64::INFINITY,
+            "outflow_below upper must be +inf when active"
+        );
+    }
+
+    #[test]
+    fn max_outflow_active_col_bounds() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let col = indexer.outflow_above_slack.start;
+        assert_eq!(t.col_lower[col], 0.0, "outflow_above lower must be 0");
+        assert_eq!(
+            t.col_upper[col],
+            f64::INFINITY,
+            "outflow_above upper must be +inf when max_outflow is Some"
+        );
+    }
+
+    #[test]
+    fn operational_violation_inactive_pinned() {
+        // When bounds are zero/None, slack columns are pinned [0, 0].
+        let system = one_hydro_system(1, 0); // default: all violation bounds = 0
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &PrecomputedPar::default(),
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("base ok");
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 1,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        // All 4 inactive slack columns must be pinned [0, 0].
+        for &col in &[
+            indexer.outflow_below_slack.start,
+            indexer.outflow_above_slack.start,
+            indexer.turbine_below_slack.start,
+            indexer.generation_below_slack.start,
+        ] {
+            assert_eq!(t.col_lower[col], 0.0, "inactive col {col} lower != 0");
+            assert_eq!(
+                t.col_upper[col], 0.0,
+                "inactive col {col} upper != 0 (should be pinned)"
+            );
+        }
+    }
+
+    #[test]
+    fn operational_violation_objective_costs() {
+        // Penalty cost * total_hours / COST_SCALE_FACTOR.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let total_hours = 720.0 + 48.0;
+        let expected = 1000.0 * total_hours / COST_SCALE_FACTOR;
+
+        for &col in &[
+            indexer.outflow_below_slack.start,
+            indexer.outflow_above_slack.start,
+            indexer.turbine_below_slack.start,
+            indexer.generation_below_slack.start,
+        ] {
+            assert!(
+                (t.objective[col] - expected).abs() < 1e-10,
+                "col {col}: objective = {}, expected = {}",
+                t.objective[col],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn min_outflow_row_bounds() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let total_hours = 720.0 + 48.0;
+        let zeta = total_hours * M3S_TO_HM3;
+        let expected_lower = 50.0 * zeta; // min_outflow = 50.0
+
+        // Row index: after water_balance(1), load_balance(1*2), fpha(0), evap(0)
+        // The indexer tells us the row. Build it to match the template.
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.min_outflow_rows.start;
+        assert!(
+            (t.row_lower[row] - expected_lower).abs() < 1e-10,
+            "min_outflow row_lower = {}, expected {}",
+            t.row_lower[row],
+            expected_lower
+        );
+        assert_eq!(
+            t.row_upper[row],
+            f64::INFINITY,
+            "min_outflow row_upper must be +inf"
+        );
+    }
+
+    #[test]
+    fn max_outflow_row_bounds() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let total_hours = 720.0 + 48.0;
+        let zeta = total_hours * M3S_TO_HM3;
+        let expected_upper = 800.0 * zeta; // max_outflow = 800.0
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.max_outflow_rows.start;
+        assert_eq!(
+            t.row_lower[row],
+            f64::NEG_INFINITY,
+            "max_outflow row_lower must be -inf"
+        );
+        assert!(
+            (t.row_upper[row] - expected_upper).abs() < 1e-10,
+            "max_outflow row_upper = {}, expected {}",
+            t.row_upper[row],
+            expected_upper
+        );
+    }
+
+    #[test]
+    fn min_turbine_row_bounds() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let total_hours = 720.0 + 48.0;
+        let zeta = total_hours * M3S_TO_HM3;
+        let expected_lower = 10.0 * zeta; // min_turbined = 10.0
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.min_turbine_rows.start;
+        assert!(
+            (t.row_lower[row] - expected_lower).abs() < 1e-10,
+            "min_turbine row_lower = {}, expected {}",
+            t.row_lower[row],
+            expected_lower
+        );
+        assert_eq!(
+            t.row_upper[row],
+            f64::INFINITY,
+            "min_turbine row_upper must be +inf"
+        );
+    }
+
+    #[test]
+    fn min_generation_row_bounds() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let total_hours = 720.0 + 48.0;
+        let expected_lower = 5.0 * total_hours; // min_generation = 5.0
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.min_generation_rows.start;
+        assert!(
+            (t.row_lower[row] - expected_lower).abs() < 1e-10,
+            "min_generation row_lower = {}, expected {}",
+            t.row_lower[row],
+            expected_lower
+        );
+        assert_eq!(
+            t.row_upper[row],
+            f64::INFINITY,
+            "min_generation row_upper must be +inf"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn min_outflow_matrix_coefficients() {
+        // Min outflow row: turbine, spillage, diversion per block + slack = +1.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let tau_0 = 720.0 * M3S_TO_HM3;
+        let tau_1 = 48.0 * M3S_TO_HM3;
+        let row = indexer.min_outflow_rows.start;
+
+        // Check turbine block 0
+        let entries = csc_entries_for_col(t, indexer.turbine.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
+            "turbine blk0 entry for min_outflow row: {:?}",
+            v
+        );
+
+        // Check turbine block 1
+        let entries = csc_entries_for_col(t, indexer.turbine.start + 1);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - tau_1).abs() < 1e-15,
+            "turbine blk1 entry for min_outflow row: {:?}",
+            v
+        );
+
+        // Check spillage block 0
+        let entries = csc_entries_for_col(t, indexer.spillage.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
+            "spillage blk0 entry for min_outflow row: {:?}",
+            v
+        );
+
+        // Check slack coefficient = +1.0
+        let entries = csc_entries_for_col(t, indexer.outflow_below_slack.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+            "outflow_below slack entry: {:?}",
+            v
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn max_outflow_matrix_slack_is_negative() {
+        // Max outflow row: slack coefficient = -1.0.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.max_outflow_rows.start;
+        let entries = csc_entries_for_col(t, indexer.outflow_above_slack.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - (-1.0)).abs() < 1e-15,
+            "outflow_above slack entry must be -1.0, got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn min_turbine_matrix_only_turbine_cols() {
+        // Min turbine row: only turbine columns (no spillage, no diversion), slack = +1.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.min_turbine_rows.start;
+
+        // Turbine block 0 should have tau_0.
+        let tau_0 = 720.0 * M3S_TO_HM3;
+        let entries = csc_entries_for_col(t, indexer.turbine.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
+            "turbine blk0 min_turbine: {:?}",
+            v
+        );
+
+        // Spillage columns should NOT have entries in the min_turbine row.
+        let entries_spill = csc_entries_for_col(t, indexer.spillage.start);
+        let v_spill = entries_spill.iter().find(|e| e.0 == row);
+        assert!(
+            v_spill.is_none(),
+            "spillage should not appear in min_turbine row"
+        );
+
+        // Slack = +1
+        let entries = csc_entries_for_col(t, indexer.turbine_below_slack.start);
+        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+            "turbine_below slack entry: {:?}",
+            v
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn min_generation_constant_productivity_coefficients() {
+        // Constant productivity rho=0.5, 2 blocks (720h, 48h):
+        // turbine blk0: 0.5 * 720 = 360.0
+        // turbine blk1: 0.5 * 48 = 24.0
+        // slack: +1.0
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        let row = indexer.min_generation_rows.start;
+
+        // Turbine block 0: rho * block_hours = 0.5 * 720 = 360.0
+        let entries_0 = csc_entries_for_col(t, indexer.turbine.start);
+        let v0 = entries_0.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v0.is_some() && (v0.unwrap() - 360.0).abs() < 1e-10,
+            "turbine blk0 min_gen coeff: {:?}, expected 360.0",
+            v0
+        );
+
+        // Turbine block 1: 0.5 * 48 = 24.0
+        let entries_1 = csc_entries_for_col(t, indexer.turbine.start + 1);
+        let v1 = entries_1.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            v1.is_some() && (v1.unwrap() - 24.0).abs() < 1e-10,
+            "turbine blk1 min_gen coeff: {:?}, expected 24.0",
+            v1
+        );
+
+        // Slack: +1.0
+        let entries_s = csc_entries_for_col(t, indexer.generation_below_slack.start);
+        let vs = entries_s.iter().find(|e| e.0 == row).map(|e| e.1);
+        assert!(
+            vs.is_some() && (vs.unwrap() - 1.0).abs() < 1e-15,
+            "generation_below slack: {:?}",
+            vs
+        );
+    }
+
+    #[test]
+    fn turbine_column_lower_bound_is_zero() {
+        // AD-5: turbine column lower bound must be 0.0, not min_turbined_m3s.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        // Both turbine columns (block 0 and block 1) must have lower bound 0.0.
+        assert_eq!(
+            t.col_lower[indexer.turbine.start], 0.0,
+            "turbine blk0 lower bound must be 0.0 (AD-5)"
+        );
+        assert_eq!(
+            t.col_lower[indexer.turbine.start + 1],
+            0.0,
+            "turbine blk1 lower bound must be 0.0 (AD-5)"
+        );
+    }
 }

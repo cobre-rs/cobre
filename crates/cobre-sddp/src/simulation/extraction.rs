@@ -31,7 +31,7 @@ use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
 use crate::StageIndexer;
-use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
+use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry, M3S_TO_HM3};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
@@ -266,6 +266,23 @@ fn extract_hydro_no_turbine(
         .unwrap_or(0.0)
         * COST_SCALE_FACTOR;
 
+    // Operational violation slacks: read from LP primals when present.
+    // Slack columns are in hm3 (outflow/turbine) or MWh (generation);
+    // output fields are in m3/s or MW, so we divide by zeta or total_hours.
+    let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
+        if indexer.has_operational_violations {
+            let total_hours: f64 = spec.block_hours.iter().sum();
+            let zeta = total_hours * M3S_TO_HM3;
+            (
+                view.primal[indexer.turbine_below_slack.start + h] / zeta,
+                view.primal[indexer.outflow_below_slack.start + h] / zeta,
+                view.primal[indexer.outflow_above_slack.start + h] / zeta,
+                view.primal[indexer.generation_below_slack.start + h] / total_hours,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
     // Determine if hydro `h` is FPHA. FPHA identification comes from
     // StageIndexer, not from EntityCounts.hydro_productivities.
     let is_fpha = indexer.fpha_hydro_indices.contains(&h);
@@ -305,10 +322,10 @@ fn extract_hydro_no_turbine(
         water_value_per_hm3: water_value,
         storage_binding_code: 0,
         operative_state_code: 1,
-        turbined_slack_m3s: 0.0,
-        outflow_slack_below_m3s: 0.0,
-        outflow_slack_above_m3s: 0.0,
-        generation_slack_mw: 0.0,
+        turbined_slack_m3s: turbined_slack,
+        outflow_slack_below_m3s: outflow_slack_below,
+        outflow_slack_above_m3s: outflow_slack_above,
+        generation_slack_mw: generation_slack,
         storage_violation_below_hm3: 0.0,
         filling_target_violation_hm3: 0.0,
         evaporation_violation_m3s,
@@ -352,6 +369,21 @@ fn extract_hydro_per_block<'a>(
         .copied()
         .unwrap_or(0.0)
         * COST_SCALE_FACTOR;
+
+    // Operational violation slacks: stage-level (same value for all blocks).
+    let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
+        if indexer.has_operational_violations {
+            let total_hours: f64 = spec.block_hours.iter().sum();
+            let zeta = total_hours * M3S_TO_HM3;
+            (
+                view.primal[indexer.turbine_below_slack.start + h] / zeta,
+                view.primal[indexer.outflow_below_slack.start + h] / zeta,
+                view.primal[indexer.outflow_above_slack.start + h] / zeta,
+                view.primal[indexer.generation_below_slack.start + h] / total_hours,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
 
     // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
     // can read generation from the LP `g_{h,k}` column rather than computing
@@ -432,10 +464,10 @@ fn extract_hydro_per_block<'a>(
             water_value_per_hm3: water_value,
             storage_binding_code: 0,
             operative_state_code: 1,
-            turbined_slack_m3s: 0.0,
-            outflow_slack_below_m3s: 0.0,
-            outflow_slack_above_m3s: 0.0,
-            generation_slack_mw: 0.0,
+            turbined_slack_m3s: turbined_slack,
+            outflow_slack_below_m3s: outflow_slack_below,
+            outflow_slack_above_m3s: outflow_slack_above,
+            generation_slack_mw: generation_slack,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
             evaporation_violation_m3s,
@@ -829,7 +861,17 @@ fn compute_cost_result(
     } else {
         range_sum(indexer.withdrawal_slack.clone()) * COST_SCALE_FACTOR
     };
-    let hydro_violation_cost = evap_violation_cost + withdrawal_violation_cost;
+    let operational_violation_cost = if indexer.has_operational_violations {
+        (range_sum(indexer.outflow_below_slack.clone())
+            + range_sum(indexer.outflow_above_slack.clone())
+            + range_sum(indexer.turbine_below_slack.clone())
+            + range_sum(indexer.generation_below_slack.clone()))
+            * COST_SCALE_FACTOR
+    } else {
+        0.0
+    };
+    let hydro_violation_cost =
+        evap_violation_cost + withdrawal_violation_cost + operational_violation_cost;
 
     // Diversion cost: regularisation term on diversion flow variables.
     let diversion_cost = if indexer.diversion.is_empty() {
@@ -1630,7 +1672,7 @@ mod tests {
         // diversion[13..15]=0.0,0.0
         // thermal[15]=80.0   line_fwd[16]=15.0   line_rev[17]=0.0
         // deficit[18]=10.0   excess[19]=2.0   withdrawal_slack[20..22]=0.0,0.0
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 100.0; // storage h0
         primal[1] = 200.0; // storage h1
@@ -2003,7 +2045,7 @@ mod tests {
         );
 
         // Primal vector: base columns + inflow slack + withdrawal slack columns
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
 
         // Fill base values
@@ -2103,7 +2145,7 @@ mod tests {
             "has_inflow_penalty must be false"
         );
 
-        let n_cols = indexer.withdrawal_slack.end; // includes withdrawal_slack columns
+        let n_cols = indexer.generation_below_slack.end; // includes withdrawal_slack columns
         let primal = vec![1.0_f64; n_cols]; // all ones
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 4];
@@ -2190,7 +2232,7 @@ mod tests {
 
         // Layout: storage[0..2], lags[2..4], storage_in[4..6], theta=6,
         //         inflow_slack=[7..9), withdrawal_slack=[9..11)
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 150.0; // storage h0
         primal[1] = 250.0; // storage h1
@@ -2297,7 +2339,7 @@ mod tests {
         assert_eq!(indexer.generation.start, 13, "generation starts at 13");
         assert_eq!(indexer.fpha_hydro_indices, vec![0]);
 
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 50.0; // storage h0
         primal[1] = 80.0; // storage h1
@@ -2377,7 +2419,7 @@ mod tests {
     #[test]
     fn fpha_productivity_is_none() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let primal = vec![0.0_f64; n_cols];
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 2];
@@ -2474,7 +2516,7 @@ mod tests {
         assert_eq!(ei.f_evap_plus_col, 8);
         assert_eq!(ei.f_evap_minus_col, 9);
 
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0; // storage h0
         // primal[1] = z_inflow h0 (zero)
@@ -2542,7 +2584,7 @@ mod tests {
     #[test]
     fn evaporation_violation_is_sum_of_slacks() {
         let indexer = make_indexer_1h_evap_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0;
         // primal[1] = z_inflow h0 (zero)
@@ -2610,7 +2652,7 @@ mod tests {
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
         // generation.start = 13 (fpha h0 b0)
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta (at N*(3+L) = 2*3 = 6)
 
@@ -2700,7 +2742,7 @@ mod tests {
     #[test]
     fn cost_breakdown_sums_to_immediate_identity_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta
         primal[13] = 30.0; // FPHA generation
@@ -2785,7 +2827,7 @@ mod tests {
     #[test]
     fn cost_unscaled_by_col_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta
         primal[13] = 30.0; // FPHA generation

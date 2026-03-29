@@ -8688,4 +8688,60 @@ mod tests {
             "turbine blk1 lower bound must be 0.0 (AD-5)"
         );
     }
+
+    #[test]
+    fn operational_violation_rows_outside_dual_relevant() {
+        // n_dual_relevant = N * (1 + L) = 1 * (1 + 0) = 1 for the active violations system.
+        // All operational violation rows must be placed beyond this range.
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+
+        assert_eq!(
+            t.n_dual_relevant, 1,
+            "n_dual_relevant must be N*(1+L) = 1, unaffected by operational violation rows"
+        );
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        // All 4 operational violation row ranges must start beyond n_dual_relevant.
+        assert!(
+            indexer.min_outflow_rows.start > t.n_dual_relevant,
+            "min_outflow row {} must be > n_dual_relevant {}",
+            indexer.min_outflow_rows.start,
+            t.n_dual_relevant
+        );
+        assert!(
+            indexer.max_outflow_rows.start > t.n_dual_relevant,
+            "max_outflow row {} must be > n_dual_relevant {}",
+            indexer.max_outflow_rows.start,
+            t.n_dual_relevant
+        );
+        assert!(
+            indexer.min_turbine_rows.start > t.n_dual_relevant,
+            "min_turbine row {} must be > n_dual_relevant {}",
+            indexer.min_turbine_rows.start,
+            t.n_dual_relevant
+        );
+        assert!(
+            indexer.min_generation_rows.start > t.n_dual_relevant,
+            "min_generation row {} must be > n_dual_relevant {}",
+            indexer.min_generation_rows.start,
+            t.n_dual_relevant
+        );
+    }
 }

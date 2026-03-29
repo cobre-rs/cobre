@@ -1595,3 +1595,86 @@ fn d19_multi_hydro_par_truncation() {
 /// If the lag-major/hydro-major indexing bug regresses, different lag values
 /// are read for each hydro during PAR evaluation, producing a different cost.
 pub const D19_EXPECTED_COST: f64 = 1_603_530.894;
+
+/// Operational violation slacks: 1 hydro with active min_outflow, max_outflow,
+/// min_turbined, and min_generation bounds.
+///
+/// ## Case setup (D20)
+///
+/// - 1 bus, 1 hydro, 0 thermals, 1 block (730h), 2 stages, deterministic.
+/// - Hydro: min_outflow=40, max_outflow=50, min_turbined=30, min_generation=20,
+///   max_turbined=50, productivity=1.0, max_storage=200, initial_storage=100.
+/// - Inflows: stage 0 = 40 m3/s, stage 1 = 10 m3/s (zero std_dev).
+/// - Penalty costs: all 4 operational violations = 5000 $/MWh, deficit = 1000 $/MWh.
+///
+/// ## Expected behaviour
+///
+/// Stage 2 (low inflow): min_outflow (40 m3/s) and min_turbined (30 m3/s)
+/// cannot be fully met with 10 m3/s inflow plus stored water, triggering
+/// operational violation slacks at penalty cost. This proves the soft-constraint
+/// mechanism works end-to-end.
+///
+/// The expected cost is recorded empirically and locked for regression. If
+/// operational violation slack columns or constraint rows are incorrect, the
+/// LP cost will change (or become infeasible), failing this assertion.
+#[test]
+fn d20_operational_violations() {
+    let case_dir = Path::new("../../examples/deterministic/d20-operational-violations");
+    let result = run_deterministic(case_dir);
+
+    assert!(
+        result.iterations <= 20,
+        "D20: iterations={} (expected <= 20)",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D20: gap={:.2e} (expected < 1e-6)",
+        result.final_gap
+    );
+    assert_cost(result.final_lb, D20_EXPECTED_COST, 1e-2, "D20");
+}
+
+/// Expected cost for D20 (operational violation slacks, 2 stages).
+///
+/// Recorded empirically. The cost includes both deficit cost (load not covered
+/// by hydro generation) and operational violation penalty costs.
+pub const D20_EXPECTED_COST: f64 = 52_522_222.222;
+
+/// Real-case validation: convertido2 (158 hydros) with truncation method.
+///
+/// Before operational violation slacks, this case failed with LP infeasibility
+/// at stage 64, iteration 1 — 9 hydros had hard `min_turbined_m3s` bounds
+/// preventing zero outflow when PAR inflows were clamped to zero. After this
+/// plan, operational slacks absorb the infeasibility at penalty cost.
+///
+/// This test is `#[ignore]` because it depends on external case data at
+/// `~/git/cobre-bridge/example/convertido2/` and may require case data
+/// updates to match current noise dimension expectations. Run with:
+/// ```sh
+/// cargo test -p cobre-sddp --test deterministic -- --ignored d20_convertido2
+/// ```
+#[test]
+#[ignore]
+fn d20_convertido2_truncation_feasibility() {
+    let case_dir = Path::new(env!("HOME")).join("git/cobre-bridge/example/convertido2");
+    if !case_dir.exists() {
+        eprintln!("SKIP: convertido2 case not found at {}", case_dir.display());
+        return;
+    }
+    let result = run_deterministic(&case_dir);
+
+    // Primary assertion: training completed without infeasibility errors.
+    // If violation slacks were missing, the LP would fail at stage 64.
+    assert!(
+        result.final_lb > 0.0,
+        "D20-convertido2: lower bound must be positive, got {}",
+        result.final_lb
+    );
+    // With iteration_limit=1 in the config, we just verify it survived 1 iteration.
+    assert!(
+        result.iterations >= 1,
+        "D20-convertido2: expected at least 1 iteration, got {}",
+        result.iterations
+    );
+}

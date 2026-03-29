@@ -831,12 +831,12 @@ for the full column definitions and validity constraints.
 
 ## Stochastic Artifacts
 
-When `--export-stochastic` is passed to `cobre run`, or when `exports.stochastic:
-true` is set in `config.json`, Cobre writes the stochastic preprocessing artifacts
-to `output/stochastic/` before training begins.
+When `exports.stochastic: true` is set in `config.json`, Cobre writes the
+stochastic preprocessing artifacts to `output/stochastic/` before training
+begins.
 
-The directory is not written when neither the flag nor the config field is set.
-Export is off by default in v0.1.x.
+The directory is not written when the config field is not set. Export is off
+by default.
 
 ### Exported files
 
@@ -893,8 +893,8 @@ and layout as the corresponding input file. To replay a run with identical
 stochastic context:
 
 ```bash
-# Export artifacts from an initial run
-cobre run my_case --export-stochastic
+# Run with exports.stochastic: true in config.json
+cobre run my_case
 
 # Copy exported artifacts to scenarios/
 cp -r my_case/output/stochastic/* my_case/scenarios/

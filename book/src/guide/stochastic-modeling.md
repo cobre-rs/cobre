@@ -233,12 +233,16 @@ estimation steps automatically before building the scenario model:
 
 ### History vs. pre-computed stats: choose one
 
-`inflow_history.parquet` and `inflow_seasonal_stats.parquet` are mutually
-exclusive inputs for the inflow model. Providing both in the same
-`scenarios/` directory is a validation error. Use history-based estimation
-when raw observations are available and you want Cobre to handle the
-statistical fitting; use pre-computed stats when you have already fitted
-the model externally or when you need precise control over the parameters.
+`inflow_history.parquet` and `inflow_seasonal_stats.parquet` serve different
+roles in the inflow model. When only `inflow_history.parquet` is present
+(and `inflow_seasonal_stats.parquet` is absent), Cobre activates the
+estimation path and derives seasonal statistics and AR coefficients from the
+historical data. When `inflow_seasonal_stats.parquet` is present, it is used
+directly regardless of whether `inflow_history.parquet` is also present.
+Use history-based estimation when raw observations are available and you want
+Cobre to handle the statistical fitting; use pre-computed stats when you have
+already fitted the model externally or when you need precise control over the
+parameters.
 
 ---
 
@@ -462,7 +466,7 @@ entity ordering when constructing the file externally.
   hydros at minimum inflow for the entire study) and evaluate how the policy
   responds.
 - **Round-trip replay.** Export the opening tree that Cobre used in a training
-  run with `--export-stochastic`, copy `output/stochastic/noise_openings.parquet`
+  run with `exports.stochastic: true` in `config.json`, copy `output/stochastic/noise_openings.parquet`
   to `scenarios/`, and re-run to reproduce the exact same backward-pass context.
   See [Exporting Stochastic Artifacts](./running-studies.md#exporting-stochastic-artifacts)
   for the complete workflow.

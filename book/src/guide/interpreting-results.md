@@ -71,7 +71,7 @@ the full convergence history. Its schema:
 
 | Column             | Type    | Description                                                 |
 | ------------------ | ------- | ----------------------------------------------------------- |
-| `iteration`        | INT32   | Iteration number (0-indexed)                                |
+| `iteration`        | INT32   | Iteration number (1-based)                                  |
 | `lower_bound`      | FLOAT64 | Optimizer's proven lower bound on the expected cost         |
 | `upper_bound_mean` | FLOAT64 | Statistical upper bound estimate (mean over forward passes) |
 | `upper_bound_std`  | FLOAT64 | Standard deviation of the upper bound estimate              |
@@ -79,6 +79,10 @@ the full convergence history. Its schema:
 | `cuts_added`       | INT32   | Cuts added to the pool in this iteration                    |
 | `cuts_removed`     | INT32   | Cuts removed by the cut selection strategy                  |
 | `cuts_active`      | INT64   | Total active cuts across all stages after this iteration    |
+| `time_forward_ms`  | INT64   | Wall-clock time for the forward pass in milliseconds        |
+| `time_backward_ms` | INT64   | Wall-clock time for the backward pass in milliseconds       |
+| `time_total_ms`    | INT64   | Total wall-clock time for the iteration in milliseconds     |
+| `forward_passes`   | INT32   | Number of forward pass scenarios in this iteration          |
 | `lp_solves`        | INT64   | Cumulative LP solves up to this iteration                   |
 
 ### Python (Polars)

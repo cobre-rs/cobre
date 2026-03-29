@@ -61,9 +61,9 @@ cobre run /path/to/my_study --output /path/to/results
 
 ### Banner
 
-When stdout is a terminal, a banner shows the version and solver backend.
-Suppress with `--no-banner` (keeps progress bars) or `--quiet` (suppresses all
-except errors).
+When stderr is a terminal, a banner shows the version and solver backend.
+Use `--quiet` to suppress the banner, progress bars, and post-run summary.
+Errors are always written to stderr regardless of `--quiet`.
 
 ### Progress Bars
 
@@ -137,14 +137,8 @@ See [CLI Reference](./cli-reference.md#exit-codes) for the full exit code table.
 
 ## Exporting Stochastic Artifacts
 
-Pass `--export-stochastic` to `cobre run` to write the stochastic preprocessing
-artifacts to `output/stochastic/` before training begins:
-
-```bash
-cobre run /path/to/my_study --export-stochastic
-```
-
-The same behavior can be enabled persistently via `config.json`:
+Set `exports.stochastic` to `true` in `config.json` to write the stochastic
+preprocessing artifacts to `output/stochastic/` before training begins:
 
 ```json
 {
@@ -153,8 +147,6 @@ The same behavior can be enabled persistently via `config.json`:
   }
 }
 ```
-
-The CLI flag takes priority over the config field.
 
 ### What is exported
 
@@ -178,8 +170,8 @@ re-run to reproduce the identical stochastic context without re-running
 estimation:
 
 ```bash
-# Step 1: initial run with export
-cobre run my_case --export-stochastic
+# Step 1: initial run with stochastic export enabled in config.json
+cobre run my_case
 
 # Step 2: copy artifacts to scenarios/
 cp -r my_case/output/stochastic/* my_case/scenarios/

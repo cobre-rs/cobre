@@ -345,6 +345,27 @@ Controls which outputs are written to the results directory.
 
 ---
 
+## Advanced Fields
+
+The `Config` struct supports additional sections not documented on this page.
+These fields are deserialized from `config.json` when present but are intended
+for advanced use cases and may change between releases:
+
+| Section                           | Purpose                                                     |
+| --------------------------------- | ----------------------------------------------------------- |
+| `upper_bound_evaluation`          | Inner approximation upper-bound evaluation settings         |
+| `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)           |
+| `training.forward_pass.pass_type` | Forward pass strategy selection                             |
+| `training.solver`                 | LP solver retry budget and attempt limits                   |
+| `simulation.sampling_scheme`      | Simulation scenario sampling strategy                       |
+| `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing |
+
+All fields have defaults and can be omitted. For the complete list of fields
+and their types, see the `Config` struct in the
+[cobre-io API docs](https://docs.rs/cobre-io).
+
+---
+
 ## See Also
 
 - [Case Directory Format](../reference/case-format.md) — full schema for all input files

@@ -7,13 +7,13 @@ Thanks for your interest in contributing. Cobre is an open-source ecosystem for 
 ### Prerequisites
 
 - **Rust** (stable, latest): https://rustup.rs
-- **C compiler** (for HiGHS/CLP solver FFI): `gcc` or `clang`
+- **C compiler** (for HiGHS solver FFI): `gcc` or `clang`
 - **CMake** (for building HiGHS from source): `cmake >= 3.15`
 
 Optional (needed for specific crates):
 
 - **MPICH** (for `cobre-comm` MPI backend): `libmpich-dev` on Debian/Ubuntu
-- **Python 3.8+** and **maturin** (for `cobre-python` builds): `pip install maturin`
+- **Python 3.12+** and **maturin** (for `cobre-python` builds): `pip install maturin`
 - **mdBook** (for the documentation site): `cargo install mdbook mdbook-katex`
 
 ### Building
@@ -133,10 +133,10 @@ cobre/
 │   ├── cobre-core/         # Entity model (buses, hydros, thermals, lines…)
 │   ├── cobre-io/           # JSON/Parquet input, FlatBuffers/Parquet output
 │   ├── cobre-stochastic/   # PAR(p) models, scenario generation
-│   ├── cobre-solver/       # LP solver abstraction (HiGHS, CLP backends)
+│   ├── cobre-solver/       # LP solver abstraction (HiGHS backend)
 │   ├── cobre-comm/         # Communication abstraction (MPI, TCP, shm, local)
 │   ├── cobre-sddp/         # SDDP training loop, simulation, cut management
-│   ├── cobre-cli/          # Binary: run/validate/report/compare/serve
+│   ├── cobre-cli/          # Binary: run/validate/report/init/schema/summary/version
 │   ├── cobre-mcp/          # Binary: MCP server for AI agent integration
 │   ├── cobre-python/       # cdylib: PyO3 Python bindings
 │   └── cobre-tui/          # Library: ratatui terminal UI
@@ -272,7 +272,7 @@ See `.claude/architecture-rules.md` for the full Python parity checklist.
 
 #### cobre-solver
 
-- The `SolverInterface` trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag; CLP-specific code behind `clp`.
+- The `SolverInterface` trait must remain backend-agnostic. HiGHS-specific code stays behind the `highs` feature flag.
 - Criterion benchmarks for solver interface changes are planned but not yet configured; they will be added in a future phase.
 - Basis warm-starting is a correctness feature, not just a performance optimization — validate it in tests.
 

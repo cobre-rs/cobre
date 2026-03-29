@@ -436,17 +436,6 @@ fn run_inner(
     cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
-    let training = run_training_phase_py(&mut setup, n_threads)?;
-
-    write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
-
-    if let Some(ref e) = training.error {
-        return Err(format!(
-            "training failed after {} iterations: {e}",
-            training.result.iterations
-        ));
-    }
-
     let stochastic_summary = build_stochastic_summary(
         &system,
         setup.stochastic(),
@@ -455,30 +444,69 @@ fn run_inner(
     );
     let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
-    let simulation = if should_simulate {
-        Some(run_simulation_phase_py(
-            &mut setup,
-            &output_dir,
-            &system,
-            &training.result,
-            n_threads,
-        )?)
-    } else {
-        None
-    };
+    let training_enabled = config.training.enabled;
 
-    Ok(RunSummary {
-        converged: training.output.converged,
-        iterations: training.result.iterations,
-        lower_bound: training.result.final_lb,
-        upper_bound: Some(training.result.final_ub),
-        gap_percent: Some(training.result.final_gap * 100.0),
-        total_time_ms: training.result.total_time_ms,
-        output_dir,
-        simulation,
-        stochastic: Some(stochastic_summary),
-        hydro_models: hydro_models_summary,
-    })
+    if training_enabled {
+        let training = run_training_phase_py(&mut setup, n_threads)?;
+
+        write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
+
+        if let Some(ref e) = training.error {
+            return Err(format!(
+                "training failed after {} iterations: {e}",
+                training.result.iterations
+            ));
+        }
+
+        let simulation = if should_simulate {
+            Some(run_simulation_phase_py(
+                &mut setup,
+                &output_dir,
+                &system,
+                &training.result,
+                n_threads,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(RunSummary {
+            converged: training.output.converged,
+            iterations: training.result.iterations,
+            lower_bound: training.result.final_lb,
+            upper_bound: Some(training.result.final_ub),
+            gap_percent: Some(training.result.final_gap * 100.0),
+            total_time_ms: training.result.total_time_ms,
+            output_dir,
+            simulation,
+            stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
+        })
+    } else {
+        // Training disabled: check if simulation is requested.
+        if should_simulate {
+            // Simulation-only mode requires a loaded policy (wired in T008).
+            return Err(
+                "training disabled but simulation-only mode is not yet implemented \
+                 (requires a loaded policy)"
+                    .to_string(),
+            );
+        }
+
+        // Both training and simulation disabled — return zero-iteration summary.
+        Ok(RunSummary {
+            converged: false,
+            iterations: 0,
+            lower_bound: 0.0,
+            upper_bound: None,
+            gap_percent: None,
+            total_time_ms: 0,
+            output_dir,
+            simulation: None,
+            stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
+        })
+    }
 }
 
 /// Convert a [`StochasticSource`] enum variant to a Python string or `None`.

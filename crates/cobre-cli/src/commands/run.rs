@@ -166,6 +166,8 @@ struct LoadBroadcastResult {
     root_config: Option<cobre_io::Config>,
     /// Root-only estimation report for summaries (None on non-root ranks).
     root_estimation_report: Option<EstimationReport>,
+    /// Whether the training phase is enabled (broadcast from rank 0).
+    training_enabled: bool,
 }
 
 /// Result of the training phase.
@@ -206,8 +208,11 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         mut setup,
         mut root_config,
         root_estimation_report,
+        training_enabled,
     } = broadcast_and_build_setup(&ctx, args)?;
 
+    // Pre-training outputs (estimation artifacts, scaling report) run
+    // regardless of training_enabled — they are data preparation outputs.
     run_pre_training(
         &ctx,
         &system,
@@ -216,52 +221,79 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         root_estimation_report.as_ref(),
     )?;
 
-    let training = run_training_phase(&ctx, &mut setup)?;
+    if training_enabled {
+        let training = run_training_phase(&ctx, &mut setup)?;
 
-    // Write training outputs immediately (before simulation), so training
-    // artifacts are persisted even if simulation fails.
-    if ctx.is_root {
-        let config = root_config.take().ok_or_else(|| CliError::Internal {
-            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-        })?;
-
-        write_training_outputs(&WriteTrainingArgs {
-            output_dir: &ctx.output_dir,
-            system: &system,
-            config: &config,
-            training_output: &training.output,
-            setup: &setup,
-            training_result: &training.result,
-            quiet: ctx.quiet,
-            stderr: &ctx.stderr,
-        })?;
-
-        drop(config);
-    }
-
-    // If training failed mid-iteration, report the error after writing
-    // partial outputs. All ranks return here — simulation is skipped.
-    if let Some(ref training_error) = training.error {
+        // Write training outputs immediately (before simulation), so training
+        // artifacts are persisted even if simulation fails.
         if ctx.is_root {
-            tracing::error!(
-                "training failed after {} iterations: {training_error}",
-                training.result.iterations
-            );
-            if !ctx.quiet {
-                let _ = ctx.stderr.write_line(&format!(
-                    "Training failed after {} iterations. Partial outputs written to {}.",
-                    training.result.iterations,
-                    ctx.output_dir.display()
-                ));
-            }
-        }
-        return Err(CliError::Internal {
-            message: format!("training error: {training_error}"),
-        });
-    }
+            let config = root_config.take().ok_or_else(|| CliError::Internal {
+                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+            })?;
 
-    if setup.n_scenarios() > 0 {
-        run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+            write_training_outputs(&WriteTrainingArgs {
+                output_dir: &ctx.output_dir,
+                system: &system,
+                config: &config,
+                training_output: &training.output,
+                setup: &setup,
+                training_result: &training.result,
+                quiet: ctx.quiet,
+                stderr: &ctx.stderr,
+            })?;
+
+            drop(config);
+        }
+
+        // If training failed mid-iteration, report the error after writing
+        // partial outputs. All ranks return here — simulation is skipped.
+        if let Some(ref training_error) = training.error {
+            if ctx.is_root {
+                tracing::error!(
+                    "training failed after {} iterations: {training_error}",
+                    training.result.iterations
+                );
+                if !ctx.quiet {
+                    let _ = ctx.stderr.write_line(&format!(
+                        "Training failed after {} iterations. Partial outputs written to {}.",
+                        training.result.iterations,
+                        ctx.output_dir.display()
+                    ));
+                }
+            }
+            return Err(CliError::Internal {
+                message: format!("training error: {training_error}"),
+            });
+        }
+
+        if setup.n_scenarios() > 0 {
+            run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+        }
+    } else {
+        // Training disabled: check if simulation is requested.
+        if setup.n_scenarios() > 0 {
+            // Simulation-only mode requires a loaded policy (wired in Epic 2).
+            // For now, attempting simulation without training will fail with a
+            // meaningful error when the FCF has no cuts.
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Training disabled. Attempting simulation with existing policy...");
+            }
+            // Cannot run simulation without a trained policy yet — placeholder
+            // for Epic 2 (T007) which will wire FCF loading.
+            return Err(CliError::Internal {
+                message: "training disabled but simulation-only mode is not yet implemented \
+                         (requires a loaded policy)"
+                    .to_string(),
+            });
+        }
+        // Both training and simulation disabled — nothing to do.
+        if ctx.is_root && !ctx.quiet {
+            let _ = ctx
+                .stderr
+                .write_line("Training disabled, simulation disabled — nothing to do.");
+        }
     }
 
     Ok(())
@@ -408,6 +440,7 @@ fn broadcast_and_build_setup(
         })?
     };
 
+    let training_enabled = bcast_config.training_enabled;
     let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
 
     Ok(LoadBroadcastResult {
@@ -415,6 +448,7 @@ fn broadcast_and_build_setup(
         setup,
         root_config: root_config.take(),
         root_estimation_report,
+        training_enabled,
     })
 }
 

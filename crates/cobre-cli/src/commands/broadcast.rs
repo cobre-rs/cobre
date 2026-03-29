@@ -113,6 +113,9 @@ pub(crate) struct BroadcastConfig {
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: BroadcastCutSelection,
     pub(crate) cut_activity_tolerance: f64,
+    /// Whether the training phase is enabled. When `false`, all ranks skip
+    /// training and proceed directly to simulation (or exit).
+    pub(crate) training_enabled: bool,
 }
 
 impl BroadcastConfig {
@@ -170,6 +173,7 @@ impl BroadcastConfig {
             inflow_method: params.inflow_method,
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
+            training_enabled: config.training.enabled,
         })
     }
 }
@@ -391,6 +395,36 @@ mod tests {
             "openings_per_stage must survive round-trip"
         );
         assert_eq!(decoded.dim, original.dim, "dim must survive round-trip");
+    }
+
+    // ------------------------------------------------------------------
+    // BroadcastConfig tests
+    // ------------------------------------------------------------------
+
+    /// `BroadcastConfig::from_config()` propagates `config.training.enabled`
+    /// to `training_enabled`. Verifies that the flag defaults to `true` and
+    /// changes to `false` when explicitly set.
+    #[test]
+    fn broadcast_config_propagates_training_enabled() {
+        use super::BroadcastConfig;
+
+        // Config with training.enabled defaulting to true (not specified in JSON).
+        let enabled_json = r#"{ "training": {} }"#;
+        let enabled_config: cobre_io::Config = serde_json::from_str(enabled_json).unwrap();
+        let bcast = BroadcastConfig::from_config(&enabled_config).unwrap();
+        assert!(
+            bcast.training_enabled,
+            "training_enabled should default to true"
+        );
+
+        // Config with training.enabled explicitly set to false.
+        let disabled_json = r#"{ "training": { "enabled": false } }"#;
+        let disabled_config: cobre_io::Config = serde_json::from_str(disabled_json).unwrap();
+        let bcast = BroadcastConfig::from_config(&disabled_config).unwrap();
+        assert!(
+            !bcast.training_enabled,
+            "training_enabled should be false when config.training.enabled is false"
+        );
     }
 
     /// `BroadcastOpeningTree` wrapped in `Option` round-trips via `broadcast_value`

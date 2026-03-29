@@ -55,6 +55,7 @@ pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
 pub mod policy_export;
+pub mod policy_load;
 pub mod risk_measure;
 pub mod scaling_report;
 pub mod setup;
@@ -97,6 +98,7 @@ pub use lp_builder::{
     GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
     build_stage_templates,
 };
+pub use policy_load::validate_policy_compatibility;
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{

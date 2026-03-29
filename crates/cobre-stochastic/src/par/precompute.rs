@@ -30,11 +30,35 @@
 //! where `s_m` is `std_m3s` for the current stage's season and `s_{m-ℓ}` is
 //! `std_m3s` for the season `ℓ` stages prior.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
 
 use crate::StochasticError;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a stage ID to a season ID using modular arithmetic on the season
+/// cycle length. Works for both positive and negative stage IDs.
+///
+/// For a monthly system (`n_seasons = 12`):
+/// - `stage_id = -1`  -> season 11 (December)
+/// - `stage_id = -12` -> season 0  (January)
+/// - `stage_id = -13` -> season 11 (December, wraps)
+/// - `stage_id = 5`   -> season 5
+fn resolve_season_id(stage_id: i32, n_seasons: usize) -> usize {
+    debug_assert!(n_seasons > 0, "n_seasons must be positive");
+    // n_seasons is always small (12 for monthly, 52 for weekly) so truncation
+    // from usize to i32 is safe in practice. The debug_assert above guards
+    // against zero; values > i32::MAX are not realistic for season counts.
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let n = n_seasons as i32;
+    #[allow(clippy::cast_sign_loss)]
+    let result = ((stage_id % n + n) % n) as usize;
+    result
+}
 
 // ---------------------------------------------------------------------------
 // PrecomputedPar
@@ -205,9 +229,37 @@ impl PrecomputedPar {
             })
             .collect();
 
+        // Season-based fallback for pre-study lag stages (negative stage_id).
+        //
+        // When the exact (h_idx, lag_stage_id) is not in model_stats (because
+        // the estimation pipeline or external files did not emit pre-study
+        // entries), we resolve lag_stage_id to a season_id via modular
+        // arithmetic on the season cycle length, then look up (h_idx, season_id)
+        // in season_stats.
+        let n_seasons = stages
+            .iter()
+            .filter_map(|s| s.season_id)
+            .collect::<HashSet<_>>()
+            .len();
+
+        let stage_to_season: HashMap<i32, usize> = stages
+            .iter()
+            .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+            .collect();
+
+        let season_stats: HashMap<(usize, usize), (f64, f64)> = model_stats
+            .iter()
+            .filter_map(|(&(h_idx, stage_id), &stats)| {
+                stage_to_season
+                    .get(&stage_id)
+                    .map(|&sid| ((h_idx, sid), stats))
+            })
+            .collect();
+
         // For converting ψ* → ψ we need std_m3s for the lag stage's season.
         // The lag stage's stage_id is: current_stage.id - l (for lag l).
-        // We look up (h_idx, stage_id - l) in model_stats.
+        // We look up (h_idx, stage_id - l) in model_stats. If that misses,
+        // fall back to season_stats via modular arithmetic on n_seasons.
 
         for (s_idx, stage) in stages.iter().enumerate() {
             let stage_id = stage.id;
@@ -245,11 +297,29 @@ impl PrecomputedPar {
                             let lag_stage_id =
                                 stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
 
-                            // Retrieve mean and std for the lag stage.
-                            let (mu_lag, s_lag) = model_stats
-                                .get(&(h_idx, lag_stage_id))
-                                .copied()
-                                .unwrap_or((0.0, 0.0));
+                            // Two-tier lookup for lag stage statistics:
+                            //
+                            // Tier 1: exact stage_id match (covers study-stage lags
+                            // and any pre-study entries explicitly present in
+                            // inflow_models).
+                            //
+                            // Tier 2: season-based fallback using modular arithmetic.
+                            // For negative lag_stage_id, resolve to season_id via:
+                            //   season_id = ((lag_stage_id % n) + n) % n
+                            // where n = n_seasons (i32 cast).
+                            let (mu_lag, s_lag) =
+                                if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
+                                    stats
+                                } else if n_seasons > 0 {
+                                    let season_id = resolve_season_id(lag_stage_id, n_seasons);
+                                    season_stats
+                                        .get(&(h_idx, season_id))
+                                        .copied()
+                                        .unwrap_or((0.0, 0.0))
+                                } else {
+                                    // No seasons defined -- cannot resolve; zero fallback.
+                                    (0.0, 0.0)
+                                };
 
                             // Avoid divide-by-zero: if s_lag == 0.0, the ratio is
                             // undefined. Treat psi as zero (no AR contribution from
@@ -442,7 +512,7 @@ mod tests {
         },
     };
 
-    use super::PrecomputedPar;
+    use super::{PrecomputedPar, resolve_season_id};
 
     fn dummy_date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -737,5 +807,201 @@ mod tests {
 
         assert!((lp.sigma(0, 0)).abs() < f64::EPSILON);
         assert!((lp.deterministic_base(0, 0) - 50.0).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pre-study lag season fallback tests (T003)
+    // -----------------------------------------------------------------------
+
+    /// Build 12 monthly study stages (id `0..11`, `season_id` `0..11`).
+    fn make_monthly_stages() -> Vec<Stage> {
+        (0..12_usize)
+            .map(|i| make_stage(i, i32::try_from(i).unwrap(), Some(i)))
+            .collect()
+    }
+
+    /// Build study-only inflow models for 12 monthly seasons.
+    ///
+    /// Each season `s` gets `mean = 100 + s*10`, `std = 20 + s*2`.
+    /// The `ar_stage` parameter specifies which stage gets the given AR
+    /// coefficients; all other stages are AR(0).
+    fn make_monthly_models(
+        hydro_id: i32,
+        ar_stage: i32,
+        ar_coeffs: &[f64],
+        residual: f64,
+    ) -> Vec<InflowModel> {
+        (0..12_i32)
+            .map(|i| {
+                let fi = f64::from(i);
+                let mean = 100.0 + fi * 10.0;
+                let std = 20.0 + fi * 2.0;
+                let (c, r) = if i == ar_stage {
+                    (ar_coeffs.to_vec(), residual)
+                } else {
+                    (vec![], 1.0)
+                };
+                make_model(hydro_id, i, mean, std, c, r)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pre_study_lag_resolves_via_season_fallback() {
+        // 12 study stages, 1 hydro with AR(1). No pre-study entries.
+        // At stage 0, lag-1 has id = -1, which should fall back to season 11.
+        let stages = make_monthly_stages();
+        let models = make_monthly_models(1, 0, &[0.5], 0.9);
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        // At stage 0 (season 0): lag-1 -> stage_id = -1 -> season 11.
+        // Season 11 stats: mean = 100 + 11*10 = 210, std = 20 + 11*2 = 42.
+        let mu_0 = 100.0;
+        let s_0 = 20.0;
+        let mu_11 = 210.0;
+        let s_11 = 42.0;
+        let psi_star = 0.5;
+
+        let psi_val = psi_star * s_0 / s_11;
+        let expected_base = mu_0 - psi_val * mu_11;
+
+        // psi should be non-zero (the core fix assertion).
+        assert!(
+            lp.psi_slice(0, 0)[0].abs() > 1e-10,
+            "psi should be non-zero when season fallback resolves; got {}",
+            lp.psi_slice(0, 0)[0]
+        );
+        assert!(
+            (lp.psi_slice(0, 0)[0] - psi_val).abs() < 1e-10,
+            "psi[0]: expected {psi_val}, got {}",
+            lp.psi_slice(0, 0)[0]
+        );
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "base: expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
+        );
+    }
+
+    #[test]
+    fn pre_study_lag_ar6_all_lags_resolve() {
+        // 12 study stages, 1 hydro with AR(6). No pre-study entries.
+        // At stage 0, lags 1-6 map to stage_ids -1..-6, which should resolve
+        // to season_ids 11, 10, 9, 8, 7, 6.
+        let stages = make_monthly_stages();
+        let models = make_monthly_models(1, 0, &[0.3, 0.2, 0.15, 0.1, 0.08, 0.05], 0.85);
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        // All 6 AR coefficients at stage 0 should be non-zero.
+        let psi = lp.psi_slice(0, 0);
+        for (lag, psi_lag) in psi.iter().enumerate().take(6) {
+            assert!(
+                psi_lag.abs() > 1e-10,
+                "psi[{lag}] should be non-zero; got {psi_lag}",
+            );
+        }
+
+        // Verify specific values for lag 0 (season 11) and lag 5 (season 6).
+        let s_0 = 20.0;
+        let s_11 = 42.0;
+        let s_6 = 32.0; // 20 + 6*2
+        assert!(
+            (psi[0] - 0.3 * s_0 / s_11).abs() < 1e-10,
+            "psi[0]: expected {}, got {}",
+            0.3 * s_0 / s_11,
+            psi[0]
+        );
+        assert!(
+            (psi[5] - 0.05 * s_0 / s_6).abs() < 1e-10,
+            "psi[5]: expected {}, got {}",
+            0.05 * s_0 / s_6,
+            psi[5]
+        );
+    }
+
+    #[test]
+    fn pre_study_lag_partial_resolution() {
+        // 12 study stages, 1 hydro with AR(2). Target: stage 1 (not 0).
+        // Lag-1 hits stage 0 (exists in study, exact match).
+        // Lag-2 hits stage -1 (needs season fallback -> season 11).
+        let stages = make_monthly_stages();
+        let models = make_monthly_models(1, 1, &[0.4, 0.25], 0.9);
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        // Stage 1 (season 1): s_1 = 22.0
+        let s_1 = 22.0;
+
+        // Lag-1: exact match to stage 0 (season 0), s_0 = 20.0.
+        let expected_psi_0 = 0.4 * s_1 / 20.0;
+        assert!(
+            (lp.psi_slice(1, 0)[0] - expected_psi_0).abs() < 1e-10,
+            "psi[0] (exact match): expected {expected_psi_0}, got {}",
+            lp.psi_slice(1, 0)[0]
+        );
+
+        // Lag-2: stage_id = -1 -> season 11 (fallback), s_11 = 42.0.
+        let expected_psi_1 = 0.25 * s_1 / 42.0;
+        assert!(
+            (lp.psi_slice(1, 0)[1] - expected_psi_1).abs() < 1e-10,
+            "psi[1] (season fallback): expected {expected_psi_1}, got {}",
+            lp.psi_slice(1, 0)[1]
+        );
+    }
+
+    #[test]
+    fn pre_study_lag_with_explicit_prestudy_model() {
+        // 12 study stages + 1 explicit pre-study InflowModel for stage_id = -1.
+        // AR(1) at stage 0. The exact match path should fire, NOT season fallback.
+        let stages = make_monthly_stages();
+        let mut models = make_monthly_models(1, 0, &[0.3], 0.954);
+
+        // Add explicit pre-study model for stage_id = -1.
+        // Use DIFFERENT stats than season 11 to prove exact match is used.
+        models.push(make_model(1, -1, 100.0, 30.0, vec![], 1.0));
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        // Stage 0: AR(1), lag-1 -> stage_id = -1 -> EXACT match to prestudy
+        // (mean=100, std=30), NOT season 11 (mean=210, std=42).
+        let s_0 = 20.0;
+        let psi_val = 0.3 * s_0 / 30.0; // Using prestudy std=30
+        let expected_base = 100.0 - psi_val * 100.0; // Using prestudy mean=100
+
+        assert!(
+            (lp.psi_slice(0, 0)[0] - psi_val).abs() < 1e-10,
+            "psi[0] should use exact match (std=30), not fallback (std=42); got {}",
+            lp.psi_slice(0, 0)[0]
+        );
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "base should use exact match; expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
+        );
+    }
+
+    #[test]
+    fn season_fallback_deep_negative_wraps_correctly() {
+        // Property test of the modular arithmetic formula.
+        assert_eq!(resolve_season_id(-1, 12), 11);
+        assert_eq!(resolve_season_id(-6, 12), 6);
+        assert_eq!(resolve_season_id(-12, 12), 0);
+        assert_eq!(resolve_season_id(-13, 12), 11);
+        assert_eq!(resolve_season_id(0, 12), 0);
+        assert_eq!(resolve_season_id(5, 12), 5);
+
+        // Additional edge cases.
+        assert_eq!(resolve_season_id(-24, 12), 0);
+        assert_eq!(resolve_season_id(-25, 12), 11);
+        assert_eq!(resolve_season_id(12, 12), 0);
+        assert_eq!(resolve_season_id(13, 12), 1);
+
+        // Non-12 cycle lengths.
+        assert_eq!(resolve_season_id(-1, 4), 3);
+        assert_eq!(resolve_season_id(-5, 4), 3);
+        assert_eq!(resolve_season_id(-4, 4), 0);
+        assert_eq!(resolve_season_id(-1, 1), 0);
     }
 }

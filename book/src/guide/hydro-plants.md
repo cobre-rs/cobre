@@ -76,9 +76,11 @@ all fields — required and optional — for a single plant:
         "type": "constant",
         "value": 0.93
       },
-      "evaporation_coefficients_mm": [
-        80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0
-      ],
+      "evaporation": {
+        "coefficients_mm": [
+          80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0
+        ]
+      },
       "diversion": {
         "downstream_id": 2,
         "max_flow_m3s": 200.0
@@ -108,8 +110,8 @@ all fields — required and optional — for a single plant:
 The `1dtoy` template uses a minimal hydro definition that omits all optional fields.
 Only `id`, `name`, `bus_id`, `downstream_id`, `reservoir`, `outflow`, and `generation`
 are required. All other top-level keys (`tailrace`, `hydraulic_losses`, `efficiency`,
-`evaporation_coefficients_mm`, `diversion`, `filling`, `penalties`) are optional and
-default to off when absent.
+`evaporation`, `diversion`, `filling`, `penalties`) are optional and default to off
+when absent.
 
 ---
 
@@ -578,22 +580,28 @@ Currently only the `"constant"` variant is supported:
 `value` is a dimensionless fraction in the range (0, 1]. A value of `0.93` means
 the turbine converts 93% of available hydraulic power to electrical output.
 
-### Evaporation Coefficients
+### Evaporation
 
-The `evaporation_coefficients_mm` field models water loss from the reservoir
-surface due to evaporation. When present, it must be an array of exactly 12
-values, one per calendar month:
+The `evaporation` block models water loss from the reservoir surface due to
+evaporation. When absent, no evaporation is modeled.
 
 ```json
-"evaporation_coefficients_mm": [
-  80.0, 75.0, 70.0, 65.0, 60.0, 55.0,
-  60.0, 65.0, 70.0, 75.0, 80.0, 85.0
-]
+"evaporation": {
+  "coefficients_mm": [
+    80.0, 75.0, 70.0, 65.0, 60.0, 55.0,
+    60.0, 65.0, 70.0, 75.0, 80.0, 85.0
+  ],
+  "reference_volumes_hm3": [
+    15000, 12000, 10000, 8000, 6000, 5000,
+    5500, 7000, 9000, 11000, 13000, 14500
+  ]
+}
 ```
 
-Index 0 is January, index 11 is December. Values are in mm/month. The evaporated
-volume is computed from the surface area of the reservoir at each stage. When
-absent, no evaporation is modeled.
+| Field                   | Type  | Required | Description                                                                                                                                                                                                                                  |
+| ----------------------- | ----- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coefficients_mm`       | array | Yes      | Exactly 12 values, one per calendar month (index 0 = January, index 11 = December). Values are in mm/month. The evaporated volume is computed from reservoir area.                                                                           |
+| `reference_volumes_hm3` | array | No       | Exactly 12 reference volumes [hm³] used as linearization points for evaporation, one per month. Must be within `[min_storage_hm3, max_storage_hm3]`. When absent, the algorithm uses its own default (e.g., mid-point of the storage range). |
 
 ### Diversion Channel
 
@@ -672,7 +680,7 @@ solver to avoid infeasible or undesirable operating states.
 | `outflow_violation_below_cost`    | $/m³/s | Penalty per m³/s of total outflow below `min_outflow_m3s`. Set high to enforce ecological flow requirements.                                                                                       |
 | `outflow_violation_above_cost`    | $/m³/s | Penalty per m³/s of total outflow above `max_outflow_m3s`. Set high to enforce flood channel capacity limits.                                                                                      |
 | `generation_violation_below_cost` | $/MW   | Penalty per MW of generation below `min_generation_mw`.                                                                                                                                            |
-| `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation. Only active when `evaporation_coefficients_mm` is present.                                                                                     |
+| `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation. Only active when the `evaporation` block is present.                                                                                           |
 | `water_withdrawal_violation_cost` | $/m³/s | Penalty per m³/s of water withdrawal constraint violation.                                                                                                                                         |
 
 ### Three-Tier Resolution Cascade
@@ -696,21 +704,21 @@ Cobre's five-layer validation pipeline checks the following conditions on hydro
 plants. Violations are reported as error messages with the failing plant's `id`
 and the nature of the problem.
 
-| Rule                            | Error Class          | Description                                                                                                                      |
-| ------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Bus reference integrity         | Reference error      | Every `bus_id` must match an `id` in `buses.json`.                                                                               |
-| Downstream reference integrity  | Reference error      | Every non-null `downstream_id` must match an `id` in `hydros.json`.                                                              |
-| Cascade acyclicity              | Topology error       | The directed graph of `downstream_id` links must be acyclic.                                                                     |
-| Storage bounds ordering         | Physical feasibility | `min_storage_hm3` must be less than `max_storage_hm3`.                                                                           |
-| Outflow bounds ordering         | Physical feasibility | When `max_outflow_m3s` is present, it must be greater than or equal to `min_outflow_m3s`.                                        |
-| Turbine bounds ordering         | Physical feasibility | `min_turbined_m3s` must be less than or equal to `max_turbined_m3s`.                                                             |
-| Generation bounds consistency   | Physical feasibility | `min_generation_mw` must be less than or equal to `max_generation_mw`.                                                           |
-| Initial conditions completeness | Reference error      | Every hydro plant must have exactly one entry in `initial_conditions.json` (either in `storage` or `filling_storage`, not both). |
-| Evaporation array length        | Schema error         | When `evaporation_coefficients_mm` is present, it must have exactly 12 values.                                                   |
-| FPHA geometry coverage          | Dimensional error    | Every plant configured with `fpha` or `linearized_head` must have at least 2 rows in `system/hydro_geometry.parquet`.            |
-| FPHA plane coverage             | Dimensional error    | Every `(hydro_id, stage_id)` group in `system/fpha_hyperplanes.parquet` must have at least 3 planes.                             |
-| FPHA coefficient signs          | Semantic error       | `gamma_v` must be positive; `gamma_s` must be non-positive.                                                                      |
-| Geometry monotonicity           | Semantic error       | `volume_hm3` must be strictly increasing; `height_m` and `area_km2` must be non-decreasing.                                      |
+| Rule                            | Error Class          | Description                                                                                                                                                                                        |
+| ------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bus reference integrity         | Reference error      | Every `bus_id` must match an `id` in `buses.json`.                                                                                                                                                 |
+| Downstream reference integrity  | Reference error      | Every non-null `downstream_id` must match an `id` in `hydros.json`.                                                                                                                                |
+| Cascade acyclicity              | Topology error       | The directed graph of `downstream_id` links must be acyclic.                                                                                                                                       |
+| Storage bounds ordering         | Physical feasibility | `min_storage_hm3` must be less than `max_storage_hm3`.                                                                                                                                             |
+| Outflow bounds ordering         | Physical feasibility | When `max_outflow_m3s` is present, it must be greater than or equal to `min_outflow_m3s`.                                                                                                          |
+| Turbine bounds ordering         | Physical feasibility | `min_turbined_m3s` must be less than or equal to `max_turbined_m3s`.                                                                                                                               |
+| Generation bounds consistency   | Physical feasibility | `min_generation_mw` must be less than or equal to `max_generation_mw`.                                                                                                                             |
+| Initial conditions completeness | Reference error      | Every hydro plant must have exactly one entry in `initial_conditions.json` (either in `storage` or `filling_storage`, not both).                                                                   |
+| Evaporation array length        | Schema error         | When `evaporation` is present, `coefficients_mm` must have exactly 12 values. `reference_volumes_hm3`, when present, must also have exactly 12 values within `[min_storage_hm3, max_storage_hm3]`. |
+| FPHA geometry coverage          | Dimensional error    | Every plant configured with `fpha` or `linearized_head` must have at least 2 rows in `system/hydro_geometry.parquet`.                                                                              |
+| FPHA plane coverage             | Dimensional error    | Every `(hydro_id, stage_id)` group in `system/fpha_hyperplanes.parquet` must have at least 3 planes.                                                                                               |
+| FPHA coefficient signs          | Semantic error       | `gamma_v` must be positive; `gamma_s` must be non-positive.                                                                                                                                        |
+| Geometry monotonicity           | Semantic error       | `volume_hm3` must be strictly increasing; `height_m` and `area_km2` must be non-decreasing.                                                                                                        |
 
 ---
 

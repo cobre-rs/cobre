@@ -33,7 +33,7 @@ my_study/
   scenarios/
     inflow_seasonal_stats.parquet
     load_seasonal_stats.parquet
-    inflow_ar_coefficients.parquet    (only when ar_order > 0)
+    inflow_ar_coefficients.parquet    (when PAR model order > 0)
     inflow_history.parquet            (alternative to pre-computed stats)
     non_controllable_stats.parquet   (stochastic NCS availability)
 ```
@@ -58,18 +58,18 @@ historical inflows for every (hydro plant, stage) pair.
 
 ### Schema
 
-| Column     | Type   | Nullable | Description                                             |
-| ---------- | ------ | -------- | ------------------------------------------------------- |
-| `hydro_id` | INT32  | No       | Hydro plant identifier (matches `id` in `hydros.json`)  |
-| `stage_id` | INT32  | No       | Stage identifier (matches `id` in `stages.json`)        |
-| `mean_m3s` | DOUBLE | No       | Seasonal mean inflow in m³/s                            |
-| `std_m3s`  | DOUBLE | No       | Seasonal standard deviation in m³/s (must be >= 0)      |
-| `ar_order` | INT32  | No       | Number of AR lags in the PAR(p) model (0 = white noise) |
+| Column     | Type   | Nullable | Description                                            |
+| ---------- | ------ | -------- | ------------------------------------------------------ |
+| `hydro_id` | INT32  | No       | Hydro plant identifier (matches `id` in `hydros.json`) |
+| `stage_id` | INT32  | No       | Stage identifier (matches `id` in `stages.json`)       |
+| `mean_m3s` | DOUBLE | No       | Seasonal mean inflow in m³/s (must be finite)          |
+| `std_m3s`  | DOUBLE | No       | Seasonal standard deviation in m³/s (must be >= 0)     |
 
 The file must contain exactly one row per `(hydro_id, stage_id)` pair.
 Every hydro plant defined in `hydros.json` must have a row for every stage
 defined in `stages.json`. The validator will reject the case if any
-combination is missing.
+combination is missing. The AR model order (number of lags) is determined
+from the `inflow_ar_coefficients.parquet` file when present, not from this file.
 
 For the `1dtoy` example, the file has 4 rows — one for each of the four
 monthly stages — for the single hydro plant `UHE1` (hydro_id = 0).
@@ -112,18 +112,17 @@ during training and simulation.
 
 ### Schema
 
-| Column     | Type   | Nullable | Description                                             |
-| ---------- | ------ | -------- | ------------------------------------------------------- |
-| `bus_id`   | INT32  | No       | Bus identifier (matches `id` in `buses.json`)           |
-| `stage_id` | INT32  | No       | Stage identifier (matches `id` in `stages.json`)        |
-| `mean_mw`  | DOUBLE | No       | Seasonal mean load in MW                                |
-| `std_mw`   | DOUBLE | No       | Seasonal standard deviation in MW (must be >= 0)        |
-| `ar_order` | INT32  | No       | Number of AR lags in the PAR(p) model (0 = white noise) |
+| Column     | Type   | Nullable | Description                                                         |
+| ---------- | ------ | -------- | ------------------------------------------------------------------- |
+| `bus_id`   | INT32  | No       | Bus identifier (matches `id` in `buses.json`)                       |
+| `stage_id` | INT32  | No       | Stage identifier (matches `id` in `stages.json`)                    |
+| `mean_mw`  | DOUBLE | No       | Seasonal mean load in MW (must be finite)                           |
+| `std_mw`   | DOUBLE | No       | Seasonal standard deviation in MW (must be >= 0, 0 = deterministic) |
 
 One row per `(bus_id, stage_id)` pair is required. Every bus in `buses.json`
 must have a row for every stage. The load mean and standard deviation determine
 both the expected demand level and how much it varies across scenarios in each
-stage.
+stage. A `std_mw` of `0.0` indicates deterministic load for that bus-stage pair.
 
 ---
 
@@ -136,53 +135,54 @@ patterns (wet seasons and dry seasons recur predictably each year) and
 autocorrelation (a wet month tends to be followed by another wet month, and
 vice versa).
 
-### What `ar_order` controls
+### What the AR order controls
 
-The `ar_order` column in the seasonal statistics files sets the number of
-autoregressive lags for each (entity, stage) pair.
+The AR order (number of autoregressive lags) is determined by the
+`inflow_ar_coefficients.parquet` file. If the file is absent or contains
+no coefficients for a given `(hydro_id, stage_id)`, the model defaults to
+white noise (order 0). When estimated from history, the order is selected
+automatically via PACF (see [Estimation from History](#estimation-from-history)).
 
-**`ar_order = 0` — white noise.** The inflow at each stage is drawn
+**Order 0 — white noise.** The inflow at each stage is drawn
 independently from a normal distribution with the specified mean and standard
 deviation. There is no memory between stages: knowing last month's inflow
 tells you nothing about this month's. This is the simplest setting and
 appropriate when you lack historical data to fit AR coefficients, or when
 the inflow series shows very little autocorrelation.
 
-**`ar_order > 0` — periodic autoregressive.** The inflow at each stage
+**Order > 0 — periodic autoregressive.** The inflow at each stage
 depends on the inflows at the preceding p stages, weighted by coefficients
 that reflect the seasonal autocorrelation structure. A wet period is
 followed by another wet period with the probability implied by the
-coefficients. Higher AR orders capture longer-range dependencies: `ar_order
-= 1` captures month-to-month persistence, `ar_order = 2` adds two-month
-memory, and so on. Most hydro inflow series are well-described by `ar_order
-= 1` or `ar_order = 2`.
+coefficients. Higher AR orders capture longer-range dependencies: order 1
+captures month-to-month persistence, order 2 adds two-month memory, and so
+on. Most hydro inflow series are well-described by order 1 or 2.
 
 ### AR coefficients file
 
-When any stage in `inflow_seasonal_stats.parquet` has `ar_order > 0`, Cobre
-also requires an `inflow_ar_coefficients.parquet` file in the `scenarios/`
-directory. This file contains the fitted AR coefficients in standardized form
-(as produced by the Yule-Walker equations). The schema and the fitting
-procedure are documented in the
-[Case Format Reference](../reference/case-format.md).
+When a non-trivial AR model is desired, Cobre requires an
+`inflow_ar_coefficients.parquet` file in the `scenarios/` directory. This
+file contains the fitted AR coefficients in standardized form (as produced
+by the periodic Yule-Walker equations). The schema and the fitting procedure
+are documented in the [Case Format Reference](../reference/case-format.md).
 
-The `1dtoy` example uses `ar_order = 0` for all stages, so no coefficients
-file is needed.
+The `1dtoy` example has no AR coefficients file, so all inflows use white
+noise (order 0).
 
 ### When to use higher AR orders
 
 In general:
 
-- Use `ar_order = 0` when historical data is short or when you want to
-  establish a baseline with the simplest possible model.
-- Use `ar_order = 1` for most real hydro systems. Monthly inflows have
-  strong one-month autocorrelation, and a first-order model captures the
-  bulk of it.
-- Use `ar_order = 2` or higher when the inflow series shows multi-month
+- Use order 0 when historical data is short or when you want to establish
+  a baseline with the simplest possible model.
+- Use order 1 for most real hydro systems. Monthly inflows have strong
+  one-month autocorrelation, and a first-order model captures the bulk of
+  it.
+- Use order 2 or higher when the inflow series shows multi-month
   persistence (common in systems with large upstream catchments or snowmelt
   storage). Validate with autocorrelation plots of your historical data.
-- Setting `ar_order > 0` with `std_m3s = 0` is a validation error — the
-  model requires non-zero variance to be identifiable.
+- AR coefficients require `std_m3s > 0` in the corresponding seasonal
+  statistics — zero variance makes the model non-identifiable.
 
 For the theoretical derivation of the PAR(p) model, see
 [Stochastic Modeling](https://cobre-rs.github.io/cobre-docs/theory/stochastic-modeling.html)
@@ -305,18 +305,14 @@ Cobre applies a noise model to bus demand during training and simulation.
 ### How load noise works
 
 Load noise uses the same PAR(p) framework as inflows. For each bus and each
-stage, Cobre draws a noise realisation from the PAR(p) model specified by
-the bus's `ar_order`, `mean_mw`, and `std_mw` columns in
-`load_seasonal_stats.parquet`. This realisation is then applied as a
-multiplicative factor on the base demand for that bus and stage: the sampled
-load replaces the deterministic demand value during scenario generation.
+stage, Cobre draws a noise realization scaled by the bus's `mean_mw` and
+`std_mw` values from `load_seasonal_stats.parquet`. This realization is then
+applied as a multiplicative factor on the base demand for that bus and stage:
+the sampled load replaces the deterministic demand value during scenario
+generation.
 
-Because the PAR(p) model is the same for both inflows and loads, load
-variability captures the same seasonal structure and stage-to-stage
-persistence that inflow models do. A bus with `ar_order = 0` gets
-independently drawn demand noise at each stage; a bus with `ar_order = 1`
-gets demand noise that has month-to-month persistence consistent with the
-historical standard deviation.
+A bus with `std_mw = 0` gets deterministic demand at each stage; a bus with
+`std_mw > 0` gets demand noise proportional to the standard deviation.
 
 ### Optional: deterministic loads without the file
 

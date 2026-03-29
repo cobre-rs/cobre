@@ -274,9 +274,13 @@ exporting schemas.
 
 ### Subcommands
 
-| Subcommand | Synopsis                           | Description                                  |
-| ---------- | ---------------------------------- | -------------------------------------------- |
-| `export`   | `cobre schema export [OUTPUT_DIR]` | Export JSON Schema files for all input types |
+| Subcommand | Synopsis                                   | Description                                  |
+| ---------- | ------------------------------------------ | -------------------------------------------- |
+| `export`   | `cobre schema export [--output-dir <DIR>]` | Export JSON Schema files for all input types |
+
+| Option               | Type | Default | Description                                                                                |
+| -------------------- | ---- | ------- | ------------------------------------------------------------------------------------------ |
+| `--output-dir <DIR>` | Path | `.`     | Directory to write schema files into. Created if absent. Existing schemas are overwritten. |
 
 ### Examples
 
@@ -285,7 +289,7 @@ exporting schemas.
 cobre schema export
 
 # Export schemas to a specific directory
-cobre schema export /data/schemas
+cobre schema export --output-dir /data/schemas
 ```
 
 ---

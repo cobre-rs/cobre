@@ -209,15 +209,15 @@ Each entry has a `"type"` discriminator. Valid types:
 
 **`simulation` section:**
 
-| Field                  | Type           | Default       | Description                                                        |
-| ---------------------- | -------------- | ------------- | ------------------------------------------------------------------ |
-| `enabled`              | boolean        | `false`       | Enable post-training simulation                                    |
-| `num_scenarios`        | integer        | `2000`        | Number of simulation scenarios                                     |
-| `policy_type`          | string         | `"outer"`     | Policy representation: `"outer"` (cuts) or `"inner"` (vertices)    |
-| `output_path`          | string or null | `null`        | Directory for simulation output files                              |
-| `output_mode`          | string or null | `null`        | Output mode: `"streaming"` or `"batched"`                          |
-| `io_channel_capacity`  | integer        | `64`          | Channel capacity between simulation and I/O writer threads         |
-| `sampling_scheme.type` | string         | `"in_sample"` | Scenario scheme: `"in_sample"`, `"out_of_sample"`, or `"external"` |
+| Field                  | Type           | Default       | Description                                                     |
+| ---------------------- | -------------- | ------------- | --------------------------------------------------------------- |
+| `enabled`              | boolean        | `false`       | Enable post-training simulation                                 |
+| `num_scenarios`        | integer        | `2000`        | Number of simulation scenarios                                  |
+| `policy_type`          | string         | `"outer"`     | Policy representation: `"outer"` (cuts) or `"inner"` (vertices) |
+| `output_path`          | string or null | `null`        | Directory for simulation output files                           |
+| `output_mode`          | string or null | `null`        | Output mode: `"streaming"` or `"batched"`                       |
+| `io_channel_capacity`  | integer        | `64`          | Channel capacity between simulation and I/O writer threads      |
+| `sampling_scheme.type` | string         | `"in_sample"` | Scenario scheme: `"in_sample"`, `"external"`, or `"historical"` |
 
 **`exports` section:**
 
@@ -323,18 +323,18 @@ policy graph horizon type, and scenario source configuration.
 
 **`stages[]` entry fields:**
 
-| Field             | Required | Description                                                    |
-| ----------------- | -------- | -------------------------------------------------------------- |
-| `id`              | Yes      | Stage identifier (non-negative integer, unique)                |
-| `start_date`      | Yes      | ISO 8601 date (e.g., `"2024-01-01"`)                           |
-| `end_date`        | Yes      | ISO 8601 date; must be after `start_date`                      |
-| `blocks`          | Yes      | Array of load blocks (`id`, `name`, `hours`)                   |
-| `num_scenarios`   | Yes      | Number of forward-pass scenarios for this stage (>= 1)         |
-| `season_id`       | No       | Reference to a season in `season_definitions`                  |
-| `block_mode`      | No       | Block execution mode: `"parallel"` (default) or `"sequential"` |
-| `state_variables` | No       | Which state variables are active: `storage`, `inflow_lags`     |
-| `risk_measure`    | No       | Per-stage risk measure: `"expectation"` or CVaR config         |
-| `sampling_method` | No       | Noise method: `"saa"` or other variants                        |
+| Field             | Required | Description                                                       |
+| ----------------- | -------- | ----------------------------------------------------------------- |
+| `id`              | Yes      | Stage identifier (non-negative integer, unique)                   |
+| `start_date`      | Yes      | ISO 8601 date (e.g., `"2024-01-01"`)                              |
+| `end_date`        | Yes      | ISO 8601 date; must be after `start_date`                         |
+| `blocks`          | Yes      | Array of load blocks (`id`, `name`, `hours`)                      |
+| `num_scenarios`   | Yes      | Number of forward-pass scenarios for this stage (>= 1)            |
+| `season_id`       | No       | Reference to a season in `season_definitions`                     |
+| `block_mode`      | No       | Block execution mode: `"parallel"` (default) or `"chronological"` |
+| `state_variables` | No       | Which state variables are active: `storage`, `inflow_lags`        |
+| `risk_measure`    | No       | Per-stage risk measure: `"expectation"` or CVaR config            |
+| `sampling_method` | No       | Noise method: `"saa"` or other variants                           |
 
 ---
 
@@ -372,14 +372,18 @@ Electrical bus registry. Buses are the nodes of the transmission network.
 
 Transmission line registry. Lines connect buses and carry power flows.
 
-| Field                   | Required | Description                                      |
-| ----------------------- | -------- | ------------------------------------------------ |
-| `lines[].id`            | Yes      | Line identifier (integer, unique)                |
-| `lines[].name`          | Yes      | Human-readable line name (string)                |
-| `lines[].source_bus_id` | Yes      | Sending-end bus ID                               |
-| `lines[].target_bus_id` | Yes      | Receiving-end bus ID                             |
-| `lines[].direct_mw`     | Yes      | Maximum power flow in the direct direction (MW)  |
-| `lines[].reverse_mw`    | Yes      | Maximum power flow in the reverse direction (MW) |
+| Field                         | Required | Description                                                          |
+| ----------------------------- | -------- | -------------------------------------------------------------------- |
+| `lines[].id`                  | Yes      | Line identifier (integer, unique)                                    |
+| `lines[].name`                | Yes      | Human-readable line name (string)                                    |
+| `lines[].source_bus_id`       | Yes      | Sending-end bus ID                                                   |
+| `lines[].target_bus_id`       | Yes      | Receiving-end bus ID                                                 |
+| `lines[].entry_stage_id`      | No       | Stage when line enters service; `null` = always exists               |
+| `lines[].exit_stage_id`       | No       | Stage when line is decommissioned; `null` = never                    |
+| `lines[].capacity.direct_mw`  | Yes      | Maximum power flow in the direct direction (MW)                      |
+| `lines[].capacity.reverse_mw` | Yes      | Maximum power flow in the reverse direction (MW)                     |
+| `lines[].exchange_cost`       | No       | Entity-level exchange cost override ($/MWh); absent = global default |
+| `lines[].losses_percent`      | No       | Transmission losses as percentage (default: 0.0)                     |
 
 ---
 
@@ -390,18 +394,26 @@ turbine, and optional cascade linkage.
 
 Key fields:
 
-| Field                                         | Required           | Description                                                          |
-| --------------------------------------------- | ------------------ | -------------------------------------------------------------------- |
-| `hydros[].id`                                 | Yes                | Plant identifier (integer, unique)                                   |
-| `hydros[].name`                               | Yes                | Human-readable plant name                                            |
-| `hydros[].bus_id`                             | Yes                | Bus where generation is injected                                     |
-| `hydros[].downstream_id`                      | No                 | Downstream plant ID in the cascade; `null` = tailwater               |
-| `hydros[].reservoir`                          | Yes                | `min_storage_hm3` and `max_storage_hm3` (both >= 0)                  |
-| `hydros[].outflow`                            | Yes                | `min_outflow_m3s` and `max_outflow_m3s` total outflow bounds         |
-| `hydros[].generation`                         | Yes                | Generation model: `model`, turbine flow bounds, generation MW bounds |
-| `hydros[].generation.model`                   | Yes                | Currently: `"constant_productivity"`                                 |
-| `hydros[].generation.productivity_mw_per_m3s` | Yes (for constant) | Turbine productivity factor                                          |
-| `hydros[].penalties`                          | No                 | Entity-level hydro penalty overrides                                 |
+| Field                                         | Required           | Description                                                                            |
+| --------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------- |
+| `hydros[].id`                                 | Yes                | Plant identifier (integer, unique)                                                     |
+| `hydros[].name`                               | Yes                | Human-readable plant name                                                              |
+| `hydros[].bus_id`                             | Yes                | Bus where generation is injected                                                       |
+| `hydros[].downstream_id`                      | No                 | Downstream plant ID in the cascade; `null` = tailwater                                 |
+| `hydros[].entry_stage_id`                     | No                 | Stage when plant enters service; `null` = always exists                                |
+| `hydros[].exit_stage_id`                      | No                 | Stage when plant is decommissioned; `null` = never                                     |
+| `hydros[].reservoir`                          | Yes                | `min_storage_hm3` and `max_storage_hm3` (both >= 0)                                    |
+| `hydros[].outflow`                            | Yes                | `min_outflow_m3s` and `max_outflow_m3s` total outflow bounds                           |
+| `hydros[].generation`                         | Yes                | Generation model: `model`, turbine flow bounds, generation MW bounds                   |
+| `hydros[].generation.model`                   | Yes                | `"constant_productivity"`, `"linearized_head"`, or `"fpha"`                            |
+| `hydros[].generation.productivity_mw_per_m3s` | Yes (for non-fpha) | Turbine productivity factor [MW/(m³/s)]                                                |
+| `hydros[].tailrace`                           | No                 | Tailrace model: `"polynomial"` or `"piecewise"`                                        |
+| `hydros[].hydraulic_losses`                   | No                 | Head loss model: `"factor"` or `"constant"`                                            |
+| `hydros[].efficiency`                         | No                 | Turbine efficiency model: `"constant"`                                                 |
+| `hydros[].evaporation`                        | No                 | Evaporation config: `coefficients_mm` (12 values) and optional `reference_volumes_hm3` |
+| `hydros[].diversion`                          | No                 | Diversion channel: `downstream_id` and `max_flow_m3s`                                  |
+| `hydros[].filling`                            | No                 | Filling config: `start_stage_id` and `filling_inflow_m3s`                              |
+| `hydros[].penalties`                          | No                 | Entity-level hydro penalty overrides (all 11 fields optional, fall back to global)     |
 
 ---
 
@@ -621,7 +633,6 @@ PAR(p) model seasonal statistics for each (hydro plant, stage) pair.
 | `stage_id` | INT32  | Yes      | Stage ID                                                    |
 | `mean_m3s` | DOUBLE | Yes      | Seasonal mean inflow (m³/s); must be finite                 |
 | `std_m3s`  | DOUBLE | Yes      | Seasonal standard deviation (m³/s); must be >= 0 and finite |
-| `ar_order` | INT32  | Yes      | AR model order (number of lags); must be >= 0               |
 
 ---
 

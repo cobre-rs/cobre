@@ -9,7 +9,6 @@ case directory. This page documents every section and field.
 
 ```json
 {
-  "version": "2.0.0",
   "training": {
     "forward_passes": 50,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 100 }]

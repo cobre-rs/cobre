@@ -214,11 +214,16 @@ pub struct BackwardPassSpec<'a> {
 
     /// Pre-allocated buffer for uniform opening probabilities. Reused per stage
     /// via `clear()` + `resize()` to avoid per-stage allocation.
-    pub probabilities_buf: Vec<f64>,
+    ///
+    /// Passed as a mutable reference to avoid `mem::take` capacity loss when
+    /// the training loop encounters an error before buffer recovery.
+    pub probabilities_buf: &'a mut Vec<f64>,
 
     /// Pre-allocated buffer for successor active cut slot indices. Reused per
     /// stage via `clear()` + `extend()` to avoid per-stage allocation.
-    pub successor_active_slots_buf: Vec<usize>,
+    ///
+    /// Passed as a mutable reference (same rationale as `probabilities_buf`).
+    pub successor_active_slots_buf: &'a mut Vec<usize>,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -1321,8 +1326,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1398,8 +1403,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1475,8 +1480,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1548,8 +1553,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1621,8 +1626,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1692,8 +1697,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         );
@@ -1807,8 +1812,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1900,8 +1905,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1998,8 +2003,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2083,8 +2088,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2177,8 +2182,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2266,8 +2271,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2349,8 +2354,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2439,8 +2444,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         );
@@ -2555,8 +2560,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2611,8 +2616,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2935,8 +2940,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3064,8 +3069,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3198,8 +3203,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3298,8 +3303,8 @@ mod tests {
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
                 cut_sync_bufs: &mut csb,
-                probabilities_buf: Vec::new(),
-                successor_active_slots_buf: Vec::new(),
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
             },
             &comm,
         )

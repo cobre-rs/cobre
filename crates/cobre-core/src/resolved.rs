@@ -835,7 +835,7 @@ mod serde_generic_bounds {
 
     /// Wire format for serde: a list of `(constraint_idx, stage_id, pairs)` groups.
     ///
-    /// JSON/bincode cannot serialize `HashMap<(usize, i32), Range<usize>>` directly
+    /// JSON/postcard cannot serialize `HashMap<(usize, i32), Range<usize>>` directly
     /// because composite tuple keys are not strings. This wire format avoids that
     /// by encoding each group as a tagged list of entries.
     #[derive(Serialize, Deserialize)]

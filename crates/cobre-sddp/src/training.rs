@@ -499,8 +499,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             risk_measures,
             cut_activity_tolerance,
             cut_sync_bufs: &mut cut_sync_bufs,
-            probabilities_buf: std::mem::take(&mut bwd_probabilities_buf),
-            successor_active_slots_buf: std::mem::take(&mut bwd_successor_active_slots_buf),
+            probabilities_buf: &mut bwd_probabilities_buf,
+            successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
         };
 
         let backward_result = match run_backward_pass(
@@ -517,9 +517,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             Err(e) => on_error!(e),
         };
 
-        // Recover buffers so their capacity is reused in the next iteration.
-        bwd_probabilities_buf = bwd_spec.probabilities_buf;
-        bwd_successor_active_slots_buf = bwd_spec.successor_active_slots_buf;
+        // Buffers are borrowed by bwd_spec and automatically available for
+        // the next iteration after bwd_spec is dropped here.
 
         // Store per-stage backward deltas and compute aggregate solve time.
         let bwd_solve_time_ms = {

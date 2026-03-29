@@ -331,11 +331,20 @@ impl HighsSolver {
 
     /// Restores default options after retry escalation.
     ///
-    /// Errors are silently ignored — already in recovery path.
+    /// Status codes are checked via `debug_assert!` to catch programming
+    /// errors during development (e.g., invalid option name). In release
+    /// builds, failures are silently ignored since we are already on the
+    /// recovery path.
     fn restore_default_settings(&mut self) {
         for opt in &default_options() {
             // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
-            unsafe { opt.apply(self.handle) };
+            let status = unsafe { opt.apply(self.handle) };
+            debug_assert_eq!(
+                status,
+                ffi::HIGHS_STATUS_OK,
+                "restore_default_settings: option {:?} failed with status {status}",
+                opt.name,
+            );
         }
     }
 

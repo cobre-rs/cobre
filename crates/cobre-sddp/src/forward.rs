@@ -775,23 +775,9 @@ fn run_forward_stage<S: SolverInterface + Send>(
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
+    // Skip dual storage: rec.dual is not read by the backward pass or any
+    // training-path code. Simulation reads duals directly from the solver view.
     rec.dual.clear();
-    // Unscale duals: structural rows use row_scale[i]; cut rows (i >= num_rows)
-    // have implicit row_scale = 1.0 and are used as-is.
-    let row_scale = &ctx.templates[t].row_scale;
-    if row_scale.is_empty() {
-        rec.dual.extend_from_slice(view.dual);
-    } else {
-        rec.dual.reserve(view.dual.len());
-        for (i, &d) in view.dual.iter().enumerate() {
-            let scale = if i < row_scale.len() {
-                row_scale[i]
-            } else {
-                1.0
-            };
-            rec.dual.push(d * scale);
-        }
-    }
     rec.stage_cost = stage_cost;
 
     // Save incoming lag values before overwriting state with primal.
@@ -803,26 +789,18 @@ fn run_forward_stage<S: SolverInterface + Send>(
         .lag_matrix_buf
         .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
 
-    rec.state.clear();
-    rec.state
-        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+    // Compute shifted lag state once into ws.current_state, then copy to rec.state.
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
-
-    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
-    crate::noise::shift_lag_state(
-        &mut rec.state,
-        &ws.scratch.lag_matrix_buf,
-        unscaled_primal,
-        indexer,
-    );
     crate::noise::shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         unscaled_primal,
         indexer,
     );
+    rec.state.clear();
+    rec.state.extend_from_slice(&ws.current_state);
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {

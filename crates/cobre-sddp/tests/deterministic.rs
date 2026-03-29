@@ -1543,3 +1543,55 @@ fn incremental_bit_for_bit_d01_trace() {
         result.final_gap
     );
 }
+
+/// Multi-hydro PAR(2) regression test with inflow truncation.
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 200 MW at $50/MWh), 2 hydros:
+///   - H0: constant productivity 1.0 MW/(m3/s), max turbined 100 m3/s,
+///     storage 0–200 hm3, PAR(2) with psi = [0.5, 0.3], mean = 40 m3/s
+///   - H1: constant productivity 0.8 MW/(m3/s), max turbined 80 m3/s,
+///     storage 0–150 hm3, PAR(2) with psi = [0.4, 0.2], mean = 25 m3/s
+/// - Deterministic load: 100 MW per stage
+/// - Initial storage: H0 = 100 hm3, H1 = 75 hm3
+/// - Past inflows: H0 = [50, 45] m3/s, H1 = [30, 28] m3/s
+/// - 3 stages × 730 h, `inflow_non_negativity: {method: "truncation"}`
+///
+/// ## What this tests
+///
+/// With 2 hydros and PAR(2), the lag state indices are:
+///   - `inflow_lags.start + 0*2 + 0` = hydro 0, lag 0
+///   - `inflow_lags.start + 0*2 + 1` = hydro 0, lag 1  (BUG: was hydro 1, lag 0)
+///   - `inflow_lags.start + 1*2 + 0` = hydro 1, lag 0
+///   - `inflow_lags.start + 1*2 + 1` = hydro 1, lag 1  (BUG: was hydro 0, lag 1)
+///
+/// If the hydro-major/lag-major bug regressed, the wrong lag values would be
+/// used in PAR evaluation, producing a different optimal cost.
+#[test]
+fn d19_multi_hydro_par_truncation() {
+    let case_dir = Path::new("../../examples/deterministic/d19-multi-hydro-par");
+    let result = run_deterministic(case_dir);
+
+    // The system with PAR(2) truncation and 2 hydros must produce a positive cost.
+    assert!(
+        result.final_lb > 0.0,
+        "D19: lower bound must be positive, got {}",
+        result.final_lb
+    );
+    // With PAR(2), 2 hydros, and truncation, convergence within 50 iterations
+    // is not guaranteed (large state space). The key regression check is that
+    // the lower bound matches the reference value, confirming the lag-major
+    // indexing is correct.
+    assert_cost(result.final_lb, D19_EXPECTED_COST, 1.0, "D19");
+}
+
+/// Expected lower bound for D19 (2-hydro PAR(2) with truncation, 3 stages).
+///
+/// Recorded empirically with the corrected lag-major indexing (T001 fix).
+/// The value depends on the PAR evaluation and truncation logic — it is not
+/// hand-computable due to the 2-hydro x 2-lag state space.
+///
+/// If the lag-major/hydro-major indexing bug regresses, different lag values
+/// are read for each hydro during PAR evaluation, producing a different cost.
+pub const D19_EXPECTED_COST: f64 = 1_603_530.894;

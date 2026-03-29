@@ -24,12 +24,18 @@
 //! For a solve at stage `t + 1` with trial point state `x_hat`:
 //!
 //! ```text
-//! pi[i]     = -dual[i]                       for i in 0..n_state
-//! alpha     = Q - sum_i(pi[i] * x_hat[i])   (intercept)
+//! pi[i]  = dual[i] * row_scale[i]           for i in 0..n_state
+//! alpha  = Q - sum_i(pi[i] * x_hat[i])      (intercept)
 //! ```
 //!
 //! where `Q` is the LP objective and `dual[0..n_state]` are the duals of the
 //! fixing constraints (storage-fixing and lag-fixing rows).
+//!
+//! The coefficients stored in the [`FutureCostFunction`] are the raw (unscaled)
+//! duals of the state-fixing rows. Negation is applied later when building the
+//! LP cut row in `build_cut_row_batch_into` (forward.rs):
+//! `-coeff * x + theta >= intercept`.
+//! See the project convention: "coefficients = dual (NOT -dual)".
 //!
 //! ## Cut activity tracking
 //!

@@ -82,7 +82,7 @@ pub(crate) fn transform_inflow_noise(
             for h in 0..n_hydros {
                 for l in 0..max_order {
                     scratch.lag_matrix_buf[l * n_hydros + h] =
-                        current_state[indexer.inflow_lags.start + h * max_order + l];
+                        current_state[indexer.inflow_lags.start + l * n_hydros + h];
                 }
             }
 

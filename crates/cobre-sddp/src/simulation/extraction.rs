@@ -245,7 +245,7 @@ fn extract_hydro_no_turbine(
     let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
         spec.inflow_m3s_per_hydro[h]
     } else if indexer.max_par_order > 0 {
-        view.primal[indexer.inflow_lags.start + h * indexer.max_par_order]
+        view.primal[indexer.inflow_lags.start + h]
     } else {
         0.0
     };
@@ -332,7 +332,7 @@ fn extract_hydro_per_block<'a>(
     let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
         spec.inflow_m3s_per_hydro[h]
     } else if indexer.max_par_order > 0 {
-        view.primal[indexer.inflow_lags.start + h * indexer.max_par_order]
+        view.primal[indexer.inflow_lags.start + h]
     } else {
         0.0
     };
@@ -1032,7 +1032,7 @@ fn extract_stub_collections(
                     hydro_id,
                     lag_index: l as u32,
                     inflow_m3s: view.primal
-                        [indexer.inflow_lags.start + h * indexer.max_par_order + l],
+                        [indexer.inflow_lags.start + l * indexer.hydro_count + h],
                 }
             })
         })

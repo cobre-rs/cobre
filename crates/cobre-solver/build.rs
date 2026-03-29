@@ -48,6 +48,10 @@ fn main() {
         .define("HIGHS_NO_DEFAULT_THREADS", "ON")
         .define("BUILD_TESTING", "OFF")
         .define("BUILD_EXAMPLES", "OFF")
+        // Ensure HighsInt is 32-bit (matching the i32 types in our FFI bindings).
+        // The _Static_assert in highs_wrapper.c catches this at compile time,
+        // but setting the flag here prevents any mismatch from the cmake build.
+        .define("HIGHSINT64", "OFF")
         // Disable zlib in HiGHS. HiGHS uses zlib only for reading compressed
         // .mps.gz/.lp.gz files via Highs_readModel(). Cobre constructs all LPs
         // programmatically via the C API and never uses file-based model I/O.

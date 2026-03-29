@@ -38,13 +38,20 @@
 //!     cut_activity_tolerance: 1e-6,
 //!     n_fwd_threads: 1,
 //!     max_blocks: 1,
+//!     cut_selection: None,
+//!     shutdown_flag: None,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
 //! assert_eq!(config.checkpoint_interval, Some(50));
 //! ```
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use cobre_core::TrainingEvent;
+
+use crate::cut_selection::CutSelectionStrategy;
 
 /// Parameters controlling the SDDP training loop.
 ///
@@ -66,6 +73,8 @@ use cobre_core::TrainingEvent;
 ///     cut_activity_tolerance: 1e-6,
 ///     n_fwd_threads: 1,
 ///     max_blocks: 1,
+///     cut_selection: None,
+///     shutdown_flag: None,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -130,6 +139,21 @@ pub struct TrainingConfig {
     ///
     /// Used for pre-sizing buffers and determining the LP column layout.
     pub max_blocks: usize,
+
+    /// Optional cut selection strategy for deactivating dominated cuts.
+    ///
+    /// When `Some(strategy)`, the training loop applies cut selection after each
+    /// backward pass, deactivating cuts that do not meet the strategy's activity
+    /// criteria. When `None`, all generated cuts remain active.
+    pub cut_selection: Option<CutSelectionStrategy>,
+
+    /// Optional shutdown signal for graceful early termination.
+    ///
+    /// When `Some(flag)`, the training loop checks `flag.load(Relaxed)` at each
+    /// iteration boundary. If the flag is `true`, the loop terminates early with
+    /// a "shutdown requested" reason. When `None`, the loop runs until
+    /// convergence or iteration limit.
+    pub shutdown_flag: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(test)]
@@ -150,6 +174,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -166,6 +192,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -178,6 +206,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -193,6 +223,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -210,6 +242,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         assert!(config.event_sender.is_none());
     }
@@ -226,6 +260,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         assert!(config.event_sender.is_some());
@@ -261,6 +297,8 @@ mod tests {
             cut_activity_tolerance: 1e-6,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

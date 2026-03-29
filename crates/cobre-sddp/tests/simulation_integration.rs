@@ -583,6 +583,8 @@ fn train_simulate_write_cycle() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -612,8 +614,6 @@ fn train_simulate_write_cycle() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )

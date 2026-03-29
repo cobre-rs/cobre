@@ -516,6 +516,8 @@ fn train_converges_with_mock_solver() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
     };
 
     let stage_ctx = StageContext {
@@ -544,8 +546,6 @@ fn train_converges_with_mock_solver() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -590,6 +590,8 @@ fn train_deterministic_with_same_seed() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf1,
         &stage_ctx,
@@ -603,8 +605,6 @@ fn train_deterministic_with_same_seed() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(5),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(50.0)),
     )
@@ -637,6 +637,8 @@ fn train_deterministic_with_same_seed() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf2,
         &stage_ctx2,
@@ -650,8 +652,6 @@ fn train_deterministic_with_same_seed() {
         &opening_tree2,
         &fx.risk_measures,
         iteration_limit(5),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(50.0)),
     )
@@ -689,6 +689,8 @@ fn train_lb_monotonically_nondecreasing() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
     };
 
     let stage_ctx = StageContext {
@@ -717,8 +719,6 @@ fn train_lb_monotonically_nondecreasing() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(6),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -762,6 +762,8 @@ fn train_emits_correct_event_sequence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
     };
 
     let stage_ctx = StageContext {
@@ -791,8 +793,6 @@ fn train_emits_correct_event_sequence() {
         &fx.risk_measures,
         // Limit to exactly 3 iterations.
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -852,6 +852,8 @@ fn train_stops_at_iteration_limit() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf,
         &stage_ctx,
@@ -865,8 +867,6 @@ fn train_stops_at_iteration_limit() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -917,6 +917,8 @@ fn train_stops_on_graceful_shutdown() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: Some(Arc::clone(&shutdown_flag)),
         },
         &mut fcf,
         &stage_ctx,
@@ -930,8 +932,6 @@ fn train_stops_on_graceful_shutdown() {
         &fx.opening_tree,
         &fx.risk_measures,
         rules,
-        None,
-        Some(&shutdown_flag),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -972,6 +972,8 @@ fn train_propagates_infeasible_error() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf,
         &stage_ctx,
@@ -985,8 +987,6 @@ fn train_propagates_infeasible_error() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::infeasible_on_first()),
     );
@@ -1036,11 +1036,11 @@ fn d17_level1_cut_selection_convergence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
-    };
-
-    let strategy = CutSelectionStrategy::Level1 {
-        threshold: 0,
-        check_frequency: 2,
+        cut_selection: Some(CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 2,
+        }),
+        shutdown_flag: None,
     };
 
     let stage_ctx = StageContext {
@@ -1069,8 +1069,6 @@ fn d17_level1_cut_selection_convergence() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        Some(&strategy),
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1178,11 +1176,11 @@ fn d18_lml1_cut_selection_convergence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
-    };
-
-    let strategy = CutSelectionStrategy::Lml1 {
-        memory_window: 3,
-        check_frequency: 2,
+        cut_selection: Some(CutSelectionStrategy::Lml1 {
+            memory_window: 3,
+            check_frequency: 2,
+        }),
+        shutdown_flag: None,
     };
 
     let stage_ctx = StageContext {
@@ -1211,8 +1209,6 @@ fn d18_lml1_cut_selection_convergence() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        Some(&strategy),
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )

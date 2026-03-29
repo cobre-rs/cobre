@@ -558,6 +558,8 @@ fn train_fixture(
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf,
         &stage_ctx,
@@ -574,8 +576,6 @@ fn train_fixture(
             rules: vec![StoppingRule::IterationLimit { limit: iterations }],
             mode: StoppingMode::Any,
         },
-        None,
-        None,
         &comm,
         HighsSolver::new,
     )

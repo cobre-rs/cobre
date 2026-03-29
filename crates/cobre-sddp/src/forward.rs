@@ -1539,7 +1539,10 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -1624,7 +1627,10 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -1715,7 +1721,10 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -2091,7 +2100,10 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -2765,7 +2777,10 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let templates = vec![
             minimal_template_1_0(),

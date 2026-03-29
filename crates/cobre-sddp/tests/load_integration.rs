@@ -453,6 +453,8 @@ fn test_stochastic_load_training_completes() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -489,8 +491,6 @@ fn test_stochastic_load_training_completes() {
         &opening_tree,
         &risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -576,6 +576,8 @@ fn test_deterministic_load_training_matches_baseline() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         },
         &mut fcf,
         &stage_ctx,
@@ -589,8 +591,6 @@ fn test_deterministic_load_training_matches_baseline() {
         &opening_tree,
         &risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -639,6 +639,8 @@ fn test_stochastic_load_seed_determinism() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -671,8 +673,6 @@ fn test_stochastic_load_seed_determinism() {
             &opening_tree,
             &risk_measures,
             iteration_limit(3),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )

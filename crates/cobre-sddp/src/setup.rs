@@ -846,6 +846,8 @@ impl StudySetup {
             cut_activity_tolerance: self.cut_activity_tolerance,
             n_fwd_threads: n_threads,
             max_blocks: self.max_blocks,
+            cut_selection: self.cut_selection.clone(),
+            shutdown_flag: shutdown_flag.map(Arc::clone),
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -878,8 +880,6 @@ impl StudySetup {
             self.stochastic.opening_tree(),
             &self.risk_measures,
             self.stopping_rule_set.clone(),
-            self.cut_selection.as_ref(),
-            shutdown_flag,
             comm,
             solver_factory,
         )

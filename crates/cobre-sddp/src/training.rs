@@ -26,8 +26,7 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -45,7 +44,6 @@ use crate::{
     convergence::ConvergenceMonitor,
     cut::CutRowMap,
     cut::fcf::FutureCostFunction,
-    cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
     forward::{ForwardPassBatch, run_forward_pass, sync_forward},
@@ -206,8 +204,8 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
 /// let result = train(
 ///     &mut solver, config, &mut fcf, &templates, &base_rows,
 ///     &indexer, &initial_state, &opening_tree, &stochastic,
-///     &horizon, &risk, stopping, None, None, &comm,
-///     1, || HiggsBackend::new(),
+///     &horizon, &risk, stopping, &comm,
+///     || HiggsBackend::new(),
 /// )?;
 ///
 /// println!("converged in {} iterations, gap={:.4}", result.result.iterations, result.result.final_gap);
@@ -232,8 +230,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     opening_tree: &OpeningTree,
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
-    cut_selection: Option<&CutSelectionStrategy>,
-    shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
 ) -> Result<TrainingOutcome, SddpError> {
@@ -302,8 +298,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         forward_passes: config_forward_passes,
         max_iterations,
         event_sender,
+        cut_selection,
+        shutdown_flag,
         ..
     } = config;
+    let cut_selection = cut_selection.as_ref();
+    let shutdown_flag = shutdown_flag.as_ref();
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -1245,6 +1245,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1276,8 +1278,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1318,6 +1318,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1349,8 +1351,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::infeasible()),
         );
@@ -1409,6 +1409,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1440,8 +1442,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1534,6 +1534,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1565,8 +1567,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1605,6 +1605,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1636,8 +1638,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         );
@@ -1673,6 +1673,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1704,8 +1706,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(1),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1749,6 +1749,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1780,8 +1782,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1832,11 +1832,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
-        };
-
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 3,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 3,
+            }),
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1868,8 +1868,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            Some(&strategy),
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1930,11 +1928,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
-        };
-
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 2,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1966,8 +1964,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            Some(&strategy),
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2042,6 +2038,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2073,8 +2071,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(3),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2119,6 +2115,8 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2154,8 +2152,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::infeasible()),
         )

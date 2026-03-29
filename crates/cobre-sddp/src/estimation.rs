@@ -29,24 +29,23 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
     config::OrderSelectionMethod,
     parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
-    validate_structure,
+    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, ArCoefficientEstimate,
+        SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Errors that can occur during the automatic estimation pipeline.
@@ -1063,6 +1062,12 @@ pub(crate) fn build_estimation_report(
 /// the matching season.  This function looks up that stage's `season_id` and
 /// emits one row for every stage with the same season, so that
 /// [`cobre_stochastic::PrecomputedPar`] finds a model at every stage index.
+///
+/// **Pre-study stages**: When `stages` contains pre-study stages (negative
+/// `id`, valid `season_id`), this function includes them in the expansion.
+/// Pre-study rows are emitted with their negative `stage_id`, which allows
+/// `PrecomputedPar::build` to find direct hits for lag stages without
+/// needing the season-based fallback path.
 fn seasonal_stats_to_rows(
     stats: &[SeasonalStats],
     stages: &[cobre_core::temporal::Stage],
@@ -1113,6 +1118,11 @@ fn seasonal_stats_to_rows(
 /// The `season_id` in `ArCoefficientEstimate` is mapped to ALL stage IDs whose
 /// `season_id` matches, so the resulting coefficient rows cover the full study
 /// horizon (not just the first occurrence of each season).
+///
+/// **Pre-study stages**: When `stages` contains pre-study stages (negative
+/// `id`, valid `season_id`), this function includes them in the expansion.
+/// Pre-study coefficient rows are emitted with their negative `stage_id`,
+/// providing direct model entries for `PrecomputedPar::build` lag lookups.
 fn ar_estimates_to_rows(
     ar_estimates: &[ArCoefficientEstimate],
     stages: &[cobre_core::temporal::Stage],
@@ -1187,8 +1197,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {
@@ -2253,5 +2263,251 @@ mod tests {
             !h2_reductions.iter().any(|r| r.season_id == 1),
             "H2 S1 should have no reduction"
         );
+    }
+
+    // ── Pre-study stage expansion tests (T005) ──────────────────────────────
+
+    /// Build a Stage with the given parameters, suitable for expansion tests.
+    fn make_expansion_stage(
+        index: usize,
+        id: i32,
+        season_id: Option<usize>,
+    ) -> cobre_core::temporal::Stage {
+        use chrono::NaiveDate;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+
+        cobre_core::temporal::Stage {
+            index,
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id,
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 10,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    #[test]
+    fn seasonal_stats_to_rows_includes_prestudy_stages() {
+        // 3 study stages (id 0, 1, 2; seasons 0, 1, 2)
+        // 2 pre-study stages (id -1, -2; seasons 2, 1)
+        let stages = vec![
+            make_expansion_stage(0, -2, Some(1)),
+            make_expansion_stage(1, -1, Some(2)),
+            make_expansion_stage(2, 0, Some(0)),
+            make_expansion_stage(3, 1, Some(1)),
+            make_expansion_stage(4, 2, Some(2)),
+        ];
+
+        let h1 = EntityId(1);
+        // SeasonalStats for seasons 0, 1, 2 (stage_id is the first stage
+        // with that season).
+        let stats = vec![
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 0,
+                mean: 100.0,
+                std: 20.0,
+            },
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 1,
+                mean: 110.0,
+                std: 22.0,
+            },
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 2,
+                mean: 120.0,
+                std: 24.0,
+            },
+        ];
+
+        let rows = seasonal_stats_to_rows(&stats, &stages);
+
+        // season 0: stage 0 only
+        // season 1: stages -2 and 1
+        // season 2: stages -1 and 2
+        // Total: 1 + 2 + 2 = 5 rows
+        assert_eq!(rows.len(), 5, "expected 5 rows (3 study + 2 pre-study)");
+
+        // Verify pre-study rows exist with negative stage_ids.
+        let prestudy_rows: Vec<_> = rows.iter().filter(|r| r.stage_id < 0).collect();
+        assert_eq!(
+            prestudy_rows.len(),
+            2,
+            "expected 2 pre-study rows, got {}",
+            prestudy_rows.len()
+        );
+
+        // stage_id = -2 has season 1 -> (mean=110, std=22).
+        let neg2 = rows.iter().find(|r| r.stage_id == -2).expect("row for -2");
+        assert!((neg2.mean_m3s - 110.0).abs() < f64::EPSILON);
+        assert!((neg2.std_m3s - 22.0).abs() < f64::EPSILON);
+
+        // stage_id = -1 has season 2 -> (mean=120, std=24).
+        let neg1 = rows.iter().find(|r| r.stage_id == -1).expect("row for -1");
+        assert!((neg1.mean_m3s - 120.0).abs() < f64::EPSILON);
+        assert!((neg1.std_m3s - 24.0).abs() < f64::EPSILON);
+
+        // Rows should be sorted by (hydro_id, stage_id).
+        for w in rows.windows(2) {
+            assert!(
+                (w[0].hydro_id.0, w[0].stage_id) <= (w[1].hydro_id.0, w[1].stage_id),
+                "rows not sorted"
+            );
+        }
+    }
+
+    #[test]
+    fn ar_estimates_to_rows_includes_prestudy_stages() {
+        // Same stage layout as test 1.
+        let stages = vec![
+            make_expansion_stage(0, -2, Some(1)),
+            make_expansion_stage(1, -1, Some(2)),
+            make_expansion_stage(2, 0, Some(0)),
+            make_expansion_stage(3, 1, Some(1)),
+            make_expansion_stage(4, 2, Some(2)),
+        ];
+
+        let h1 = EntityId(1);
+        // AR(1) estimates for seasons 0, 1, 2.
+        let ar_estimates = vec![
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 0,
+                coefficients: vec![0.3],
+                residual_std_ratio: 0.9,
+            },
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 1,
+                coefficients: vec![0.4],
+                residual_std_ratio: 0.85,
+            },
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 2,
+                coefficients: vec![0.5],
+                residual_std_ratio: 0.8,
+            },
+        ];
+
+        let rows = ar_estimates_to_rows(&ar_estimates, &stages);
+
+        // season 0 -> 1 stage (id 0): 1 row
+        // season 1 -> 2 stages (ids -2, 1): 2 rows
+        // season 2 -> 2 stages (ids -1, 2): 2 rows
+        // Total: 5 rows (each AR(1), so 1 coefficient row per stage)
+        assert_eq!(rows.len(), 5, "expected 5 rows");
+
+        // Pre-study coefficient rows exist.
+        let prestudy_rows: Vec<_> = rows.iter().filter(|r| r.stage_id < 0).collect();
+        assert_eq!(prestudy_rows.len(), 2);
+
+        // stage_id = -2 is season 1, coefficient = 0.4.
+        let neg2 = rows.iter().find(|r| r.stage_id == -2).expect("row for -2");
+        assert!((neg2.coefficient - 0.4).abs() < f64::EPSILON);
+        assert!((neg2.residual_std_ratio - 0.85).abs() < f64::EPSILON);
+
+        // stage_id = -1 is season 2, coefficient = 0.5.
+        let neg1 = rows.iter().find(|r| r.stage_id == -1).expect("row for -1");
+        assert!((neg1.coefficient - 0.5).abs() < f64::EPSILON);
+        assert!((neg1.residual_std_ratio - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn full_estimation_produces_prestudy_inflow_models() {
+        use cobre_io::scenarios::assemble_inflow_models;
+
+        // Build stages with 2 pre-study + 3 study.
+        let stages = vec![
+            make_expansion_stage(0, -2, Some(1)),
+            make_expansion_stage(1, -1, Some(2)),
+            make_expansion_stage(2, 0, Some(0)),
+            make_expansion_stage(3, 1, Some(1)),
+            make_expansion_stage(4, 2, Some(2)),
+        ];
+
+        let h1 = EntityId(1);
+
+        // Build stats rows (including pre-study).
+        let stats = vec![
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 0,
+                mean: 100.0,
+                std: 20.0,
+            },
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 1,
+                mean: 110.0,
+                std: 22.0,
+            },
+            SeasonalStats {
+                entity_id: h1,
+                stage_id: 2,
+                mean: 120.0,
+                std: 24.0,
+            },
+        ];
+        let stats_rows = seasonal_stats_to_rows(&stats, &stages);
+
+        // Build coefficient rows.
+        let ar_ests = vec![
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 0,
+                coefficients: vec![0.3],
+                residual_std_ratio: 0.9,
+            },
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 1,
+                coefficients: vec![0.4],
+                residual_std_ratio: 0.85,
+            },
+            ArCoefficientEstimate {
+                hydro_id: h1,
+                season_id: 2,
+                coefficients: vec![0.5],
+                residual_std_ratio: 0.8,
+            },
+        ];
+        let coeff_rows = ar_estimates_to_rows(&ar_ests, &stages);
+
+        // Assemble into InflowModel.
+        let inflow_models =
+            assemble_inflow_models(stats_rows, coeff_rows).expect("assembly should succeed");
+
+        // Should have entries for pre-study stages.
+        assert!(
+            inflow_models.iter().any(|m| m.stage_id < 0),
+            "expected pre-study InflowModel entries (negative stage_id)"
+        );
+
+        // Pre-study models should have correct stats from their season.
+        let prestudy_neg2 = inflow_models
+            .iter()
+            .find(|m| m.stage_id == -2)
+            .expect("InflowModel for stage -2");
+        assert!((prestudy_neg2.mean_m3s - 110.0).abs() < f64::EPSILON);
+        assert!((prestudy_neg2.std_m3s - 22.0).abs() < f64::EPSILON);
     }
 }

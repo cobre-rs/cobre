@@ -540,6 +540,11 @@ fn extract_sim_stage_result(
                 .map_or(&[], Vec::as_slice),
             col_scale: &ctx.templates[t].col_scale,
             row_scale: &ctx.templates[t].row_scale,
+            cumulative_discount_factor: ctx
+                .cumulative_discount_factors
+                .get(t)
+                .copied()
+                .unwrap_or(1.0),
         },
         ids.stage_id_u32,
     );
@@ -1323,6 +1328,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1417,6 +1423,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1501,6 +1508,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1583,6 +1591,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1667,6 +1676,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1748,6 +1758,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1829,6 +1840,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1907,6 +1919,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1972,6 +1985,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2080,6 +2094,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2182,6 +2197,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2269,6 +2285,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2367,6 +2384,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2464,6 +2482,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2576,6 +2595,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2851,6 +2871,7 @@ mod tests {
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2983,6 +3004,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[1],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3118,6 +3140,7 @@ mod tests {
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3422,6 +3445,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3518,6 +3542,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
                 ncs_max_gen: &[],
+                cumulative_discount_factors: &[],
             },
             &fcf,
             &TrainingContext {

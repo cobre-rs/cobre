@@ -1268,6 +1268,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -1342,6 +1343,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -1434,6 +1436,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         train(
             &mut solver,
@@ -1560,6 +1563,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -1632,6 +1636,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -1701,6 +1706,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -1778,6 +1784,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         train(
             &mut solver,
@@ -1865,6 +1872,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         train(
             &mut solver,
@@ -1962,6 +1970,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         train(
             &mut solver,
@@ -2070,6 +2079,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = train(
             &mut solver,
@@ -2152,6 +2162,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let outcome = train(
             &mut solver,
@@ -2243,6 +2254,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let outcome = train(
             &mut solver,
@@ -2315,6 +2327,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let outcome = train(
             &mut solver,

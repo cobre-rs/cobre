@@ -609,6 +609,7 @@ fn train_simulate_write_cycle() {
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts_per_stage,
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -754,6 +755,7 @@ fn train_simulate_write_cycle() {
             load_bus_indices: &[],
             block_counts_per_stage: &[],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         },
         &fcf,
         &TrainingContext {
@@ -1282,6 +1284,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         load_bus_indices: &[],
         block_counts_per_stage: &block_counts,
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
 
     let training_config = TrainingConfig {

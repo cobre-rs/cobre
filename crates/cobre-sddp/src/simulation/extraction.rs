@@ -215,6 +215,11 @@ pub struct StageExtractionSpec<'a> {
     /// Empty when no prescaling is applied.  Used to unscale row lower/upper
     /// bounds at the extraction boundary.
     pub row_scale: &'a [f64],
+    /// Cumulative discount factor for this stage (for reporting).
+    ///
+    /// Product of all one-step discount factors for transitions preceding
+    /// this stage. `1.0` for stage 0.
+    pub cumulative_discount_factor: f64,
 }
 
 impl StageExtractionSpec<'_> {
@@ -1445,6 +1450,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             3,
         );
@@ -1486,6 +1492,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1527,6 +1534,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1570,6 +1578,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1625,6 +1634,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             2,
         );
@@ -1662,6 +1672,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             stage_id,
         );
@@ -1705,6 +1716,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1854,6 +1866,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1950,6 +1963,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2212,6 +2226,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2298,6 +2313,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2395,6 +2411,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2505,6 +2522,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2572,6 +2590,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2678,6 +2697,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2748,6 +2768,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2822,6 +2843,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2912,6 +2934,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2999,6 +3022,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &col_scale,
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -3109,6 +3133,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );

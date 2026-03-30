@@ -107,6 +107,25 @@ pub struct StageTemplates {
     /// `hydro_productivities_per_stage[stage][h]` is the productivity of hydro `h`
     /// at stage `stage`, accounting for per-stage overrides.  FPHA hydros have 0.0.
     pub hydro_productivities_per_stage: Vec<Vec<f64>>,
+    /// Per-stage one-step discount factor for the transition departing stage `t`.
+    ///
+    /// `discount_factors[t] = 1 / (1 + r_t)^(Dt / 365.25)` where `r_t` is the
+    /// annual discount rate (global or per-transition override) and `Dt` is the
+    /// stage duration in days. When `annual_discount_rate == 0.0` and no
+    /// per-transition overrides exist, all entries are `1.0`.
+    ///
+    /// Length equals `templates.len()`. Computed at setup time and applied to
+    /// the theta objective coefficient in the LP template.
+    pub discount_factors: Vec<f64>,
+    /// Cumulative discount factor at each stage for reporting.
+    ///
+    /// `cumulative_discount_factors[0] = 1.0` (present value).
+    /// `cumulative_discount_factors[t] = cumulative_discount_factors[t-1] * discount_factors[t-1]`
+    /// for `t >= 1`.
+    ///
+    /// Length equals `templates.len()`. The present value of stage `t`'s
+    /// immediate cost is `cumulative_discount_factors[t] * immediate_cost_t`.
+    pub cumulative_discount_factors: Vec<f64>,
 }
 
 /// Construct a [`StageTemplate`] for a single study stage.
@@ -385,6 +404,8 @@ pub fn build_stage_templates(
             active_ncs_indices: Vec::new(),
             diversion_upstream: HashMap::new(),
             hydro_productivities_per_stage: Vec::new(),
+            discount_factors: Vec::new(),
+            cumulative_discount_factors: Vec::new(),
         });
     }
 
@@ -514,6 +535,11 @@ pub fn build_stage_templates(
         })
         .collect();
 
+    // Default discount factors to 1.0 (no discounting). The actual
+    // per-stage factors are computed from the PolicyGraph in
+    // StudySetup::from_broadcast_params and overwrite this field.
+    let discount_factors = vec![1.0; templates.len()];
+
     Ok(StageTemplates {
         templates,
         base_rows,
@@ -530,6 +556,9 @@ pub fn build_stage_templates(
         active_ncs_indices: active_ncs_indices_per_stage,
         diversion_upstream: diversion_upstream_output,
         hydro_productivities_per_stage,
+        discount_factors,
+        // Cumulative factors default to 1.0; overwritten by setup.rs.
+        cumulative_discount_factors: vec![1.0; n_study],
     })
 }
 

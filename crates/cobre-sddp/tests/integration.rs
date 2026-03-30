@@ -524,6 +524,7 @@ fn run_one_deterministic_pass(
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     train(
         &mut solver,
@@ -592,6 +593,7 @@ fn train_converges_with_mock_solver() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -679,6 +681,7 @@ fn train_lb_monotonically_nondecreasing() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     train(
         &mut solver,
@@ -753,6 +756,7 @@ fn train_emits_correct_event_sequence() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     train(
         &mut solver,
@@ -817,6 +821,7 @@ fn train_stops_at_iteration_limit() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -883,6 +888,7 @@ fn train_stops_on_graceful_shutdown() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -939,6 +945,7 @@ fn train_propagates_infeasible_error() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -1034,6 +1041,7 @@ fn d17_level1_cut_selection_convergence() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,
@@ -1175,6 +1183,7 @@ fn d18_lml1_cut_selection_convergence() {
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize, 1],
         ncs_max_gen: &[],
+        cumulative_discount_factors: &[],
     };
     let result = train(
         &mut solver,

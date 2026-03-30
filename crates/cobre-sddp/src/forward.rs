@@ -1551,6 +1551,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1640,6 +1641,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1735,6 +1737,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2113,6 +2116,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -2257,6 +2261,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
 
         // Run with 1 workspace.
@@ -2378,6 +2383,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -2639,6 +2645,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let _ = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2797,6 +2804,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3010,6 +3018,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -3118,6 +3127,7 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3221,6 +3231,7 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3301,6 +3312,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1, 1, 1],
             ncs_max_gen: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

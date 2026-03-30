@@ -52,6 +52,13 @@ pub(crate) struct ScratchBuffers {
     /// Filled by `transform_inflow_noise` with `base_h + sigma_h * eta_effective_h`
     /// for each hydro. Used by `PatchBuffer::fill_z_inflow_patches` (Category 5).
     pub(crate) z_inflow_rhs_buf: Vec<f64>,
+    /// Scratch buffer for effective (possibly clamped) eta values per hydro.
+    ///
+    /// Filled by [`compute_effective_eta`] with either raw eta (no truncation)
+    /// or clamped eta (truncation active). Sized to `hydro_count`.
+    ///
+    /// [`compute_effective_eta`]: crate::noise::compute_effective_eta
+    pub(crate) effective_eta_buf: Vec<f64>,
     /// Scratch buffer for unscaled primal values.
     ///
     /// When column scaling is active, solver primal values are in scaled
@@ -117,6 +124,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
+                effective_eta_buf: Vec::with_capacity(hydro_count),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -173,6 +181,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                     z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
+                    effective_eta_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -231,6 +240,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
                     row_lower_buf: Vec::new(),
                     z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
+                    effective_eta_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },

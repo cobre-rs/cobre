@@ -51,6 +51,18 @@ pub enum InflowNonNegativityMethod {
         /// Penalty coefficient `c^{inf}` applied to each slack unit.
         cost: f64,
     },
+
+    /// Combined truncation and penalty enforcement.
+    ///
+    /// The PAR(p) noise is clamped (identical to [`Truncation`]) so that the
+    /// mean + noise inflow is never negative. In addition, penalty slack
+    /// columns are added (identical to [`Penalty`]) so the solver can "undo"
+    /// part of the clamping if cost-effective. This matches SPTcpp's
+    /// `truncamento_penalizacao` mode.
+    TruncationWithPenalty {
+        /// Legacy global cost (deprecated in favor of penalty cascade).
+        cost: f64,
+    },
 }
 
 impl InflowNonNegativityMethod {
@@ -66,7 +78,11 @@ impl InflowNonNegativityMethod {
     /// ```
     #[must_use]
     pub fn has_slack_columns(&self) -> bool {
-        matches!(self, InflowNonNegativityMethod::Penalty { .. })
+        matches!(
+            self,
+            InflowNonNegativityMethod::Penalty { .. }
+                | InflowNonNegativityMethod::TruncationWithPenalty { .. }
+        )
     }
 
     /// Returns the penalty cost when slack columns are active, or `None`.
@@ -82,7 +98,8 @@ impl InflowNonNegativityMethod {
     #[must_use]
     pub fn penalty_cost(&self) -> Option<f64> {
         match self {
-            InflowNonNegativityMethod::Penalty { cost } => Some(*cost),
+            InflowNonNegativityMethod::Penalty { cost }
+            | InflowNonNegativityMethod::TruncationWithPenalty { cost } => Some(*cost),
             InflowNonNegativityMethod::Truncation | InflowNonNegativityMethod::None => None,
         }
     }
@@ -100,6 +117,9 @@ impl From<&cobre_io::config::InflowNonNegativityConfig> for InflowNonNegativityM
         match cfg.method.as_str() {
             "truncation" => InflowNonNegativityMethod::Truncation,
             "penalty" => InflowNonNegativityMethod::Penalty {
+                cost: cfg.penalty_cost,
+            },
+            "truncation_with_penalty" => InflowNonNegativityMethod::TruncationWithPenalty {
                 cost: cfg.penalty_cost,
             },
             _ => InflowNonNegativityMethod::None,
@@ -222,5 +242,34 @@ mod tests {
             let method = InflowNonNegativityMethod::from(&cfg);
             assert_eq!(method.penalty_cost(), Some(expected_cost));
         }
+    }
+
+    // ── TruncationWithPenalty ───────────────────────────────────────────────
+
+    #[test]
+    fn truncation_with_penalty_has_slack_columns() {
+        assert!(
+            InflowNonNegativityMethod::TruncationWithPenalty { cost: 100.0 }.has_slack_columns()
+        );
+    }
+
+    #[test]
+    fn truncation_with_penalty_cost() {
+        assert_eq!(
+            InflowNonNegativityMethod::TruncationWithPenalty { cost: 500.0 }.penalty_cost(),
+            Some(500.0)
+        );
+    }
+
+    #[test]
+    fn test_inflow_method_conversion_truncation_with_penalty() {
+        let cfg = InflowNonNegativityConfig {
+            method: "truncation_with_penalty".to_string(),
+            penalty_cost: 750.0,
+        };
+        assert_eq!(
+            InflowNonNegativityMethod::from(&cfg),
+            InflowNonNegativityMethod::TruncationWithPenalty { cost: 750.0 }
+        );
     }
 }

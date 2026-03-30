@@ -74,7 +74,8 @@ pub(crate) fn transform_inflow_noise(
     let has_par = par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros;
 
     match inflow_method {
-        InflowNonNegativityMethod::Truncation => {
+        InflowNonNegativityMethod::Truncation
+        | InflowNonNegativityMethod::TruncationWithPenalty { .. } => {
             let max_order = indexer.max_par_order;
             let lag_len = max_order * n_hydros;
             scratch.lag_matrix_buf.clear();

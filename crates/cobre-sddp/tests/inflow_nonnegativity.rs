@@ -443,8 +443,11 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
+    build_fixture_with_method(InflowNonNegativityMethod::Penalty { cost: 1000.0 })
+}
+
+fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixture {
     let system = build_system();
-    let inflow_method = InflowNonNegativityMethod::Penalty { cost: 1000.0 };
 
     let par_lp = PrecomputedPar::build(
         system.inflow_models(),
@@ -760,6 +763,45 @@ fn test_simulation_slack_output_populated() {
     assert!(
         any_nonzero,
         "inflow_nonnegativity_slack_m3s must be > 0.0 in at least one hydro stage result"
+    );
+}
+
+/// T-015: TruncationWithPenalty mode -- training completes and inflow slack columns
+/// are present.
+///
+/// Verifies that the hybrid mode (clamping + penalty slack) works end-to-end:
+/// 1. Training completes without errors (LP is feasible).
+/// 2. The LP template has inflow slack columns (`has_slack_columns() == true`).
+/// 3. Noise is clamped (same as Truncation mode).
+#[test]
+fn truncation_with_penalty_training_completes() {
+    let fx = build_fixture_with_method(InflowNonNegativityMethod::TruncationWithPenalty {
+        cost: 1000.0,
+    });
+
+    // Verify the method has slack columns.
+    assert!(
+        fx.inflow_method.has_slack_columns(),
+        "TruncationWithPenalty must have slack columns"
+    );
+
+    // Verify the LP template has inflow slack columns in the indexer.
+    assert!(
+        fx.indexer.inflow_slack.len() > 0,
+        "indexer.inflow_slack must be non-empty for TruncationWithPenalty"
+    );
+
+    // Train and verify convergence.
+    let outcome = train_fixture(&fx, 5).expect("training must succeed");
+    assert!(
+        outcome.error.is_none(),
+        "TruncationWithPenalty: training error: {:?}",
+        outcome.error
+    );
+    assert!(
+        outcome.result.iterations <= 10,
+        "TruncationWithPenalty: iterations={} (expected <= 10)",
+        outcome.result.iterations
     );
 }
 

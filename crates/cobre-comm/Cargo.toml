@@ -14,7 +14,7 @@ categories = ["science", "network-programming"]
 
 [dependencies]
 thiserror = "2"
-ferrompi = { version = "0.2", optional = true }
+ferrompi = { version = "0.2.2", optional = true }
 
 [features]
 mpi = ["dep:ferrompi"]

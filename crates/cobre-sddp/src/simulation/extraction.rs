@@ -31,7 +31,7 @@ use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
 use crate::StageIndexer;
-use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry, M3S_TO_HM3};
+use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
@@ -266,19 +266,28 @@ fn extract_hydro_no_turbine(
         .unwrap_or(0.0)
         * COST_SCALE_FACTOR;
 
-    // Operational violation slacks: read from LP primals when present.
-    // Slack columns are in hm3 (outflow/turbine) or MWh (generation);
-    // output fields are in m3/s or MW, so we divide by zeta or total_hours.
+    // Operational violation slacks are per-block in rate units (m3/s or MW).
+    // Stage-level: hours-weighted average across blocks.
     let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
         if indexer.has_operational_violations {
+            let n_blks = indexer.n_blks;
+            let base_tb = indexer.turbine_below_slack.start + h * n_blks;
+            let base_ob = indexer.outflow_below_slack.start + h * n_blks;
+            let base_oa = indexer.outflow_above_slack.start + h * n_blks;
+            let base_gb = indexer.generation_below_slack.start + h * n_blks;
+            let mut tb = 0.0_f64;
+            let mut ob = 0.0_f64;
+            let mut oa = 0.0_f64;
+            let mut gb = 0.0_f64;
             let total_hours: f64 = spec.block_hours.iter().sum();
-            let zeta = total_hours * M3S_TO_HM3;
-            (
-                view.primal[indexer.turbine_below_slack.start + h] / zeta,
-                view.primal[indexer.outflow_below_slack.start + h] / zeta,
-                view.primal[indexer.outflow_above_slack.start + h] / zeta,
-                view.primal[indexer.generation_below_slack.start + h] / total_hours,
-            )
+            for blk in 0..n_blks {
+                let w = spec.block_hours[blk] / total_hours;
+                tb += view.primal[base_tb + blk] * w;
+                ob += view.primal[base_ob + blk] * w;
+                oa += view.primal[base_oa + blk] * w;
+                gb += view.primal[base_gb + blk] * w;
+            }
+            (tb, ob, oa, gb)
         } else {
             (0.0, 0.0, 0.0, 0.0)
         };
@@ -370,21 +379,6 @@ fn extract_hydro_per_block<'a>(
         .unwrap_or(0.0)
         * COST_SCALE_FACTOR;
 
-    // Operational violation slacks: stage-level (same value for all blocks).
-    let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
-        if indexer.has_operational_violations {
-            let total_hours: f64 = spec.block_hours.iter().sum();
-            let zeta = total_hours * M3S_TO_HM3;
-            (
-                view.primal[indexer.turbine_below_slack.start + h] / zeta,
-                view.primal[indexer.outflow_below_slack.start + h] / zeta,
-                view.primal[indexer.outflow_above_slack.start + h] / zeta,
-                view.primal[indexer.generation_below_slack.start + h] / total_hours,
-            )
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        };
-
     // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
     // can read generation from the LP `g_{h,k}` column rather than computing
     // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
@@ -442,6 +436,20 @@ fn extract_hydro_per_block<'a>(
         } else {
             turbined * spec.hydro_productivities[h]
         };
+
+        // Operational violation slacks: read per-block value directly (m3/s or MW).
+        let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
+            if indexer.has_operational_violations {
+                let n = indexer.n_blks;
+                (
+                    view.primal[indexer.turbine_below_slack.start + h * n + b],
+                    view.primal[indexer.outflow_below_slack.start + h * n + b],
+                    view.primal[indexer.outflow_above_slack.start + h * n + b],
+                    view.primal[indexer.generation_below_slack.start + h * n + b],
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
 
         #[allow(clippy::cast_possible_truncation)]
         SimulationHydroResult {

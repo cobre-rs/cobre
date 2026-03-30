@@ -1739,7 +1739,7 @@ fn d20_operational_violations() {
 }
 
 /// Recorded empirically with initial_storage=10 hm3.
-pub const D20_EXPECTED_COST: f64 = 388_210_222.222_222;
+pub const D20_EXPECTED_COST: f64 = 195_744_444.444_444_48;
 
 /// LP consistency test: cost consistency between outflow violation slacks
 /// and `hydro_violation_cost`. 1 hydro (min_outflow=50 m3/s), 1 thermal,
@@ -1839,10 +1839,10 @@ fn d21_min_outflow_regression() {
         "D21: expected non-zero outflow_slack_below_m3s"
     );
 
-    // Verify cost consistency: hydro_violation_cost = slack * hours^2 * M3S_TO_HM3 * penalty.
+    // Verify cost consistency: hydro_violation_cost = slack_m3s * penalty * hours.
+    // Per-block formulation: slack is in m3/s, objective = penalty * block_hours.
     let penalty = 5000.0_f64;
     let hours = 730.0_f64;
-    let m3s_to_hm3 = 3_600.0 / 1_000_000.0;
 
     let mut total_hydro_violation_cost = 0.0;
     for (s, stage_result) in scenario.stages.iter().enumerate() {
@@ -1853,7 +1853,7 @@ fn d21_min_outflow_regression() {
         total_hydro_violation_cost += stage_violation_cost;
 
         if slack_m3s > 1e-10 {
-            let expected_cost = slack_m3s * hours * hours * m3s_to_hm3 * penalty;
+            let expected_cost = slack_m3s * penalty * hours;
             let cost_diff = (stage_violation_cost - expected_cost).abs();
             assert!(
                 cost_diff < 1e-2,
@@ -1916,7 +1916,7 @@ fn d21_min_outflow_regression() {
         // 3. outflow_violation_below_cost matches the formula.
         let slack_m3s = stage_result.hydros[0].outflow_slack_below_m3s;
         if slack_m3s > 1e-10 {
-            let expected_below_cost = slack_m3s * hours * hours * m3s_to_hm3 * penalty;
+            let expected_below_cost = slack_m3s * penalty * hours;
             assert!(
                 (cost.outflow_violation_below_cost - expected_below_cost).abs() < 1e-2,
                 "D21 stage {s}: outflow_violation_below_cost={}, expected={}",
@@ -1939,7 +1939,139 @@ fn d21_min_outflow_regression() {
 }
 
 /// Recorded empirically with initial_storage=5 hm3 and inflow=10 m3/s.
-pub const D21_EXPECTED_COST: f64 = 749_786_555.555_555_5;
+pub const D21_EXPECTED_COST: f64 = 285_716_111.111_111_1;
+
+/// D22: Multi-block per-block min outflow regression test.
+///
+/// 1 hydro (min_outflow=30 m3/s), 1 thermal, 3 blocks per stage (200h, 300h, 230h),
+/// inflow=10 m3/s. Violation of 20 m3/s in every block at penalty 5000 $/m3/s.
+/// Validates that per-block constraints prevent the optimizer from concentrating
+/// flow into one block while starving others.
+#[test]
+fn d22_per_block_min_outflow() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d22-per-block-min-outflow");
+
+    // Create scenario parquet files (deterministic: std=0).
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![20.0, 20.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
+        .expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::try_new(
+        Arc::clone(&inflow_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![10.0, 10.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("inflow RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
+        .expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    // Train + simulate.
+    let (result, scenario_results, summary) = run_with_simulation(case_dir);
+
+    assert!(
+        result.iterations <= 20,
+        "D22: iterations={} (expected <= 20)",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D22: gap={:.2e} (expected < 1e-6)",
+        result.final_gap
+    );
+    assert_cost(result.final_lb, D22_EXPECTED_COST, 1e-2, "D22");
+    assert_eq!(summary.n_scenarios, 1);
+    assert_cost(
+        summary.mean_cost,
+        result.final_lb,
+        1e-2,
+        "D22-sim-vs-training",
+    );
+
+    // Verify per-block outflow violation slacks.
+    let scenario = &scenario_results[0];
+    let block_hours = [200.0_f64, 300.0, 230.0];
+    let penalty = 5000.0_f64;
+
+    for (s, stage_result) in scenario.stages.iter().enumerate() {
+        // Per-block results: 1 hydro * 3 blocks = 3 rows.
+        assert_eq!(
+            stage_result.hydros.len(),
+            3,
+            "D22 stage {s}: expected 3 per-block hydro rows"
+        );
+
+        for (b, hr) in stage_result.hydros.iter().enumerate() {
+            // Each block should have non-zero outflow violation (inflow=10 < min_outflow=30).
+            assert!(
+                hr.outflow_slack_below_m3s > 1e-6,
+                "D22 stage {s} block {b}: outflow_slack_below_m3s should be > 0, got {}",
+                hr.outflow_slack_below_m3s
+            );
+        }
+
+        // Per-block constraints produce different slack values per block because
+        // the penalty cost is proportional to block_hours. The optimizer concentrates
+        // available outflow into blocks with higher penalty costs (longer blocks).
+        // This is the intended per-block behavior: each block enforces its own bound.
+
+        // Total violation cost for this stage should match the sum of per-block costs.
+        assert_eq!(stage_result.costs.len(), 1);
+        let total_violation_cost = stage_result.costs[0].hydro_violation_cost;
+        let expected_total: f64 = stage_result
+            .hydros
+            .iter()
+            .enumerate()
+            .map(|(b, hr)| hr.outflow_slack_below_m3s * penalty * block_hours[b])
+            .sum();
+        assert!(
+            (total_violation_cost - expected_total).abs() < 1e-2,
+            "D22 stage {s}: hydro_violation_cost={total_violation_cost}, expected={expected_total}"
+        );
+    }
+}
+
+/// Recorded empirically with multi-block (3 blocks) per-block min outflow.
+pub const D22_EXPECTED_COST: f64 = 140_376_666.666_666_66;
 
 /// Real-case validation: convertido2 (158 hydros) with truncation method.
 ///

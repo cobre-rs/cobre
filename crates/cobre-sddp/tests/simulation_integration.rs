@@ -1225,19 +1225,21 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     let total_hours = 744.0_f64;
     let m3s_to_hm3 = 3_600.0 / 1_000_000.0;
     let zeta = total_hours * m3s_to_hm3;
-    let expected_row_lower = 50.0 * zeta;
+    // Per-block formulation: row_lower is in rate units (m3/s), not volume.
+    let expected_row_lower = 50.0;
     assert!(
         (t0.row_lower[min_outflow_row] - expected_row_lower).abs() < 1e-10,
-        "min_outflow row_lower = {}, expected {} (= 50.0 * zeta)",
+        "min_outflow row_lower = {}, expected {} (rate units m3/s)",
         t0.row_lower[min_outflow_row],
         expected_row_lower
     );
 
     // Inject a sentinel non-zero value at the slack column in the primal.
-    let sentinel_hm3 = 5.0;
-    let expected_slack_m3s = sentinel_hm3 / zeta;
+    // Per-block: the slack column value IS in m3/s, no conversion needed.
+    let sentinel_m3s = 5.0;
+    let expected_slack_m3s = sentinel_m3s;
     let mut solver = SizedMockSolver::new(t0.num_cols, t0.num_rows);
-    solver.set_primal(slack_col, sentinel_hm3);
+    solver.set_primal(slack_col, sentinel_m3s);
 
     let templates = vec![t0.clone(); n_stages];
     let base_rows = vec![templates_result.base_rows[0]; n_stages];
@@ -1323,7 +1325,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     let io_thread = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
     let mut sim_solver = SizedMockSolver::new(t0.num_cols, t0.num_rows);
-    sim_solver.set_primal(slack_col, sentinel_hm3);
+    sim_solver.set_primal(slack_col, sentinel_m3s);
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
         sim_solver,
@@ -1382,7 +1384,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     assert!(
         found_nonzero_slack,
         "Expected at least one hydro result with outflow_slack_below_m3s = {expected_slack_m3s:.6} \
-         (sentinel_hm3={sentinel_hm3} / zeta={zeta}), but all were zero. \
+         (sentinel_m3s={sentinel_m3s} / zeta={zeta}), but all were zero. \
          This indicates the extraction path does not read from the slack column.",
     );
 }

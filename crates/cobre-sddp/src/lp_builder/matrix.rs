@@ -717,11 +717,9 @@ pub(super) fn fill_load_balance_entries(
                     // This branch should not be reached because FPHA hydros are handled
                     // by the `if let Some(local_idx) = fpha_local[h_idx]` branch above.
                     // If we get here, the FPHA local-index table is inconsistent.
-                    debug_assert!(
-                        false,
+                    unreachable!(
                         "non-FPHA branch reached for FPHA resolved model at hydro {h_idx}"
                     );
-                    0.0
                 }
             };
             if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {

@@ -265,6 +265,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                 }
             }
 
+            // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
                 setup.forward_passes(),
@@ -327,6 +328,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                 ));
             }
 
+            // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
                 setup.forward_passes(),

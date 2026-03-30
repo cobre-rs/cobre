@@ -3024,6 +3024,10 @@ mod tests {
         primal[14] = 0.5;
         obj[14] = 20.0;
 
+        // withdrawal (pos): h0=0.0, h1=0.3 * 15.0  => 4.5 * 1000 = 4500
+        primal[17] = 0.3;
+        obj[17] = 15.0;
+
         // Total objective for the LP (sum of primal * obj):
         let total_obj: f64 = primal.iter().zip(obj.iter()).map(|(p, o)| p * o).sum();
 
@@ -3074,7 +3078,7 @@ mod tests {
         let expected_outflow_above = (1.0 * 5.0) * 1000.0;
         let expected_turbined = (4.0 * 8.0) * 1000.0;
         let expected_generation = (6.0 * 3.0) * 1000.0;
-        let expected_withdrawal = (0.5 * 20.0) * 1000.0;
+        let expected_withdrawal = (0.5 * 20.0 + 0.3 * 15.0) * 1000.0;
         let expected_evaporation = 0.0; // no evaporation hydros
 
         assert!(

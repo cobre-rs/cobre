@@ -364,13 +364,10 @@ fn convert(raw: RawPenalties) -> GlobalPenaltyDefaults {
             .hydro
             .water_withdrawal_violation_neg_cost
             .unwrap_or(raw.hydro.water_withdrawal_violation_cost),
-        // Over-evaporation default: 100x the base cost (backward compatibility
-        // with OVER_EVAPORATION_COST_MULTIPLIER). When the user specifies an
-        // explicit pos cost in penalties.json, it is used as-is.
         evaporation_violation_pos_cost: raw
             .hydro
             .evaporation_violation_pos_cost
-            .unwrap_or(raw.hydro.evaporation_violation_cost * 100.0),
+            .unwrap_or(raw.hydro.evaporation_violation_cost),
         evaporation_violation_neg_cost: raw
             .hydro
             .evaporation_violation_neg_cost
@@ -514,7 +511,7 @@ mod tests {
                 water_withdrawal_violation_cost: 1000.0,
                 water_withdrawal_violation_pos_cost: 1000.0,
                 water_withdrawal_violation_neg_cost: 1000.0,
-                evaporation_violation_pos_cost: 500_000.0, // 5000 * 100 (over-evaporation default)
+                evaporation_violation_pos_cost: 5000.0,
                 evaporation_violation_neg_cost: 5000.0,
             },
             ncs_curtailment_cost: 0.005,

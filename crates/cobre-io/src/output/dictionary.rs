@@ -1375,8 +1375,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 162,
-            "variables.csv must have exactly 162 data rows (one per column across all 14 schemas)"
+            row_count, 164,
+            "variables.csv must have exactly 164 data rows (one per column across all 14 schemas)"
         );
     }
 

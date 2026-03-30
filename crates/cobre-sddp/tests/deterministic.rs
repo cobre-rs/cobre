@@ -2110,3 +2110,177 @@ fn d20_convertido2_truncation_feasibility() {
         result.iterations
     );
 }
+
+/// D23: Bidirectional withdrawal -- over-withdrawal activation.
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 1 thermal (T0: 200 MW at $100/MWh), 1 hydro (H0: constant
+///   productivity 1.0 MW/(m³/s), max turbine 20 m³/s, reservoir 0-10 hm³)
+/// - Deterministic inflows: 50.0 m³/s per stage (high, to create water excess)
+/// - Water withdrawal target: 5 m³/s per stage
+/// - Deterministic load: 80.0 MW per stage
+/// - Initial storage: 5.0 hm³
+/// - 2 stages x 730 h, `inflow_non_negativity: none`
+///
+/// ## Penalty structure (asymmetric)
+///
+/// - `water_withdrawal_violation_pos_cost`: 1.0 (cheap over-withdrawal)
+/// - `water_withdrawal_violation_neg_cost`: 10,000.0 (expensive under-withdrawal)
+/// - `spillage_cost`: 1,000.0 (expensive spillage)
+///
+/// ## Why over-withdrawal activates
+///
+/// kappa = 730 * 3600 / 1e6 = 2.628 hm³/(m³/s)
+///
+/// Water excess per stage: inflow (50) - withdrawal_target (5) - max_turbine (20) = 25 m³/s
+/// Storage fill from excess: 25 * 2.628 = 65.7 hm³ >> max_storage (10 hm³)
+///
+/// The solver must shed excess water. Two options:
+/// 1. Spill: cost = 1,000 * 730 = 730,000 per m³/s
+/// 2. Over-withdraw: cost = 1.0 * 730 = 730 per m³/s
+///
+/// Over-withdrawal is ~1000x cheaper, so the solver strongly prefers `ww_pos > 0`.
+#[test]
+fn d23_bidirectional_withdrawal() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d23-bidirectional-withdrawal");
+
+    // Create scenario parquet files (deterministic: std=0).
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![80.0, 80.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
+        .expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::try_new(
+        Arc::clone(&inflow_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![50.0, 50.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("inflow RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
+        .expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    // Create hydro_bounds parquet with withdrawal target.
+    let constraints_dir = case_dir.join("constraints");
+    std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
+
+    let bounds_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("water_withdrawal_m3s", DataType::Float64, false),
+    ]));
+    let bounds_batch = RecordBatch::try_new(
+        Arc::clone(&bounds_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![5.0, 5.0])),
+        ],
+    )
+    .expect("bounds RecordBatch");
+    let file = std::fs::File::create(constraints_dir.join("hydro_bounds.parquet"))
+        .expect("create bounds parquet");
+    let mut writer = ArrowWriter::try_new(file, bounds_schema, None).expect("ArrowWriter");
+    writer.write(&bounds_batch).expect("write bounds batch");
+    writer.close().expect("close bounds writer");
+
+    // Train + simulate.
+    let (result, scenario_results, _summary) = run_with_simulation(case_dir);
+
+    assert!(
+        result.iterations <= 20,
+        "D23: iterations={} (expected <= 20)",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D23: gap={:.2e} (expected < 1e-6)",
+        result.final_gap
+    );
+
+    // AC-1: over-withdrawal slack is activated in at least one stage.
+    assert_eq!(scenario_results.len(), 1);
+    let scenario = &scenario_results[0];
+    assert_eq!(scenario.stages.len(), 2);
+
+    let mut found_ww_pos = false;
+    for stage_result in &scenario.stages {
+        for hydro_result in &stage_result.hydros {
+            if hydro_result.water_withdrawal_violation_pos_m3s > 1e-10 {
+                found_ww_pos = true;
+            }
+            // AC-2: under-withdrawal should NOT activate (neg cost is high).
+            assert!(
+                hydro_result.water_withdrawal_violation_neg_m3s < 1e-10,
+                "D23: unexpected under-withdrawal violation: {}",
+                hydro_result.water_withdrawal_violation_neg_m3s
+            );
+        }
+    }
+    assert!(
+        found_ww_pos,
+        "D23: expected non-zero water_withdrawal_violation_pos_m3s (over-withdrawal)"
+    );
+
+    // AC-3: water balance identity holds for each stage.
+    // V_out = V_in + kappa * (inflow - ww_target + ww_neg - ww_pos - turbined - spillage)
+    let kappa = 730.0 * 3600.0 / 1e6; // hm3 per (m3/s)
+    let ww_target = 5.0;
+    let inflow = 50.0;
+
+    for (s, stage_result) in scenario.stages.iter().enumerate() {
+        assert_eq!(stage_result.hydros.len(), 1);
+        let h = &stage_result.hydros[0];
+
+        let net_flow = inflow - ww_target + h.water_withdrawal_violation_neg_m3s
+            - h.water_withdrawal_violation_pos_m3s
+            - h.turbined_m3s
+            - h.spillage_m3s;
+        let expected_v_out = h.storage_initial_hm3 + kappa * net_flow;
+        let diff = (h.storage_final_hm3 - expected_v_out).abs();
+        assert!(
+            diff < 1e-6,
+            "D23 stage {s}: water balance mismatch: V_out={}, expected={expected_v_out}, diff={diff}",
+            h.storage_final_hm3
+        );
+    }
+}

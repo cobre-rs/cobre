@@ -1686,14 +1686,14 @@ mod tests {
         let block_durations = vec![vec![720.0_f64], vec![744.0_f64]];
 
         let mut r0 = make_hydro_record(0, Some(0), 1); // generation_mw = 50.0
-        r0.water_withdrawal_violation_m3s = 2.5; // nonzero for round-trip test
+        r0.water_withdrawal_violation_pos_m3s = 2.5; // nonzero for round-trip test
         let r1 = make_hydro_record(1, Some(0), 2); // generation_mw = 50.0
         let records = vec![&r0, &r1];
 
         let batch =
             build_hydros_batch(&records, &block_durations).expect("hydros batch must build");
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 29, "hydros schema has 29 columns");
+        assert_eq!(batch.num_columns(), 31, "hydros schema has 31 columns");
 
         let gen_mwh_col = batch
             .column_by_name("generation_mwh")
@@ -1732,12 +1732,12 @@ mod tests {
         assert_eq!(outflow_arr.value(1), 90.0);
 
         let ww_col = batch
-            .column_by_name("water_withdrawal_violation_neg_m3s")
-            .expect("water_withdrawal_violation_neg_m3s column must exist");
+            .column_by_name("water_withdrawal_violation_pos_m3s")
+            .expect("water_withdrawal_violation_pos_m3s column must exist");
         let ww_arr = ww_col
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
-            .expect("water_withdrawal_violation_neg_m3s must be Float64Array");
+            .expect("water_withdrawal_violation_pos_m3s must be Float64Array");
         assert_eq!(
             ww_arr.value(0),
             2.5,

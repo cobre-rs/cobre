@@ -2644,12 +2644,14 @@ mod tests {
             "evaporation_m3s should be Some(3.5)"
         );
         assert!(
-            result.hydros[0].evaporation_violation_m3s.abs() < 1e-12,
-            "evaporation_violation_m3s should be 0.0"
+            result.hydros[0].evaporation_violation_pos_m3s.abs() < 1e-12,
+            "evaporation_violation_pos_m3s should be 0.0"
         );
     }
 
-    /// Acceptance criterion: `evaporation_violation_m3s` equals the sum of the two slack columns.
+    /// Acceptance criterion: directional evaporation violations are extracted
+    /// separately from the LP's `f_evap_plus` (under-evaporation / neg) and
+    /// `f_evap_minus` (over-evaporation / pos) columns.
     #[test]
     fn evaporation_violation_is_sum_of_slacks() {
         let indexer = make_indexer_1h_evap_1blk();
@@ -2661,8 +2663,8 @@ mod tests {
         // primal[3] = theta = 0
         // primal[6] = diversion h0 b0 (zero)
         primal[7] = 2.0; // Q_ev
-        primal[8] = 0.5; // f_evap_plus — acceptance criterion value
-        primal[9] = 0.0; // f_evap_minus
+        primal[8] = 0.5; // f_evap_plus (under-evaporation -> neg)
+        primal[9] = 0.0; // f_evap_minus (over-evaporation -> pos)
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2705,10 +2707,17 @@ mod tests {
             0,
         );
 
+        // f_evap_plus (primal[8] = 0.5) maps to under-evaporation (neg).
         assert!(
-            (result.hydros[0].evaporation_violation_m3s - 0.5).abs() < 1e-12,
-            "evaporation_violation_m3s should be 0.5, got {}",
-            result.hydros[0].evaporation_violation_m3s
+            (result.hydros[0].evaporation_violation_neg_m3s - 0.5).abs() < 1e-12,
+            "evaporation_violation_neg_m3s should be 0.5, got {}",
+            result.hydros[0].evaporation_violation_neg_m3s
+        );
+        // f_evap_minus (primal[9] = 0.0) maps to over-evaporation (pos).
+        assert!(
+            result.hydros[0].evaporation_violation_pos_m3s.abs() < 1e-12,
+            "evaporation_violation_pos_m3s should be 0.0, got {}",
+            result.hydros[0].evaporation_violation_pos_m3s
         );
     }
 

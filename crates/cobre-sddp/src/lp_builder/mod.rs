@@ -160,13 +160,6 @@ pub(crate) const COST_SCALE_FACTOR: f64 = 1_000.0;
 /// area-volume curve may exceed the linear estimate near `v_max`).
 pub(crate) const Q_EV_SAFETY_MARGIN: f64 = 2.0;
 
-/// Historical multiplier for over-evaporation penalty (100x).
-/// No longer applied in the LP builder — the 100x is now embedded in the
-/// default `evaporation_violation_pos_cost` during penalties.json parsing.
-/// Retained for reference documentation only.
-#[allow(dead_code)]
-pub(crate) const OVER_EVAPORATION_COST_MULTIPLIER: f64 = 100.0;
-
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------

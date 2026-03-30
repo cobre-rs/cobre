@@ -7952,8 +7952,6 @@ mod tests {
     // Operational violation slack structural tests
     // ─────────────────────────────────────────────────────────────────────
 
-    use crate::lp_builder::M3S_TO_HM3;
-
     /// Build a system with 1 hydro, 1 bus, 2 blocks, active operational bounds.
     ///
     /// Block durations: 720.0h (heavy), 48.0h (light).

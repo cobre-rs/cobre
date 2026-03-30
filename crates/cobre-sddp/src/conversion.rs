@@ -283,9 +283,11 @@ mod tests {
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_pos_m3s: 0.0,
+            evaporation_violation_neg_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
-            water_withdrawal_violation_m3s: 0.0,
+            water_withdrawal_violation_pos_m3s: 0.0,
+            water_withdrawal_violation_neg_m3s: 0.0,
         }
     }
 

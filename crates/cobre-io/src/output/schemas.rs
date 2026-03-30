@@ -455,13 +455,12 @@ mod tests {
     #[test]
     fn hydros_schema_field_count_and_names() {
         let schema = hydros_schema();
-        // The spec (output-schemas.md SS5.2) defines 29 data columns.
-        // The ticket's acceptance criterion listed 26, which is a stale count;
-        // the spec is the authoritative source.
+        // The spec (output-schemas.md SS5.2) defines 31 data columns.
+        // Bidirectional withdrawal/evaporation slacks added pos/neg pairs.
         assert_eq!(
             schema.fields().len(),
-            29,
-            "hydros schema must have 29 fields"
+            31,
+            "hydros schema must have 31 fields"
         );
         let names = field_names(&schema);
         assert_eq!(
@@ -787,7 +786,7 @@ mod tests {
             .collect();
         let expected: &[(&str, usize)] = &[
             ("costs", 26),
-            ("hydros", 29),
+            ("hydros", 31),
             ("thermals", 10),
             ("exchanges", 11),
             ("buses", 10),

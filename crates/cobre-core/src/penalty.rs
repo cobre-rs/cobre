@@ -78,6 +78,8 @@ pub struct HydroPenaltyOverrides {
     pub evaporation_violation_pos_cost: Option<f64>,
     /// Override for under-evaporation violation cost [$/mm]. `None` = use symmetric.
     pub evaporation_violation_neg_cost: Option<f64>,
+    /// Override for inflow non-negativity cost [$/m³/s]. `None` = use global default.
+    pub inflow_nonnegativity_cost: Option<f64>,
 }
 
 /// Resolve a bus's deficit segments: use entity override if present, else global default.
@@ -102,6 +104,7 @@ pub struct HydroPenaltyOverrides {
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
 ///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
 ///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
+///         inflow_nonnegativity_cost: 1000.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -141,6 +144,7 @@ pub fn resolve_bus_deficit_segments(
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
 ///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
 ///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
+///         inflow_nonnegativity_cost: 1000.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -176,6 +180,7 @@ pub fn resolve_bus_excess_cost(
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
 ///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
 ///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
+///         inflow_nonnegativity_cost: 1000.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -214,6 +219,7 @@ pub fn resolve_line_exchange_cost(
 ///     evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
 ///     water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
 ///     evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
+///     inflow_nonnegativity_cost: 1000.0,
 /// };
 /// let global = GlobalPenaltyDefaults {
 ///     bus_deficit_segments: vec![],
@@ -289,6 +295,9 @@ pub fn resolve_hydro_penalties(
                 evaporation_violation_neg_cost: ov
                     .evaporation_violation_neg_cost
                     .unwrap_or(g.evaporation_violation_neg_cost),
+                inflow_nonnegativity_cost: ov
+                    .inflow_nonnegativity_cost
+                    .unwrap_or(g.inflow_nonnegativity_cost),
             }
         }
     }
@@ -315,6 +324,7 @@ pub fn resolve_hydro_penalties(
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
 ///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
 ///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
+///         inflow_nonnegativity_cost: 1000.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -364,6 +374,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 8.0,
                 evaporation_violation_pos_cost: 7.0,
                 evaporation_violation_neg_cost: 7.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
             ncs_curtailment_cost: 50.0,
         }
@@ -472,6 +483,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: Some(110.0),
             evaporation_violation_pos_cost: Some(100.0),
             evaporation_violation_neg_cost: Some(100.0),
+            inflow_nonnegativity_cost: Some(500.0),
         };
         let result = resolve_hydro_penalties(&Some(overrides), &global);
 
@@ -490,6 +502,7 @@ mod tests {
         assert!((result.water_withdrawal_violation_neg_cost - 110.0).abs() < f64::EPSILON);
         assert!((result.evaporation_violation_pos_cost - 100.0).abs() < f64::EPSILON);
         assert!((result.evaporation_violation_neg_cost - 100.0).abs() < f64::EPSILON);
+        assert!((result.inflow_nonnegativity_cost - 500.0).abs() < f64::EPSILON);
     }
 
     #[test]

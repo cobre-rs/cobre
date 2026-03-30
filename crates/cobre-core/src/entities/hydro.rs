@@ -85,6 +85,9 @@ pub struct HydroPenalties {
     pub evaporation_violation_pos_cost: f64,
     /// Penalty per mm of under-evaporation \[$/mm\].
     pub evaporation_violation_neg_cost: f64,
+    /// Penalty per m³/s of inflow non-negativity slack activation \[$/m³/s\].
+    /// Used by the LP builder when the inflow non-negativity method is `Penalty`.
+    pub inflow_nonnegativity_cost: f64,
 }
 
 /// Production function model for a hydro plant.
@@ -258,6 +261,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: v,
             evaporation_violation_pos_cost: v,
             evaporation_violation_neg_cost: v,
+            inflow_nonnegativity_cost: 1000.0,
         }
     }
     fn minimal_hydro(model: HydroGenerationModel) -> Hydro {
@@ -472,6 +476,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 11.0,
             evaporation_violation_pos_cost: 10.0,
             evaporation_violation_neg_cost: 10.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
 
         assert!((p.spillage_cost - 1.0).abs() < f64::EPSILON);
@@ -555,6 +560,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 8.0,
                 evaporation_violation_pos_cost: 7.0,
                 evaporation_violation_neg_cost: 7.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
         let json = serde_json::to_string(&hydro).unwrap();

@@ -166,13 +166,13 @@ pub(super) fn fill_stage_columns(
 
     // Inflow non-negativity slack columns (sigma_inf_h), one per hydro.
     // Bounds [0, +inf) come from vec initialisation; only objective needs writing.
+    // Per-plant cost from the penalty cascade (T-010).
     if ctx.has_penalty {
         let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
-        let penalty_cost = ctx.inflow_method.penalty_cost().unwrap_or(0.0);
-        let obj_coeff = penalty_cost * total_stage_hours;
         for h_idx in 0..layout.n_h {
             let col = layout.col_inflow_slack_start + h_idx;
-            objective[col] = obj_coeff;
+            let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+            objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
         }
     }
 

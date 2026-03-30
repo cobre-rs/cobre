@@ -240,6 +240,7 @@ fn build_system_with_one_hydro() -> cobre_core::System {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         },
     };
 
@@ -620,6 +621,7 @@ fn build_system_for_par1(n_hydros: usize) -> cobre_core::System {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         })
         .collect();

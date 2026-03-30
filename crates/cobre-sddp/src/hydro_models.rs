@@ -1774,6 +1774,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         }
     }
 

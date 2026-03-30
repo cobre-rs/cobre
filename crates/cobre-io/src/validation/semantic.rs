@@ -1365,6 +1365,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: v,
             evaporation_violation_pos_cost: v,
             evaporation_violation_neg_cost: v,
+            inflow_nonnegativity_cost: 1000.0,
         }
     }
 
@@ -1559,6 +1560,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 1.0,
                 evaporation_violation_pos_cost: 1.0,
                 evaporation_violation_neg_cost: 1.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
             ncs_curtailment_cost: 1.0,
         }
@@ -2444,6 +2446,7 @@ mod tests {
             spillage_cost: 1.0,
             diversion_cost: 1.0,
             fpha_turbined_cost: 2.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
         h
     }

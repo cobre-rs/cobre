@@ -619,6 +619,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         }
     }
 
@@ -805,6 +806,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -1354,6 +1356,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -1470,6 +1473,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: 0.0,
                     evaporation_violation_pos_cost: 0.0,
                     evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
                 bus: BusStagePenalties { excess_cost: 0.0 },
                 line: LineStagePenalties { exchange_cost: 0.0 },
@@ -1623,6 +1627,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
         let penalties = ResolvedPenalties::new(
             &PenaltiesCountsSpec {
@@ -1824,6 +1829,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -2459,6 +2465,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: 0.0,
                     evaporation_violation_pos_cost: 0.0,
                     evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
             })
             .collect();
@@ -2741,6 +2748,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -2918,6 +2926,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
 
         let make_hydro = |id: i32, gen_model: HydroGenerationModel| Hydro {
@@ -4471,6 +4480,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 0.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
         let make_h = |id: i32| Hydro {
             id: EntityId(id),
@@ -4758,6 +4768,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: evaporation_violation_cost,
                 evaporation_violation_neg_cost: evaporation_violation_cost,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -4868,6 +4879,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: 0.0,
                     evaporation_violation_pos_cost: evaporation_violation_cost,
                     evaporation_violation_neg_cost: evaporation_violation_cost,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
                 bus: BusStagePenalties { excess_cost: 0.0 },
                 line: LineStagePenalties { exchange_cost: 0.0 },
@@ -5816,6 +5828,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: water_withdrawal_violation_cost,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -5941,6 +5954,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: water_withdrawal_violation_cost,
                     evaporation_violation_pos_cost: 0.0,
                     evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
                 bus: BusStagePenalties { excess_cost: 0.0 },
                 line: LineStagePenalties { exchange_cost: 0.0 },
@@ -6262,6 +6276,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 2_000.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -6376,6 +6391,7 @@ mod tests {
             water_withdrawal_violation_neg_cost: 2_000.0,
             evaporation_violation_pos_cost: 0.0,
             evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         };
         let penalties = ResolvedPenalties::new(
             &PenaltiesCountsSpec {
@@ -6527,6 +6543,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 1_000.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -6640,6 +6657,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: 1_000.0,
                     evaporation_violation_pos_cost: 0.0,
                     evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
                 bus: BusStagePenalties { excess_cost: 0.0 },
                 line: LineStagePenalties { exchange_cost: 0.0 },
@@ -7590,6 +7608,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -8020,6 +8039,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 0.0,
                 evaporation_violation_pos_cost: 0.0,
                 evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -8143,6 +8163,7 @@ mod tests {
                     water_withdrawal_violation_neg_cost: 0.0,
                     evaporation_violation_pos_cost: 0.0,
                     evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
                 },
                 bus: BusStagePenalties { excess_cost: 0.0 },
                 line: LineStagePenalties { exchange_cost: 0.0 },

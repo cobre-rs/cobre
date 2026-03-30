@@ -354,6 +354,8 @@ pub(crate) struct RawHydroPenaltyOverrides {
     evaporation_violation_cost: Option<f64>,
     #[serde(default)]
     water_withdrawal_violation_cost: Option<f64>,
+    #[serde(default)]
+    inflow_nonnegativity_cost: Option<f64>,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -851,6 +853,7 @@ fn convert_penalty_overrides(raw: RawHydroPenaltyOverrides) -> HydroPenaltyOverr
         water_withdrawal_violation_neg_cost: raw.water_withdrawal_violation_cost,
         evaporation_violation_pos_cost: raw.evaporation_violation_cost,
         evaporation_violation_neg_cost: raw.evaporation_violation_cost,
+        inflow_nonnegativity_cost: raw.inflow_nonnegativity_cost,
     }
 }
 
@@ -925,6 +928,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 1_000.0,
                 evaporation_violation_pos_cost: 5_000.0,
                 evaporation_violation_neg_cost: 5_000.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
             ncs_curtailment_cost: 0.005,
         }

@@ -84,6 +84,11 @@ pub struct InflowNonNegativityConfig {
     pub method: String,
 
     /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"`.
+    ///
+    /// **Deprecated:** Use `penalties.json` -> `hydro.inflow_nonnegativity_cost`
+    /// instead. When both are specified, the penalty cascade takes precedence.
+    /// This field is retained for backward compatibility with existing cases
+    /// that do not yet have `inflow_nonnegativity_cost` in their `penalties.json`.
     pub penalty_cost: f64,
 }
 

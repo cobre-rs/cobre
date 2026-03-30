@@ -136,6 +136,7 @@ mod tests {
                 water_withdrawal_violation_neg_cost: 1_000.0,
                 evaporation_violation_pos_cost: 5_000.0,
                 evaporation_violation_neg_cost: 5_000.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
             ncs_curtailment_cost: 0.005,
         }

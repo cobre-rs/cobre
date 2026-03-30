@@ -8121,18 +8121,18 @@ mod tests {
             },
         );
 
-        // 4 slack column ranges each contain exactly 1 column (1 hydro).
-        assert_eq!(indexer.outflow_below_slack.len(), 1);
-        assert_eq!(indexer.outflow_above_slack.len(), 1);
-        assert_eq!(indexer.turbine_below_slack.len(), 1);
-        assert_eq!(indexer.generation_below_slack.len(), 1);
+        // 4 slack column ranges each contain n_hydros * n_blks = 1 * 2 = 2 columns.
+        assert_eq!(indexer.outflow_below_slack.len(), 2);
+        assert_eq!(indexer.outflow_above_slack.len(), 2);
+        assert_eq!(indexer.turbine_below_slack.len(), 2);
+        assert_eq!(indexer.generation_below_slack.len(), 2);
         assert!(indexer.has_operational_violations);
 
-        // 4 row ranges each contain exactly 1 row (1 hydro).
-        assert_eq!(indexer.min_outflow_rows.len(), 1);
-        assert_eq!(indexer.max_outflow_rows.len(), 1);
-        assert_eq!(indexer.min_turbine_rows.len(), 1);
-        assert_eq!(indexer.min_generation_rows.len(), 1);
+        // 4 row ranges each contain n_hydros * n_blks = 1 * 2 = 2 rows.
+        assert_eq!(indexer.min_outflow_rows.len(), 2);
+        assert_eq!(indexer.max_outflow_rows.len(), 2);
+        assert_eq!(indexer.min_turbine_rows.len(), 2);
+        assert_eq!(indexer.min_generation_rows.len(), 2);
 
         // All slack columns and constraint rows are within the template's range.
         assert!(
@@ -8254,9 +8254,10 @@ mod tests {
 
     #[test]
     fn operational_violation_objective_costs() {
-        // Penalty cost * total_hours / COST_SCALE_FACTOR.
+        // Per-block: penalty * block_hours / COST_SCALE_FACTOR.
         let result = build_active_violations_template();
         let t = &result.templates[0];
+        let n_blks = 2;
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8264,7 +8265,7 @@ mod tests {
                 n_thermals: 0,
                 n_lines: 0,
                 n_buses: 1,
-                n_blks: 2,
+                n_blks,
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
@@ -8274,34 +8275,34 @@ mod tests {
             },
         );
 
-        let total_hours = 720.0 + 48.0;
-        let expected = 1000.0 * total_hours / COST_SCALE_FACTOR;
-
-        for &col in &[
-            indexer.outflow_below_slack.start,
-            indexer.outflow_above_slack.start,
-            indexer.turbine_below_slack.start,
-            indexer.generation_below_slack.start,
-        ] {
-            assert!(
-                (t.objective[col] - expected).abs() < 1e-10,
-                "col {col}: objective = {}, expected = {}",
-                t.objective[col],
-                expected
-            );
+        let block_hours = [720.0, 48.0];
+        for blk in 0..n_blks {
+            let expected = 1000.0 * block_hours[blk] / COST_SCALE_FACTOR;
+            for &start in &[
+                indexer.outflow_below_slack.start,
+                indexer.outflow_above_slack.start,
+                indexer.turbine_below_slack.start,
+                indexer.generation_below_slack.start,
+            ] {
+                // Column for hydro 0, block `blk`: start + 0 * n_blks + blk.
+                let col = start + blk;
+                assert!(
+                    (t.objective[col] - expected).abs() < 1e-10,
+                    "col {col} (block {blk}): objective = {}, expected = {}",
+                    t.objective[col],
+                    expected
+                );
+            }
         }
     }
 
     #[test]
     fn min_outflow_row_bounds() {
+        // Per-block: RHS in rate units (m3/s), not volume.
         let result = build_active_violations_template();
         let t = &result.templates[0];
-        let total_hours = 720.0 + 48.0;
-        let zeta = total_hours * M3S_TO_HM3;
-        let expected_lower = 50.0 * zeta; // min_outflow = 50.0
+        let expected_lower = 50.0; // min_outflow_m3s
 
-        // Row index: after water_balance(1), load_balance(1*2), fpha(0), evap(0)
-        // The indexer tells us the row. Build it to match the template.
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8319,27 +8320,29 @@ mod tests {
             },
         );
 
-        let row = indexer.min_outflow_rows.start;
-        assert!(
-            (t.row_lower[row] - expected_lower).abs() < 1e-10,
-            "min_outflow row_lower = {}, expected {}",
-            t.row_lower[row],
-            expected_lower
-        );
-        assert_eq!(
-            t.row_upper[row],
-            f64::INFINITY,
-            "min_outflow row_upper must be +inf"
-        );
+        // Both blocks get the same RHS.
+        for blk in 0..2 {
+            let row = indexer.min_outflow_rows.start + blk;
+            assert!(
+                (t.row_lower[row] - expected_lower).abs() < 1e-10,
+                "min_outflow row_lower (block {blk}) = {}, expected {}",
+                t.row_lower[row],
+                expected_lower
+            );
+            assert_eq!(
+                t.row_upper[row],
+                f64::INFINITY,
+                "min_outflow row_upper must be +inf"
+            );
+        }
     }
 
     #[test]
     fn max_outflow_row_bounds() {
+        // Per-block: RHS in rate units (m3/s).
         let result = build_active_violations_template();
         let t = &result.templates[0];
-        let total_hours = 720.0 + 48.0;
-        let zeta = total_hours * M3S_TO_HM3;
-        let expected_upper = 800.0 * zeta; // max_outflow = 800.0
+        let expected_upper = 800.0; // max_outflow_m3s
 
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
@@ -8358,27 +8361,28 @@ mod tests {
             },
         );
 
-        let row = indexer.max_outflow_rows.start;
-        assert_eq!(
-            t.row_lower[row],
-            f64::NEG_INFINITY,
-            "max_outflow row_lower must be -inf"
-        );
-        assert!(
-            (t.row_upper[row] - expected_upper).abs() < 1e-10,
-            "max_outflow row_upper = {}, expected {}",
-            t.row_upper[row],
-            expected_upper
-        );
+        for blk in 0..2 {
+            let row = indexer.max_outflow_rows.start + blk;
+            assert_eq!(
+                t.row_lower[row],
+                f64::NEG_INFINITY,
+                "max_outflow row_lower must be -inf"
+            );
+            assert!(
+                (t.row_upper[row] - expected_upper).abs() < 1e-10,
+                "max_outflow row_upper (block {blk}) = {}, expected {}",
+                t.row_upper[row],
+                expected_upper
+            );
+        }
     }
 
     #[test]
     fn min_turbine_row_bounds() {
+        // Per-block: RHS in rate units (m3/s).
         let result = build_active_violations_template();
         let t = &result.templates[0];
-        let total_hours = 720.0 + 48.0;
-        let zeta = total_hours * M3S_TO_HM3;
-        let expected_lower = 10.0 * zeta; // min_turbined = 10.0
+        let expected_lower = 10.0; // min_turbined_m3s
 
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
@@ -8397,26 +8401,28 @@ mod tests {
             },
         );
 
-        let row = indexer.min_turbine_rows.start;
-        assert!(
-            (t.row_lower[row] - expected_lower).abs() < 1e-10,
-            "min_turbine row_lower = {}, expected {}",
-            t.row_lower[row],
-            expected_lower
-        );
-        assert_eq!(
-            t.row_upper[row],
-            f64::INFINITY,
-            "min_turbine row_upper must be +inf"
-        );
+        for blk in 0..2 {
+            let row = indexer.min_turbine_rows.start + blk;
+            assert!(
+                (t.row_lower[row] - expected_lower).abs() < 1e-10,
+                "min_turbine row_lower (block {blk}) = {}, expected {}",
+                t.row_lower[row],
+                expected_lower
+            );
+            assert_eq!(
+                t.row_upper[row],
+                f64::INFINITY,
+                "min_turbine row_upper must be +inf"
+            );
+        }
     }
 
     #[test]
     fn min_generation_row_bounds() {
+        // Per-block: RHS in rate units (MW), not MWh.
         let result = build_active_violations_template();
         let t = &result.templates[0];
-        let total_hours = 720.0 + 48.0;
-        let expected_lower = 5.0 * total_hours; // min_generation = 5.0
+        let expected_lower = 5.0; // min_generation_mw
 
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
@@ -8435,26 +8441,29 @@ mod tests {
             },
         );
 
-        let row = indexer.min_generation_rows.start;
-        assert!(
-            (t.row_lower[row] - expected_lower).abs() < 1e-10,
-            "min_generation row_lower = {}, expected {}",
-            t.row_lower[row],
-            expected_lower
-        );
-        assert_eq!(
-            t.row_upper[row],
-            f64::INFINITY,
-            "min_generation row_upper must be +inf"
-        );
+        for blk in 0..2 {
+            let row = indexer.min_generation_rows.start + blk;
+            assert!(
+                (t.row_lower[row] - expected_lower).abs() < 1e-10,
+                "min_generation row_lower (block {blk}) = {}, expected {}",
+                t.row_lower[row],
+                expected_lower
+            );
+            assert_eq!(
+                t.row_upper[row],
+                f64::INFINITY,
+                "min_generation row_upper must be +inf"
+            );
+        }
     }
 
     #[test]
     #[allow(clippy::cast_sign_loss)]
     fn min_outflow_matrix_coefficients() {
-        // Min outflow row: turbine, spillage, diversion per block + slack = +1.
+        // Per-block min outflow: q + s + d + slack = 1.0 per block-row.
         let result = build_active_violations_template();
         let t = &result.templates[0];
+        let n_blks = 2;
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8462,7 +8471,7 @@ mod tests {
                 n_thermals: 0,
                 n_lines: 0,
                 n_buses: 1,
-                n_blks: 2,
+                n_blks,
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
@@ -8472,53 +8481,42 @@ mod tests {
             },
         );
 
-        let tau_0 = 720.0 * M3S_TO_HM3;
-        let tau_1 = 48.0 * M3S_TO_HM3;
-        let row = indexer.min_outflow_rows.start;
+        for blk in 0..n_blks {
+            let row = indexer.min_outflow_rows.start + blk;
 
-        // Check turbine block 0
-        let entries = csc_entries_for_col(t, indexer.turbine.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
-            "turbine blk0 entry for min_outflow row: {:?}",
-            v
-        );
+            // Turbine column for this block: coefficient 1.0
+            let entries = csc_entries_for_col(t, indexer.turbine.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+                "turbine blk{blk} entry for min_outflow row: {v:?}"
+            );
 
-        // Check turbine block 1
-        let entries = csc_entries_for_col(t, indexer.turbine.start + 1);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - tau_1).abs() < 1e-15,
-            "turbine blk1 entry for min_outflow row: {:?}",
-            v
-        );
+            // Spillage column for this block: coefficient 1.0
+            let entries = csc_entries_for_col(t, indexer.spillage.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+                "spillage blk{blk} entry for min_outflow row: {v:?}"
+            );
 
-        // Check spillage block 0
-        let entries = csc_entries_for_col(t, indexer.spillage.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
-            "spillage blk0 entry for min_outflow row: {:?}",
-            v
-        );
-
-        // Check slack coefficient = +1.0
-        let entries = csc_entries_for_col(t, indexer.outflow_below_slack.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
-            "outflow_below slack entry: {:?}",
-            v
-        );
+            // Slack column for this block: coefficient 1.0
+            let entries = csc_entries_for_col(t, indexer.outflow_below_slack.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+                "outflow_below slack blk{blk}: {v:?}"
+            );
+        }
     }
 
     #[test]
     #[allow(clippy::cast_sign_loss)]
     fn max_outflow_matrix_slack_is_negative() {
-        // Max outflow row: slack coefficient = -1.0.
+        // Per-block max outflow row: slack coefficient = -1.0.
         let result = build_active_violations_template();
         let t = &result.templates[0];
+        let n_blks = 2;
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8526,7 +8524,7 @@ mod tests {
                 n_thermals: 0,
                 n_lines: 0,
                 n_buses: 1,
-                n_blks: 2,
+                n_blks,
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
@@ -8536,22 +8534,24 @@ mod tests {
             },
         );
 
-        let row = indexer.max_outflow_rows.start;
-        let entries = csc_entries_for_col(t, indexer.outflow_above_slack.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - (-1.0)).abs() < 1e-15,
-            "outflow_above slack entry must be -1.0, got {:?}",
-            v
-        );
+        for blk in 0..n_blks {
+            let row = indexer.max_outflow_rows.start + blk;
+            let entries = csc_entries_for_col(t, indexer.outflow_above_slack.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - (-1.0)).abs() < 1e-15,
+                "outflow_above slack blk{blk} must be -1.0, got {v:?}"
+            );
+        }
     }
 
     #[test]
     #[allow(clippy::cast_sign_loss)]
     fn min_turbine_matrix_only_turbine_cols() {
-        // Min turbine row: only turbine columns (no spillage, no diversion), slack = +1.
+        // Per-block min turbine: only turbine columns (no spillage), coefficient 1.0.
         let result = build_active_violations_template();
         let t = &result.templates[0];
+        let n_blks = 2;
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8559,7 +8559,7 @@ mod tests {
                 n_thermals: 0,
                 n_lines: 0,
                 n_buses: 1,
-                n_blks: 2,
+                n_blks,
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
@@ -8569,45 +8569,43 @@ mod tests {
             },
         );
 
-        let row = indexer.min_turbine_rows.start;
+        for blk in 0..n_blks {
+            let row = indexer.min_turbine_rows.start + blk;
 
-        // Turbine block 0 should have tau_0.
-        let tau_0 = 720.0 * M3S_TO_HM3;
-        let entries = csc_entries_for_col(t, indexer.turbine.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - tau_0).abs() < 1e-15,
-            "turbine blk0 min_turbine: {:?}",
-            v
-        );
+            // Turbine column: coefficient 1.0
+            let entries = csc_entries_for_col(t, indexer.turbine.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+                "turbine blk{blk} min_turbine: {v:?}"
+            );
 
-        // Spillage columns should NOT have entries in the min_turbine row.
-        let entries_spill = csc_entries_for_col(t, indexer.spillage.start);
-        let v_spill = entries_spill.iter().find(|e| e.0 == row);
-        assert!(
-            v_spill.is_none(),
-            "spillage should not appear in min_turbine row"
-        );
+            // Spillage should NOT appear in min_turbine row.
+            let entries_spill = csc_entries_for_col(t, indexer.spillage.start + blk);
+            let v_spill = entries_spill.iter().find(|e| e.0 == row);
+            assert!(
+                v_spill.is_none(),
+                "spillage should not appear in min_turbine row (blk {blk})"
+            );
 
-        // Slack = +1
-        let entries = csc_entries_for_col(t, indexer.turbine_below_slack.start);
-        let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
-            "turbine_below slack entry: {:?}",
-            v
-        );
+            // Slack = +1.0
+            let entries = csc_entries_for_col(t, indexer.turbine_below_slack.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
+                "turbine_below slack blk{blk}: {v:?}"
+            );
+        }
     }
 
     #[test]
     #[allow(clippy::cast_sign_loss)]
     fn min_generation_constant_productivity_coefficients() {
-        // Constant productivity rho=0.5, 2 blocks (720h, 48h):
-        // turbine blk0: 0.5 * 720 = 360.0
-        // turbine blk1: 0.5 * 48 = 24.0
-        // slack: +1.0
+        // Per-block constant productivity: coefficient = rho = 0.5 per block-row.
         let result = build_active_violations_template();
         let t = &result.templates[0];
+        let n_blks = 2;
+        let rho = 0.5;
         let indexer = StageIndexer::with_equipment(
             &crate::indexer::EquipmentCounts {
                 hydro_count: 1,
@@ -8615,7 +8613,7 @@ mod tests {
                 n_thermals: 0,
                 n_lines: 0,
                 n_buses: 1,
-                n_blks: 2,
+                n_blks,
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
@@ -8625,34 +8623,25 @@ mod tests {
             },
         );
 
-        let row = indexer.min_generation_rows.start;
+        for blk in 0..n_blks {
+            let row = indexer.min_generation_rows.start + blk;
 
-        // Turbine block 0: rho * block_hours = 0.5 * 720 = 360.0
-        let entries_0 = csc_entries_for_col(t, indexer.turbine.start);
-        let v0 = entries_0.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v0.is_some() && (v0.unwrap() - 360.0).abs() < 1e-10,
-            "turbine blk0 min_gen coeff: {:?}, expected 360.0",
-            v0
-        );
+            // Turbine column: coefficient = rho
+            let entries = csc_entries_for_col(t, indexer.turbine.start + blk);
+            let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                v.is_some() && (v.unwrap() - rho).abs() < 1e-10,
+                "turbine blk{blk} min_gen coeff: {v:?}, expected {rho}"
+            );
 
-        // Turbine block 1: 0.5 * 48 = 24.0
-        let entries_1 = csc_entries_for_col(t, indexer.turbine.start + 1);
-        let v1 = entries_1.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            v1.is_some() && (v1.unwrap() - 24.0).abs() < 1e-10,
-            "turbine blk1 min_gen coeff: {:?}, expected 24.0",
-            v1
-        );
-
-        // Slack: +1.0
-        let entries_s = csc_entries_for_col(t, indexer.generation_below_slack.start);
-        let vs = entries_s.iter().find(|e| e.0 == row).map(|e| e.1);
-        assert!(
-            vs.is_some() && (vs.unwrap() - 1.0).abs() < 1e-15,
-            "generation_below slack: {:?}",
-            vs
-        );
+            // Slack: +1.0
+            let entries_s = csc_entries_for_col(t, indexer.generation_below_slack.start + blk);
+            let vs = entries_s.iter().find(|e| e.0 == row).map(|e| e.1);
+            assert!(
+                vs.is_some() && (vs.unwrap() - 1.0).abs() < 1e-15,
+                "generation_below slack blk{blk}: {vs:?}"
+            );
+        }
     }
 
     #[test]
@@ -8777,16 +8766,16 @@ mod tests {
             "indexer.has_operational_violations must be true when hydros exist"
         );
 
-        let total_hours = 720.0 + 48.0;
-        let zeta = total_hours * M3S_TO_HM3;
-        let expected_row_lower = 50.0 * zeta;
+        // Per-block formulation: RHS is in rate units (m3/s or MW), not volume/energy.
+        // Block 0 column at `.start`, block 1 at `.start + 1`.
+        let block_hours_0 = 720.0;
 
+        // Min outflow row (block 0): row_lower = 50.0 m3/s
         let row = indexer.min_outflow_rows.start;
         assert!(
-            (t.row_lower[row] - expected_row_lower).abs() < 1e-10,
-            "min_outflow row_lower = {}, expected {} (= 50.0 * zeta)",
+            (t.row_lower[row] - 50.0).abs() < 1e-10,
+            "min_outflow row_lower = {}, expected 50.0 (rate units m3/s)",
             t.row_lower[row],
-            expected_row_lower
         );
         assert_eq!(
             t.row_upper[row],
@@ -8794,6 +8783,7 @@ mod tests {
             "min_outflow row_upper must be +inf for >= constraint"
         );
 
+        // Column bounds: outflow_below_slack block 0.
         let col = indexer.outflow_below_slack.start;
         assert_eq!(
             t.col_lower[col], 0.0,
@@ -8805,7 +8795,8 @@ mod tests {
             "outflow_below_slack col_upper must be +inf when min_outflow > 0"
         );
 
-        let expected_objective = 1000.0 * total_hours / COST_SCALE_FACTOR;
+        // Objective: penalty * block_hours (block 0).
+        let expected_objective = 1000.0 * block_hours_0 / COST_SCALE_FACTOR;
         assert!(
             t.objective[col] > 0.0,
             "outflow_below_slack objective must be positive (penalty), got {}",
@@ -8816,7 +8807,7 @@ mod tests {
             "outflow_below_slack objective = {}, expected {} (= 1000 * {} / {})",
             t.objective[col],
             expected_objective,
-            total_hours,
+            block_hours_0,
             COST_SCALE_FACTOR
         );
 
@@ -8832,31 +8823,28 @@ mod tests {
         assert_eq!(t.col_upper[col_gen], f64::INFINITY);
         assert!(t.objective[col_gen] > 0.0);
 
+        // Min turbine row (block 0): row_lower = 10.0 m3/s
         let min_turb_row = indexer.min_turbine_rows.start;
-        let expected_turb_lower = 10.0 * zeta;
         assert!(
-            (t.row_lower[min_turb_row] - expected_turb_lower).abs() < 1e-10,
-            "min_turbine row_lower = {}, expected {}",
+            (t.row_lower[min_turb_row] - 10.0).abs() < 1e-10,
+            "min_turbine row_lower = {}, expected 10.0 (rate units m3/s)",
             t.row_lower[min_turb_row],
-            expected_turb_lower
         );
 
+        // Min generation row (block 0): row_lower = 5.0 MW
         let min_gen_row = indexer.min_generation_rows.start;
-        let expected_gen_lower = 5.0 * total_hours;
         assert!(
-            (t.row_lower[min_gen_row] - expected_gen_lower).abs() < 1e-10,
-            "min_generation row_lower = {}, expected {}",
+            (t.row_lower[min_gen_row] - 5.0).abs() < 1e-10,
+            "min_generation row_lower = {}, expected 5.0 (rate units MW)",
             t.row_lower[min_gen_row],
-            expected_gen_lower
         );
 
+        // Max outflow row (block 0): row_upper = 800.0 m3/s
         let max_outflow_row = indexer.max_outflow_rows.start;
-        let expected_max_upper = 800.0 * zeta;
         assert!(
-            (t.row_upper[max_outflow_row] - expected_max_upper).abs() < 1e-10,
-            "max_outflow row_upper = {}, expected {}",
+            (t.row_upper[max_outflow_row] - 800.0).abs() < 1e-10,
+            "max_outflow row_upper = {}, expected 800.0 (rate units m3/s)",
             t.row_upper[max_outflow_row],
-            expected_max_upper
         );
     }
 }

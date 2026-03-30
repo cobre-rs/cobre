@@ -42,13 +42,13 @@
 //! ```
 //!
 //! After withdrawal slack columns, 4 operational violation slack column regions are
-//! appended when `hydro_count > 0` (one column per hydro in each region):
+//! appended when `hydro_count > 0` (one column per hydro per block in each region):
 //!
 //! ```text
-//! [ws_end,      ws_end+N)    outflow_below_slack    — min-outflow violation slack
-//! [ws_end+N,    ws_end+2*N)  outflow_above_slack    — max-outflow violation slack
-//! [ws_end+2*N,  ws_end+3*N)  turbine_below_slack    — min-turbine violation slack
-//! [ws_end+3*N,  ws_end+4*N)  generation_below_slack — min-generation violation slack
+//! [ws_end,          ws_end+N*K)    outflow_below_slack    — per-block min-outflow violation
+//! [ws_end+N*K,      ws_end+2*N*K)  outflow_above_slack    — per-block max-outflow violation
+//! [ws_end+2*N*K,    ws_end+3*N*K)  turbine_below_slack    — per-block min-turbine violation
+//! [ws_end+3*N*K,    ws_end+4*N*K)  generation_below_slack — per-block min-generation violation
 //! ```
 //!
 //! where ws_end = `withdrawal_slack.end`, H = `hydro_count`, K = `n_blks`,
@@ -62,13 +62,13 @@
 //! ```
 //!
 //! After evaporation rows, 4 operational violation constraint row regions are
-//! appended when `hydro_count > 0` (one row per hydro in each region):
+//! appended when `hydro_count > 0` (one row per hydro per block in each region):
 //!
 //! ```text
-//! [evap_end,      evap_end+N)    min_outflow_rows    — min-outflow constraints
-//! [evap_end+N,    evap_end+2*N)  max_outflow_rows    — max-outflow constraints
-//! [evap_end+2*N,  evap_end+3*N)  min_turbine_rows    — min-turbine constraints
-//! [evap_end+3*N,  evap_end+4*N)  min_generation_rows — min-generation constraints
+//! [evap_end,          evap_end+N*K)    min_outflow_rows    — per-block min-outflow constraints
+//! [evap_end+N*K,      evap_end+2*N*K)  max_outflow_rows    — per-block max-outflow constraints
+//! [evap_end+2*N*K,    evap_end+3*N*K)  min_turbine_rows    — per-block min-turbine constraints
+//! [evap_end+3*N*K,    evap_end+4*N*K)  min_generation_rows — per-block min-generation constraints
 //! ```
 //!
 //! ## Worked example (SS5.5.3): N = 3, L = 2
@@ -390,54 +390,54 @@ pub struct StageIndexer {
 
     // ── Operational violation slack column ranges ─────────────────────────
     // Populated only by the full build path; empty (`0..0`) when built via `new`.
-    /// Column range for outflow-below violation slacks, one per hydro.
+    /// Column range for outflow-below violation slacks, one per hydro per block.
     ///
-    /// `outflow_below_slack.start + h` is the column for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `outflow_below_slack.start + h * n_blks + blk` is the column for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub outflow_below_slack: Range<usize>,
 
-    /// Column range for outflow-above violation slacks, one per hydro.
+    /// Column range for outflow-above violation slacks, one per hydro per block.
     ///
-    /// `outflow_above_slack.start + h` is the column for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `outflow_above_slack.start + h * n_blks + blk` is the column for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub outflow_above_slack: Range<usize>,
 
-    /// Column range for turbine-below violation slacks, one per hydro.
+    /// Column range for turbine-below violation slacks, one per hydro per block.
     ///
-    /// `turbine_below_slack.start + h` is the column for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `turbine_below_slack.start + h * n_blks + blk` is the column for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub turbine_below_slack: Range<usize>,
 
-    /// Column range for generation-below violation slacks, one per hydro.
+    /// Column range for generation-below violation slacks, one per hydro per block.
     ///
-    /// `generation_below_slack.start + h` is the column for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `generation_below_slack.start + h * n_blks + blk` is the column for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub generation_below_slack: Range<usize>,
 
     // ── Operational violation constraint row ranges ────────────────────────
     // Populated only by the full build path; empty (`0..0`) when built via `new`.
-    /// Row range for min-outflow constraint rows, one per hydro.
+    /// Row range for min-outflow constraint rows, one per hydro per block.
     ///
-    /// `min_outflow_rows.start + h` is the row for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `min_outflow_rows.start + h * n_blks + blk` is the row for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub min_outflow_rows: Range<usize>,
 
-    /// Row range for max-outflow constraint rows, one per hydro.
+    /// Row range for max-outflow constraint rows, one per hydro per block.
     ///
-    /// `max_outflow_rows.start + h` is the row for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `max_outflow_rows.start + h * n_blks + blk` is the row for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub max_outflow_rows: Range<usize>,
 
-    /// Row range for min-turbine constraint rows, one per hydro.
+    /// Row range for min-turbine constraint rows, one per hydro per block.
     ///
-    /// `min_turbine_rows.start + h` is the row for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `min_turbine_rows.start + h * n_blks + blk` is the row for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub min_turbine_rows: Range<usize>,
 
-    /// Row range for min-generation constraint rows, one per hydro.
+    /// Row range for min-generation constraint rows, one per hydro per block.
     ///
-    /// `min_generation_rows.start + h` is the row for hydro `h`.
-    /// Empty (`0..0`) when built via [`StageIndexer::new`].
+    /// `min_generation_rows.start + h * n_blks + blk` is the row for hydro `h`,
+    /// block `blk`.  Empty (`0..0`) when built via [`StageIndexer::new`].
     pub min_generation_rows: Range<usize>,
 
     /// Whether operational violation slack columns are present.
@@ -867,7 +867,7 @@ impl StageIndexer {
             (0..0, false)
         };
 
-        // Operational violation slack columns: 4 per hydro, placed after withdrawal slack.
+        // Operational violation slack columns: 4 families * (hydro_count * n_blks), placed after withdrawal slack.
         let evap_rows_end = fpha_row_cursor + n_evap_hydros;
         let (
             outflow_below_slack,
@@ -880,16 +880,17 @@ impl StageIndexer {
             min_generation_rows,
             has_operational_violations,
         ) = if hydro_count > 0 {
+            let n_op = hydro_count * n_blks;
             let ws_end = withdrawal_slack.end;
-            let ob = ws_end..ws_end + hydro_count;
-            let oa = ob.end..ob.end + hydro_count;
-            let tb = oa.end..oa.end + hydro_count;
-            let gb = tb.end..tb.end + hydro_count;
+            let ob = ws_end..ws_end + n_op;
+            let oa = ob.end..ob.end + n_op;
+            let tb = oa.end..oa.end + n_op;
+            let gb = tb.end..tb.end + n_op;
 
-            let r_min_out = evap_rows_end..evap_rows_end + hydro_count;
-            let r_max_out = r_min_out.end..r_min_out.end + hydro_count;
-            let r_min_turb = r_max_out.end..r_max_out.end + hydro_count;
-            let r_min_gen = r_min_turb.end..r_min_turb.end + hydro_count;
+            let r_min_out = evap_rows_end..evap_rows_end + n_op;
+            let r_max_out = r_min_out.end..r_min_out.end + n_op;
+            let r_min_turb = r_max_out.end..r_max_out.end + n_op;
+            let r_min_gen = r_min_turb.end..r_min_turb.end + n_op;
 
             (
                 ob, oa, tb, gb, r_min_out, r_max_out, r_min_turb, r_min_gen, true,

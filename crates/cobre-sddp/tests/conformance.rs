@@ -968,19 +968,21 @@ fn indexer_constraint_inventory() {
         "generation_below must start where turbine_below ends"
     );
 
-    // Each range must span exactly hydro_count columns.
+    // Each operational violation slack range must span hydro_count * n_blks columns.
     let hydro_count = 3;
-    assert_eq!(indexer.outflow_below_slack.len(), hydro_count);
-    assert_eq!(indexer.outflow_above_slack.len(), hydro_count);
-    assert_eq!(indexer.turbine_below_slack.len(), hydro_count);
-    assert_eq!(indexer.generation_below_slack.len(), hydro_count);
+    let n_blks = 2;
+    let n_op = hydro_count * n_blks;
+    assert_eq!(indexer.outflow_below_slack.len(), n_op);
+    assert_eq!(indexer.outflow_above_slack.len(), n_op);
+    assert_eq!(indexer.turbine_below_slack.len(), n_op);
+    assert_eq!(indexer.generation_below_slack.len(), n_op);
     assert_eq!(indexer.withdrawal_slack.len(), hydro_count);
 
-    // Constraint rows must also span hydro_count each.
-    assert_eq!(indexer.min_outflow_rows.len(), hydro_count);
-    assert_eq!(indexer.max_outflow_rows.len(), hydro_count);
-    assert_eq!(indexer.min_turbine_rows.len(), hydro_count);
-    assert_eq!(indexer.min_generation_rows.len(), hydro_count);
+    // Constraint rows must also span hydro_count * n_blks each.
+    assert_eq!(indexer.min_outflow_rows.len(), n_op);
+    assert_eq!(indexer.max_outflow_rows.len(), n_op);
+    assert_eq!(indexer.min_turbine_rows.len(), n_op);
+    assert_eq!(indexer.min_generation_rows.len(), n_op);
 }
 
 /// CI regression guard: verifies the expected number of hydro-related slack

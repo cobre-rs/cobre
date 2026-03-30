@@ -122,22 +122,22 @@ pub(crate) struct StageLayout {
     /// Layout: `col_withdrawal_slack_start + h`.
     /// Zero when `n_h == 0`.
     pub(crate) col_withdrawal_slack_start: usize,
-    /// Start of outflow-below-minimum slack columns (one per hydro, stage-level).
+    /// Start of outflow-below-minimum slack columns (one per hydro per block).
     ///
     /// Inserted after withdrawal slack columns.
-    /// Layout: `col_outflow_below_start + h`.
+    /// Layout: `col_outflow_below_start + h_idx * n_blks + blk`.
     pub(crate) col_outflow_below_start: usize,
-    /// Start of outflow-above-maximum slack columns (one per hydro, stage-level).
+    /// Start of outflow-above-maximum slack columns (one per hydro per block).
     ///
-    /// Layout: `col_outflow_above_start + h`.
+    /// Layout: `col_outflow_above_start + h_idx * n_blks + blk`.
     pub(crate) col_outflow_above_start: usize,
-    /// Start of turbine-below-minimum slack columns (one per hydro, stage-level).
+    /// Start of turbine-below-minimum slack columns (one per hydro per block).
     ///
-    /// Layout: `col_turbine_below_start + h`.
+    /// Layout: `col_turbine_below_start + h_idx * n_blks + blk`.
     pub(crate) col_turbine_below_start: usize,
-    /// Start of generation-below-minimum slack columns (one per hydro, stage-level).
+    /// Start of generation-below-minimum slack columns (one per hydro per block).
     ///
-    /// Layout: `col_generation_below_start + h`.
+    /// Layout: `col_generation_below_start + h_idx * n_blks + blk`.
     pub(crate) col_generation_below_start: usize,
     /// Start of NCS generation columns (after operational violation slack columns).
     ///
@@ -149,21 +149,21 @@ pub(crate) struct StageLayout {
     /// Indices (into `ctx.non_controllable_sources`) of NCS active at this stage.
     pub(crate) active_ncs_indices: Vec<usize>,
     pub(crate) num_cols: usize,
-    /// Start of minimum-outflow constraint rows (one per hydro, after evaporation rows).
+    /// Start of minimum-outflow constraint rows (one per hydro per block, after evaporation rows).
     ///
-    /// Layout: `row_min_outflow_start + h`.
+    /// Layout: `row_min_outflow_start + h_idx * n_blks + blk`.
     pub(crate) row_min_outflow_start: usize,
-    /// Start of maximum-outflow constraint rows (one per hydro).
+    /// Start of maximum-outflow constraint rows (one per hydro per block).
     ///
-    /// Layout: `row_max_outflow_start + h`.
+    /// Layout: `row_max_outflow_start + h_idx * n_blks + blk`.
     pub(crate) row_max_outflow_start: usize,
-    /// Start of minimum-turbine constraint rows (one per hydro).
+    /// Start of minimum-turbine constraint rows (one per hydro per block).
     ///
-    /// Layout: `row_min_turbine_start + h`.
+    /// Layout: `row_min_turbine_start + h_idx * n_blks + blk`.
     pub(crate) row_min_turbine_start: usize,
-    /// Start of minimum-generation constraint rows (one per hydro).
+    /// Start of minimum-generation constraint rows (one per hydro per block).
     ///
-    /// Layout: `row_min_generation_start + h`.
+    /// Layout: `row_min_generation_start + h_idx * n_blks + blk`.
     pub(crate) row_min_generation_start: usize,
     /// Start of generic constraint rows (after operational violation rows).
     ///
@@ -268,12 +268,13 @@ impl StageLayout {
         let col_withdrawal_slack_start = col_evap_start + n_evap_cols;
         let withdrawal_slack_end = col_withdrawal_slack_start + ctx.n_hydros;
 
-        // Operational violation slack columns: 4 per hydro, placed after withdrawal slack.
+        // Operational violation slack columns: 4 families * (n_hydros * n_blks), placed after withdrawal slack.
+        let n_op_slack = ctx.n_hydros * n_blks;
         let col_outflow_below_start = withdrawal_slack_end;
-        let col_outflow_above_start = col_outflow_below_start + ctx.n_hydros;
-        let col_turbine_below_start = col_outflow_above_start + ctx.n_hydros;
-        let col_generation_below_start = col_turbine_below_start + ctx.n_hydros;
-        let operational_slack_end = col_generation_below_start + ctx.n_hydros;
+        let col_outflow_above_start = col_outflow_below_start + n_op_slack;
+        let col_turbine_below_start = col_outflow_above_start + n_op_slack;
+        let col_generation_below_start = col_turbine_below_start + n_op_slack;
+        let operational_slack_end = col_generation_below_start + n_op_slack;
 
         let n_state = idx.n_state;
         let n_dual_relevant = n_state;
@@ -308,12 +309,13 @@ impl StageLayout {
         let n_ncs_cols = n_active_ncs * n_blks;
         let col_ncs_end = col_ncs_start + n_ncs_cols;
 
-        // Operational violation rows: 4 per hydro, placed after evaporation rows.
+        // Operational violation rows: 4 families * (n_hydros * n_blks), placed after evaporation rows.
+        let n_op_rows = ctx.n_hydros * n_blks;
         let row_min_outflow_start = evap_rows_end;
-        let row_max_outflow_start = row_min_outflow_start + ctx.n_hydros;
-        let row_min_turbine_start = row_max_outflow_start + ctx.n_hydros;
-        let row_min_generation_start = row_min_turbine_start + ctx.n_hydros;
-        let operational_rows_end = row_min_generation_start + ctx.n_hydros;
+        let row_max_outflow_start = row_min_outflow_start + n_op_rows;
+        let row_min_turbine_start = row_max_outflow_start + n_op_rows;
+        let row_min_generation_start = row_min_turbine_start + n_op_rows;
+        let operational_rows_end = row_min_generation_start + n_op_rows;
 
         // ── Generic constraints: identify active rows and slack columns ─────────
         // Generic constraint rows are placed after operational violation rows (last row region).

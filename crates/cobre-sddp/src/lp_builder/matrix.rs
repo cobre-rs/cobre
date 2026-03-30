@@ -244,61 +244,73 @@ pub(super) fn fill_stage_columns(
         objective[col] = hp.water_withdrawal_violation_cost * total_stage_hours;
     }
 
-    // Operational violation slack columns: 4 regions of n_h columns each.
+    // Operational violation slack columns: 4 regions of n_h * n_blks columns each.
     // Bounds [0, +inf) when the corresponding bound is active (positive for
     // min constraints, Some for max outflow); pinned to [0, 0] when inactive.
-    // Objective cost: resolved penalty * total_stage_hours.
+    // Objective cost: resolved penalty * block_hours.
 
-    // Outflow-below-minimum slacks (sigma_outflow_below_h).
+    // Outflow-below-minimum slacks (sigma_outflow_below_{h,k}).
     for h_idx in 0..layout.n_h {
-        let col = layout.col_outflow_below_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.min_outflow_m3s > 0.0 {
-            col_upper[col] = f64::INFINITY;
-        } else {
-            col_upper[col] = 0.0;
-        }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.outflow_violation_below_cost * total_stage_hours;
+        for blk in 0..layout.n_blks {
+            let col = layout.col_outflow_below_start + h_idx * layout.n_blks + blk;
+            if hb.min_outflow_m3s > 0.0 {
+                col_upper[col] = f64::INFINITY;
+            } else {
+                col_upper[col] = 0.0;
+            }
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = hp.outflow_violation_below_cost * block_hours;
+        }
     }
 
-    // Outflow-above-maximum slacks (sigma_outflow_above_h).
+    // Outflow-above-maximum slacks (sigma_outflow_above_{h,k}).
     for h_idx in 0..layout.n_h {
-        let col = layout.col_outflow_above_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.max_outflow_m3s.is_some() {
-            col_upper[col] = f64::INFINITY;
-        } else {
-            col_upper[col] = 0.0;
-        }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.outflow_violation_above_cost * total_stage_hours;
+        for blk in 0..layout.n_blks {
+            let col = layout.col_outflow_above_start + h_idx * layout.n_blks + blk;
+            if hb.max_outflow_m3s.is_some() {
+                col_upper[col] = f64::INFINITY;
+            } else {
+                col_upper[col] = 0.0;
+            }
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = hp.outflow_violation_above_cost * block_hours;
+        }
     }
 
-    // Turbine-below-minimum slacks (sigma_turbine_below_h).
+    // Turbine-below-minimum slacks (sigma_turbine_below_{h,k}).
     for h_idx in 0..layout.n_h {
-        let col = layout.col_turbine_below_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.min_turbined_m3s > 0.0 {
-            col_upper[col] = f64::INFINITY;
-        } else {
-            col_upper[col] = 0.0;
-        }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.turbined_violation_below_cost * total_stage_hours;
+        for blk in 0..layout.n_blks {
+            let col = layout.col_turbine_below_start + h_idx * layout.n_blks + blk;
+            if hb.min_turbined_m3s > 0.0 {
+                col_upper[col] = f64::INFINITY;
+            } else {
+                col_upper[col] = 0.0;
+            }
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = hp.turbined_violation_below_cost * block_hours;
+        }
     }
 
-    // Generation-below-minimum slacks (sigma_generation_below_h).
+    // Generation-below-minimum slacks (sigma_generation_below_{h,k}).
     for h_idx in 0..layout.n_h {
-        let col = layout.col_generation_below_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.min_generation_mw > 0.0 {
-            col_upper[col] = f64::INFINITY;
-        } else {
-            col_upper[col] = 0.0;
-        }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.generation_violation_below_cost * total_stage_hours;
+        for blk in 0..layout.n_blks {
+            let col = layout.col_generation_below_start + h_idx * layout.n_blks + blk;
+            if hb.min_generation_mw > 0.0 {
+                col_upper[col] = f64::INFINITY;
+            } else {
+                col_upper[col] = 0.0;
+            }
+            let block_hours = stage.blocks[blk].duration_hours;
+            objective[col] = hp.generation_violation_below_cost * block_hours;
+        }
     }
 
     // NCS generation columns: one per active NCS per block.
@@ -460,55 +472,60 @@ pub(super) fn fill_stage_rows(
 
 /// Fill row bounds for the 4 operational violation constraint families.
 ///
-/// - **Min outflow** (`>=`): `row_lower = min_outflow_m3s * zeta`, `row_upper = +INF`.
-/// - **Max outflow** (`<=`): `row_lower = -INF`, `row_upper = max_outflow_m3s * zeta`
+/// Per-block formulation: one row per hydro per block. RHS is in rate units
+/// (m3/s for flow families, MW for generation).
+///
+/// - **Min outflow** (`>=`): `row_lower = min_outflow_m3s`, `row_upper = +INF`.
+/// - **Max outflow** (`<=`): `row_lower = -INF`, `row_upper = max_outflow_m3s`
 ///   (or `+INF` when the bound is absent, making the row non-binding).
-/// - **Min turbine** (`>=`): `row_lower = min_turbined_m3s * zeta`, `row_upper = +INF`.
-/// - **Min generation** (`>=`): `row_lower = min_generation_mw * total_stage_hours`,
-///   `row_upper = +INF` (`MWh` units, not hm3).
+/// - **Min turbine** (`>=`): `row_lower = min_turbined_m3s`, `row_upper = +INF`.
+/// - **Min generation** (`>=`): `row_lower = min_generation_mw`, `row_upper = +INF`.
 fn fill_operational_violation_rows(
     ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
+    _stage: &Stage,
     stage_idx: usize,
     layout: &StageLayout,
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    // Min outflow rows (>= constraint): LHS + sigma >= min_outflow * zeta
+    // Min outflow rows (>= constraint): LHS + sigma >= min_outflow_m3s
     for h_idx in 0..layout.n_h {
-        let row = layout.row_min_outflow_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        let rhs = hb.min_outflow_m3s * layout.zeta;
-        row_lower[row] = rhs;
-        row_upper[row] = f64::INFINITY;
+        for blk in 0..layout.n_blks {
+            let row = layout.row_min_outflow_start + h_idx * layout.n_blks + blk;
+            row_lower[row] = hb.min_outflow_m3s;
+            row_upper[row] = f64::INFINITY;
+        }
     }
 
-    // Max outflow rows (<= constraint): LHS - sigma <= max_outflow * zeta
+    // Max outflow rows (<= constraint): LHS - sigma <= max_outflow_m3s
     for h_idx in 0..layout.n_h {
-        let row = layout.row_max_outflow_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        let rhs = hb.max_outflow_m3s.unwrap_or(f64::INFINITY) * layout.zeta;
-        row_lower[row] = f64::NEG_INFINITY;
-        row_upper[row] = rhs;
+        for blk in 0..layout.n_blks {
+            let row = layout.row_max_outflow_start + h_idx * layout.n_blks + blk;
+            row_lower[row] = f64::NEG_INFINITY;
+            row_upper[row] = hb.max_outflow_m3s.unwrap_or(f64::INFINITY);
+        }
     }
 
-    // Min turbine flow rows (>= constraint): LHS + sigma >= min_turbined * zeta
+    // Min turbine flow rows (>= constraint): LHS + sigma >= min_turbined_m3s
     for h_idx in 0..layout.n_h {
-        let row = layout.row_min_turbine_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        let rhs = hb.min_turbined_m3s * layout.zeta;
-        row_lower[row] = rhs;
-        row_upper[row] = f64::INFINITY;
+        for blk in 0..layout.n_blks {
+            let row = layout.row_min_turbine_start + h_idx * layout.n_blks + blk;
+            row_lower[row] = hb.min_turbined_m3s;
+            row_upper[row] = f64::INFINITY;
+        }
     }
 
-    // Min generation rows (>= constraint): LHS + sigma >= min_generation * total_hours
-    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+    // Min generation rows (>= constraint): LHS + sigma >= min_generation_mw
     for h_idx in 0..layout.n_h {
-        let row = layout.row_min_generation_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        let rhs = hb.min_generation_mw * total_stage_hours;
-        row_lower[row] = rhs;
-        row_upper[row] = f64::INFINITY;
+        for blk in 0..layout.n_blks {
+            let row = layout.row_min_generation_start + h_idx * layout.n_blks + blk;
+            row_lower[row] = hb.min_generation_mw;
+            row_upper[row] = f64::INFINITY;
+        }
     }
 }
 
@@ -1144,7 +1161,7 @@ pub(super) fn fill_z_inflow_entries(
 ///   where `coeff * var` is `rho * q` for constant-productivity hydros or `g` for FPHA.
 pub(super) fn fill_operational_violation_entries(
     ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
+    _stage: &Stage,
     stage_idx: usize,
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
@@ -1158,93 +1175,83 @@ pub(super) fn fill_operational_violation_entries(
     }
 
     for (h_idx, fpha_local_entry) in fpha_local.iter().enumerate() {
-        // ── Min outflow ──────────────────────────────────────────────────────
-        {
-            let row = layout.row_min_outflow_start + h_idx;
-            for blk in 0..n_blks {
-                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
-                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
-                col_entries[col_q].push((row, tau));
-                let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
-                col_entries[col_s].push((row, tau));
-                let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
-                col_entries[col_d].push((row, tau));
-            }
-            let col_slack = layout.col_outflow_below_start + h_idx;
+        // ── Min outflow (per block): q + s + d + sigma >= min_outflow_m3s ───
+        for blk in 0..n_blks {
+            let row = layout.row_min_outflow_start + h_idx * n_blks + blk;
+            let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+            col_entries[col_q].push((row, 1.0));
+            let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
+            col_entries[col_s].push((row, 1.0));
+            let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
+            col_entries[col_d].push((row, 1.0));
+            let col_slack = layout.col_outflow_below_start + h_idx * n_blks + blk;
             col_entries[col_slack].push((row, 1.0));
         }
 
-        // ── Max outflow ──────────────────────────────────────────────────────
-        {
-            let row = layout.row_max_outflow_start + h_idx;
-            for blk in 0..n_blks {
-                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
-                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
-                col_entries[col_q].push((row, tau));
-                let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
-                col_entries[col_s].push((row, tau));
-                let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
-                col_entries[col_d].push((row, tau));
-            }
-            let col_slack = layout.col_outflow_above_start + h_idx;
+        // ── Max outflow (per block): q + s + d - sigma <= max_outflow_m3s ───
+        for blk in 0..n_blks {
+            let row = layout.row_max_outflow_start + h_idx * n_blks + blk;
+            let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+            col_entries[col_q].push((row, 1.0));
+            let col_s = layout.col_spillage_start + h_idx * n_blks + blk;
+            col_entries[col_s].push((row, 1.0));
+            let col_d = layout.col_diversion_start + h_idx * n_blks + blk;
+            col_entries[col_d].push((row, 1.0));
+            let col_slack = layout.col_outflow_above_start + h_idx * n_blks + blk;
             col_entries[col_slack].push((row, -1.0));
         }
 
-        // ── Min turbine flow ─────────────────────────────────────────────────
-        {
-            let row = layout.row_min_turbine_start + h_idx;
-            for blk in 0..n_blks {
-                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
-                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
-                col_entries[col_q].push((row, tau));
-            }
-            let col_slack = layout.col_turbine_below_start + h_idx;
+        // ── Min turbine flow (per block): q + sigma >= min_turbined_m3s ─────
+        for blk in 0..n_blks {
+            let row = layout.row_min_turbine_start + h_idx * n_blks + blk;
+            let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+            col_entries[col_q].push((row, 1.0));
+            let col_slack = layout.col_turbine_below_start + h_idx * n_blks + blk;
             col_entries[col_slack].push((row, 1.0));
         }
 
-        // ── Min generation ───────────────────────────────────────────────────
-        {
-            let row = layout.row_min_generation_start + h_idx;
-            if let Some(&local_fpha_idx) = fpha_local_entry.as_ref() {
-                // FPHA: use generation variable g_{h,blk} with coefficient = block_hours.
-                for blk in 0..n_blks {
-                    let block_hours = stage.blocks[blk].duration_hours;
-                    let col_g = layout.col_generation_start + local_fpha_idx * n_blks + blk;
-                    col_entries[col_g].push((row, block_hours));
-                }
-            } else {
-                // Constant productivity: rho * q_{h,blk} * block_hours.
-                let rho = match &ctx.hydros[h_idx].generation_model {
-                    HydroGenerationModel::ConstantProductivity {
-                        productivity_mw_per_m3s,
-                    }
-                    | HydroGenerationModel::LinearizedHead {
-                        productivity_mw_per_m3s,
-                    } => *productivity_mw_per_m3s,
-                    HydroGenerationModel::Fpha => {
-                        // Entity model is Fpha but resolved model at this stage is
-                        // ConstantProductivity (fallback). Extract rho from the resolved model.
-                        if let ResolvedProductionModel::ConstantProductivity { productivity } =
-                            ctx.production_models.model(h_idx, stage_idx)
-                        {
-                            *productivity
-                        } else {
-                            debug_assert!(
-                                false,
-                                "Fpha entity model with non-Fpha resolved model and no local index for hydro {h_idx}"
-                            );
-                            0.0
-                        }
-                    }
-                };
-                for blk in 0..n_blks {
-                    let block_hours = stage.blocks[blk].duration_hours;
-                    let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
-                    col_entries[col_q].push((row, rho * block_hours));
-                }
+        // ── Min generation (per block): g + sigma >= min_generation_mw ──────
+        if let Some(&local_fpha_idx) = fpha_local_entry.as_ref() {
+            // FPHA: generation variable g_{h,blk} (already in MW).
+            for blk in 0..n_blks {
+                let row = layout.row_min_generation_start + h_idx * n_blks + blk;
+                let col_g = layout.col_generation_start + local_fpha_idx * n_blks + blk;
+                col_entries[col_g].push((row, 1.0));
+                let col_slack = layout.col_generation_below_start + h_idx * n_blks + blk;
+                col_entries[col_slack].push((row, 1.0));
             }
-            let col_slack = layout.col_generation_below_start + h_idx;
-            col_entries[col_slack].push((row, 1.0));
+        } else {
+            // Constant productivity: gen_k = rho * q_k (MW).
+            let rho = match &ctx.hydros[h_idx].generation_model {
+                HydroGenerationModel::ConstantProductivity {
+                    productivity_mw_per_m3s,
+                }
+                | HydroGenerationModel::LinearizedHead {
+                    productivity_mw_per_m3s,
+                } => *productivity_mw_per_m3s,
+                HydroGenerationModel::Fpha => {
+                    // Entity model is Fpha but resolved model at this stage is
+                    // ConstantProductivity (fallback). Extract rho from the resolved model.
+                    if let ResolvedProductionModel::ConstantProductivity { productivity } =
+                        ctx.production_models.model(h_idx, stage_idx)
+                    {
+                        *productivity
+                    } else {
+                        debug_assert!(
+                            false,
+                            "Fpha entity model with non-Fpha resolved model and no local index for hydro {h_idx}"
+                        );
+                        0.0
+                    }
+                }
+            };
+            for blk in 0..n_blks {
+                let row = layout.row_min_generation_start + h_idx * n_blks + blk;
+                let col_q = layout.col_turbine_start + h_idx * n_blks + blk;
+                col_entries[col_q].push((row, rho));
+                let col_slack = layout.col_generation_below_start + h_idx * n_blks + blk;
+                col_entries[col_slack].push((row, 1.0));
+            }
         }
     }
 }

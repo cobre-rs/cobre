@@ -1866,6 +1866,76 @@ fn d21_min_outflow_regression() {
         total_hydro_violation_cost > 0.0,
         "D21: hydro_violation_cost must be positive"
     );
+
+    // Verify decomposed cost fields.
+    for (s, stage_result) in scenario.stages.iter().enumerate() {
+        let cost = &stage_result.costs[0];
+
+        // 1. outflow_violation_below_cost matches hydro_violation_cost
+        //    (D21 only has min-outflow violations).
+        let component_sum = cost.outflow_violation_below_cost
+            + cost.outflow_violation_above_cost
+            + cost.turbined_violation_cost
+            + cost.generation_violation_cost
+            + cost.evaporation_violation_cost
+            + cost.withdrawal_violation_cost;
+        assert!(
+            (cost.hydro_violation_cost - component_sum).abs() < 1e-6,
+            "D21 stage {s}: sum invariant failed: hydro_violation_cost={}, component_sum={}",
+            cost.hydro_violation_cost,
+            component_sum
+        );
+
+        // 2. Non-applicable components must be zero (D21 only has min-outflow).
+        assert!(
+            cost.outflow_violation_above_cost.abs() < 1e-10,
+            "D21 stage {s}: outflow_above should be 0, got {}",
+            cost.outflow_violation_above_cost
+        );
+        assert!(
+            cost.turbined_violation_cost.abs() < 1e-10,
+            "D21 stage {s}: turbined should be 0, got {}",
+            cost.turbined_violation_cost
+        );
+        assert!(
+            cost.generation_violation_cost.abs() < 1e-10,
+            "D21 stage {s}: generation should be 0, got {}",
+            cost.generation_violation_cost
+        );
+        assert!(
+            cost.evaporation_violation_cost.abs() < 1e-10,
+            "D21 stage {s}: evaporation should be 0, got {}",
+            cost.evaporation_violation_cost
+        );
+        assert!(
+            cost.withdrawal_violation_cost.abs() < 1e-10,
+            "D21 stage {s}: withdrawal should be 0, got {}",
+            cost.withdrawal_violation_cost
+        );
+
+        // 3. outflow_violation_below_cost matches the formula.
+        let slack_m3s = stage_result.hydros[0].outflow_slack_below_m3s;
+        if slack_m3s > 1e-10 {
+            let expected_below_cost = slack_m3s * hours * hours * m3s_to_hm3 * penalty;
+            assert!(
+                (cost.outflow_violation_below_cost - expected_below_cost).abs() < 1e-2,
+                "D21 stage {s}: outflow_violation_below_cost={}, expected={}",
+                cost.outflow_violation_below_cost,
+                expected_below_cost
+            );
+        }
+    }
+
+    // 4. At least one stage has non-zero outflow_violation_below_cost.
+    let found_below_cost = scenario
+        .stages
+        .iter()
+        .flat_map(|s| &s.costs)
+        .any(|c| c.outflow_violation_below_cost > 1e-10);
+    assert!(
+        found_below_cost,
+        "D21: expected non-zero outflow_violation_below_cost in at least one stage"
+    );
 }
 
 /// Recorded empirically with initial_storage=5 hm3 and inflow=10 m3/s.

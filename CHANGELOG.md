@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.3.1] - 2026-03-30
+
+### Added
+
+- **Discount rate support** -- Annual discount rate from the policy graph is
+  now wired into the SDDP solver. Per-stage one-step discount factors scale
+  the theta (future cost) objective coefficient, and cumulative discount
+  factors weight stagewise costs in both the training upper bound and
+  simulation cost accumulation.
+- **Deterministic regression test D25** -- Verifies discounted lower bound
+  and simulation discount factors against undiscounted baseline (D02).
+
+### Fixed
+
+- **Discounted upper bound** -- The statistical upper bound now applies
+  cumulative discount factors to stagewise immediate costs, making it
+  comparable to the discounted lower bound. Previously, undiscounted stage
+  costs were summed, producing a UB incommensurate with the LB when a
+  non-zero discount rate was active.
+- **Immediate cost extraction under discount** -- Stage cost extraction
+  (`objective - theta`) now accounts for the discount factor on the theta
+  coefficient (`objective - d_t * theta`), correctly isolating the
+  undiscounted immediate cost at each stage.
+
 ## [0.3.0] - 2026-03-30
 
 ### Added

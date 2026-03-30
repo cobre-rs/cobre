@@ -50,6 +50,7 @@ use crate::SddpError;
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
 ///     rng_seed: 42,
+///     total_visited_states: 0,
 /// };
 ///
 /// // Compatible metadata passes validation.
@@ -162,6 +163,7 @@ mod tests {
             forward_passes: 4,
             warm_start_cuts: 0,
             rng_seed: 42,
+            total_visited_states: 0,
         }
     }
 

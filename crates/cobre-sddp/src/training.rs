@@ -120,6 +120,12 @@ pub struct TrainingResult {
     /// Stage index is `-1` for forward and lower bound (which span all stages),
     /// and the actual stage index for backward per-stage entries (added in T-004).
     pub solver_stats_log: Vec<SolverStatsEntry>,
+
+    /// Visited states archive (only present with Dominated cut selection).
+    ///
+    /// Moved out of the training loop so the caller can serialize it
+    /// into the policy checkpoint.
+    pub visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +419,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     total_time_ms,
                     basis_cache,
                     solver_stats_log,
+                    visited_archive: visited_archive.take(),
                 },
                 error: Some($e),
             });
@@ -811,6 +818,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             total_time_ms,
             basis_cache,
             solver_stats_log,
+            visited_archive,
         },
         error: None,
     })

@@ -1028,10 +1028,17 @@ fn d12_checkpoint_round_trip() {
         forward_passes: 1,
         warm_start_cuts: 0,
         rng_seed: 42,
+        total_visited_states: 0,
     };
 
-    write_policy_checkpoint(&policy_dir, &stage_cuts_payloads, &[], &policy_metadata)
-        .expect("write_policy_checkpoint must succeed");
+    write_policy_checkpoint(
+        &policy_dir,
+        &stage_cuts_payloads,
+        &[],
+        &policy_metadata,
+        &[],
+    )
+    .expect("write_policy_checkpoint must succeed");
 
     // ── Step 7: read checkpoint back and verify metadata ─────────────────────
 

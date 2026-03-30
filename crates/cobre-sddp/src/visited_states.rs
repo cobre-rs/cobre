@@ -13,6 +13,7 @@
 ///
 /// Stores forward-pass trial points as a flat contiguous `Vec<f64>`.
 /// Entry `i * state_dimension .. (i + 1) * state_dimension` holds state `i`.
+#[derive(Debug, Clone)]
 pub struct StageStates {
     /// Flat buffer of accumulated state vectors.
     data: Vec<f64>,
@@ -75,6 +76,7 @@ impl StageStates {
 /// One [`StageStates`] per stage.  Only created when
 /// [`CutSelectionStrategy::Dominated`](crate::CutSelectionStrategy::Dominated)
 /// is active.
+#[derive(Debug, Clone)]
 pub struct VisitedStatesArchive {
     stages: Vec<StageStates>,
 }

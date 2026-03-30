@@ -9,7 +9,9 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
-use cobre_io::output::policy::{PolicyBasisRecord, PolicyCutRecord, StageCutsPayload};
+use cobre_io::output::policy::{
+    PolicyBasisRecord, PolicyCutRecord, StageCutsPayload, StageStatesPayload,
+};
 
 use crate::cut::FutureCostFunction;
 use crate::training::TrainingResult;
@@ -131,6 +133,29 @@ pub fn build_stage_basis_records<'a>(
                     num_cut_rows,
                 }
             })
+        })
+        .collect()
+}
+
+/// Build per-stage [`StageStatesPayload`]s from the visited states archive.
+///
+/// Returns an empty `Vec` if the archive is `None` (non-Dominated strategies).
+#[must_use]
+pub fn build_stage_states_payloads(
+    archive: Option<&crate::visited_states::VisitedStatesArchive>,
+) -> Vec<StageStatesPayload<'_>> {
+    let Some(archive) = archive else {
+        return Vec::new();
+    };
+    (0..archive.num_stages())
+        .map(|t| {
+            let stage = archive.stage(t);
+            StageStatesPayload {
+                stage_id: t as u32,
+                state_dimension: stage.state_dimension() as u32,
+                count: stage.count() as u32,
+                data: stage.states(),
+            }
         })
         .collect()
 }

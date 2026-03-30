@@ -459,6 +459,7 @@ fn load_policy_for_simulation(
         reason: "loaded from checkpoint".to_string(),
         solver_stats_log: Vec::new(),
         basis_cache,
+        visited_archive: None,
     })
 }
 

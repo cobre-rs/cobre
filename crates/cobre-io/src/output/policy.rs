@@ -111,6 +111,35 @@ pub struct PolicyBasisRecord<'a> {
     pub num_cut_rows: u32,
 }
 
+/// Payload for writing per-stage visited states to a policy checkpoint.
+///
+/// The `data` slice contains the flat state vectors (row-major, each of length
+/// `state_dimension`). The total number of stored states is `count`.
+#[derive(Debug, Clone)]
+pub struct StageStatesPayload<'a> {
+    /// Stage index (0-based).
+    pub stage_id: u32,
+    /// Length of each state vector.
+    pub state_dimension: u32,
+    /// Number of states stored.
+    pub count: u32,
+    /// Flat data buffer: `count * state_dimension` f64 elements.
+    pub data: &'a [f64],
+}
+
+/// Owned version of [`StageStatesPayload`] returned by [`deserialize_stage_states`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StageStatesReadResult {
+    /// Stage index (0-based).
+    pub stage_id: u32,
+    /// Length of each state vector.
+    pub state_dimension: u32,
+    /// Number of states stored.
+    pub count: u32,
+    /// Flat data buffer (owned).
+    pub data: Vec<f64>,
+}
+
 /// Policy metadata for checkpoint resume and warm-start.
 ///
 /// Serialized to JSON (not `FlatBuffers`) because it is small, human-readable, and
@@ -140,6 +169,7 @@ pub struct PolicyBasisRecord<'a> {
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
 ///     rng_seed: 42,
+///     total_visited_states: 0,
 /// };
 /// let json = serde_json::to_string_pretty(&meta).unwrap();
 /// assert!(json.contains("completed_iterations"));
@@ -181,6 +211,12 @@ pub struct PolicyCheckpointMetadata {
     /// training run with the same `rng_seed` and `forward_passes` will
     /// produce identical noise sequences at each iteration.
     pub rng_seed: u64,
+    /// Total visited states across all stages (dominated cut selection).
+    ///
+    /// Absent in checkpoints written before dominated cut selection was
+    /// added; defaults to `0` on deserialization.
+    #[serde(default)]
+    pub total_visited_states: u64,
 }
 
 // FlatBuffers field offsets. Offsets derived from field declaration order in SS3.1.
@@ -212,6 +248,11 @@ const BASIS_FIELD_NUM_ROWS: u16 = 10;
 const BASIS_FIELD_COLUMN_STATUS: u16 = 12;
 const BASIS_FIELD_ROW_STATUS: u16 = 14;
 const BASIS_FIELD_NUM_CUT_ROWS: u16 = 16;
+
+const STATES_FIELD_STAGE_ID: u16 = 4;
+const STATES_FIELD_STATE_DIMENSION: u16 = 6;
+const STATES_FIELD_COUNT: u16 = 8;
+const STATES_FIELD_DATA: u16 = 10;
 
 // ── Helper: build a single cut table ─────────────────────────────────────────
 
@@ -392,6 +433,32 @@ pub fn serialize_stage_basis(record: &PolicyBasisRecord<'_>) -> Vec<u8> {
     builder.finished_data().to_vec()
 }
 
+/// Serialize one stage's visited states into a `FlatBuffers` buffer.
+///
+/// Produces a buffer containing a root `StageStates` table with fields
+/// `stage_id`, `state_dimension`, `count`, and `data` (a flat `[f64]`
+/// vector). The buffer is ready for writing directly to a `.bin` policy
+/// file under `states/`.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn serialize_stage_states(payload: &StageStatesPayload<'_>) -> Vec<u8> {
+    let estimated = 64 + std::mem::size_of_val(payload.data);
+    let mut builder = FlatBufferBuilder::with_capacity(estimated);
+
+    let data_vec = builder.create_vector(payload.data);
+
+    let root = builder.start_table();
+    builder.push_slot_always::<u32>(STATES_FIELD_STAGE_ID, payload.stage_id);
+    builder.push_slot_always::<u32>(STATES_FIELD_STATE_DIMENSION, payload.state_dimension);
+    builder.push_slot_always::<u32>(STATES_FIELD_COUNT, payload.count);
+    builder.push_slot_always(STATES_FIELD_DATA, data_vec);
+
+    let root_offset = builder.end_table(root);
+    builder.finish_minimal(root_offset);
+
+    builder.finished_data().to_vec()
+}
+
 /// Per-stage cut data payload for [`write_policy_checkpoint`].
 ///
 /// Groups all fields required by [`serialize_stage_cuts`] into a single struct so
@@ -503,8 +570,9 @@ pub struct StageCutsPayload<'a> {
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
 ///     rng_seed: 0,
+///     total_visited_states: 0,
 /// };
-/// write_policy_checkpoint(Path::new("/tmp/policy"), &stage_cuts, &[], &metadata)?;
+/// write_policy_checkpoint(Path::new("/tmp/policy"), &stage_cuts, &[], &metadata, &[])?;
 /// # Ok(())
 /// # }
 /// ```
@@ -513,6 +581,7 @@ pub fn write_policy_checkpoint(
     stage_cuts: &[StageCutsPayload<'_>],
     stage_bases: &[PolicyBasisRecord<'_>],
     metadata: &PolicyCheckpointMetadata,
+    stage_states: &[StageStatesPayload<'_>],
 ) -> Result<(), OutputError> {
     // Create cuts/ and basis/ subdirectories (and path/ itself if needed).
     let cuts_dir = path.join("cuts");
@@ -543,6 +612,19 @@ pub fn write_policy_checkpoint(
         let file_path = basis_dir.join(&filename);
         let buf = serialize_stage_basis(record);
         std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;
+    }
+
+    // Write per-stage states files: states/stage_NNN.bin (if any).
+    if !stage_states.is_empty() {
+        let states_dir = path.join("states");
+        std::fs::create_dir_all(&states_dir).map_err(|e| OutputError::io(&states_dir, e))?;
+
+        for payload in stage_states {
+            let filename = format!("stage_{:03}.bin", payload.stage_id);
+            let file_path = states_dir.join(&filename);
+            let buf = serialize_stage_states(payload);
+            std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;
+        }
     }
 
     // Write metadata.json LAST — its presence is the commit signal.
@@ -628,6 +710,10 @@ pub struct PolicyCheckpoint {
     pub stage_cuts: Vec<StageCutsReadResult>,
     /// Per-stage solver bases, sorted by `stage_id`.
     pub stage_bases: Vec<OwnedPolicyBasisRecord>,
+    /// Per-stage visited states, sorted by `stage_id`.
+    ///
+    /// Empty for checkpoints written before dominated cut selection was added.
+    pub stage_states: Vec<StageStatesReadResult>,
 }
 
 // ── Safe FlatBuffers wire-format helpers ─────────────────────────────────────
@@ -1065,6 +1151,55 @@ pub fn deserialize_stage_basis(buf: &[u8]) -> Result<OwnedPolicyBasisRecord, Out
     })
 }
 
+/// Deserialize one stage's visited states from a `FlatBuffers` buffer.
+///
+/// Parses the `StageStates` root table produced by [`serialize_stage_states`]
+/// and returns an owned [`StageStatesReadResult`].
+///
+/// # Errors
+///
+/// Returns [`OutputError::SerializationError`] if the buffer is truncated or
+/// has an invalid wire format.
+pub fn deserialize_stage_states(buf: &[u8]) -> Result<StageStatesReadResult, OutputError> {
+    let ctx = "stage_states";
+
+    let table_pos = resolve_root(buf)
+        .ok_or_else(|| OutputError::serialization(ctx, "buffer too short for root offset"))?;
+
+    let vtable_pos = resolve_vtable_pos(buf, table_pos)
+        .ok_or_else(|| OutputError::serialization(ctx, "invalid soffset_to_vtable"))?;
+
+    let stage_id = field_pos(buf, table_pos, vtable_pos, STATES_FIELD_STAGE_ID)
+        .and_then(|p| read_u32_le(buf, p))
+        .unwrap_or(0);
+
+    let state_dimension = field_pos(buf, table_pos, vtable_pos, STATES_FIELD_STATE_DIMENSION)
+        .and_then(|p| read_u32_le(buf, p))
+        .unwrap_or(0);
+
+    let count = field_pos(buf, table_pos, vtable_pos, STATES_FIELD_COUNT)
+        .and_then(|p| read_u32_le(buf, p))
+        .unwrap_or(0);
+
+    let data = if let Some(data_field_pos) =
+        field_pos(buf, table_pos, vtable_pos, STATES_FIELD_DATA)
+    {
+        let vec_pos = follow_uoffset(buf, data_field_pos)
+            .ok_or_else(|| OutputError::serialization(ctx, "invalid uoffset for data vector"))?;
+        read_f64_vector(buf, vec_pos)
+            .ok_or_else(|| OutputError::serialization(ctx, "data vector truncated"))?
+    } else {
+        Vec::new()
+    };
+
+    Ok(StageStatesReadResult {
+        stage_id,
+        state_dimension,
+        count,
+        data,
+    })
+}
+
 /// Read a complete policy checkpoint from `path`.
 ///
 /// Reads `metadata.json`, all `cuts/stage_NNN.bin` files, and all
@@ -1107,10 +1242,21 @@ pub fn read_policy_checkpoint(path: &Path) -> Result<PolicyCheckpoint, OutputErr
         read_sorted_bin_files(&basis_dir, "stage_basis", deserialize_stage_basis)?;
     stage_bases.sort_by_key(|r| r.stage_id);
 
+    // Read all states/stage_NNN.bin files (may be empty for older checkpoints).
+    let states_dir = path.join("states");
+    let stage_states = if states_dir.is_dir() {
+        let mut ss = read_sorted_bin_files(&states_dir, "stage_states", deserialize_stage_states)?;
+        ss.sort_by_key(|r| r.stage_id);
+        ss
+    } else {
+        Vec::new()
+    };
+
     Ok(PolicyCheckpoint {
         metadata,
         stage_cuts,
         stage_bases,
+        stage_states,
     })
 }
 
@@ -1341,6 +1487,7 @@ mod tests {
             forward_passes: 4,
             warm_start_cuts: 0,
             rng_seed: 42,
+            total_visited_states: 0,
         };
 
         let json = serde_json::to_string_pretty(&meta)
@@ -1404,6 +1551,7 @@ mod tests {
             forward_passes: 1,
             warm_start_cuts: 0,
             rng_seed: 0,
+            total_visited_states: 0,
         };
 
         let json = serde_json::to_string_pretty(&meta)
@@ -1436,6 +1584,7 @@ mod tests {
             forward_passes: 4,
             warm_start_cuts: 0,
             rng_seed: 42,
+            total_visited_states: 0,
         }
     }
 
@@ -1491,7 +1640,7 @@ mod tests {
         ];
         let metadata = make_metadata(3, 3);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts, &basis_records, &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts, &basis_records, &metadata, &[])
             .expect("write_policy_checkpoint must succeed");
 
         // Directories must exist.
@@ -1526,7 +1675,7 @@ mod tests {
         let stage_cuts = [make_stage_cuts_payload(0, &cuts_s0, &[0], 3)];
         let metadata = make_metadata(1, 3);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata, &[])
             .expect("write_policy_checkpoint must succeed");
 
         let content = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
@@ -1582,7 +1731,7 @@ mod tests {
         ];
         let metadata = make_metadata(3, 3);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata, &[])
             .expect("write_policy_checkpoint must succeed");
 
         for i in 0..3u32 {
@@ -1612,7 +1761,7 @@ mod tests {
         let basis_records = [make_basis_record(0)];
         let metadata = make_metadata(1, 2);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts, &basis_records, &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts, &basis_records, &metadata, &[])
             .expect("write_policy_checkpoint must succeed");
 
         let p = tmp.path().join("basis/stage_000.bin");
@@ -1635,7 +1784,7 @@ mod tests {
         let stage_cuts = [make_stage_cuts_payload(0, &cuts_s0, &[0], 2)];
         let metadata = make_metadata(1, 2);
 
-        let result = write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata);
+        let result = write_policy_checkpoint(tmp.path(), &stage_cuts, &[], &metadata, &[]);
 
         assert!(
             result.is_ok(),
@@ -1700,7 +1849,7 @@ mod tests {
         let stage_cuts = [make_stage_cuts_payload(0, &cuts_s0, &[0], 1)];
         let metadata = make_metadata(1, 1);
 
-        let result = write_policy_checkpoint(&readonly_target, &stage_cuts, &[], &metadata);
+        let result = write_policy_checkpoint(&readonly_target, &stage_cuts, &[], &metadata, &[]);
 
         // Restore permissions so the tempdir can be cleaned up.
         let mut perms2 = std::fs::metadata(tmp.path()).unwrap().permissions();
@@ -1751,7 +1900,7 @@ mod tests {
         let stage_bases = [basis_records_0, basis_records_1, basis_records_59];
         let metadata = make_metadata(3, 2);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts, &stage_bases, &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts, &stage_bases, &metadata, &[])
             .expect("write_policy_checkpoint must succeed");
 
         assert!(
@@ -2084,6 +2233,7 @@ mod tests {
             forward_passes: 4,
             warm_start_cuts: 10,
             rng_seed: 12345,
+            total_visited_states: 0,
         };
 
         let json = serde_json::to_string(&meta).expect("serialize must succeed");
@@ -2122,6 +2272,7 @@ mod tests {
             forward_passes: 1,
             warm_start_cuts: 0,
             rng_seed: 0,
+            total_visited_states: 0,
         };
 
         let json = serde_json::to_string(&meta).expect("serialize must succeed");
@@ -2154,8 +2305,14 @@ mod tests {
         let basis_records = [make_basis_record(0), make_basis_record(1)];
         let metadata = make_metadata(2, 3);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &basis_records, &metadata)
-            .expect("write must succeed");
+        write_policy_checkpoint(
+            tmp.path(),
+            &stage_cuts_payloads,
+            &basis_records,
+            &metadata,
+            &[],
+        )
+        .expect("write must succeed");
 
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
 
@@ -2210,7 +2367,7 @@ mod tests {
         let stage_cuts_payloads = [make_stage_cuts_payload(0, &cuts_s0, &[0], 1)];
         let metadata = make_metadata(1, 1);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &metadata, &[])
             .expect("write must succeed");
 
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
@@ -2254,7 +2411,7 @@ mod tests {
         ];
         let metadata = make_metadata(3, 2);
 
-        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &metadata)
+        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &metadata, &[])
             .expect("write must succeed");
 
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
@@ -2293,10 +2450,11 @@ mod tests {
             forward_passes: 8,
             warm_start_cuts: 20,
             rng_seed: 99999,
+            total_visited_states: 0,
         };
 
         let stage_cuts_payloads: [StageCutsPayload<'_>; 0] = [];
-        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &meta_in)
+        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &meta_in, &[])
             .expect("write must succeed");
 
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");

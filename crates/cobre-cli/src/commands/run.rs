@@ -279,6 +279,70 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                     "Warm-start: loaded {warm_count} cuts per stage from prior policy."
                 ));
             }
+        } else if policy_mode == "resume" {
+            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(CliError::Internal {
+                    message: format!(
+                        "Policy directory not found: {}. Cannot resume \
+                         without a prior checkpoint.",
+                        policy_dir.display()
+                    ),
+                });
+            }
+
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Loading prior checkpoint for resume training...");
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| CliError::Internal {
+                    message: format!("failed to read policy checkpoint: {e}"),
+                })?;
+
+            if let Some(ref config) = root_config {
+                if config.policy.validate_compatibility {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                    let state_dim = setup.fcf().state_dimension as u32;
+                    cobre_sddp::validate_policy_compatibility(
+                        &checkpoint.metadata,
+                        state_dim,
+                        n_stages,
+                        None,
+                        None,
+                    )
+                    .map_err(CliError::from)?;
+                }
+            }
+
+            let completed = u64::from(checkpoint.metadata.completed_iterations);
+            if completed >= setup.max_iterations() && ctx.is_root && !ctx.quiet {
+                let _ = ctx.stderr.write_line(&format!(
+                    "WARNING: Checkpoint already completed {completed} iterations \
+                     (max_iterations = {}). No additional training will occur.",
+                    setup.max_iterations()
+                ));
+            }
+
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(CliError::from)?;
+            setup.replace_fcf(warm_fcf);
+            setup.set_start_iteration(completed);
+
+            if ctx.is_root && !ctx.quiet {
+                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let _ = ctx.stderr.write_line(&format!(
+                    "Resume: loaded {warm_count} cuts per stage, \
+                     resuming from iteration {completed}."
+                ));
+            }
         }
 
         let training = run_training_phase(&ctx, &mut setup)?;

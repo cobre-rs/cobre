@@ -173,6 +173,13 @@ pub struct PolicyCheckpointMetadata {
     /// Number of cuts loaded from a previous policy at run start.
     pub warm_start_cuts: u32,
     /// RNG seed used by the scenario sampler.
+    ///
+    /// The noise sampling architecture derives per-draw seeds from
+    /// `(rng_seed, iteration, scenario, stage)` via SipHash-1-3. This
+    /// makes noise at any given iteration deterministic from the seed
+    /// alone — no accumulated RNG state is needed for resume. A resumed
+    /// training run with the same `rng_seed` and `forward_passes` will
+    /// produce identical noise sequences at each iteration.
     pub rng_seed: u64,
 }
 

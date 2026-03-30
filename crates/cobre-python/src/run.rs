@@ -482,6 +482,43 @@ fn run_inner(
             )
             .map_err(|e| format!("warm-start FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
+        } else if config.policy.mode == "resume" {
+            let policy_dir = output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(format!(
+                    "Policy directory not found: {}. Cannot resume \
+                     without a prior checkpoint.",
+                    policy_dir.display()
+                ));
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| format!("failed to read policy checkpoint: {e}"))?;
+
+            if config.policy.validate_compatibility {
+                #[allow(clippy::cast_possible_truncation)]
+                let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                let state_dim = setup.fcf().state_dimension as u32;
+                cobre_sddp::validate_policy_compatibility(
+                    &checkpoint.metadata,
+                    state_dim,
+                    n_stages,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("policy validation error: {e}"))?;
+            }
+
+            let completed = u64::from(checkpoint.metadata.completed_iterations);
+
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(|e| format!("resume FCF construction error: {e}"))?;
+            setup.replace_fcf(warm_fcf);
+            setup.set_start_iteration(completed);
         }
 
         let training = run_training_phase_py(&mut setup, n_threads)?;

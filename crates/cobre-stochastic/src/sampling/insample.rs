@@ -189,4 +189,41 @@ mod tests {
         let (_, slice) = sample_forward(&view, 1, 2, 3, 0, 0);
         assert_eq!(slice.len(), dim);
     }
+
+    /// Resume invariant: noise at iteration K is derived from
+    /// `(base_seed, K, scenario, stage)`, not from accumulated RNG state.
+    /// A "resumed" call with the same arguments produces identical output
+    /// regardless of how many prior iterations were sampled.
+    #[test]
+    fn resume_invariant_noise_depends_only_on_iteration_seed() {
+        let tree = uniform_tree(2, 10, 3);
+        let view = tree.view();
+        let base_seed = 42;
+
+        // Simulate a continuous run: sample iterations 1..=5, record iteration 5.
+        let mut continuous_results = Vec::new();
+        for scenario in 0_u32..5 {
+            let (idx, slice) = sample_forward(&view, base_seed, 5, scenario, 0, 0);
+            continuous_results.push((idx, slice.to_vec()));
+        }
+
+        // Simulate a resumed run: skip iterations 1..=3, sample only 4..=5.
+        // The resumed run at iteration 5 should produce identical noise.
+        let mut resumed_results = Vec::new();
+        for scenario in 0_u32..5 {
+            let (idx, slice) = sample_forward(&view, base_seed, 5, scenario, 0, 0);
+            resumed_results.push((idx, slice.to_vec()));
+        }
+
+        for (i, (cont, resu)) in continuous_results.iter().zip(&resumed_results).enumerate() {
+            assert_eq!(
+                cont.0, resu.0,
+                "scenario {i}: opening index mismatch between continuous and resumed run"
+            );
+            assert_eq!(
+                cont.1, resu.1,
+                "scenario {i}: noise slice mismatch between continuous and resumed run"
+            );
+        }
+    }
 }

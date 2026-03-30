@@ -40,6 +40,7 @@
 //!     max_blocks: 1,
 //!     cut_selection: None,
 //!     shutdown_flag: None,
+//!     start_iteration: 0,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -75,6 +76,7 @@ use crate::cut_selection::CutSelectionStrategy;
 ///     max_blocks: 1,
 ///     cut_selection: None,
 ///     shutdown_flag: None,
+///     start_iteration: 0,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -154,6 +156,14 @@ pub struct TrainingConfig {
     /// a "shutdown requested" reason. When `None`, the loop runs until
     /// convergence or iteration limit.
     pub shutdown_flag: Option<Arc<AtomicBool>>,
+
+    /// Starting iteration for resumed training runs.
+    ///
+    /// When resuming from a checkpoint, this is set to the checkpoint's
+    /// `completed_iterations`. The training loop starts at
+    /// `start_iteration + 1` and runs up to `max_iterations`.
+    /// Default: `0` (fresh training).
+    pub start_iteration: u64,
 }
 
 #[cfg(test)]
@@ -176,6 +186,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -194,6 +205,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -208,6 +220,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -225,6 +238,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -244,6 +258,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         assert!(config.event_sender.is_none());
     }
@@ -262,6 +277,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         assert!(config.event_sender.is_some());
@@ -299,6 +315,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

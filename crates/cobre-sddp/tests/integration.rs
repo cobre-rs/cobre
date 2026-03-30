@@ -518,6 +518,7 @@ fn train_converges_with_mock_solver() {
         max_blocks: 1,
         cut_selection: None,
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -592,6 +593,7 @@ fn train_deterministic_with_same_seed() {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf1,
         &stage_ctx,
@@ -639,6 +641,7 @@ fn train_deterministic_with_same_seed() {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf2,
         &stage_ctx2,
@@ -691,6 +694,7 @@ fn train_lb_monotonically_nondecreasing() {
         max_blocks: 1,
         cut_selection: None,
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -764,6 +768,7 @@ fn train_emits_correct_event_sequence() {
         max_blocks: 1,
         cut_selection: None,
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -854,6 +859,7 @@ fn train_stops_at_iteration_limit() {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -919,6 +925,7 @@ fn train_stops_on_graceful_shutdown() {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: Some(Arc::clone(&shutdown_flag)),
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -974,6 +981,7 @@ fn train_propagates_infeasible_error() {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -1041,6 +1049,7 @@ fn d17_level1_cut_selection_convergence() {
             check_frequency: 2,
         }),
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -1181,6 +1190,7 @@ fn d18_lml1_cut_selection_convergence() {
             check_frequency: 2,
         }),
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {

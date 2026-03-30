@@ -585,6 +585,7 @@ fn train_simulate_write_cycle() {
         max_blocks: 1,
         cut_selection: None,
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];

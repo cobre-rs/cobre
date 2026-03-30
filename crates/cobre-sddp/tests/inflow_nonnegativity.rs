@@ -560,6 +560,7 @@ fn train_fixture(
             max_blocks,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,

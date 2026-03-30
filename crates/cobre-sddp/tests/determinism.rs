@@ -548,6 +548,7 @@ fn run_training(
         max_blocks: 1,
         cut_selection: None,
         shutdown_flag: None,
+        start_iteration: 0,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts

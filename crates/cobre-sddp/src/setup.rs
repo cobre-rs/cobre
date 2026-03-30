@@ -254,6 +254,7 @@ pub struct StudySetup {
     seed: u64,
     forward_passes: u32,
     max_iterations: u64,
+    start_iteration: u64,
     n_scenarios: u32,
     io_channel_capacity: usize,
     policy_path: String,
@@ -598,6 +599,7 @@ impl StudySetup {
             seed,
             forward_passes,
             max_iterations,
+            start_iteration: 0,
             n_scenarios,
             io_channel_capacity,
             policy_path,
@@ -807,6 +809,14 @@ impl StudySetup {
         self.max_iterations
     }
 
+    /// Set the starting iteration for resumed training.
+    ///
+    /// When resuming from a checkpoint, call this with the checkpoint's
+    /// `completed_iterations` so the training loop starts at `start_iteration + 1`.
+    pub fn set_start_iteration(&mut self, iteration: u64) {
+        self.start_iteration = iteration;
+    }
+
     /// Return the number of simulation scenarios (0 if simulation is disabled).
     #[must_use]
     pub fn n_scenarios(&self) -> u32 {
@@ -916,6 +926,7 @@ impl StudySetup {
             max_blocks: self.max_blocks,
             cut_selection: self.cut_selection.clone(),
             shutdown_flag: shutdown_flag.map(Arc::clone),
+            start_iteration: self.start_iteration,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).

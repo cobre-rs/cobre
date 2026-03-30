@@ -1519,6 +1519,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1607,6 +1608,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1701,6 +1703,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2080,6 +2083,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2757,6 +2761,7 @@ mod tests {
             max_blocks: 1,
             cut_selection: None,
             shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };

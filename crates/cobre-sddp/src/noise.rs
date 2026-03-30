@@ -666,6 +666,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -721,6 +723,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -776,6 +780,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,

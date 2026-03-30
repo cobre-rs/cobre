@@ -215,6 +215,11 @@ pub struct StageExtractionSpec<'a> {
     /// Empty when no prescaling is applied.  Used to unscale row lower/upper
     /// bounds at the extraction boundary.
     pub row_scale: &'a [f64],
+    /// Cumulative discount factor for this stage (for reporting).
+    ///
+    /// Product of all one-step discount factors for transitions preceding
+    /// this stage. `1.0` for stage 0.
+    pub cumulative_discount_factor: f64,
 }
 
 impl StageExtractionSpec<'_> {
@@ -806,6 +811,7 @@ pub fn extract_stage_result(
         spec.indexer,
         spec.col_scale,
         generic_violation_cost,
+        spec.cumulative_discount_factor,
         ncs_curtailment_cost,
         stage_id,
     )];
@@ -838,6 +844,7 @@ fn compute_cost_result(
     indexer: &StageIndexer,
     col_scale: &[f64],
     generic_violation_cost: f64,
+    cumulative_discount_factor: f64,
     ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
@@ -855,8 +862,14 @@ fn compute_cost_result(
     let col_cost = |col: usize| view.primal[col] * view.objective_coeffs[col] / scale_factor(col);
     let range_sum = |r: std::ops::Range<usize>| -> f64 { r.map(col_cost).sum() };
 
-    let future_cost = view.primal[indexer.theta] * COST_SCALE_FACTOR;
-    let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
+    let theta_obj_coeff = view
+        .objective_coeffs
+        .get(indexer.theta)
+        .copied()
+        .unwrap_or(1.0);
+    let theta_contribution = view.primal[indexer.theta] * theta_obj_coeff;
+    let future_cost = theta_contribution * COST_SCALE_FACTOR;
+    let immediate_cost = (view.objective - theta_contribution) * COST_SCALE_FACTOR;
     let thermal_cost = if indexer.thermal.is_empty() {
         0.0
     } else {
@@ -982,7 +995,7 @@ fn compute_cost_result(
         total_cost: view.objective * COST_SCALE_FACTOR,
         immediate_cost,
         future_cost,
-        discount_factor: 1.0,
+        discount_factor: cumulative_discount_factor,
         thermal_cost,
         contract_cost: 0.0,
         deficit_cost,
@@ -1445,6 +1458,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             3,
         );
@@ -1486,6 +1500,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1527,6 +1542,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1570,6 +1586,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1625,6 +1642,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             2,
         );
@@ -1662,6 +1680,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             stage_id,
         );
@@ -1705,6 +1724,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1854,6 +1874,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -1950,6 +1971,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2212,6 +2234,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2298,6 +2321,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2395,6 +2419,7 @@ mod tests {
                 hydro_productivities: &[1.0, 1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2505,6 +2530,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2572,6 +2598,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2678,6 +2705,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2748,6 +2776,7 @@ mod tests {
                 hydro_productivities: &[1.0],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2783,6 +2812,7 @@ mod tests {
         primal[13] = 30.0;
 
         let mut obj = vec![0.0_f64; n_cols];
+        obj[6] = 1.0; // theta coefficient (undiscounted)
         // FPHA generation column 13: objective_coeff=0.01
         obj[13] = 0.01;
 
@@ -2822,6 +2852,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2871,6 +2902,7 @@ mod tests {
         primal[13] = 30.0; // FPHA generation
 
         let mut obj = vec![0.0_f64; n_cols];
+        obj[6] = 1.0; // theta coefficient (undiscounted)
         obj[13] = 0.01; // FPHA generation cost (scaled)
         // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
         //                           = 1.0 * 500 + 0.01 * 30 = 500.3
@@ -2912,6 +2944,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -2956,6 +2989,7 @@ mod tests {
         primal[13] = 30.0; // FPHA generation
 
         let mut obj = vec![0.0_f64; n_cols];
+        obj[6] = 1.0; // theta coefficient (undiscounted)
         // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
         obj[13] = 0.01;
 
@@ -2999,6 +3033,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &col_scale,
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );
@@ -3109,6 +3144,7 @@ mod tests {
                 hydro_productivities: &[0.0, 1.5],
                 col_scale: &[],
                 row_scale: &[],
+                cumulative_discount_factor: 1.0,
             },
             0,
         );

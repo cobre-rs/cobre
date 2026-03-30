@@ -771,7 +771,8 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     }
 
-    let stage_cost = (view.objective - unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
+    let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
+    let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
@@ -894,13 +895,10 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         iteration,
         fwd_offset,
     } = batch;
-    let num_stages = horizon.num_stages();
-    let forward_passes = *local_forward_passes;
+    let (num_stages, forward_passes) = (horizon.num_stages(), *local_forward_passes);
 
     debug_assert_eq!(records.len(), forward_passes * num_stages);
     debug_assert_eq!(initial_state.len(), indexer.n_state);
-    debug_assert_eq!(ctx.templates.len(), num_stages);
-    debug_assert_eq!(ctx.base_rows.len(), num_stages);
 
     let start = Instant::now();
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
@@ -910,7 +908,6 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     let base_seed = stochastic.base_seed();
     let n_workers = workspaces.len().max(1);
 
-    // Split `records` into disjoint per-worker sub-slices.
     let mut remaining: &mut [TrajectoryRecord] = records;
     let mut record_slices: Vec<&mut [TrajectoryRecord]> = Vec::with_capacity(n_workers);
     for w in 0..n_workers {
@@ -921,8 +918,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     }
     let basis_slices: Vec<BasisStoreSliceMut<'_>> = basis_store.split_workers_mut(n_workers);
 
-    // Each worker collects per-scenario costs in its local scenario index order.
-    // Worker w handles scenarios [start_m, end_m) in global scenario space.
+    // Each worker collects per-scenario costs in local scenario index order.
     let worker_results: Vec<Result<(Vec<f64>, u64), SddpError>> = workspaces
         .par_iter_mut()
         .zip(record_slices.par_iter_mut())
@@ -934,24 +930,26 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let mut trajectory_costs = vec![0.0_f64; n_local];
             let local_solve_count_before = ws.solver.statistics().solve_count;
 
-            // Stage-first, scenario-second: load the LP model once per stage,
-            // then iterate over all scenarios patching bounds and solving.
             for t in 0..num_stages {
                 ws.solver.load_model(&ctx.templates[t]);
                 if cut_batches[t].num_rows > 0 {
                     ws.solver.add_rows(&cut_batches[t]);
                 }
 
+                let cum_d = ctx
+                    .cumulative_discount_factors
+                    .get(t)
+                    .copied()
+                    .unwrap_or(1.0);
+
                 for (local_m, m) in (start_m..end_m).enumerate() {
-                    // Restore per-scenario state for this stage.
-                    if t == 0 {
-                        ws.current_state.clear();
-                        ws.current_state.extend_from_slice(initial_state);
+                    ws.current_state.clear();
+                    let src: &[f64] = if t == 0 {
+                        initial_state
                     } else {
-                        let prev_rec = &worker_records[local_m * num_stages + (t - 1)];
-                        ws.current_state.clear();
-                        ws.current_state.extend_from_slice(&prev_rec.state);
-                    }
+                        &worker_records[local_m * num_stages + (t - 1)].state
+                    };
+                    ws.current_state.extend_from_slice(src);
 
                     let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
@@ -965,14 +963,15 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         iteration: *iteration,
                         raw_noise,
                     };
-                    trajectory_costs[local_m] += run_forward_stage(
-                        ws,
-                        &mut basis_slice,
-                        ctx,
-                        training_ctx,
-                        &key,
-                        worker_records,
-                    )?;
+                    trajectory_costs[local_m] += cum_d
+                        * run_forward_stage(
+                            ws,
+                            &mut basis_slice,
+                            ctx,
+                            training_ctx,
+                            &key,
+                            worker_records,
+                        )?;
                 }
             }
 
@@ -981,9 +980,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         })
         .collect();
 
-    // Merge per-worker cost vectors in global scenario index order.
-    // Worker 0's scenarios come first (lowest global indices), then worker 1's, etc.
-    // This matches `partition()`'s static assignment and produces a canonical ordering.
+    // Merge per-worker cost vectors in global scenario index order (canonical).
     let mut scenario_costs = Vec::with_capacity(forward_passes);
     let mut lp_solves = 0u64;
     for result in worker_results {
@@ -1551,6 +1548,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1640,6 +1639,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1735,6 +1736,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2113,6 +2116,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -2257,6 +2262,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
 
         // Run with 1 workspace.
@@ -2378,6 +2385,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -2639,6 +2648,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let _ = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2797,6 +2808,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3010,6 +3023,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -3118,6 +3133,8 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3221,6 +3238,8 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3301,6 +3320,8 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

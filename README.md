@@ -54,7 +54,7 @@ pip install cobre-python
 
 ## Current Status
 
-Cobre v0.3.0 is alpha software with a fully functional SDDP solver. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. See the [roadmap](https://cobre-rs.github.io/cobre/reference/roadmap.html) for what's next.
+Cobre v0.3.1 is alpha software with a fully functional SDDP solver. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. See the [roadmap](https://cobre-rs.github.io/cobre/reference/roadmap.html) for what's next.
 
 ## Contributing
 

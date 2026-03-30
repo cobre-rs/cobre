@@ -358,6 +358,62 @@ impl StudySetup {
             &hydro_models.evaporation,
         )?;
 
+        // ── Discount factors ─────────────────────────────────────────────────
+        // Compute per-stage one-step discount factors from the PolicyGraph
+        // and store in StageTemplates. This is done here (not inside
+        // build_stage_templates) to avoid threading PolicyGraph through
+        // the template builder's signature.
+        {
+            let pg = system.policy_graph();
+            let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+            stage_templates.discount_factors = study_stages
+                .iter()
+                .map(|stage| {
+                    let rate = pg
+                        .transitions
+                        .iter()
+                        .find(|tr| tr.source_id == stage.id)
+                        .and_then(|tr| tr.annual_discount_rate_override)
+                        .unwrap_or(pg.annual_discount_rate);
+                    if rate == 0.0 {
+                        1.0
+                    } else {
+                        let dt_days = f64::from(
+                            i32::try_from((stage.end_date - stage.start_date).num_days())
+                                .unwrap_or(i32::MAX),
+                        );
+                        1.0 / (1.0 + rate).powf(dt_days / 365.25)
+                    }
+                })
+                .collect();
+        }
+
+        // ── Cumulative discount factors ──────────────────────────────────────
+        // D_0 = 1.0, D_t = D_{t-1} * d_{t-1} for t >= 1.
+        // Used by the simulation extraction layer for reporting only.
+        {
+            let n = stage_templates.discount_factors.len();
+            let mut cumulative = vec![1.0; n];
+            for t in 1..n {
+                cumulative[t] = cumulative[t - 1] * stage_templates.discount_factors[t - 1];
+            }
+            stage_templates.cumulative_discount_factors = cumulative;
+        }
+
+        // Apply discount factors to theta objective coefficients before
+        // column/row scaling. The discount factor d_t converts
+        // `1.0 * theta` to `d_t * theta` in the objective, correctly
+        // valuing discounted future cost. This is orthogonal to cost
+        // scaling (which divides c_i by K but leaves theta untouched);
+        // the discount factor multiplies that untouched 1.0 to d_t.
+        // When annual_discount_rate == 0.0, d_t == 1.0 and this is a no-op.
+        if let Some(first) = stage_templates.templates.first() {
+            let theta_col = StageIndexer::new(stage_templates.n_hydros, first.max_par_order).theta;
+            for (s_idx, tmpl) in stage_templates.templates.iter_mut().enumerate() {
+                tmpl.objective[theta_col] *= stage_templates.discount_factors[s_idx];
+            }
+        }
+
         // Compute and apply column scaling, then row scaling for numerical
         // conditioning (D_r * A * D_c form). Scale factors are stored in the
         // template for unscaling primal/dual solutions in the forward and
@@ -820,6 +876,8 @@ impl StudySetup {
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
             ncs_max_gen: &self.ncs_max_gen,
+            discount_factors: &self.stage_templates.discount_factors,
+            cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
         }
     }
 
@@ -886,6 +944,8 @@ impl StudySetup {
             load_bus_indices: &self.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
             ncs_max_gen: &self.ncs_max_gen,
+            discount_factors: &self.stage_templates.discount_factors,
+            cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
         };
 
         let training_ctx = TrainingContext {

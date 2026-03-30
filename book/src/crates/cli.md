@@ -15,8 +15,9 @@ into a single executable with a consistent user interface.
 | `cobre validate <CASE_DIR>`  | Run the 5-layer validation pipeline and print a structured diagnostic report        |
 | `cobre report <RESULTS_DIR>` | Read result manifests and print a machine-readable JSON summary to stdout           |
 | `cobre summary <OUTPUT_DIR>` | Display the human-readable post-run summary table from a completed output directory |
-| `cobre version`              | Print version, solver backend, communication backend, and build information         |
 | `cobre init <DIRECTORY>`     | Scaffold a new case directory from an embedded template                             |
+| `cobre schema <COMMAND>`     | Manage JSON Schema files for case directory input types                             |
+| `cobre version`              | Print version, solver backend, communication backend, and build information         |
 
 ## Exit Code Contract
 

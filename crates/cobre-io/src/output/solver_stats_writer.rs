@@ -51,6 +51,8 @@ pub struct SolverStatsRow {
     pub set_bounds_time_ms: f64,
     /// Cumulative time in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
+    /// Per-level retry success counts (12 levels).
+    pub retry_level_histogram: [u64; 12],
 }
 
 /// Write training solver statistics to `training/solver/iterations.parquet`.
@@ -130,28 +132,39 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
     let basis_set_time_arr =
         Float64Array::from(rows.iter().map(|r| r.basis_set_time_ms).collect::<Vec<_>>());
 
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(iteration_arr),
-            Arc::new(phase_arr),
-            Arc::new(stage_arr),
-            Arc::new(lp_solves_arr),
-            Arc::new(lp_successes_arr),
-            Arc::new(lp_retries_arr),
-            Arc::new(lp_failures_arr),
-            Arc::new(retry_attempts_arr),
-            Arc::new(basis_offered_arr),
-            Arc::new(basis_rejections_arr),
-            Arc::new(simplex_iter_arr),
-            Arc::new(solve_time_arr),
-            Arc::new(load_model_time_arr),
-            Arc::new(add_rows_time_arr),
-            Arc::new(set_bounds_time_arr),
-            Arc::new(basis_set_time_arr),
-        ],
-    )
-    .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
+    // Build 12 per-level retry histogram columns.
+    let retry_level_arrays: Vec<_> = (0..12)
+        .map(|lvl| {
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|r| r.retry_level_histogram[lvl])
+                    .collect::<Vec<_>>(),
+            )) as Arc<dyn arrow::array::Array>
+        })
+        .collect();
+
+    let mut columns: Vec<Arc<dyn arrow::array::Array>> = vec![
+        Arc::new(iteration_arr),
+        Arc::new(phase_arr),
+        Arc::new(stage_arr),
+        Arc::new(lp_solves_arr),
+        Arc::new(lp_successes_arr),
+        Arc::new(lp_retries_arr),
+        Arc::new(lp_failures_arr),
+        Arc::new(retry_attempts_arr),
+        Arc::new(basis_offered_arr),
+        Arc::new(basis_rejections_arr),
+        Arc::new(simplex_iter_arr),
+        Arc::new(solve_time_arr),
+        Arc::new(load_model_time_arr),
+        Arc::new(add_rows_time_arr),
+        Arc::new(set_bounds_time_arr),
+        Arc::new(basis_set_time_arr),
+    ];
+    columns.extend(retry_level_arrays);
+
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)
+        .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
 
     let file = std::fs::File::create(&tmp_path).map_err(|e| OutputError::io(&tmp_path, e))?;
     let props = WriterProperties::builder()
@@ -196,6 +209,7 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
+                retry_level_histogram: [0; 12],
             },
             SolverStatsRow {
                 iteration: 1,
@@ -214,6 +228,7 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
+                retry_level_histogram: [0; 12],
             },
         ]
     }
@@ -234,7 +249,7 @@ mod tests {
         let batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 16);
+        assert_eq!(batch.num_columns(), 28);
 
         let iteration_col = batch
             .column(0)
@@ -271,6 +286,6 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema();
-        assert_eq!(schema.fields().len(), 16);
+        assert_eq!(schema.fields().len(), 28);
     }
 }

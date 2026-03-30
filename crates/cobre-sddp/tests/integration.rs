@@ -346,6 +346,11 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
             generation_violation_below_cost: 0.0,
             evaporation_violation_cost: 0.0,
             water_withdrawal_violation_cost: 0.0,
+            water_withdrawal_violation_pos_cost: 0.0,
+            water_withdrawal_violation_neg_cost: 0.0,
+            evaporation_violation_pos_cost: 0.0,
+            evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         },
     };
 
@@ -497,6 +502,62 @@ impl Fixture {
     }
 }
 
+/// Run a single training pass with a given stochastic context and opening tree.
+///
+/// Returns the `TrainingOutcome`. Used to de-duplicate the two identical
+/// train calls in `train_deterministic_with_same_seed`.
+fn run_one_deterministic_pass(
+    fx: &Fixture,
+    stochastic: &StochasticContext,
+    opening_tree: &OpeningTree,
+    limit: u64,
+) -> cobre_sddp::TrainingOutcome {
+    let mut fcf = make_fcf(fx.n_stages);
+    let mut solver = MockSolver::with_fixed(50.0);
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
+    };
+    train(
+        &mut solver,
+        TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
+        },
+        &mut fcf,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic,
+            initial_state: &fx.initial_state,
+        },
+        opening_tree,
+        &fx.risk_measures,
+        iteration_limit(limit),
+        &StubComm,
+        || Ok(MockSolver::with_fixed(50.0)),
+    )
+    .unwrap()
+}
+
 // Tests
 
 /// Verify the full training loop runs to completion under `IterationLimit`.
@@ -516,6 +577,9 @@ fn train_converges_with_mock_solver() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -544,8 +608,6 @@ fn train_converges_with_mock_solver() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -564,98 +626,11 @@ fn train_converges_with_mock_solver() {
 fn train_deterministic_with_same_seed() {
     let fx = Fixture::new(2);
 
-    let mut fcf1 = make_fcf(fx.n_stages);
-    let mut solver1 = MockSolver::with_fixed(50.0);
-    let comm = StubComm;
+    let result1 = run_one_deterministic_pass(&fx, &fx.stochastic, &fx.opening_tree, 5);
 
-    let stage_ctx = StageContext {
-        templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_max_gen: &[],
-    };
-    let result1 = train(
-        &mut solver1,
-        TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-        },
-        &mut fcf1,
-        &stage_ctx,
-        &TrainingContext {
-            horizon: &fx.horizon,
-            indexer: &fx.indexer,
-            inflow_method: &InflowNonNegativityMethod::None,
-            stochastic: &fx.stochastic,
-            initial_state: &fx.initial_state,
-        },
-        &fx.opening_tree,
-        &fx.risk_measures,
-        iteration_limit(5),
-        None,
-        None,
-        &comm,
-        || Ok(MockSolver::with_fixed(50.0)),
-    )
-    .unwrap();
-
-    let mut fcf2 = make_fcf(fx.n_stages);
-    let mut solver2 = MockSolver::with_fixed(50.0);
     let opening_tree2 = make_opening_tree(1);
     let stochastic2 = make_stochastic_context(fx.n_stages, 1);
-
-    let stage_ctx2 = StageContext {
-        templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_max_gen: &[],
-    };
-    let result2 = train(
-        &mut solver2,
-        TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-        },
-        &mut fcf2,
-        &stage_ctx2,
-        &TrainingContext {
-            horizon: &fx.horizon,
-            indexer: &fx.indexer,
-            inflow_method: &InflowNonNegativityMethod::None,
-            stochastic: &stochastic2,
-            initial_state: &fx.initial_state,
-        },
-        &opening_tree2,
-        &fx.risk_measures,
-        iteration_limit(5),
-        None,
-        None,
-        &comm,
-        || Ok(MockSolver::with_fixed(50.0)),
-    )
-    .unwrap();
+    let result2 = run_one_deterministic_pass(&fx, &stochastic2, &opening_tree2, 5);
 
     assert_eq!(
         result1.result.final_lb.to_bits(),
@@ -689,6 +664,9 @@ fn train_lb_monotonically_nondecreasing() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -717,8 +695,6 @@ fn train_lb_monotonically_nondecreasing() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(6),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -762,6 +738,9 @@ fn train_emits_correct_event_sequence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -791,8 +770,6 @@ fn train_emits_correct_event_sequence() {
         &fx.risk_measures,
         // Limit to exactly 3 iterations.
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -852,6 +829,9 @@ fn train_stops_at_iteration_limit() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -865,8 +845,6 @@ fn train_stops_at_iteration_limit() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -917,6 +895,9 @@ fn train_stops_on_graceful_shutdown() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: Some(Arc::clone(&shutdown_flag)),
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -930,8 +911,6 @@ fn train_stops_on_graceful_shutdown() {
         &fx.opening_tree,
         &fx.risk_measures,
         rules,
-        None,
-        Some(&shutdown_flag),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -972,6 +951,9 @@ fn train_propagates_infeasible_error() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -985,8 +967,6 @@ fn train_propagates_infeasible_error() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::infeasible_on_first()),
     );
@@ -1036,11 +1016,12 @@ fn d17_level1_cut_selection_convergence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
-    };
-
-    let strategy = CutSelectionStrategy::Level1 {
-        threshold: 0,
-        check_frequency: 2,
+        cut_selection: Some(CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 2,
+        }),
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -1069,8 +1050,6 @@ fn d17_level1_cut_selection_convergence() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        Some(&strategy),
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1178,11 +1157,12 @@ fn d18_lml1_cut_selection_convergence() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
-    };
-
-    let strategy = CutSelectionStrategy::Lml1 {
-        memory_window: 3,
-        check_frequency: 2,
+        cut_selection: Some(CutSelectionStrategy::Lml1 {
+            memory_window: 3,
+            check_frequency: 2,
+        }),
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     let stage_ctx = StageContext {
@@ -1211,8 +1191,6 @@ fn d18_lml1_cut_selection_convergence() {
         &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
-        Some(&strategy),
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )

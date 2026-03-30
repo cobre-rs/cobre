@@ -8,6 +8,13 @@
 
 #include "highs_wrapper.h"
 #include <interfaces/highs_c_api.h>
+#include <stdint.h>
+
+/* Compile-time guard: cobre-solver assumes HighsInt is 32-bit (i32 on the
+ * Rust side). If HiGHS was built with -DHIGHSINT64=ON, all FFI calls would
+ * silently corrupt memory. Fail the build early instead. */
+_Static_assert(sizeof(HighsInt) == sizeof(int32_t),
+    "cobre-solver assumes HighsInt is 32-bit; rebuild HiGHS without HIGHSINT64");
 
 /* =========================================================================
  * Lifecycle

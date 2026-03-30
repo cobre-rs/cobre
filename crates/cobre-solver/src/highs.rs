@@ -14,7 +14,7 @@
 //! # Configuration
 //!
 //! The constructor applies performance-tuned defaults (`HiGHS` Implementation
-//! SS4.1): primal simplex, no presolve, no parallelism, suppressed output, and
+//! SS4.1): dual simplex, no presolve, no parallelism, suppressed output, and
 //! tight feasibility tolerances. These defaults are optimised for repeated
 //! solves of small-to-medium LPs. Per-run parameters (time limit, iteration
 //! limit) are not set here -- those are applied by the caller before each solve.
@@ -196,6 +196,8 @@ struct RetryOutcome {
     attempts: u64,
     solve_time: f64,
     iterations: u64,
+    /// The retry level (0..11) at which the solve succeeded.
+    level: u32,
 }
 
 impl HighsSolver {
@@ -329,11 +331,20 @@ impl HighsSolver {
 
     /// Restores default options after retry escalation.
     ///
-    /// Errors are silently ignored — already in recovery path.
+    /// Status codes are checked via `debug_assert!` to catch programming
+    /// errors during development (e.g., invalid option name). In release
+    /// builds, failures are silently ignored since we are already on the
+    /// recovery path.
     fn restore_default_settings(&mut self) {
         for opt in &default_options() {
             // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
-            unsafe { opt.apply(self.handle) };
+            let status = unsafe { opt.apply(self.handle) };
+            debug_assert_eq!(
+                status,
+                ffi::HIGHS_STATUS_OK,
+                "restore_default_settings: option {:?} failed with status {status}",
+                opt.name,
+            );
         }
     }
 
@@ -528,6 +539,7 @@ impl HighsSolver {
         let mut found_optimal = false;
         let mut optimal_time = 0.0_f64;
         let mut optimal_iterations: u64 = 0;
+        let mut optimal_level = 0_u32;
 
         for level in 0..num_retry_levels {
             // Check overall wall-clock budget before starting a new level.
@@ -552,6 +564,7 @@ impl HighsSolver {
                 found_optimal = true;
                 optimal_time = retry_time;
                 optimal_iterations = iters;
+                optimal_level = level;
                 break;
             }
 
@@ -594,6 +607,7 @@ impl HighsSolver {
                 attempts: retry_attempts,
                 solve_time: optimal_time,
                 iterations: optimal_iterations,
+                level: optimal_level,
             });
         }
 
@@ -630,7 +644,7 @@ impl HighsSolver {
         match level {
             // -- Phase 1: Core cumulative sequence (levels 0-4) ---------------
             //
-            // Level 0: cold restart (clear solver state), primal simplex.
+            // Level 0: cold restart (clear solver state), dual simplex.
             0 => {
                 unsafe { ffi::cobre_highs_clear_solver(self.handle) };
                 self.set_iteration_limits();
@@ -1059,6 +1073,7 @@ impl SolverInterface for HighsSolver {
                 self.stats.success_count += 1;
                 self.stats.total_iterations += outcome.iterations;
                 self.stats.total_solve_time_seconds += outcome.solve_time;
+                self.stats.retry_level_histogram[outcome.level as usize] += 1;
                 Ok(self.extract_solution_view(outcome.solve_time))
             }
             Err((attempts, err)) => {

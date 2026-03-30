@@ -169,6 +169,11 @@ pub struct LinePenaltyOverrideRow {
 ///     generation_violation_below_cost: None,
 ///     evaporation_violation_cost: None,
 ///     water_withdrawal_violation_cost: None,
+///     water_withdrawal_violation_pos_cost: None,
+///     water_withdrawal_violation_neg_cost: None,
+///     evaporation_violation_pos_cost: None,
+///     evaporation_violation_neg_cost: None,
+///     inflow_nonnegativity_cost: None,
 /// };
 /// assert_eq!(row.hydro_id, EntityId::from(5));
 /// assert_eq!(row.spillage_cost, Some(0.01));
@@ -203,6 +208,16 @@ pub struct HydroPenaltyOverrideRow {
     pub evaporation_violation_cost: Option<f64>,
     /// Water withdrawal violation override.
     pub water_withdrawal_violation_cost: Option<f64>,
+    /// Over-withdrawal violation override.
+    pub water_withdrawal_violation_pos_cost: Option<f64>,
+    /// Under-withdrawal violation override.
+    pub water_withdrawal_violation_neg_cost: Option<f64>,
+    /// Over-evaporation violation override.
+    pub evaporation_violation_pos_cost: Option<f64>,
+    /// Under-evaporation violation override.
+    pub evaporation_violation_neg_cost: Option<f64>,
+    /// Inflow non-negativity cost override.
+    pub inflow_nonnegativity_cost: Option<f64>,
 }
 
 /// A single row from `constraints/penalty_overrides_ncs.parquet`.
@@ -659,6 +674,14 @@ pub fn parse_penalty_overrides_hydro(
                 generation_violation_below_cost,
                 evaporation_violation_cost,
                 water_withdrawal_violation_cost,
+                // Directional overrides not yet exposed in Parquet schema —
+                // stage-level directional overrides will be added when the
+                // Parquet schema is extended.
+                water_withdrawal_violation_pos_cost: None,
+                water_withdrawal_violation_neg_cost: None,
+                evaporation_violation_pos_cost: None,
+                evaporation_violation_neg_cost: None,
+                inflow_nonnegativity_cost: None,
             });
         }
     }

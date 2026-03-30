@@ -54,6 +54,18 @@ pub struct SimulationCostResult {
     pub filling_target_cost: f64,
     /// Cost of hydro operational constraint violations.
     pub hydro_violation_cost: f64,
+    /// Cost of minimum outflow violations: sum of `outflow_below_slack` * penalty.
+    pub outflow_violation_below_cost: f64,
+    /// Cost of maximum outflow violations: sum of `outflow_above_slack` * penalty.
+    pub outflow_violation_above_cost: f64,
+    /// Cost of minimum turbining violations: sum of `turbine_below_slack` * penalty.
+    pub turbined_violation_cost: f64,
+    /// Cost of minimum generation violations: sum of `generation_below_slack` * penalty.
+    pub generation_violation_cost: f64,
+    /// Cost of evaporation constraint violations.
+    pub evaporation_violation_cost: f64,
+    /// Cost of water withdrawal constraint violations.
+    pub withdrawal_violation_cost: f64,
     /// Cost of inflow non-negativity constraint violations.
     pub inflow_penalty_cost: f64,
     /// Cost of generic constraint violations.
@@ -130,13 +142,18 @@ pub struct SimulationHydroResult {
     pub storage_violation_below_hm3: f64,
     /// Filling target violation in hm³.
     pub filling_target_violation_hm3: f64,
-    /// Evaporation constraint violation in m³/s.
-    pub evaporation_violation_m3s: f64,
+    /// Over-evaporation violation in m³/s (evaporated more than target).
+    pub evaporation_violation_pos_m3s: f64,
+    /// Under-evaporation violation in m³/s (evaporated less than target).
+    pub evaporation_violation_neg_m3s: f64,
     /// Inflow non-negativity constraint slack in m³/s.
     pub inflow_nonnegativity_slack_m3s: f64,
-    /// Water withdrawal violation slack in m³/s.
+    /// Over-withdrawal violation in m³/s (withdrew more than target).
+    /// Zero when no withdrawal is modeled.
+    pub water_withdrawal_violation_pos_m3s: f64,
+    /// Under-withdrawal violation in m³/s (withdrew less than target).
     /// Zero when no withdrawal is modeled or withdrawal is fully sustained.
-    pub water_withdrawal_violation_m3s: f64,
+    pub water_withdrawal_violation_neg_m3s: f64,
 }
 
 /// Thermal unit result for one (stage, block, thermal) tuple.
@@ -537,6 +554,12 @@ mod tests {
             storage_violation_cost: 20.0,
             filling_target_cost: 30.0,
             hydro_violation_cost: 5.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            turbined_violation_cost: 0.0,
+            generation_violation_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            withdrawal_violation_cost: 0.0,
             inflow_penalty_cost: 3.0,
             generic_violation_cost: 2.0,
             spillage_cost: 1.0,
@@ -595,9 +618,11 @@ mod tests {
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_pos_m3s: 0.0,
+            evaporation_violation_neg_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
-            water_withdrawal_violation_m3s: 0.0,
+            water_withdrawal_violation_pos_m3s: 0.0,
+            water_withdrawal_violation_neg_m3s: 0.0,
         };
 
         assert_eq!(r.hydro_id, 5);

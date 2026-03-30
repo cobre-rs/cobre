@@ -50,6 +50,11 @@ use std::ops::Range;
 ///     generation_violation_below_cost: 500.0,
 ///     evaporation_violation_cost: 500.0,
 ///     water_withdrawal_violation_cost: 500.0,
+///     water_withdrawal_violation_pos_cost: 500.0,
+///     water_withdrawal_violation_neg_cost: 500.0,
+///     evaporation_violation_pos_cost: 500.0,
+///     evaporation_violation_neg_cost: 500.0,
+///     inflow_nonnegativity_cost: 1000.0,
 /// };
 /// // Copy-semantics: can be passed by value
 /// let q = p;
@@ -82,6 +87,16 @@ pub struct HydroStagePenalties {
     pub evaporation_violation_cost: f64,
     /// Constraint-violation cost for unmet water withdrawal \[$/m³/s\].
     pub water_withdrawal_violation_cost: f64,
+    /// Constraint-violation cost for over-withdrawal (withdrew more than target) \[$/m³/s\].
+    pub water_withdrawal_violation_pos_cost: f64,
+    /// Constraint-violation cost for under-withdrawal (withdrew less than target) \[$/m³/s\].
+    pub water_withdrawal_violation_neg_cost: f64,
+    /// Constraint-violation cost for over-evaporation \[$/mm\].
+    pub evaporation_violation_pos_cost: f64,
+    /// Constraint-violation cost for under-evaporation \[$/mm\].
+    pub evaporation_violation_neg_cost: f64,
+    /// Constraint-violation cost for inflow non-negativity slack \[$/m³/s\].
+    pub inflow_nonnegativity_cost: f64,
 }
 
 /// Bus penalty values for a given (bus, stage) pair.
@@ -344,6 +359,11 @@ pub struct ContractStageBounds {
 ///     generation_violation_below_cost: 500.0,
 ///     evaporation_violation_cost: 500.0,
 ///     water_withdrawal_violation_cost: 500.0,
+///     water_withdrawal_violation_pos_cost: 500.0,
+///     water_withdrawal_violation_neg_cost: 500.0,
+///     evaporation_violation_pos_cost: 500.0,
+///     evaporation_violation_neg_cost: 500.0,
+///     inflow_nonnegativity_cost: 1000.0,
 /// };
 /// let bus_default = BusStagePenalties { excess_cost: 100.0 };
 /// let line_default = LineStagePenalties { exchange_cost: 5.0 };
@@ -835,7 +855,7 @@ mod serde_generic_bounds {
 
     /// Wire format for serde: a list of `(constraint_idx, stage_id, pairs)` groups.
     ///
-    /// JSON/bincode cannot serialize `HashMap<(usize, i32), Range<usize>>` directly
+    /// JSON/postcard cannot serialize `HashMap<(usize, i32), Range<usize>>` directly
     /// because composite tuple keys are not strings. This wire format avoids that
     /// by encoding each group as a tagged list of entries.
     #[derive(Serialize, Deserialize)]
@@ -1443,6 +1463,11 @@ mod tests {
             generation_violation_below_cost: 200.0,
             evaporation_violation_cost: 150.0,
             water_withdrawal_violation_cost: 100.0,
+            water_withdrawal_violation_pos_cost: 100.0,
+            water_withdrawal_violation_neg_cost: 100.0,
+            evaporation_violation_pos_cost: 150.0,
+            evaporation_violation_neg_cost: 150.0,
+            inflow_nonnegativity_cost: 1000.0,
         }
     }
 

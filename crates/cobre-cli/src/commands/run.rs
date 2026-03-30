@@ -166,6 +166,10 @@ struct LoadBroadcastResult {
     root_config: Option<cobre_io::Config>,
     /// Root-only estimation report for summaries (None on non-root ranks).
     root_estimation_report: Option<EstimationReport>,
+    /// Whether the training phase is enabled (broadcast from rank 0).
+    training_enabled: bool,
+    /// Policy initialization mode (broadcast from rank 0).
+    policy_mode: cobre_io::PolicyMode,
 }
 
 /// Result of the training phase.
@@ -206,8 +210,12 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         mut setup,
         mut root_config,
         root_estimation_report,
+        training_enabled,
+        policy_mode,
     } = broadcast_and_build_setup(&ctx, args)?;
 
+    // Pre-training outputs (estimation artifacts, scaling report) run
+    // regardless of training_enabled — they are data preparation outputs.
     run_pre_training(
         &ctx,
         &system,
@@ -216,55 +224,242 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         root_estimation_report.as_ref(),
     )?;
 
-    let training = run_training_phase(&ctx, &mut setup)?;
+    if training_enabled {
+        apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
+        let training = run_training_phase(&ctx, &mut setup)?;
 
-    // Write training outputs immediately (before simulation), so training
-    // artifacts are persisted even if simulation fails.
-    if ctx.is_root {
-        let config = root_config.take().ok_or_else(|| CliError::Internal {
-            message: "root_config was None on rank 0 — internal invariant violated".to_string(),
-        })?;
-
-        write_training_outputs(&WriteTrainingArgs {
-            output_dir: &ctx.output_dir,
-            system: &system,
-            config: &config,
-            training_output: &training.output,
-            setup: &setup,
-            training_result: &training.result,
-            quiet: ctx.quiet,
-            stderr: &ctx.stderr,
-        })?;
-
-        drop(config);
-    }
-
-    // If training failed mid-iteration, report the error after writing
-    // partial outputs. All ranks return here — simulation is skipped.
-    if let Some(ref training_error) = training.error {
+        // Write training outputs immediately (before simulation), so training
+        // artifacts are persisted even if simulation fails.
         if ctx.is_root {
-            tracing::error!(
-                "training failed after {} iterations: {training_error}",
-                training.result.iterations
-            );
-            if !ctx.quiet {
-                let _ = ctx.stderr.write_line(&format!(
-                    "Training failed after {} iterations. Partial outputs written to {}.",
-                    training.result.iterations,
-                    ctx.output_dir.display()
-                ));
-            }
+            let config = root_config.take().ok_or_else(|| CliError::Internal {
+                message: "root_config was None on rank 0 — internal invariant violated".to_string(),
+            })?;
+            write_training_outputs(&WriteTrainingArgs {
+                output_dir: &ctx.output_dir,
+                system: &system,
+                config: &config,
+                training_output: &training.output,
+                setup: &setup,
+                training_result: &training.result,
+                quiet: ctx.quiet,
+                stderr: &ctx.stderr,
+            })?;
+            drop(config);
         }
-        return Err(CliError::Internal {
-            message: format!("training error: {training_error}"),
-        });
-    }
 
-    if setup.n_scenarios() > 0 {
-        run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+        // If training failed mid-iteration, report the error after writing
+        // partial outputs. All ranks return here — simulation is skipped.
+        if let Some(ref training_error) = training.error {
+            if ctx.is_root {
+                tracing::error!(
+                    "training failed after {} iterations: {training_error}",
+                    training.result.iterations
+                );
+                if !ctx.quiet {
+                    let _ = ctx.stderr.write_line(&format!(
+                        "Training failed after {} iterations. Partial outputs written to {}.",
+                        training.result.iterations,
+                        ctx.output_dir.display()
+                    ));
+                }
+            }
+            return Err(CliError::Internal {
+                message: format!("training error: {training_error}"),
+            });
+        }
+
+        if setup.n_scenarios() > 0 {
+            run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+        }
+    } else if setup.n_scenarios() > 0 {
+        // Training disabled but simulation requested: load policy from disk.
+        let training_result =
+            load_policy_for_simulation(&ctx, &system, &mut setup, root_config.as_ref())?;
+        run_simulation_phase(&ctx, &system, &mut setup, &training_result)?;
+    } else {
+        // Both training and simulation disabled — nothing to do.
+        if ctx.is_root && !ctx.quiet {
+            let _ = ctx
+                .stderr
+                .write_line("Training disabled, simulation disabled — nothing to do.");
+        }
     }
 
     Ok(())
+}
+
+/// Load a policy checkpoint from disk and optionally validate its compatibility.
+///
+/// Returns the loaded checkpoint. The `policy_dir` must already exist.
+fn load_and_validate_checkpoint(
+    policy_dir: &Path,
+    system: &System,
+    setup: &StudySetup,
+    root_config: Option<&cobre_io::Config>,
+) -> Result<cobre_io::PolicyCheckpoint, CliError> {
+    let checkpoint = cobre_io::output::policy::read_policy_checkpoint(policy_dir).map_err(|e| {
+        CliError::Internal {
+            message: format!("failed to read policy checkpoint: {e}"),
+        }
+    })?;
+
+    if let Some(config) = root_config {
+        if config.policy.validate_compatibility {
+            #[allow(clippy::cast_possible_truncation)]
+            let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+            let state_dim =
+                u32::try_from(setup.fcf().state_dimension).map_err(|e| CliError::Internal {
+                    message: format!("state_dimension overflows u32: {e}"),
+                })?;
+            cobre_sddp::validate_policy_compatibility(
+                &checkpoint.metadata,
+                state_dim,
+                n_stages,
+                None,
+                None,
+            )
+            .map_err(CliError::from)?;
+        }
+    }
+
+    Ok(checkpoint)
+}
+
+/// Apply warm-start or resume policy before training, if requested.
+fn apply_training_policy(
+    ctx: &RunContext<impl Communicator>,
+    system: &System,
+    setup: &mut StudySetup,
+    root_config: Option<&cobre_io::Config>,
+    policy_mode: cobre_io::PolicyMode,
+) -> Result<(), CliError> {
+    match policy_mode {
+        cobre_io::PolicyMode::WarmStart => {
+            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(CliError::Internal {
+                    message: format!(
+                        "Policy directory not found: {}. Cannot warm-start \
+                         without a prior policy.",
+                        policy_dir.display()
+                    ),
+                });
+            }
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Loading prior policy for warm-start training...");
+            }
+            let checkpoint = load_and_validate_checkpoint(&policy_dir, system, setup, root_config)?;
+            // Reserve one extra slot for cuts added in the final iteration.
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(CliError::from)?;
+            setup.replace_fcf(warm_fcf);
+            if ctx.is_root && !ctx.quiet {
+                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let _ = ctx.stderr.write_line(&format!(
+                    "Warm-start: loaded {warm_count} cuts per stage from prior policy."
+                ));
+            }
+        }
+        cobre_io::PolicyMode::Resume => {
+            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(CliError::Internal {
+                    message: format!(
+                        "Policy directory not found: {}. Cannot resume \
+                         without a prior checkpoint.",
+                        policy_dir.display()
+                    ),
+                });
+            }
+            if ctx.is_root && !ctx.quiet {
+                let _ = ctx
+                    .stderr
+                    .write_line("Loading prior checkpoint for resume training...");
+            }
+            let checkpoint = load_and_validate_checkpoint(&policy_dir, system, setup, root_config)?;
+            let completed = u64::from(checkpoint.metadata.completed_iterations);
+            if completed >= setup.max_iterations() && ctx.is_root && !ctx.quiet {
+                let _ = ctx.stderr.write_line(&format!(
+                    "WARNING: Checkpoint already completed {completed} iterations \
+                     (max_iterations = {}). No additional training will occur.",
+                    setup.max_iterations()
+                ));
+            }
+            // Reserve one extra slot for cuts added in the final iteration.
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(CliError::from)?;
+            setup.replace_fcf(warm_fcf);
+            setup.set_start_iteration(completed);
+            if ctx.is_root && !ctx.quiet {
+                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let _ = ctx.stderr.write_line(&format!(
+                    "Resume: loaded {warm_count} cuts per stage, \
+                     resuming from iteration {completed}."
+                ));
+            }
+        }
+        cobre_io::PolicyMode::Fresh => {}
+    }
+    Ok(())
+}
+
+/// Load a policy checkpoint and build a synthetic `TrainingResult` for simulation-only mode.
+fn load_policy_for_simulation(
+    ctx: &RunContext<impl Communicator>,
+    system: &System,
+    setup: &mut StudySetup,
+    root_config: Option<&cobre_io::Config>,
+) -> Result<cobre_sddp::TrainingResult, CliError> {
+    if ctx.is_root && !ctx.quiet {
+        let _ = ctx
+            .stderr
+            .write_line("Training disabled. Loading policy for simulation-only mode...");
+    }
+
+    let policy_dir = ctx.output_dir.join(setup.policy_path());
+    if !policy_dir.exists() {
+        return Err(CliError::Internal {
+            message: format!(
+                "Policy directory not found: {}. Cannot run simulation-only \
+                 mode without a trained policy.",
+                policy_dir.display()
+            ),
+        });
+    }
+
+    let checkpoint = load_and_validate_checkpoint(&policy_dir, system, setup, root_config)?;
+
+    let loaded_fcf = cobre_sddp::FutureCostFunction::from_deserialized(&checkpoint.stage_cuts)
+        .map_err(CliError::from)?;
+    setup.replace_fcf(loaded_fcf);
+
+    let basis_cache =
+        cobre_sddp::build_basis_cache_from_checkpoint(setup.num_stages(), &checkpoint.stage_bases);
+
+    Ok(cobre_sddp::TrainingResult {
+        iterations: checkpoint.metadata.completed_iterations.into(),
+        final_lb: checkpoint.metadata.final_lower_bound,
+        final_ub: checkpoint
+            .metadata
+            .best_upper_bound
+            .unwrap_or(f64::INFINITY),
+        final_ub_std: 0.0,
+        final_gap: 0.0,
+        total_time_ms: 0,
+        reason: "loaded from checkpoint".to_string(),
+        solver_stats_log: Vec::new(),
+        basis_cache,
+    })
 }
 
 /// Set up the communicator, terminal, rayon pool, and resolve the output directory.
@@ -408,6 +603,8 @@ fn broadcast_and_build_setup(
         })?
     };
 
+    let training_enabled = bcast_config.training_enabled;
+    let policy_mode = bcast_config.policy_mode;
     let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
 
     Ok(LoadBroadcastResult {
@@ -415,6 +612,8 @@ fn broadcast_and_build_setup(
         setup,
         root_config: root_config.take(),
         root_estimation_report,
+        training_enabled,
+        policy_mode,
     })
 }
 
@@ -903,6 +1102,7 @@ fn delta_to_stats_row(
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        retry_level_histogram: delta.retry_level_histogram,
     }
 }
 

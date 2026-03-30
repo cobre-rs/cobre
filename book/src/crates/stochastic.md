@@ -17,18 +17,18 @@ for deterministic noise generation.
 
 ## Module overview
 
-| Module          | Purpose                                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedPar` cache                               |
-| `par::evaluate` | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                          |
-| `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, AIC order selection |
-| `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                            |
-| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                              |
-| `correlation`   | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                    |
-| `tree`          | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                      |
-| `sampling`      | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage                            |
-| `context`       | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                             |
-| `error`         | `StochasticError` with five variants covering all failure domains of the stochastic layer                                            |
+| Module          | Purpose                                                                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedPar` cache                                    |
+| `par::evaluate` | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                               |
+| `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, PACF/AIC order selection |
+| `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                                 |
+| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                                   |
+| `correlation`   | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                         |
+| `tree`          | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                           |
+| `sampling`      | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage                                 |
+| `context`       | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                                  |
+| `error`         | `StochasticError` with five variants covering all failure domains of the stochastic layer                                                 |
 
 ## Architecture
 
@@ -274,10 +274,19 @@ The recursion is truncated if the prediction error variance drops to or below
 `f64::EPSILON`, handling near-singular autocorrelation sequences without
 returning an error.
 
-### Step 4: AIC order selection
+### Step 4: Order selection
 
-`select_order_aic` selects the AR order that minimises the Akaike Information
-Criterion:
+Two order selection methods are available:
+
+**PACF-based selection (default):** `select_order_pacf` selects the AR order
+using the periodic partial autocorrelation function (PACF) with a 95%
+significance threshold. The maximum significant lag becomes the AR order.
+This method avoids overfitting in series with little autocorrelation and
+captures meaningful persistence where it exists. PACF-based selection is the
+default since v0.1.9.
+
+**AIC-based selection:** `select_order_aic` selects the AR order that minimises
+the Akaike Information Criterion:
 
 ```text
 AIC(p) = N · ln(σ²_p) + 2p
@@ -403,6 +412,11 @@ coefficients for the fitted order), `sigma2_per_order` (prediction error
 variance at each intermediate order, length = actual fitted order), `parcor`
 (partial autocorrelation coefficients), `sigma2` (final prediction error
 variance).
+
+### `PacfSelectionResult`
+
+Output of `select_order_pacf`. Fields: `selected_order` (0 for white noise),
+`pacf_values` (partial autocorrelation values for each candidate lag).
 
 ### `AicSelectionResult`
 
@@ -536,7 +550,7 @@ No external dependencies or system libraries are required. All dependencies
 
 ### Test suite overview
 
-The crate has 239 tests total covering unit tests, conformance integration
+The test suite covers unit tests, conformance integration
 tests, reproducibility integration tests, and doc-tests. Tests were added
 in v0.1.1 for the PAR evaluation functions, normal noise precomputation, and
 the estimation pipeline.

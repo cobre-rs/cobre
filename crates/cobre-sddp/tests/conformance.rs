@@ -868,3 +868,209 @@ mod lb_conformance {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Constraint inventory conformance
+// ---------------------------------------------------------------------------
+
+/// Verify that `StageIndexer::with_equipment` produces non-empty ranges for
+/// every constraint family when all features are active.
+///
+/// This catches bugs where the indexer layout arithmetic silently produces
+/// empty (0..0) ranges for a constraint family that should be present.
+#[test]
+fn indexer_constraint_inventory() {
+    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+
+    let indexer = StageIndexer::with_equipment(
+        &EquipmentCounts {
+            hydro_count: 3,
+            max_par_order: 1,
+            n_thermals: 2,
+            n_lines: 1,
+            n_buses: 2,
+            n_blks: 2,
+            has_inflow_penalty: true,
+            max_deficit_segments: 2,
+        },
+        &FphaColumnLayout {
+            hydro_indices: vec![0],
+            planes_per_hydro: vec![3],
+        },
+    );
+
+    // Operational violation slack columns must all be non-empty.
+    assert!(
+        !indexer.outflow_below_slack.is_empty(),
+        "outflow_below_slack must be non-empty"
+    );
+    assert!(
+        !indexer.outflow_above_slack.is_empty(),
+        "outflow_above_slack must be non-empty"
+    );
+    assert!(
+        !indexer.turbine_below_slack.is_empty(),
+        "turbine_below_slack must be non-empty"
+    );
+    assert!(
+        !indexer.generation_below_slack.is_empty(),
+        "generation_below_slack must be non-empty"
+    );
+
+    // Operational violation constraint rows must all be non-empty.
+    assert!(
+        !indexer.min_outflow_rows.is_empty(),
+        "min_outflow_rows must be non-empty"
+    );
+    assert!(
+        !indexer.max_outflow_rows.is_empty(),
+        "max_outflow_rows must be non-empty"
+    );
+    assert!(
+        !indexer.min_turbine_rows.is_empty(),
+        "min_turbine_rows must be non-empty"
+    );
+    assert!(
+        !indexer.min_generation_rows.is_empty(),
+        "min_generation_rows must be non-empty"
+    );
+
+    // has_operational_violations flag.
+    assert!(
+        indexer.has_operational_violations,
+        "has_operational_violations must be true when hydro_count > 0"
+    );
+
+    // Inflow non-negativity slack.
+    assert!(
+        !indexer.inflow_slack.is_empty(),
+        "inflow_slack must be non-empty when has_inflow_penalty=true"
+    );
+
+    // Water withdrawal slacks (bidirectional).
+    assert!(
+        !indexer.withdrawal_slack_neg.is_empty(),
+        "withdrawal_slack_neg must be non-empty when hydro_count > 0"
+    );
+    assert!(
+        !indexer.withdrawal_slack_pos.is_empty(),
+        "withdrawal_slack_pos must be non-empty when hydro_count > 0"
+    );
+
+    // Operational violation slack columns must be contiguous: each range
+    // starts where the previous ends.
+    assert_eq!(
+        indexer.outflow_above_slack.start, indexer.outflow_below_slack.end,
+        "outflow_above must start where outflow_below ends"
+    );
+    assert_eq!(
+        indexer.turbine_below_slack.start, indexer.outflow_above_slack.end,
+        "turbine_below must start where outflow_above ends"
+    );
+    assert_eq!(
+        indexer.generation_below_slack.start, indexer.turbine_below_slack.end,
+        "generation_below must start where turbine_below ends"
+    );
+
+    // Each operational violation slack range must span hydro_count * n_blks columns.
+    let hydro_count = 3;
+    let n_blks = 2;
+    let n_op = hydro_count * n_blks;
+    assert_eq!(indexer.outflow_below_slack.len(), n_op);
+    assert_eq!(indexer.outflow_above_slack.len(), n_op);
+    assert_eq!(indexer.turbine_below_slack.len(), n_op);
+    assert_eq!(indexer.generation_below_slack.len(), n_op);
+    assert_eq!(indexer.withdrawal_slack_neg.len(), hydro_count);
+    assert_eq!(indexer.withdrawal_slack_pos.len(), hydro_count);
+
+    // Constraint rows must also span hydro_count * n_blks each.
+    assert_eq!(indexer.min_outflow_rows.len(), n_op);
+    assert_eq!(indexer.max_outflow_rows.len(), n_op);
+    assert_eq!(indexer.min_turbine_rows.len(), n_op);
+    assert_eq!(indexer.min_generation_rows.len(), n_op);
+}
+
+/// CI regression guard: verifies the expected number of hydro-related slack
+/// column families in `StageIndexer` and checks for range overlaps.
+///
+/// When a developer adds a new constraint type to the LP builder, they must
+/// also:
+/// 1. Add the corresponding slack column range to `StageIndexer`.
+/// 2. Add extraction logic in `accumulate_category_costs`.
+/// 3. Add a new field to `SimulationCostResult`.
+/// 4. Update this guard count.
+///
+/// If the count changes without updating this test, the failure message
+/// explains what needs to be done.
+#[test]
+fn constraint_extraction_regression_guard() {
+    use std::ops::Range;
+
+    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+
+    let indexer = StageIndexer::with_equipment(
+        &EquipmentCounts {
+            hydro_count: 2,
+            max_par_order: 1,
+            n_thermals: 1,
+            n_lines: 1,
+            n_buses: 1,
+            n_blks: 1,
+            has_inflow_penalty: true,
+            max_deficit_segments: 1,
+        },
+        &FphaColumnLayout {
+            hydro_indices: vec![0],
+            planes_per_hydro: vec![2],
+        },
+    );
+
+    // Collect all hydro-related slack column families.
+    // These are the families that contribute to the hydro violation cost
+    // decomposition in accumulate_category_costs().
+    let slack_families: Vec<(&str, &Range<usize>)> = vec![
+        ("outflow_below_slack", &indexer.outflow_below_slack),
+        ("outflow_above_slack", &indexer.outflow_above_slack),
+        ("turbine_below_slack", &indexer.turbine_below_slack),
+        ("generation_below_slack", &indexer.generation_below_slack),
+        ("withdrawal_slack_neg", &indexer.withdrawal_slack_neg),
+        ("withdrawal_slack_pos", &indexer.withdrawal_slack_pos),
+        ("inflow_slack", &indexer.inflow_slack),
+    ];
+
+    // Guard: exactly 7 hydro-related slack column families.
+    // If you are adding a new constraint type, update:
+    //   1. StageIndexer — add the new Range<usize> field
+    //   2. accumulate_category_costs() — extract the new cost component
+    //   3. SimulationCostResult — add the new f64 cost field
+    //   4. CostWriteRecord + costs_schema() — add the Parquet output column
+    //   5. This test — add the new family to `slack_families` and bump the count
+    assert_eq!(
+        slack_families.len(),
+        7,
+        "Expected exactly 7 hydro-related slack column families. \
+         If you added a new constraint type, update: (a) accumulate_category_costs, \
+         (b) SimulationCostResult, (c) CostWriteRecord + costs_schema, \
+         (d) this regression guard."
+    );
+
+    // Verify no range overlaps between any two families.
+    for i in 0..slack_families.len() {
+        let (name_a, range_a) = &slack_families[i];
+        if range_a.is_empty() {
+            continue;
+        }
+        for (name_b, range_b) in &slack_families[i + 1..] {
+            if range_b.is_empty() {
+                continue;
+            }
+            let overlaps = range_a.start < range_b.end && range_b.start < range_a.end;
+            assert!(
+                !overlaps,
+                "Slack column range overlap detected between {name_a} ({range_a:?}) and \
+                 {name_b} ({range_b:?}). This indicates a layout arithmetic bug in \
+                 StageIndexer::with_equipment."
+            );
+        }
+    }
+}

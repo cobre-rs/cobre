@@ -152,7 +152,7 @@ pub struct StageStateConfig {
 
     /// Whether past inflow realizations (AR model lags) are state
     /// variables. Default: false. Required when PAR model order `p > 0`
-    /// and inflow lag cuts are enabled.
+    /// and inflow lag state tracking is enabled.
     pub inflow_lags: bool,
 }
 

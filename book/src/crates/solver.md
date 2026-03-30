@@ -233,25 +233,43 @@ applies seven performance-tuned default options before returning:
 If HiGHS handle creation or any option call fails, the handle is destroyed
 before returning `Err(SolverError::InternalError { .. })`.
 
-### 5-level retry escalation
+### 12-level retry escalation
 
 When HiGHS returns `SOLVE_ERROR` or `UNKNOWN` (not a definitive terminal
-status), `HighsSolver::solve` escalates through five retry levels before giving
-up:
+status), `HighsSolver::solve` escalates through twelve retry levels organised
+in two phases, with wall-clock budgets per level and an overall budget:
+
+**Phase 1 (levels 0--4): core cumulative sequence**
 
 | Level | Action                                                       |
 | ----- | ------------------------------------------------------------ |
 | 0     | Clear the cached basis and factorization (`clear_solver`)    |
 | 1     | Enable presolve (`presolve = "on"`)                          |
-| 2     | Switch to primal simplex (`simplex_strategy = 1`)            |
+| 2     | Switch to dual simplex (`simplex_strategy = 1`)              |
 | 3     | Relax feasibility tolerances (`primal` and `dual` to `1e-6`) |
 | 4     | Switch to interior point method (`solver = "ipm"`)           |
+
+**Phase 2 (levels 5--11): extended strategies with scaling**
+
+Each level starts from restored defaults with presolve and iteration limits,
+then applies level-specific scaling, tolerance, and solver options.
+
+| Level | Action                                                                      |
+| ----- | --------------------------------------------------------------------------- |
+| 5     | Presolve + scale strategy 3                                                 |
+| 6     | Presolve + primal simplex + scale strategy 4                                |
+| 7     | Presolve + scale strategy 3 + relaxed tolerances (`1e-6`)                   |
+| 8     | Presolve + objective scale (`-10`)                                          |
+| 9     | Presolve + primal simplex + objective scale (`-10`) + bound scale (`-5`)    |
+| 10    | Presolve + objective scale (`-13`) + bound scale (`-8`) + relaxed tol       |
+| 11    | Presolve + IPM + objective scale (`-10`) + bound scale (`-5`) + relaxed tol |
 
 The first level that returns `OPTIMAL` exits the loop. If a definitive terminal
 status (`INFEASIBLE`, `UNBOUNDED`, `TIME_LIMIT`, `ITERATION_LIMIT`) is reached
 during a retry level, the loop exits immediately with the corresponding
-`SolverError` variant. If all five levels are exhausted without a result, the
-method returns `SolverError::NumericalDifficulty`. Default settings are restored
+`SolverError` variant. If all twelve levels are exhausted or the overall
+wall-clock budget expires, the method returns
+`SolverError::NumericalDifficulty`. Default settings are restored
 unconditionally after the retry loop, regardless of outcome, so subsequent calls
 see the standard configuration.
 

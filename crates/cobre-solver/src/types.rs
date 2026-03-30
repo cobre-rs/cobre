@@ -190,6 +190,12 @@ pub struct SolverStatistics {
     /// Accumulated by `solve_with_basis` around the basis installation step.
     /// `solve()` (without basis) does not increment this counter.
     pub total_basis_set_time_seconds: f64,
+
+    /// Per-level retry success histogram (12 levels, indexed 0..11).
+    ///
+    /// `retry_level_histogram[k]` counts how many solves were recovered at
+    /// retry level `k`. The sum equals `success_count - first_try_successes`.
+    pub retry_level_histogram: [u64; 12],
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -253,10 +259,11 @@ pub struct StageTemplate {
 
     /// Number of dual-relevant constraint rows (contiguous prefix of rows).
     ///
-    /// Equal to `N + N*L + n_fpha + n_gvc` per
-    /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// For constant-productivity-only hydros (no FPHA), this equals `n_state`.
-    /// Extracting cut coefficients reads `dual[0..n_dual_relevant]`.
+    /// Currently equal to `n_state` (= `N + N*L` where `N` is the number of
+    /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable
+    /// constraint rows are structural and not included in the dual-relevant set.
+    ///
+    /// Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
     pub n_dual_relevant: usize,
 
     /// Number of operating hydros at this stage.
@@ -527,6 +534,7 @@ mod tests {
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
         assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
+        assert_eq!(stats.retry_level_histogram, [0u64; 12]);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

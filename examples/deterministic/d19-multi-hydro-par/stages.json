@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "pre_study_stages": [
+    {
+      "id": -2,
+      "start_date": "2023-11-01",
+      "end_date": "2023-12-01",
+      "season_id": 0
+    },
+    {
+      "id": -1,
+      "start_date": "2023-12-01",
+      "end_date": "2024-01-01",
+      "season_id": 0
+    }
+  ],
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-02-01",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 730
+        }
+      ],
+      "state_variables": {
+        "storage": true,
+        "inflow_lags": true
+      },
+      "num_scenarios": 1
+    },
+    {
+      "id": 1,
+      "start_date": "2024-02-01",
+      "end_date": "2024-03-01",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 730
+        }
+      ],
+      "state_variables": {
+        "storage": true,
+        "inflow_lags": true
+      },
+      "num_scenarios": 1
+    },
+    {
+      "id": 2,
+      "start_date": "2024-03-01",
+      "end_date": "2024-04-01",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 730
+        }
+      ],
+      "state_variables": {
+        "storage": true,
+        "inflow_lags": true
+      },
+      "num_scenarios": 1
+    }
+  ]
+}

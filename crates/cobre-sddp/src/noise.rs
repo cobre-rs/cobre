@@ -74,7 +74,8 @@ pub(crate) fn transform_inflow_noise(
     let has_par = par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros;
 
     match inflow_method {
-        InflowNonNegativityMethod::Truncation => {
+        InflowNonNegativityMethod::Truncation
+        | InflowNonNegativityMethod::TruncationWithPenalty { .. } => {
             let max_order = indexer.max_par_order;
             let lag_len = max_order * n_hydros;
             scratch.lag_matrix_buf.clear();
@@ -82,7 +83,7 @@ pub(crate) fn transform_inflow_noise(
             for h in 0..n_hydros {
                 for l in 0..max_order {
                     scratch.lag_matrix_buf[l * n_hydros + h] =
-                        current_state[indexer.inflow_lags.start + h * max_order + l];
+                        current_state[indexer.inflow_lags.start + l * n_hydros + h];
                 }
             }
 
@@ -422,6 +423,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -555,6 +561,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 

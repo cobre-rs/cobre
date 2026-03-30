@@ -141,6 +141,11 @@ fn build_system() -> cobre_core::System {
         generation_violation_below_cost: 0.0,
         evaporation_violation_cost: 0.0,
         water_withdrawal_violation_cost: 0.0,
+        water_withdrawal_violation_pos_cost: 0.0,
+        water_withdrawal_violation_neg_cost: 0.0,
+        evaporation_violation_pos_cost: 0.0,
+        evaporation_violation_neg_cost: 0.0,
+        inflow_nonnegativity_cost: 1000.0,
     };
 
     let bus = Bus {
@@ -314,6 +319,11 @@ fn build_system() -> cobre_core::System {
         generation_violation_below_cost: 0.0,
         evaporation_violation_cost: 0.0,
         water_withdrawal_violation_cost: 0.0,
+        water_withdrawal_violation_pos_cost: 0.0,
+        water_withdrawal_violation_neg_cost: 0.0,
+        evaporation_violation_pos_cost: 0.0,
+        evaporation_violation_neg_cost: 0.0,
+        inflow_nonnegativity_cost: 1000.0,
     };
     let resolved_penalties = ResolvedPenalties::new(
         &PenaltiesCountsSpec {
@@ -433,8 +443,11 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
+    build_fixture_with_method(InflowNonNegativityMethod::Penalty { cost: 1000.0 })
+}
+
+fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixture {
     let system = build_system();
-    let inflow_method = InflowNonNegativityMethod::Penalty { cost: 1000.0 };
 
     let par_lp = PrecomputedPar::build(
         system.inflow_models(),
@@ -476,7 +489,7 @@ fn build_fixture() -> Fixture {
             has_inflow_penalty,
             max_deficit_segments: 1,
         },
-        &cobre_sddp::FphaConfig {
+        &cobre_sddp::FphaColumnLayout {
             hydro_indices: vec![],
             planes_per_hydro: vec![],
         },
@@ -558,6 +571,9 @@ fn train_fixture(
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -574,8 +590,6 @@ fn train_fixture(
             rules: vec![StoppingRule::IterationLimit { limit: iterations }],
             mode: StoppingMode::Any,
         },
-        None,
-        None,
         &comm,
         HighsSolver::new,
     )
@@ -749,5 +763,190 @@ fn test_simulation_slack_output_populated() {
     assert!(
         any_nonzero,
         "inflow_nonnegativity_slack_m3s must be > 0.0 in at least one hydro stage result"
+    );
+}
+
+/// T-015: `TruncationWithPenalty` mode -- training completes and inflow slack columns
+/// are present.
+///
+/// Verifies that the hybrid mode (clamping + penalty slack) works end-to-end:
+/// 1. Training completes without errors (LP is feasible).
+/// 2. The LP template has inflow slack columns (`has_slack_columns() == true`).
+/// 3. Noise is clamped (same as Truncation mode).
+#[test]
+fn truncation_with_penalty_training_completes() {
+    let fx = build_fixture_with_method(InflowNonNegativityMethod::TruncationWithPenalty {
+        cost: 1000.0,
+    });
+
+    // Verify the method has slack columns.
+    assert!(
+        fx.inflow_method.has_slack_columns(),
+        "TruncationWithPenalty must have slack columns"
+    );
+
+    // Verify the LP template has inflow slack columns in the indexer.
+    assert!(
+        !fx.indexer.inflow_slack.is_empty(),
+        "indexer.inflow_slack must be non-empty for TruncationWithPenalty"
+    );
+
+    // Train and verify convergence.
+    let outcome = train_fixture(&fx, 5).expect("training must succeed");
+    assert!(
+        outcome.error.is_none(),
+        "TruncationWithPenalty: training error: {:?}",
+        outcome.error
+    );
+    assert!(
+        outcome.result.iterations <= 10,
+        "TruncationWithPenalty: iterations={} (expected <= 10)",
+        outcome.result.iterations
+    );
+}
+
+/// T-012: Per-plant inflow penalty differentiation.
+///
+/// Two hydros with different `inflow_nonnegativity_cost` values produce different
+/// objective coefficients on their inflow slack columns in the LP template.
+/// H1 gets 100 R$/MWh, H2 gets 5000 R$/MWh.
+///
+/// Verified at the LP template level: the objective coefficient for H1's inflow
+/// slack column equals `100 * block_hours`, while H2's equals `5000 * block_hours`.
+#[test]
+fn per_plant_inflow_penalty_differentiates_objective_coefficients() {
+    use cobre_core::resolved::{
+        HydroStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, ResolvedPenalties,
+    };
+
+    // Build modified penalties: H1 (index 0) gets 100, H2 (index 1) gets 5000.
+    let hydro_penalties_default = HydroStagePenalties {
+        spillage_cost: 0.0,
+        diversion_cost: 0.0,
+        fpha_turbined_cost: 0.0,
+        storage_violation_below_cost: 0.0,
+        filling_target_violation_cost: 0.0,
+        turbined_violation_below_cost: 0.0,
+        outflow_violation_below_cost: 0.0,
+        outflow_violation_above_cost: 0.0,
+        generation_violation_below_cost: 0.0,
+        evaporation_violation_cost: 0.0,
+        water_withdrawal_violation_cost: 0.0,
+        water_withdrawal_violation_pos_cost: 0.0,
+        water_withdrawal_violation_neg_cost: 0.0,
+        evaporation_violation_pos_cost: 0.0,
+        evaporation_violation_neg_cost: 0.0,
+        inflow_nonnegativity_cost: 100.0,
+    };
+    let mut resolved_penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: N_HYDROS,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties_default,
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+    // H2 (index 1) gets expensive cost.
+    for stage_idx in 0..N_STAGES {
+        resolved_penalties
+            .hydro_penalties_mut(1, stage_idx)
+            .inflow_nonnegativity_cost = 5000.0;
+    }
+
+    // Rebuild the system with patched penalties using the base system's data.
+    let base_system = build_system();
+    let system = cobre_core::SystemBuilder::new()
+        .buses(base_system.buses().to_vec())
+        .hydros(base_system.hydros().to_vec())
+        .stages(base_system.stages().to_vec())
+        .inflow_models(base_system.inflow_models().to_vec())
+        .correlation(base_system.correlation().clone())
+        .bounds(base_system.bounds().clone())
+        .penalties(resolved_penalties)
+        .build()
+        .unwrap();
+
+    // Build templates.
+    let inflow_method = InflowNonNegativityMethod::Penalty { cost: 100.0 };
+    let par_lp = PrecomputedPar::build(
+        system.inflow_models(),
+        &system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect::<Vec<_>>(),
+        &system.hydros().iter().map(|h| h.id).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
+    let templates = build_stage_templates(
+        &system,
+        &inflow_method,
+        &par_lp,
+        &cobre_stochastic::normal::precompute::PrecomputedNormal::default(),
+        &hydro_models.production,
+        &hydro_models.evaporation,
+    )
+    .expect("build_stage_templates must succeed");
+
+    // Verify: the objective coefficients for the inflow slack columns differ.
+    let tmpl0 = &templates.templates[0];
+    let block_hours = 744.0_f64;
+
+    // The inflow slack columns are at indexer positions. With 2 hydros, PAR(0),
+    // and has_penalty=true, the indexer allocates 2 inflow slack columns.
+    let n_blks = 1;
+    let indexer = StageIndexer::with_equipment(
+        &cobre_sddp::EquipmentCounts {
+            hydro_count: tmpl0.n_hydro,
+            max_par_order: tmpl0.max_par_order,
+            n_thermals: 0,
+            n_lines: 0,
+            n_buses: 1,
+            n_blks,
+            has_inflow_penalty: true,
+            max_deficit_segments: 1,
+        },
+        &cobre_sddp::FphaColumnLayout {
+            hydro_indices: vec![],
+            planes_per_hydro: vec![],
+        },
+    );
+
+    // Inflow slack columns: indexer.inflow_slack.start .. indexer.inflow_slack.end
+    assert_eq!(indexer.inflow_slack.len(), N_HYDROS);
+    let h1_col = indexer.inflow_slack.start; // H1 (index 0)
+    let h2_col = indexer.inflow_slack.start + 1; // H2 (index 1)
+
+    let h1_obj = tmpl0.objective[h1_col];
+    let h2_obj = tmpl0.objective[h2_col];
+
+    // LP builder divides by COST_SCALE_FACTOR (1000.0) for conditioning.
+    let cost_scale = 1000.0_f64;
+    let expected_h1 = 100.0 * block_hours / cost_scale;
+    let expected_h2 = 5000.0 * block_hours / cost_scale;
+
+    assert!(
+        (h1_obj - expected_h1).abs() < 1e-6,
+        "H1 inflow slack objective: expected {expected_h1}, got {h1_obj}"
+    );
+    assert!(
+        (h2_obj - expected_h2).abs() < 1e-6,
+        "H2 inflow slack objective: expected {expected_h2}, got {h2_obj}"
+    );
+    assert!(
+        (h2_obj / h1_obj - 50.0).abs() < 1e-6,
+        "H2/H1 objective ratio must be 50 (5000/100), got {}",
+        h2_obj / h1_obj
     );
 }

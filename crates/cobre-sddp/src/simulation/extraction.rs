@@ -14,8 +14,9 @@
 //! ```text
 //! [0, N)             storage      — outgoing storage volumes
 //! [N, N*(1+L))       inflow_lags  — AR lag variables (hydro-major order)
-//! [N*(1+L), N*(2+L)) storage_in   — incoming storage volumes (fixed vars)
-//! N*(2+L)            theta        — future cost variable
+//! [N*(1+L), N*(2+L)) z_inflow     — realized inflow (auxiliary, not state)
+//! [N*(2+L), N*(3+L)) storage_in   — incoming storage volumes (fixed vars)
+//! N*(3+L)            theta        — future cost variable
 //! [theta+1, ...)     equipment    — turbine, spillage, thermal, lines, deficit, excess
 //! ```
 //!
@@ -245,7 +246,7 @@ fn extract_hydro_no_turbine(
     let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
         spec.inflow_m3s_per_hydro[h]
     } else if indexer.max_par_order > 0 {
-        view.primal[indexer.inflow_lags.start + h * indexer.max_par_order]
+        view.primal[indexer.inflow_lags.start + h]
     } else {
         0.0
     };
@@ -254,8 +255,13 @@ fn extract_hydro_no_turbine(
     } else {
         0.0
     };
-    let withdrawal_violation = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack.start + h]
+    let withdrawal_neg = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack_neg.start + h]
+    } else {
+        0.0
+    };
+    let withdrawal_pos = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack_pos.start + h]
     } else {
         0.0
     };
@@ -265,6 +271,32 @@ fn extract_hydro_no_turbine(
         .copied()
         .unwrap_or(0.0)
         * COST_SCALE_FACTOR;
+
+    // Operational violation slacks are per-block in rate units (m3/s or MW).
+    // Stage-level: hours-weighted average across blocks.
+    let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
+        if indexer.has_operational_violations {
+            let n_blks = indexer.n_blks;
+            let base_turbine_below = indexer.turbine_below_slack.start + h * n_blks;
+            let base_outflow_below = indexer.outflow_below_slack.start + h * n_blks;
+            let base_outflow_above = indexer.outflow_above_slack.start + h * n_blks;
+            let base_gen_below = indexer.generation_below_slack.start + h * n_blks;
+            let mut tb = 0.0_f64;
+            let mut ob = 0.0_f64;
+            let mut oa = 0.0_f64;
+            let mut gb = 0.0_f64;
+            let total_hours: f64 = spec.block_hours.iter().sum();
+            for blk in 0..n_blks {
+                let w = spec.block_hours[blk] / total_hours;
+                tb += view.primal[base_turbine_below + blk] * w;
+                ob += view.primal[base_outflow_below + blk] * w;
+                oa += view.primal[base_outflow_above + blk] * w;
+                gb += view.primal[base_gen_below + blk] * w;
+            }
+            (tb, ob, oa, gb)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
 
     // Determine if hydro `h` is FPHA. FPHA identification comes from
     // StageIndexer, not from EntityCounts.hydro_productivities.
@@ -276,14 +308,15 @@ fn extract_hydro_no_turbine(
     };
 
     // Evaporation: read from LP columns when present; fall back to 0.0.
-    let (evaporation_m3s, evaporation_violation_m3s) =
+    let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
         if let Some(local_evap_idx) = indexer.evap_hydro_indices.iter().position(|&e| e == h) {
             let ei = &indexer.evap_indices[local_evap_idx];
             let q_ev = view.primal[ei.q_ev_col];
-            let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
-            (Some(q_ev), violation)
+            let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
+            let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
+            (Some(q_ev), neg, pos)
         } else {
-            (Some(0.0), 0.0)
+            (Some(0.0), 0.0, 0.0)
         };
 
     SimulationHydroResult {
@@ -305,15 +338,110 @@ fn extract_hydro_no_turbine(
         water_value_per_hm3: water_value,
         storage_binding_code: 0,
         operative_state_code: 1,
-        turbined_slack_m3s: 0.0,
-        outflow_slack_below_m3s: 0.0,
-        outflow_slack_above_m3s: 0.0,
-        generation_slack_mw: 0.0,
+        turbined_slack_m3s: turbined_slack,
+        outflow_slack_below_m3s: outflow_slack_below,
+        outflow_slack_above_m3s: outflow_slack_above,
+        generation_slack_mw: generation_slack,
         storage_violation_below_hm3: 0.0,
         filling_target_violation_hm3: 0.0,
-        evaporation_violation_m3s,
+        evaporation_violation_pos_m3s,
+        evaporation_violation_neg_m3s,
         inflow_nonnegativity_slack_m3s: inflow_slack,
-        water_withdrawal_violation_m3s: withdrawal_violation,
+        water_withdrawal_violation_pos_m3s: withdrawal_pos,
+        water_withdrawal_violation_neg_m3s: withdrawal_neg,
+    }
+}
+
+/// Stage-level (non-per-block) data extracted for one hydro plant.
+///
+/// Captures values that are constant across all blocks within a stage so that
+/// the per-block closure in [`extract_hydro_per_block`] only needs to read
+/// per-block columns.
+struct HydroStageContext {
+    storage_final: f64,
+    storage_initial: f64,
+    incremental_inflow: f64,
+    inflow_slack: f64,
+    withdrawal_neg: f64,
+    withdrawal_pos: f64,
+    water_value: f64,
+    fpha_local: Option<usize>,
+    productivity_mw_per_m3s: Option<f64>,
+    evaporation_m3s: Option<f64>,
+    evaporation_violation_neg_m3s: f64,
+    evaporation_violation_pos_m3s: f64,
+}
+
+impl HydroStageContext {
+    /// Read all stage-level scalars for hydro at system index `h`.
+    fn new(view: &SolutionView<'_>, spec: &StageExtractionSpec<'_>, h: usize) -> Self {
+        let indexer = spec.indexer;
+        let storage_final = view.primal[indexer.storage.start + h];
+        let storage_initial = view.primal[indexer.storage_in.start + h];
+        let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
+            spec.inflow_m3s_per_hydro[h]
+        } else if indexer.max_par_order > 0 {
+            view.primal[indexer.inflow_lags.start + h]
+        } else {
+            0.0
+        };
+        let inflow_slack = if indexer.has_inflow_penalty {
+            view.primal[indexer.inflow_slack.start + h]
+        } else {
+            0.0
+        };
+        let withdrawal_neg = if indexer.has_withdrawal {
+            view.primal[indexer.withdrawal_slack_neg.start + h]
+        } else {
+            0.0
+        };
+        let withdrawal_pos = if indexer.has_withdrawal {
+            view.primal[indexer.withdrawal_slack_pos.start + h]
+        } else {
+            0.0
+        };
+        let water_value = view
+            .dual
+            .get(indexer.water_balance.start + h)
+            .copied()
+            .unwrap_or(0.0)
+            * COST_SCALE_FACTOR;
+        // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
+        // can read generation from the LP `g_{h,k}` column rather than computing
+        // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
+        // because they use a piecewise function, not a scalar constant.
+        let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
+        let productivity_mw_per_m3s = if fpha_local.is_some() {
+            None
+        } else {
+            Some(spec.hydro_productivities[h])
+        };
+        // Evaporation: stage-level (one column per hydro, same for all blocks).
+        let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
+        let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
+            if let Some(lei) = local_evap {
+                let ei = &indexer.evap_indices[lei];
+                let q_ev = view.primal[ei.q_ev_col];
+                let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
+                let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
+                (Some(q_ev), neg, pos)
+            } else {
+                (Some(0.0), 0.0, 0.0)
+            };
+        Self {
+            storage_final,
+            storage_initial,
+            incremental_inflow,
+            inflow_slack,
+            withdrawal_neg,
+            withdrawal_pos,
+            water_value,
+            fpha_local,
+            productivity_mw_per_m3s,
+            evaporation_m3s,
+            evaporation_violation_neg_m3s,
+            evaporation_violation_pos_m3s,
+        }
     }
 }
 
@@ -327,53 +455,9 @@ fn extract_hydro_per_block<'a>(
 ) -> impl Iterator<Item = SimulationHydroResult> + 'a {
     let indexer = spec.indexer;
     let n_blks = indexer.n_blks;
-    let storage_final = view.primal[indexer.storage.start + h];
-    let storage_initial = view.primal[indexer.storage_in.start + h];
-    let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
-        spec.inflow_m3s_per_hydro[h]
-    } else if indexer.max_par_order > 0 {
-        view.primal[indexer.inflow_lags.start + h * indexer.max_par_order]
-    } else {
-        0.0
-    };
-    let inflow_slack = if indexer.has_inflow_penalty {
-        view.primal[indexer.inflow_slack.start + h]
-    } else {
-        0.0
-    };
-    let withdrawal_violation = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack.start + h]
-    } else {
-        0.0
-    };
-    let water_value = view
-        .dual
-        .get(indexer.water_balance.start + h)
-        .copied()
-        .unwrap_or(0.0)
-        * COST_SCALE_FACTOR;
 
-    // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
-    // can read generation from the LP `g_{h,k}` column rather than computing
-    // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
-    // because they use a piecewise function, not a scalar constant.
-    let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
-    let productivity_mw_per_m3s = if fpha_local.is_some() {
-        None
-    } else {
-        Some(spec.hydro_productivities[h])
-    };
-
-    // Evaporation: stage-level (one column per hydro, same for all blocks).
-    let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
-    let (evaporation_m3s, evaporation_violation_m3s) = if let Some(lei) = local_evap {
-        let ei = &indexer.evap_indices[lei];
-        let q_ev = view.primal[ei.q_ev_col];
-        let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
-        (Some(q_ev), violation)
-    } else {
-        (Some(0.0), 0.0)
-    };
+    // Extract stage-level scalars once; the per-block closure captures them.
+    let ctx = HydroStageContext::new(view, spec, h);
 
     // Look up diversion source indices for this hydro (for inflow computation).
     let hydro_entity_id = EntityId(hydro_id);
@@ -405,11 +489,25 @@ fn extract_hydro_per_block<'a>(
 
         // For FPHA hydros, read generation from the LP `g_{h,k}` column.
         // For constant-productivity hydros, compute generation as turbined * productivity.
-        let generation_mw = if let Some(local_fpha_idx) = fpha_local {
+        let generation_mw = if let Some(local_fpha_idx) = ctx.fpha_local {
             view.primal[indexer.generation.start + local_fpha_idx * n_blks + b]
         } else {
             turbined * spec.hydro_productivities[h]
         };
+
+        // Operational violation slacks: read per-block value directly (m3/s or MW).
+        let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
+            if indexer.has_operational_violations {
+                let n = indexer.n_blks;
+                (
+                    view.primal[indexer.turbine_below_slack.start + h * n + b],
+                    view.primal[indexer.outflow_below_slack.start + h * n + b],
+                    view.primal[indexer.outflow_above_slack.start + h * n + b],
+                    view.primal[indexer.generation_below_slack.start + h * n + b],
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
 
         #[allow(clippy::cast_possible_truncation)]
         SimulationHydroResult {
@@ -418,29 +516,31 @@ fn extract_hydro_per_block<'a>(
             hydro_id,
             turbined_m3s: turbined,
             spillage_m3s: spillage,
-            evaporation_m3s,
+            evaporation_m3s: ctx.evaporation_m3s,
             diverted_inflow_m3s: Some(diverted_inflow),
             diverted_outflow_m3s: Some(diverted_outflow),
-            incremental_inflow_m3s: incremental_inflow,
-            inflow_m3s: incremental_inflow,
-            storage_initial_hm3: storage_initial,
-            storage_final_hm3: storage_final,
+            incremental_inflow_m3s: ctx.incremental_inflow,
+            inflow_m3s: ctx.incremental_inflow,
+            storage_initial_hm3: ctx.storage_initial,
+            storage_final_hm3: ctx.storage_final,
             generation_mw,
-            productivity_mw_per_m3s,
+            productivity_mw_per_m3s: ctx.productivity_mw_per_m3s,
             spillage_cost: spillage * view.objective_coeffs[s_col] / spec.col_scale_factor(s_col)
                 * COST_SCALE_FACTOR,
-            water_value_per_hm3: water_value,
+            water_value_per_hm3: ctx.water_value,
             storage_binding_code: 0,
             operative_state_code: 1,
-            turbined_slack_m3s: 0.0,
-            outflow_slack_below_m3s: 0.0,
-            outflow_slack_above_m3s: 0.0,
-            generation_slack_mw: 0.0,
+            turbined_slack_m3s: turbined_slack,
+            outflow_slack_below_m3s: outflow_slack_below,
+            outflow_slack_above_m3s: outflow_slack_above,
+            generation_slack_mw: generation_slack,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s,
-            inflow_nonnegativity_slack_m3s: inflow_slack,
-            water_withdrawal_violation_m3s: withdrawal_violation,
+            evaporation_violation_pos_m3s: ctx.evaporation_violation_pos_m3s,
+            evaporation_violation_neg_m3s: ctx.evaporation_violation_neg_m3s,
+            inflow_nonnegativity_slack_m3s: ctx.inflow_slack,
+            water_withdrawal_violation_pos_m3s: ctx.withdrawal_pos,
+            water_withdrawal_violation_neg_m3s: ctx.withdrawal_neg,
         }
     })
 }
@@ -815,21 +915,59 @@ fn compute_cost_result(
         range_sum(indexer.inflow_slack.clone()) * COST_SCALE_FACTOR
     };
 
-    // Hydro violation cost: evaporation violation slacks + withdrawal violation
-    // slacks. These are penalty-bearing LP columns that absorb constraint
-    // violations for linearised evaporation and minimum withdrawal flow.
-    let evap_violation_cost: f64 = indexer
+    // Hydro violation cost: decomposed into 6 per-constraint components.
+    // Evaporation violation slacks (linearised evaporation constraint).
+    let evaporation_violation_cost: f64 = indexer
         .evap_indices
         .iter()
         .map(|ei| col_cost(ei.f_evap_plus_col) + col_cost(ei.f_evap_minus_col))
         .sum::<f64>()
         * COST_SCALE_FACTOR;
-    let withdrawal_violation_cost = if indexer.withdrawal_slack.is_empty() {
+
+    // Water withdrawal violation slacks (both under- and over-withdrawal).
+    let withdrawal_violation_cost = if indexer.withdrawal_slack_neg.is_empty() {
         0.0
     } else {
-        range_sum(indexer.withdrawal_slack.clone()) * COST_SCALE_FACTOR
+        (range_sum(indexer.withdrawal_slack_neg.clone())
+            + range_sum(indexer.withdrawal_slack_pos.clone()))
+            * COST_SCALE_FACTOR
     };
-    let hydro_violation_cost = evap_violation_cost + withdrawal_violation_cost;
+
+    // Operational violation slacks: 4 separate constraint types.
+    let (
+        outflow_violation_below_cost,
+        outflow_violation_above_cost,
+        turbined_violation_cost,
+        generation_violation_cost,
+    ) = if indexer.has_operational_violations {
+        (
+            range_sum(indexer.outflow_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.outflow_above_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.turbine_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.generation_below_slack.clone()) * COST_SCALE_FACTOR,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    let hydro_violation_cost = evaporation_violation_cost
+        + withdrawal_violation_cost
+        + outflow_violation_below_cost
+        + outflow_violation_above_cost
+        + turbined_violation_cost
+        + generation_violation_cost;
+    debug_assert!(
+        (hydro_violation_cost
+            - (outflow_violation_below_cost
+                + outflow_violation_above_cost
+                + turbined_violation_cost
+                + generation_violation_cost
+                + evaporation_violation_cost
+                + withdrawal_violation_cost))
+            .abs()
+            < 1e-6,
+        "hydro_violation_cost must equal sum of components"
+    );
 
     // Diversion cost: regularisation term on diversion flow variables.
     let diversion_cost = if indexer.diversion.is_empty() {
@@ -852,6 +990,12 @@ fn compute_cost_result(
         storage_violation_cost: 0.0,
         filling_target_cost: 0.0,
         hydro_violation_cost,
+        outflow_violation_below_cost,
+        outflow_violation_above_cost,
+        turbined_violation_cost,
+        generation_violation_cost,
+        evaporation_violation_cost,
+        withdrawal_violation_cost,
         inflow_penalty_cost,
         generic_violation_cost,
         spillage_cost: spillage_cost + diversion_cost,
@@ -1032,7 +1176,7 @@ fn extract_stub_collections(
                     hydro_id,
                     lag_index: l as u32,
                     inflow_m3s: view.primal
-                        [indexer.inflow_lags.start + h * indexer.max_par_order + l],
+                        [indexer.inflow_lags.start + l * indexer.hydro_count + h],
                 }
             })
         })
@@ -1103,6 +1247,12 @@ fn extract_stub_collections(
 ///     storage_violation_cost: 20.0,
 ///     filling_target_cost: 30.0,
 ///     hydro_violation_cost: 5.0,
+///     outflow_violation_below_cost: 0.0,
+///     outflow_violation_above_cost: 0.0,
+///     turbined_violation_cost: 0.0,
+///     generation_violation_cost: 0.0,
+///     evaporation_violation_cost: 0.0,
+///     withdrawal_violation_cost: 0.0,
 ///     inflow_penalty_cost: 3.0,
 ///     generic_violation_cost: 2.0,
 ///     spillage_cost: 1.0,
@@ -1607,7 +1757,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -1630,7 +1780,7 @@ mod tests {
         // diversion[13..15]=0.0,0.0
         // thermal[15]=80.0   line_fwd[16]=15.0   line_rev[17]=0.0
         // deficit[18]=10.0   excess[19]=2.0   withdrawal_slack[20..22]=0.0,0.0
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 100.0; // storage h0
         primal[1] = 200.0; // storage h1
@@ -1845,6 +1995,12 @@ mod tests {
             storage_violation_cost: storage_violation,
             filling_target_cost: filling,
             hydro_violation_cost: hydro_violation,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            turbined_violation_cost: 0.0,
+            generation_violation_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            withdrawal_violation_cost: 0.0,
             inflow_penalty_cost: inflow_penalty,
             generic_violation_cost: generic_violation,
             spillage_cost: spillage,
@@ -1987,7 +2143,7 @@ mod tests {
                 has_inflow_penalty: true,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -2003,7 +2159,7 @@ mod tests {
         );
 
         // Primal vector: base columns + inflow slack + withdrawal slack columns
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
 
         // Fill base values
@@ -2093,7 +2249,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -2103,7 +2259,7 @@ mod tests {
             "has_inflow_penalty must be false"
         );
 
-        let n_cols = indexer.withdrawal_slack.end; // includes withdrawal_slack columns
+        let n_cols = indexer.generation_below_slack.end; // includes withdrawal_slack columns
         let primal = vec![1.0_f64; n_cols]; // all ones
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 4];
@@ -2172,7 +2328,7 @@ mod tests {
                 has_inflow_penalty: true,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -2190,7 +2346,7 @@ mod tests {
 
         // Layout: storage[0..2], lags[2..4], storage_in[4..6], theta=6,
         //         inflow_slack=[7..9), withdrawal_slack=[9..11)
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 150.0; // storage h0
         primal[1] = 250.0; // storage h1
@@ -2280,7 +2436,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![0],
                 planes_per_hydro: vec![2],
             },
@@ -2297,7 +2453,7 @@ mod tests {
         assert_eq!(indexer.generation.start, 13, "generation starts at 13");
         assert_eq!(indexer.fpha_hydro_indices, vec![0]);
 
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 50.0; // storage h0
         primal[1] = 80.0; // storage h1
@@ -2377,7 +2533,7 @@ mod tests {
     #[test]
     fn fpha_productivity_is_none() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let primal = vec![0.0_f64; n_cols];
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 2];
@@ -2454,7 +2610,7 @@ mod tests {
                 has_inflow_penalty: false,
                 max_deficit_segments: 1,
             },
-            &crate::indexer::FphaConfig {
+            &crate::indexer::FphaColumnLayout {
                 hydro_indices: vec![],
                 planes_per_hydro: vec![],
             },
@@ -2474,7 +2630,7 @@ mod tests {
         assert_eq!(ei.f_evap_plus_col, 8);
         assert_eq!(ei.f_evap_minus_col, 9);
 
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0; // storage h0
         // primal[1] = z_inflow h0 (zero)
@@ -2533,16 +2689,18 @@ mod tests {
             "evaporation_m3s should be Some(3.5)"
         );
         assert!(
-            result.hydros[0].evaporation_violation_m3s.abs() < 1e-12,
-            "evaporation_violation_m3s should be 0.0"
+            result.hydros[0].evaporation_violation_pos_m3s.abs() < 1e-12,
+            "evaporation_violation_pos_m3s should be 0.0"
         );
     }
 
-    /// Acceptance criterion: `evaporation_violation_m3s` equals the sum of the two slack columns.
+    /// Acceptance criterion: directional evaporation violations are extracted
+    /// separately from the LP's `f_evap_plus` (under-evaporation / neg) and
+    /// `f_evap_minus` (over-evaporation / pos) columns.
     #[test]
     fn evaporation_violation_is_sum_of_slacks() {
         let indexer = make_indexer_1h_evap_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0;
         // primal[1] = z_inflow h0 (zero)
@@ -2550,8 +2708,8 @@ mod tests {
         // primal[3] = theta = 0
         // primal[6] = diversion h0 b0 (zero)
         primal[7] = 2.0; // Q_ev
-        primal[8] = 0.5; // f_evap_plus — acceptance criterion value
-        primal[9] = 0.0; // f_evap_minus
+        primal[8] = 0.5; // f_evap_plus (under-evaporation -> neg)
+        primal[9] = 0.0; // f_evap_minus (over-evaporation -> pos)
 
         let obj = vec![0.0_f64; n_cols];
         let dual = vec![0.0_f64; 1];
@@ -2594,10 +2752,17 @@ mod tests {
             0,
         );
 
+        // f_evap_plus (primal[8] = 0.5) maps to under-evaporation (neg).
         assert!(
-            (result.hydros[0].evaporation_violation_m3s - 0.5).abs() < 1e-12,
-            "evaporation_violation_m3s should be 0.5, got {}",
-            result.hydros[0].evaporation_violation_m3s
+            (result.hydros[0].evaporation_violation_neg_m3s - 0.5).abs() < 1e-12,
+            "evaporation_violation_neg_m3s should be 0.5, got {}",
+            result.hydros[0].evaporation_violation_neg_m3s
+        );
+        // f_evap_minus (primal[9] = 0.0) maps to over-evaporation (pos).
+        assert!(
+            result.hydros[0].evaporation_violation_pos_m3s.abs() < 1e-12,
+            "evaporation_violation_pos_m3s should be 0.0, got {}",
+            result.hydros[0].evaporation_violation_pos_m3s
         );
     }
 
@@ -2610,7 +2775,7 @@ mod tests {
     fn fpha_turbined_cost_in_compute_cost_result() {
         let indexer = make_indexer_2h_1fpha_1blk();
         // generation.start = 13 (fpha h0 b0)
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta (at N*(3+L) = 2*3 = 6)
 
@@ -2700,7 +2865,7 @@ mod tests {
     #[test]
     fn cost_breakdown_sums_to_immediate_identity_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta
         primal[13] = 30.0; // FPHA generation
@@ -2785,7 +2950,7 @@ mod tests {
     #[test]
     fn cost_unscaled_by_col_scale() {
         let indexer = make_indexer_2h_1fpha_1blk();
-        let n_cols = indexer.withdrawal_slack.end;
+        let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[6] = 500.0; // theta
         primal[13] = 30.0; // FPHA generation
@@ -2845,6 +3010,161 @@ mod tests {
             (cost.fpha_turbined_cost - 150.0).abs() < 1e-6,
             "fpha_turbined_cost should be 150.0 (unscaled by col_scale=2.0), got {}",
             cost.fpha_turbined_cost
+        );
+    }
+
+    /// Verify that `compute_cost_result` decomposes `hydro_violation_cost` into
+    /// the 6 per-constraint components, and that the sum invariant holds.
+    #[test]
+    fn hydro_violation_cost_decomposition() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        // Layout (see make_indexer_2h_1fpha_1blk):
+        //   withdrawal_slack_neg:   14..16
+        //   withdrawal_slack_pos:   16..18
+        //   outflow_below_slack:    18..20
+        //   outflow_above_slack:    20..22
+        //   turbine_below_slack:    22..24
+        //   generation_below_slack: 24..26
+        assert_eq!(indexer.withdrawal_slack_neg, 14..16);
+        assert_eq!(indexer.withdrawal_slack_pos, 16..18);
+        assert_eq!(indexer.outflow_below_slack, 18..20);
+        assert_eq!(indexer.outflow_above_slack, 20..22);
+        assert_eq!(indexer.turbine_below_slack, 22..24);
+        assert_eq!(indexer.generation_below_slack, 24..26);
+        assert!(indexer.has_operational_violations);
+
+        let n_cols = indexer.generation_below_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        let mut obj = vec![0.0_f64; n_cols];
+
+        // Set theta so objective algebra works.
+        primal[indexer.theta] = 0.0;
+
+        // Assign known primal (slack) and objective (penalty) values per
+        // constraint type. Each slack * penalty gives a known cost contribution.
+        // COST_SCALE_FACTOR = 1000.0 is applied inside the extraction.
+
+        // outflow_below: h0=2.0 * 10.0, h1=3.0 * 10.0  => (20+30) * 1000 = 50000
+        primal[18] = 2.0;
+        obj[18] = 10.0;
+        primal[19] = 3.0;
+        obj[19] = 10.0;
+
+        // outflow_above: h0=1.0 * 5.0, h1=0.0  => 5 * 1000 = 5000
+        primal[20] = 1.0;
+        obj[20] = 5.0;
+
+        // turbine_below: h0=4.0 * 8.0, h1=0.0  => 32 * 1000 = 32000
+        primal[22] = 4.0;
+        obj[22] = 8.0;
+
+        // generation_below: h0=0.0, h1=6.0 * 3.0  => 18 * 1000 = 18000
+        primal[25] = 6.0;
+        obj[25] = 3.0;
+
+        // withdrawal (neg): h0=0.5 * 20.0, h1=0.0  => 10 * 1000 = 10000
+        primal[14] = 0.5;
+        obj[14] = 20.0;
+
+        // withdrawal (pos): h0=0.0, h1=0.3 * 15.0  => 4.5 * 1000 = 4500
+        primal[17] = 0.3;
+        obj[17] = 15.0;
+
+        // Total objective for the LP (sum of primal * obj):
+        let total_obj: f64 = primal.iter().zip(obj.iter()).map(|(p, o)| p * o).sum();
+
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: total_obj,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+                generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
+            },
+            0,
+        );
+
+        let cost = &result.costs[0];
+
+        // Expected values (primal * obj * COST_SCALE_FACTOR):
+        let expected_outflow_below = (2.0 * 10.0 + 3.0 * 10.0) * 1000.0;
+        let expected_outflow_above = (1.0 * 5.0) * 1000.0;
+        let expected_turbined = (4.0 * 8.0) * 1000.0;
+        let expected_generation = (6.0 * 3.0) * 1000.0;
+        let expected_withdrawal = (0.5 * 20.0 + 0.3 * 15.0) * 1000.0;
+        let expected_evaporation = 0.0; // no evaporation hydros
+
+        assert!(
+            (cost.outflow_violation_below_cost - expected_outflow_below).abs() < 1e-6,
+            "outflow_below: expected {expected_outflow_below}, got {}",
+            cost.outflow_violation_below_cost
+        );
+        assert!(
+            (cost.outflow_violation_above_cost - expected_outflow_above).abs() < 1e-6,
+            "outflow_above: expected {expected_outflow_above}, got {}",
+            cost.outflow_violation_above_cost
+        );
+        assert!(
+            (cost.turbined_violation_cost - expected_turbined).abs() < 1e-6,
+            "turbined: expected {expected_turbined}, got {}",
+            cost.turbined_violation_cost
+        );
+        assert!(
+            (cost.generation_violation_cost - expected_generation).abs() < 1e-6,
+            "generation: expected {expected_generation}, got {}",
+            cost.generation_violation_cost
+        );
+        assert!(
+            (cost.evaporation_violation_cost - expected_evaporation).abs() < 1e-6,
+            "evaporation: expected {expected_evaporation}, got {}",
+            cost.evaporation_violation_cost
+        );
+        assert!(
+            (cost.withdrawal_violation_cost - expected_withdrawal).abs() < 1e-6,
+            "withdrawal: expected {expected_withdrawal}, got {}",
+            cost.withdrawal_violation_cost
+        );
+
+        // Sum invariant: hydro_violation_cost == sum of all 6 components.
+        let component_sum = cost.outflow_violation_below_cost
+            + cost.outflow_violation_above_cost
+            + cost.turbined_violation_cost
+            + cost.generation_violation_cost
+            + cost.evaporation_violation_cost
+            + cost.withdrawal_violation_cost;
+        assert!(
+            (cost.hydro_violation_cost - component_sum).abs() < 1e-6,
+            "hydro_violation_cost ({}) must equal sum of components ({component_sum})",
+            cost.hydro_violation_cost
         );
     }
 }

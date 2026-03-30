@@ -84,8 +84,8 @@ https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schema
 
 The available schema files are:
 
-| File                      | Schema URL                                                                |
-| ------------------------- | ------------------------------------------------------------------------- |
+| File                      | Schema URL                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `config.json`             | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json`             |
 | `penalties.json`          | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/penalties.schema.json`          |
 | `stages.json`             | `https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json`             |
@@ -334,9 +334,8 @@ The file must contain these columns:
 | ---------- | ------ | ----------------------------------------------------- |
 | `bus_id`   | INT32  | Bus identifier (matches `id` in `buses.json`)         |
 | `stage_id` | INT32  | Stage identifier (matches `id` in `stages.json`)      |
-| `mean_mw`  | DOUBLE | Seasonal mean load in MW                              |
+| `mean_mw`  | DOUBLE | Seasonal mean load in MW (must be finite)             |
 | `std_mw`   | DOUBLE | Seasonal standard deviation in MW (0 = deterministic) |
-| `ar_order` | INT32  | Number of AR lags (0 = white noise, no correlation)   |
 
 For a 1-bus, 4-stage case with a mean load of 60 MW and 10% standard deviation:
 
@@ -348,7 +347,6 @@ df = pl.DataFrame({
     "stage_id": [0, 1, 2, 3],
     "mean_mw":  [60.0, 60.0, 60.0, 60.0],
     "std_mw":   [6.0,  6.0,  6.0,  6.0],
-    "ar_order": [0, 0, 0, 0],
 })
 df.write_parquet("my_case/scenarios/load_seasonal_stats.parquet")
 ```

@@ -271,6 +271,11 @@ fn build_system_with_load(
             generation_violation_below_cost: 0.0,
             evaporation_violation_cost: 0.0,
             water_withdrawal_violation_cost: 0.0,
+            water_withdrawal_violation_pos_cost: 0.0,
+            water_withdrawal_violation_neg_cost: 0.0,
+            evaporation_violation_pos_cost: 0.0,
+            evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
         },
     };
 
@@ -453,6 +458,9 @@ fn test_stochastic_load_training_completes() {
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -489,8 +497,6 @@ fn test_stochastic_load_training_completes() {
         &opening_tree,
         &risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -576,6 +582,9 @@ fn test_deterministic_load_training_matches_baseline() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         },
         &mut fcf,
         &stage_ctx,
@@ -589,8 +598,6 @@ fn test_deterministic_load_training_matches_baseline() {
         &opening_tree,
         &risk_measures,
         iteration_limit(3),
-        None,
-        None,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -639,6 +646,9 @@ fn test_stochastic_load_seed_determinism() {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -671,8 +681,6 @@ fn test_stochastic_load_seed_determinism() {
             &opening_tree,
             &risk_measures,
             iteration_limit(3),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )

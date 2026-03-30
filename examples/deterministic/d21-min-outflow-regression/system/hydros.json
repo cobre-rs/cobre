@@ -1,0 +1,27 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/hydros.schema.json",
+  "hydros": [
+    {
+      "id": 0,
+      "name": "H0",
+      "bus_id": 0,
+      "downstream_id": null,
+      "reservoir": {
+        "min_storage_hm3": 0.0,
+        "max_storage_hm3": 200.0
+      },
+      "outflow": {
+        "min_outflow_m3s": 50.0,
+        "max_outflow_m3s": 100.0
+      },
+      "generation": {
+        "model": "constant_productivity",
+        "productivity_mw_per_m3s": 1.0,
+        "min_turbined_m3s": 0.0,
+        "max_turbined_m3s": 100.0,
+        "min_generation_mw": 0.0,
+        "max_generation_mw": 100.0
+      }
+    }
+  ]
+}

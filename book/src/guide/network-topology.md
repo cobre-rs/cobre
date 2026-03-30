@@ -157,8 +157,10 @@ The following example shows a two-bus system with a single connecting line:
       "target_bus_id": 1,
       "entry_stage_id": null,
       "exit_stage_id": null,
-      "direct_capacity_mw": 1000.0,
-      "reverse_capacity_mw": 800.0,
+      "capacity": {
+        "direct_mw": 1000.0,
+        "reverse_mw": 800.0
+      },
       "losses_percent": 2.5,
       "exchange_cost": 1.0
     }
@@ -168,22 +170,23 @@ The following example shows a two-bus system with a single connecting line:
 
 This line allows up to 1000 MW to flow from bus 0 to bus 1, and up to 800 MW in
 the reverse direction. A 2.5% transmission loss is applied to all flow. The
-`exchange_cost` is a regularization penalty, not a physical cost.
+`exchange_cost` is an optional per-line override of the global value from
+`penalties.json` — it is a regularization penalty, not a physical cost.
 
 ### Core Fields
 
-| Field                 | Type            | Required | Description                                                                                                            |
-| --------------------- | --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `id`                  | integer         | Yes      | Unique non-negative integer identifier. Must be unique across all lines.                                               |
-| `name`                | string          | Yes      | Human-readable line name. Used in output files, validation messages, and log output.                                   |
-| `source_bus_id`       | integer         | Yes      | Bus ID at the source end. Defines the "direct" flow direction. Must match an `id` in `buses.json`.                     |
-| `target_bus_id`       | integer         | Yes      | Bus ID at the target end. Must match an `id` in `buses.json`. Must differ from `source_bus_id`.                        |
-| `entry_stage_id`      | integer or null | No       | Stage at which the line enters service (inclusive). `null` means available from stage 0.                               |
-| `exit_stage_id`       | integer or null | No       | Stage at which the line is decommissioned (inclusive). `null` means never decommissioned.                              |
-| `direct_capacity_mw`  | number          | Yes      | Maximum flow from source to target [MW]. Hard upper bound on the flow variable.                                        |
-| `reverse_capacity_mw` | number          | Yes      | Maximum flow from target to source [MW]. Hard upper bound on the reverse flow variable.                                |
-| `losses_percent`      | number          | Yes      | Transmission losses as a percentage of transmitted power (e.g., `2.5` means 2.5%). Set to `0.0` for lossless transfer. |
-| `exchange_cost`       | number          | Yes      | Regularization penalty per MWh of flow [$/MWh]. Not a physical cost — see note below.                                  |
+| Field                 | Type            | Required | Description                                                                                                                 |
+| --------------------- | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | integer         | Yes      | Unique non-negative integer identifier. Must be unique across all lines.                                                    |
+| `name`                | string          | Yes      | Human-readable line name. Used in output files, validation messages, and log output.                                        |
+| `source_bus_id`       | integer         | Yes      | Bus ID at the source end. Defines the "direct" flow direction. Must match an `id` in `buses.json`.                          |
+| `target_bus_id`       | integer         | Yes      | Bus ID at the target end. Must match an `id` in `buses.json`. Must differ from `source_bus_id`.                             |
+| `entry_stage_id`      | integer or null | No       | Stage at which the line enters service (inclusive). `null` means available from stage 0.                                    |
+| `exit_stage_id`       | integer or null | No       | Stage at which the line is decommissioned (inclusive). `null` means never decommissioned.                                   |
+| `capacity.direct_mw`  | number          | Yes      | Maximum flow from source to target [MW]. Hard upper bound on the flow variable.                                             |
+| `capacity.reverse_mw` | number          | Yes      | Maximum flow from target to source [MW]. Hard upper bound on the reverse flow variable.                                     |
+| `losses_percent`      | number          | No       | Transmission losses as a percentage of transmitted power (e.g., `2.5` means 2.5%). Defaults to `0.0` for lossless transfer. |
+| `exchange_cost`       | number          | No       | Regularization penalty per MWh of flow [$/MWh]. Overrides the global default from `penalties.json`. See note below.         |
 
 ### Exchange Cost Note
 
@@ -193,10 +196,11 @@ preference between equivalent dispatch solutions. Without any exchange cost, the
 solver is indifferent between using or not using a lossless, uncongested line,
 which can cause oscillations between equivalent solutions across iterations.
 
-A small exchange cost (0.5–2.0 $/MWh) breaks this degeneracy without meaningfully
+A small exchange cost (0.5--2.0 $/MWh) breaks this degeneracy without meaningfully
 distorting the economic dispatch. The global default is set in `penalties.json`
-under `line.exchange_cost`. Per-line overrides are not currently supported; the
-global value applies to all lines.
+under `line.exchange_cost`. Per-line overrides are supported via the optional
+`exchange_cost` field on each line object, which takes precedence over the global
+default. Lines without an explicit `exchange_cost` use the global value.
 
 ---
 
@@ -268,8 +272,10 @@ Then add a line to `lines.json`:
       "name": "North-South",
       "source_bus_id": 0,
       "target_bus_id": 1,
-      "direct_capacity_mw": 500.0,
-      "reverse_capacity_mw": 500.0,
+      "capacity": {
+        "direct_mw": 500.0,
+        "reverse_mw": 500.0
+      },
       "losses_percent": 1.0,
       "exchange_cost": 1.0
     }
@@ -296,7 +302,7 @@ and lines. Violations are reported as error messages with the failing entity's `
 | No self-loops             | Physical feasibility | `source_bus_id` and `target_bus_id` must differ on every line. A line from a bus to itself is not meaningful. |
 | Deficit segment ordering  | Physical feasibility | Deficit segments must be listed with ascending costs. The final segment must have `depth_mw: null`.           |
 | Unbounded final segment   | Physical feasibility | The last entry in every `deficit_segments` array must have `depth_mw: null` to guarantee LP feasibility.      |
-| Non-negative capacity     | Physical feasibility | `direct_capacity_mw` and `reverse_capacity_mw` must be non-negative.                                          |
+| Non-negative capacity     | Physical feasibility | `capacity.direct_mw` and `capacity.reverse_mw` must be non-negative.                                          |
 | Non-negative losses       | Physical feasibility | `losses_percent` must be in the range [0, 100).                                                               |
 
 When a bus ID referenced by a generator does not exist in `buses.json`, the

@@ -264,6 +264,11 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         generation_violation_below_cost: 0.0,
         evaporation_violation_cost: 0.0,
         water_withdrawal_violation_cost: 0.0,
+        water_withdrawal_violation_pos_cost: 0.0,
+        water_withdrawal_violation_neg_cost: 0.0,
+        evaporation_violation_pos_cost: 0.0,
+        evaporation_violation_neg_cost: 0.0,
+        inflow_nonnegativity_cost: 1000.0,
     };
 
     let bus = Bus {
@@ -546,6 +551,9 @@ fn run_training(
         cut_activity_tolerance: 0.0,
         n_fwd_threads: 1,
         max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts
@@ -583,8 +591,6 @@ fn run_training(
                 &fx.opening_tree,
                 &fx.risk_measures,
                 iteration_limit(n_iterations),
-                None,
-                None,
                 &comm,
                 || Ok(MockSolver3H::new(100.0)),
             )

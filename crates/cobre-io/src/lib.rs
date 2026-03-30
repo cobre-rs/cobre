@@ -55,7 +55,7 @@ pub mod system;
 pub mod validation;
 
 pub use broadcast::{deserialize_system, serialize_system};
-pub use config::{Config, EstimationConfig, OrderSelectionMethod, parse_config};
+pub use config::{Config, EstimationConfig, OrderSelectionMethod, PolicyMode, parse_config};
 pub use constraints::{
     BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry,
     GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow,

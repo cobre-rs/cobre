@@ -106,6 +106,16 @@ pub(crate) struct RawHydroPenalties {
     generation_violation_below_cost: f64,
     evaporation_violation_cost: f64,
     water_withdrawal_violation_cost: f64,
+    /// Optional directional over-withdrawal cost. Defaults to symmetric.
+    water_withdrawal_violation_pos_cost: Option<f64>,
+    /// Optional directional under-withdrawal cost. Defaults to symmetric.
+    water_withdrawal_violation_neg_cost: Option<f64>,
+    /// Optional directional over-evaporation cost. Defaults to symmetric.
+    evaporation_violation_pos_cost: Option<f64>,
+    /// Optional directional under-evaporation cost. Defaults to symmetric.
+    evaporation_violation_neg_cost: Option<f64>,
+    /// Optional inflow non-negativity cost. Defaults to 1000.0.
+    inflow_nonnegativity_cost: Option<f64>,
 }
 
 /// Intermediate type for the `non_controllable_source` section.
@@ -348,6 +358,23 @@ fn convert(raw: RawPenalties) -> GlobalPenaltyDefaults {
         generation_violation_below_cost: raw.hydro.generation_violation_below_cost,
         evaporation_violation_cost: raw.hydro.evaporation_violation_cost,
         water_withdrawal_violation_cost: raw.hydro.water_withdrawal_violation_cost,
+        water_withdrawal_violation_pos_cost: raw
+            .hydro
+            .water_withdrawal_violation_pos_cost
+            .unwrap_or(raw.hydro.water_withdrawal_violation_cost),
+        water_withdrawal_violation_neg_cost: raw
+            .hydro
+            .water_withdrawal_violation_neg_cost
+            .unwrap_or(raw.hydro.water_withdrawal_violation_cost),
+        evaporation_violation_pos_cost: raw
+            .hydro
+            .evaporation_violation_pos_cost
+            .unwrap_or(raw.hydro.evaporation_violation_cost),
+        evaporation_violation_neg_cost: raw
+            .hydro
+            .evaporation_violation_neg_cost
+            .unwrap_or(raw.hydro.evaporation_violation_cost),
+        inflow_nonnegativity_cost: raw.hydro.inflow_nonnegativity_cost.unwrap_or(1000.0),
     };
 
     GlobalPenaltyDefaults {
@@ -485,6 +512,11 @@ mod tests {
                 generation_violation_below_cost: 1000.0,
                 evaporation_violation_cost: 5000.0,
                 water_withdrawal_violation_cost: 1000.0,
+                water_withdrawal_violation_pos_cost: 1000.0,
+                water_withdrawal_violation_neg_cost: 1000.0,
+                evaporation_violation_pos_cost: 5000.0,
+                evaporation_violation_neg_cost: 5000.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
             ncs_curtailment_cost: 0.005,
         };

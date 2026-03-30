@@ -15,21 +15,21 @@ with all foreign keys resolved and all domain rules verified.
 
 ## Module overview
 
-| Module               | Purpose                                                                           |
-| -------------------- | --------------------------------------------------------------------------------- |
-| `config`             | `Config` struct and `parse_config` — reads `config.json`                          |
-| `system`             | Entity parsers for buses, lines, hydros, thermals, and stub types                 |
-| `extensions`         | Hydro production model extensions — FPHA hyperplane loading, production model configuration parsing, and hydro geometry parsing |
-| `scenarios`          | Inflow and load statistical model loading, assembly, and history-based estimation |
-| `constraints`        | Stage-varying bound and penalty override loading from Parquet                     |
-| `penalties`          | Global penalty defaults parser (`penalties.json`)                                 |
-| `stages`             | Stage sequence and policy graph loading (`stages.json`)                           |
-| `initial_conditions` | Reservoir initial storage loading                                                 |
-| `validation`         | Five-layer validation pipeline and `ValidationContext`                            |
-| `resolution`         | Three-tier penalty and bound resolution into O(1) lookup tables                   |
-| `pipeline`           | Orchestrator that wires all layers into a single `load_case` call                 |
-| `report`             | Structured validation report generation                                           |
-| `broadcast`          | System serialization and deserialization for MPI broadcast                        |
+| Module               | Purpose                                                                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `config`             | `Config` struct and `parse_config` — reads `config.json`                                                                            |
+| `system`             | Entity parsers for buses, lines, hydros, thermals, and stub types                                                                   |
+| `extensions`         | Hydro production model extensions — FPHA hyperplane loading, production model configuration parsing, and hydro geometry parsing     |
+| `scenarios`          | Inflow and load statistical model loading, assembly, and history-based estimation                                                   |
+| `constraints`        | Stage-varying bound and penalty override loading from Parquet                                                                       |
+| `penalties`          | Global penalty defaults parser (`penalties.json`)                                                                                   |
+| `stages`             | Stage sequence and policy graph loading (`stages.json`)                                                                             |
+| `initial_conditions` | Reservoir initial storage loading                                                                                                   |
+| `validation`         | Five-layer validation pipeline and `ValidationContext`                                                                              |
+| `resolution`         | Three-tier penalty and bound resolution into O(1) lookup tables                                                                     |
+| `pipeline`           | Orchestrator that wires all layers into a single `load_case` call                                                                   |
+| `report`             | Structured validation report generation                                                                                             |
+| `broadcast`          | System serialization and deserialization for MPI broadcast                                                                          |
 | `output`             | Output result types for simulation and training data; `output::hydro_models` exports fitted FPHA hyperplane coefficients to Parquet |
 
 ## `load_case`
@@ -122,16 +122,15 @@ my_case/
 │   ├── non_controllable_sources.json    # Intermittent sources (optional)
 │   ├── pumping_stations.json            # Pumping stations (optional)
 │   └── energy_contracts.json           # Bilateral contracts (optional)
-├── extensions/
 │   ├── hydro_geometry.parquet           # Reservoir geometry tables (optional)
-│   ├── production_models.json           # FPHA production function configs (optional)
+│   ├── hydro_production_models.json    # FPHA production function configs (optional)
 │   └── fpha_hyperplanes.parquet         # FPHA hyperplane coefficients (optional)
 ├── scenarios/
-│   ├── inflow_seasonal_stats.parquet    # PAR model seasonal statistics (required)
-│   ├── inflow_ar_coefficients.parquet   # PAR autoregressive coefficients (required)
+│   ├── inflow_seasonal_stats.parquet    # PAR model seasonal statistics (optional)
+│   ├── inflow_ar_coefficients.parquet   # PAR autoregressive coefficients (optional)
 │   ├── inflow_history.parquet           # Historical inflow series (optional)
 │   ├── load_seasonal_stats.parquet      # Load model seasonal statistics (optional)
-│   ├── load_factors.parquet             # Load scaling factors (optional)
+│   ├── load_factors.json                # Load scaling factors (optional)
 │   ├── correlation.json                 # Cross-series correlation model (optional)
 │   └── external_scenarios.parquet       # Pre-generated external scenarios (optional)
 └── constraints/
@@ -142,7 +141,7 @@ my_case/
     ├── contract_bounds.parquet          # Stage-varying contract bounds (optional)
     ├── generic_constraints.json         # User-defined LP constraints (optional)
     ├── generic_constraint_bounds.parquet # Bounds for generic constraints (optional)
-    ├── exchange_factors.parquet         # Block exchange factors (optional)
+    ├── exchange_factors.json             # Block exchange factors (optional)
     ├── penalty_overrides_hydro.parquet  # Stage-varying hydro penalty overrides (optional)
     ├── penalty_overrides_bus.parquet    # Stage-varying bus penalty overrides (optional)
     ├── penalty_overrides_line.parquet   # Stage-varying line penalty overrides (optional)
@@ -296,11 +295,11 @@ The `config.json` file accepts an optional `"estimation"` section that controls
 the fitting procedure. All fields have defaults and the section may be omitted
 entirely.
 
-| Field                         | Type                 | Default | Description                                                             |
-| ----------------------------- | -------------------- | ------- | ----------------------------------------------------------------------- |
-| `max_order`                   | `u32`                | `6`     | Maximum autoregressive lag order considered during model selection      |
-| `order_selection`             | `"aic"` or `"fixed"` | `"aic"` | Criterion for selecting the AR order: AIC minimization or fixed maximum |
-| `min_observations_per_season` | `u32`                | `30`    | Minimum observations required per `(entity, season)` group              |
+| Field                         | Type                  | Default  | Description                                                                      |
+| ----------------------------- | --------------------- | -------- | -------------------------------------------------------------------------------- |
+| `max_order`                   | `u32`                 | `6`      | Maximum autoregressive lag order considered during model selection               |
+| `order_selection`             | `"pacf"` or `"fixed"` | `"pacf"` | Criterion for selecting the AR order: PACF significance testing or fixed maximum |
+| `min_observations_per_season` | `u32`                 | `30`     | Minimum observations required per `(entity, season)` group                       |
 
 The `estimation` configuration is accessible at `config.estimation` after
 `parse_config`. The `min_observations_per_season` threshold is used both during

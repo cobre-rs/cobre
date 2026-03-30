@@ -37,7 +37,11 @@ struct PartialRecord {
     cuts_added: u32,
     cuts_removed: u32,
     cuts_active: u32,
-    /// MPI allreduce time from [`TrainingEvent::ForwardSyncComplete`] (ms).
+    /// Wall-clock time for the `allreduce` bound-statistic reduction
+    /// from [`TrainingEvent::ForwardSyncComplete`] (ms).
+    ///
+    /// Note: the forward-pass scenario exchange uses `allgatherv`, not
+    /// `allreduce`. This field tracks only the scalar bound reduction.
     forward_sync_ms: u64,
     /// MPI broadcast time from [`TrainingEvent::CutSyncComplete`] (ms).
     cut_sync_ms: u64,

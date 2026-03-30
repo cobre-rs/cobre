@@ -84,6 +84,11 @@ pub struct InflowNonNegativityConfig {
     pub method: String,
 
     /// Penalty coefficient $c^{inf}$ applied when `method` is `"penalty"`.
+    ///
+    /// **Deprecated:** Use `penalties.json` -> `hydro.inflow_nonnegativity_cost`
+    /// instead. When both are specified, the penalty cascade takes precedence.
+    /// This field is retained for backward compatibility with existing cases
+    /// that do not yet have `inflow_nonnegativity_cost` in their `penalties.json`.
     pub penalty_cost: f64,
 }
 
@@ -302,6 +307,32 @@ pub struct LipschitzConfig {
     pub scale_factor: Option<f64>,
 }
 
+/// Policy initialization mode (`config.json → policy.mode`).
+///
+/// Controls whether the training phase starts from scratch, warm-starts from
+/// a prior policy's cuts, or resumes a checkpointed training run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum PolicyMode {
+    /// Start training from an empty future-cost function.
+    Fresh,
+    /// Load cuts from a prior policy checkpoint and continue training.
+    WarmStart,
+    /// Resume a previously interrupted training run from its checkpoint.
+    Resume,
+}
+
+impl std::fmt::Display for PolicyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PolicyMode::Fresh => f.write_str("fresh"),
+            PolicyMode::WarmStart => f.write_str("warm_start"),
+            PolicyMode::Resume => f.write_str("resume"),
+        }
+    }
+}
+
 /// Policy directory settings (`config.json → policy`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -311,7 +342,7 @@ pub struct PolicyConfig {
     pub path: String,
 
     /// Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
-    pub mode: String,
+    pub mode: PolicyMode,
 
     /// Verify state dimension and entity compatibility when loading.
     pub validate_compatibility: bool,
@@ -324,7 +355,7 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             path: "./policy".to_string(),
-            mode: "fresh".to_string(),
+            mode: PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
         }
@@ -660,7 +691,7 @@ mod tests {
         assert!((cfg.modeling.inflow_non_negativity.penalty_cost - 1000.0).abs() < f64::EPSILON);
         assert!(!cfg.simulation.enabled);
         assert_eq!(cfg.simulation.num_scenarios, 2000);
-        assert_eq!(cfg.policy.mode, "fresh");
+        assert_eq!(cfg.policy.mode, PolicyMode::Fresh);
         assert_eq!(cfg.policy.path, "./policy");
         assert!(cfg.policy.validate_compatibility);
         assert!(cfg.exports.training);
@@ -800,7 +831,7 @@ mod tests {
         assert_eq!(cfg.upper_bound_evaluation.initial_iteration, Some(10));
 
         // Policy
-        assert_eq!(cfg.policy.mode, "fresh");
+        assert_eq!(cfg.policy.mode, PolicyMode::Fresh);
         assert!(cfg.policy.validate_compatibility);
         assert_eq!(cfg.policy.checkpointing.enabled, Some(true));
 
@@ -923,6 +954,19 @@ mod tests {
                 "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json"
             ),
             "schema field should be stored when present in JSON"
+        );
+    }
+
+    /// Invalid `policy.mode` values are rejected at parse time.
+    #[test]
+    fn test_invalid_policy_mode_rejected() {
+        let f = write_config(
+            r#"{"training": {"forward_passes": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}, "policy": {"mode": "warmstart"}}"#,
+        );
+        let err = parse_config(f.path()).unwrap_err();
+        assert!(
+            matches!(err, LoadError::SchemaError { .. }),
+            "expected SchemaError for invalid policy.mode, got: {err:?}"
         );
     }
 

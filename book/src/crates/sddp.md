@@ -85,25 +85,25 @@ near zero.
 
 ## Module overview
 
-| Module           | Responsibility                                                                        |
-| ---------------- | ------------------------------------------------------------------------------------- |
-| `training`       | `train`: the top-level loop orchestrator; wires all steps together                    |
-| `forward`        | `run_forward_pass`, `sync_forward`: step 1 and step 2                                 |
-| `state_exchange` | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                     |
-| `backward`       | `run_backward_pass`: step 4 Benders cut generation across all trial points            |
-| `cut_sync`       | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                           |
-| `cut_selection`  | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a pool pruning        |
-| `lower_bound`    | `evaluate_lower_bound`: step 5b risk-adjusted LB computation                          |
-| `convergence`    | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation              |
-| `cut`            | `CutPool`, `FutureCostFunction`, `CutWireHeader`: cut data structures and wire format |
-| `config`         | `TrainingConfig`: algorithm parameters                                                |
-| `stopping_rule`  | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria               |
-| `risk_measure`   | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                   |
-| `horizon_mode`   | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` in MVP)               |
-| `indexer`        | `StageIndexer`: LP column and row offset arithmetic for stage subproblems             |
-| `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves         |
-| `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)       |
-| `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors  |
+| Module           | Responsibility                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `training`       | `train`: the top-level loop orchestrator; wires all steps together                                             |
+| `forward`        | `run_forward_pass`, `sync_forward`: step 1 and step 2                                                          |
+| `state_exchange` | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                                              |
+| `backward`       | `run_backward_pass`: step 4 Benders cut generation across all trial points                                     |
+| `cut_sync`       | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                    |
+| `cut_selection`  | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a pool pruning                                 |
+| `lower_bound`    | `evaluate_lower_bound`: step 5b risk-adjusted LB computation                                                   |
+| `convergence`    | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                       |
+| `cut`            | `CutPool`, `FutureCostFunction`, `CutWireHeader`: cut data structures and wire format                          |
+| `config`         | `TrainingConfig`: algorithm parameters                                                                         |
+| `stopping_rule`  | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                        |
+| `risk_measure`   | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                                            |
+| `horizon_mode`   | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` in MVP)                                        |
+| `indexer`        | `StageIndexer`: LP column and row offset arithmetic for stage subproblems                                      |
+| `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves                                  |
+| `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                |
+| `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                           |
 | `fpha_fitting`   | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry |
 
 ## Configuration
@@ -206,7 +206,7 @@ by `(iteration, forward_pass_index)` to guarantee bit-for-bit identical FCF
 state across all MPI ranks.
 
 The FCF is built once before training begins. Total slot capacity is
-`warm_start_cuts + max_iterations * forward_passes * num_ranks` per stage.
+`warm_start_cuts + max_iterations * forward_passes` per stage.
 
 ### `PatchBuffer`
 
@@ -345,7 +345,7 @@ Key events emitted during training:
 | `BackwardPassComplete` | After step 4 cut generation for all trial points   |
 | `CutSyncComplete`      | After step 5 cut allgatherv                        |
 | `CutSelectionComplete` | After step 5a pool pruning (when strategy is set)  |
-| `LowerBoundEvaluated`  | After step 5b LB broadcast                         |
+| `ConvergenceUpdate`    | After step 6 stopping rules evaluated              |
 | `IterationSummary`     | At the end of each iteration (LB, UB, gap, timing) |
 | `TrainingFinished`     | When a stopping rule triggers                      |
 
@@ -417,12 +417,13 @@ wrapped by `anyhow`.
 
 | `SddpError` variant | Trigger                                                  |
 | ------------------- | -------------------------------------------------------- |
-| `Infeasible`        | LP has no feasible solution (stage, iteration, scenario) |
 | `Solver`            | LP solve failed for numerical or timeout reasons         |
 | `Communication`     | MPI collective operation failed                          |
 | `Stochastic`        | Scenario generation or PAR model validation failed       |
 | `Io`                | Case directory loading or validation failed              |
 | `Validation`        | Algorithm configuration is semantically invalid          |
+| `Infeasible`        | LP has no feasible solution (stage, iteration, scenario) |
+| `Simulation`        | Simulation phase error (LP failure, I/O, policy issue)   |
 
 ## Performance notes
 
@@ -462,7 +463,7 @@ of `cobre-comm`).
 
 ### Test suite overview
 
-The crate has 645 tests across 17 source modules covering:
+The test suite covers:
 
 - Unit tests for each module's core logic.
 - Integration tests using `LocalBackend` (single-rank) for the

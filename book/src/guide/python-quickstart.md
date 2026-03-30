@@ -13,13 +13,13 @@ Requires Python 3.12, 3.13, or 3.14.
 ## Run a Case
 
 ```python
-import cobre_python as cobre
+import cobre
 
-result = cobre.run("path/to/case")
+result = cobre.run.run("path/to/case")
 ```
 
-The `run()` function loads the case, trains an SDDP policy, optionally runs
-simulation, and writes output files. It returns a dictionary with:
+The `cobre.run.run()` function loads the case, trains an SDDP policy, optionally
+runs simulation, and writes output files. It returns a dictionary with:
 
 ```python
 print(f"Converged: {result['converged']}")
@@ -32,7 +32,7 @@ print(f"Output dir: {result['output_dir']}")
 ## Optional Parameters
 
 ```python
-result = cobre.run(
+result = cobre.run.run(
     "path/to/case",
     output_dir="path/to/output",   # default: case_dir/output
     threads=4,                      # default: 1
@@ -52,8 +52,8 @@ import polars as pl
 convergence = pl.read_parquet("output/training/convergence.parquet")
 print(convergence.head())
 
-# Simulation costs (if simulation was enabled)
-costs = pl.read_parquet("output/simulation/costs.parquet")
+# Simulation costs (if simulation was enabled) — Hive-partitioned
+costs = pl.read_parquet("output/simulation/costs/")
 print(costs.describe())
 ```
 
@@ -63,13 +63,13 @@ For larger datasets, use the built-in Arrow loaders that avoid serialization
 overhead:
 
 ```python
-# Returns an Arrow RecordBatch (zero-copy)
-convergence_batch = cobre.load_convergence_arrow("output/")
-simulation_batch = cobre.load_simulation_arrow("output/")
+# Returns a pyarrow.Table (zero-copy)
+convergence_table = cobre.results.load_convergence_arrow("output/")
+simulation_tables = cobre.results.load_simulation_arrow("output/")
 
 # Convert to Polars without copying
 import polars as pl
-df = pl.from_arrow(convergence_batch)
+df = pl.from_arrow(convergence_table)
 ```
 
 ## Next Steps

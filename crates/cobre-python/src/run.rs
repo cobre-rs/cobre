@@ -62,11 +62,7 @@ fn init_rayon(threads: Option<u32>) {
         .unwrap_or(());
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines
-)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn write_policy_checkpoint(
     policy_dir: &std::path::Path,
     fcf: &FutureCostFunction,
@@ -76,97 +72,22 @@ fn write_policy_checkpoint(
     seed: u64,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        write_policy_checkpoint as io_write_policy_checkpoint, PolicyBasisRecord,
-        PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
+    };
+    use cobre_sddp::policy_export::{
+        build_active_indices, build_stage_basis_records, build_stage_cut_records,
+        build_stage_cuts_payloads, convert_basis_cache,
     };
 
     let n_stages = fcf.pools.len();
     let state_dimension = fcf.state_dimension;
 
-    let stage_records: Vec<Vec<PolicyCutRecord<'_>>> = fcf
-        .pools
-        .iter()
-        .map(|pool| {
-            (0..pool.populated_count)
-                .filter(|&i| pool.active[i])
-                .map(|i| {
-                    let meta = &pool.metadata[i];
-                    PolicyCutRecord {
-                        cut_id: meta.iteration_generated * u64::from(pool.forward_passes)
-                            + u64::from(meta.forward_pass_index),
-                        slot_index: i as u32,
-                        iteration: meta.iteration_generated as u32,
-                        forward_pass_index: meta.forward_pass_index,
-                        intercept: pool.intercepts[i],
-                        coefficients: &pool.coefficients[i],
-                        is_active: true,
-                        domination_count: meta.active_count as u32,
-                    }
-                })
-                .collect()
-        })
-        .collect();
+    let stage_records = build_stage_cut_records(fcf);
+    let stage_active_indices = build_active_indices(&stage_records);
+    let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
 
-    let stage_active_indices: Vec<Vec<u32>> = stage_records
-        .iter()
-        .map(|records| records.iter().map(|r| r.slot_index).collect())
-        .collect();
-
-    let stage_cuts: Vec<StageCutsPayload<'_>> = fcf
-        .pools
-        .iter()
-        .enumerate()
-        .map(|(stage_idx, pool)| StageCutsPayload {
-            stage_id: stage_idx as u32,
-            state_dimension: state_dimension as u32,
-            capacity: pool.capacity as u32,
-            warm_start_count: pool.warm_start_count,
-            cuts: &stage_records[stage_idx],
-            active_cut_indices: &stage_active_indices[stage_idx],
-            populated_count: pool.populated_count as u32,
-        })
-        .collect();
-
-    let basis_col_u8: Vec<Vec<u8>> = training_result
-        .basis_cache
-        .iter()
-        .map(|opt| {
-            opt.as_ref()
-                .map(|b| b.col_status.iter().map(|&v| v as u8).collect())
-                .unwrap_or_default()
-        })
-        .collect();
-
-    let basis_row_u8: Vec<Vec<u8>> = training_result
-        .basis_cache
-        .iter()
-        .map(|opt| {
-            opt.as_ref()
-                .map(|b| b.row_status.iter().map(|&v| v as u8).collect())
-                .unwrap_or_default()
-        })
-        .collect();
-
-    let stage_bases: Vec<PolicyBasisRecord<'_>> = training_result
-        .basis_cache
-        .iter()
-        .enumerate()
-        .filter_map(|(stage_idx, opt)| {
-            opt.as_ref().map(|_| {
-                let num_cut_rows = fcf
-                    .pools
-                    .get(stage_idx)
-                    .map_or(0, |pool| pool.populated_count.min(pool.capacity) as u32);
-                PolicyBasisRecord {
-                    stage_id: stage_idx as u32,
-                    iteration: training_result.iterations as u32,
-                    column_status: &basis_col_u8[stage_idx],
-                    row_status: &basis_row_u8[stage_idx],
-                    num_cut_rows,
-                }
-            })
-        })
-        .collect();
+    let (basis_col_u8, basis_row_u8) = convert_basis_cache(training_result);
+    let stage_bases = build_stage_basis_records(fcf, training_result, &basis_col_u8, &basis_row_u8);
 
     let created_at = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -186,7 +107,7 @@ fn write_policy_checkpoint(
         system_hash: String::new(),
         max_iterations: max_iterations as u32,
         forward_passes,
-        warm_start_cuts: 0,
+        warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
         rng_seed: seed,
     };
 
@@ -315,6 +236,7 @@ fn delta_to_stats_row(
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        retry_level_histogram: delta.retry_level_histogram,
     }
 }
 
@@ -514,17 +436,6 @@ fn run_inner(
     cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
-    let training = run_training_phase_py(&mut setup, n_threads)?;
-
-    write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
-
-    if let Some(ref e) = training.error {
-        return Err(format!(
-            "training failed after {} iterations: {e}",
-            training.result.iterations
-        ));
-    }
-
     let stochastic_summary = build_stochastic_summary(
         &system,
         setup.stochastic(),
@@ -533,30 +444,215 @@ fn run_inner(
     );
     let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
 
-    let simulation = if should_simulate {
-        Some(run_simulation_phase_py(
-            &mut setup,
-            &output_dir,
-            &system,
-            &training.result,
-            n_threads,
-        )?)
-    } else {
-        None
-    };
+    let training_enabled = config.training.enabled;
 
-    Ok(RunSummary {
-        converged: training.output.converged,
-        iterations: training.result.iterations,
-        lower_bound: training.result.final_lb,
-        upper_bound: Some(training.result.final_ub),
-        gap_percent: Some(training.result.final_gap * 100.0),
-        total_time_ms: training.result.total_time_ms,
-        output_dir,
-        simulation,
-        stochastic: Some(stochastic_summary),
-        hydro_models: hydro_models_summary,
-    })
+    if training_enabled {
+        // Warm-start: load prior policy and inject cuts before training.
+        if config.policy.mode == cobre_io::PolicyMode::WarmStart {
+            let policy_dir = output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(format!(
+                    "Policy directory not found: {}. Cannot warm-start \
+                     without a prior policy.",
+                    policy_dir.display()
+                ));
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| format!("failed to read policy checkpoint: {e}"))?;
+
+            if config.policy.validate_compatibility {
+                #[allow(clippy::cast_possible_truncation)]
+                let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                let state_dim = setup.fcf().state_dimension as u32;
+                cobre_sddp::validate_policy_compatibility(
+                    &checkpoint.metadata,
+                    state_dim,
+                    n_stages,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("policy validation error: {e}"))?;
+            }
+
+            // Reserve one extra slot for cuts added in the final iteration.
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(|e| format!("warm-start FCF construction error: {e}"))?;
+            setup.replace_fcf(warm_fcf);
+        } else if config.policy.mode == cobre_io::PolicyMode::Resume {
+            let policy_dir = output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(format!(
+                    "Policy directory not found: {}. Cannot resume \
+                     without a prior checkpoint.",
+                    policy_dir.display()
+                ));
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| format!("failed to read policy checkpoint: {e}"))?;
+
+            if config.policy.validate_compatibility {
+                #[allow(clippy::cast_possible_truncation)]
+                let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                let state_dim = setup.fcf().state_dimension as u32;
+                cobre_sddp::validate_policy_compatibility(
+                    &checkpoint.metadata,
+                    state_dim,
+                    n_stages,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("policy validation error: {e}"))?;
+            }
+
+            let completed = u64::from(checkpoint.metadata.completed_iterations);
+
+            // Reserve one extra slot for cuts added in the final iteration.
+            let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
+                &checkpoint.stage_cuts,
+                setup.forward_passes(),
+                setup.max_iterations().saturating_add(1),
+            )
+            .map_err(|e| format!("resume FCF construction error: {e}"))?;
+            setup.replace_fcf(warm_fcf);
+            setup.set_start_iteration(completed);
+        }
+
+        let training = run_training_phase_py(&mut setup, n_threads)?;
+
+        write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
+
+        if let Some(ref e) = training.error {
+            return Err(format!(
+                "training failed after {} iterations: {e}",
+                training.result.iterations
+            ));
+        }
+
+        let simulation = if should_simulate {
+            Some(run_simulation_phase_py(
+                &mut setup,
+                &output_dir,
+                &system,
+                &training.result,
+                n_threads,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(RunSummary {
+            converged: training.output.converged,
+            iterations: training.result.iterations,
+            lower_bound: training.result.final_lb,
+            upper_bound: Some(training.result.final_ub),
+            gap_percent: Some(training.result.final_gap * 100.0),
+            total_time_ms: training.result.total_time_ms,
+            output_dir,
+            simulation,
+            stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
+        })
+    } else {
+        // Training disabled: check if simulation is requested.
+        if should_simulate {
+            // Simulation-only mode: load policy and run simulation.
+            let policy_dir = output_dir.join(setup.policy_path());
+            if !policy_dir.exists() {
+                return Err(format!(
+                    "Policy directory not found: {}. Cannot run simulation-only \
+                     mode without a trained policy.",
+                    policy_dir.display()
+                ));
+            }
+
+            let checkpoint = cobre_io::output::policy::read_policy_checkpoint(&policy_dir)
+                .map_err(|e| format!("failed to read policy checkpoint: {e}"))?;
+
+            // Validate compatibility if configured.
+            if config.policy.validate_compatibility {
+                #[allow(clippy::cast_possible_truncation)]
+                let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                let state_dim = setup.fcf().state_dimension as u32;
+                cobre_sddp::validate_policy_compatibility(
+                    &checkpoint.metadata,
+                    state_dim,
+                    n_stages,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("policy validation error: {e}"))?;
+            }
+
+            // Replace the empty FCF with the loaded one.
+            let loaded_fcf =
+                cobre_sddp::FutureCostFunction::from_deserialized(&checkpoint.stage_cuts)
+                    .map_err(|e| format!("FCF reconstruction error: {e}"))?;
+            setup.replace_fcf(loaded_fcf);
+
+            // Build basis cache from loaded checkpoint.
+            let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
+                setup.num_stages(),
+                &checkpoint.stage_bases,
+            );
+
+            // Create a minimal TrainingResult for simulation warm-start.
+            let training_result = cobre_sddp::TrainingResult {
+                iterations: checkpoint.metadata.completed_iterations.into(),
+                final_lb: checkpoint.metadata.final_lower_bound,
+                final_ub: checkpoint
+                    .metadata
+                    .best_upper_bound
+                    .unwrap_or(f64::INFINITY),
+                final_ub_std: 0.0,
+                final_gap: 0.0,
+                total_time_ms: 0,
+                reason: "loaded from checkpoint".to_string(),
+                solver_stats_log: Vec::new(),
+                basis_cache,
+            };
+
+            let simulation = Some(run_simulation_phase_py(
+                &mut setup,
+                &output_dir,
+                &system,
+                &training_result,
+                n_threads,
+            )?);
+
+            return Ok(RunSummary {
+                converged: false,
+                iterations: 0,
+                lower_bound: checkpoint.metadata.final_lower_bound,
+                upper_bound: checkpoint.metadata.best_upper_bound,
+                gap_percent: None,
+                total_time_ms: 0,
+                output_dir,
+                simulation,
+                stochastic: Some(stochastic_summary),
+                hydro_models: hydro_models_summary,
+            });
+        }
+
+        // Both training and simulation disabled — return zero-iteration summary.
+        Ok(RunSummary {
+            converged: false,
+            iterations: 0,
+            lower_bound: 0.0,
+            upper_bound: None,
+            gap_percent: None,
+            total_time_ms: 0,
+            output_dir,
+            simulation: None,
+            stochastic: Some(stochastic_summary),
+            hydro_models: hydro_models_summary,
+        })
+    }
 }
 
 /// Convert a [`StochasticSource`] enum variant to a Python string or `None`.

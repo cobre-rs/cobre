@@ -261,7 +261,7 @@ mod tests {
     fn make_config() -> crate::Config {
         use crate::config::{
             CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
-            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, SimulationConfig,
+            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
             SimulationSamplingConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
             UpperBoundEvaluationConfig,
         };
@@ -284,7 +284,7 @@ mod tests {
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig {
                 path: "./policy".to_string(),
-                mode: "fresh".to_string(),
+                mode: PolicyMode::Fresh,
                 validate_compatibility: true,
                 checkpointing: CheckpointingConfig::default(),
             },

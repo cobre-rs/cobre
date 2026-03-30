@@ -16,6 +16,15 @@ use rand_pcg::Pcg64;
 /// the same seed produces two independent generators that yield
 /// identical sequences.
 ///
+/// # Resume invariant
+///
+/// The training pipeline derives per-draw seeds from
+/// `(base_seed, iteration, scenario, stage)` via `derive_forward_seed`.
+/// Because `iteration` is the absolute iteration number (not a counter
+/// from zero), a resumed training run at iteration K+1 produces the
+/// same seed — and therefore the same noise — as a continuous run.
+/// This makes explicit RNG state serialization unnecessary for resume.
+///
 /// # Examples
 ///
 /// ```

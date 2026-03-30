@@ -163,8 +163,8 @@
       "properties": {
         "method": {
           "default": "penalty",
-          "description": "Method: `\"none\"`, `\"penalty\"`, or `\"truncation\"`.",
-          "type": "string"
+          "description": "Method: `\"none\"`, `\"penalty\"`, `\"truncation\"`, or `\"truncation_with_penalty\"`.",
+          "enum": ["none", "penalty", "truncation", "truncation_with_penalty"]
         },
         "penalty_cost": {
           "default": 1000.0,
@@ -244,7 +244,7 @@
         "mode": {
           "default": "fresh",
           "description": "Initialization mode: `\"fresh\"`, `\"warm_start\"`, or `\"resume\"`.",
-          "type": "string"
+          "enum": ["fresh", "warm_start", "resume"]
         },
         "path": {
           "default": "./policy",

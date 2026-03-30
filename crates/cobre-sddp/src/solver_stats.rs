@@ -57,6 +57,9 @@ pub struct SolverStatsDelta {
 
     /// Cumulative wall-clock time spent in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
+
+    /// Per-level retry success histogram delta (12 levels, indexed 0..11).
+    pub retry_level_histogram: [u64; 12],
 }
 
 impl SolverStatsDelta {
@@ -91,6 +94,18 @@ impl SolverStatsDelta {
             basis_set_time_ms: (after.total_basis_set_time_seconds
                 - before.total_basis_set_time_seconds)
                 * 1000.0,
+            retry_level_histogram: {
+                let mut h = [0u64; 12];
+                for (dst, (a, b)) in h.iter_mut().zip(
+                    after
+                        .retry_level_histogram
+                        .iter()
+                        .zip(&before.retry_level_histogram),
+                ) {
+                    *dst = a - b;
+                }
+                h
+            },
         }
     }
 
@@ -116,6 +131,13 @@ impl SolverStatsDelta {
             result.add_rows_time_ms += d.add_rows_time_ms;
             result.set_bounds_time_ms += d.set_bounds_time_ms;
             result.basis_set_time_ms += d.basis_set_time_ms;
+            for (dst, src) in result
+                .retry_level_histogram
+                .iter_mut()
+                .zip(&d.retry_level_histogram)
+            {
+                *dst += src;
+            }
         }
         result
     }
@@ -145,6 +167,13 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
         result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
         result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
         result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
+        for (dst, src) in result
+            .retry_level_histogram
+            .iter_mut()
+            .zip(&s.retry_level_histogram)
+        {
+            *dst += src;
+        }
     }
     result
 }
@@ -179,6 +208,7 @@ mod tests {
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.1,
+            retry_level_histogram: [0; 12],
         };
         let after = SolverStatistics {
             solve_count: 20,
@@ -196,6 +226,7 @@ mod tests {
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.3,
+            retry_level_histogram: [0; 12],
         };
 
         let delta = SolverStatsDelta::from_snapshots(&before, &after);
@@ -234,6 +265,7 @@ mod tests {
             total_add_rows_time_seconds: 0.05,
             total_set_bounds_time_seconds: 0.02,
             total_basis_set_time_seconds: 0.01,
+            retry_level_histogram: [0; 12],
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
         assert_eq!(delta.lp_solves, 0);
@@ -276,6 +308,7 @@ mod tests {
             add_rows_time_ms: 5.0,
             set_bounds_time_ms: 2.0,
             basis_set_time_ms: 1.0,
+            retry_level_histogram: [0; 12],
         };
         let d2 = SolverStatsDelta {
             lp_solves: 20,
@@ -293,6 +326,7 @@ mod tests {
             add_rows_time_ms: 10.0,
             set_bounds_time_ms: 4.0,
             basis_set_time_ms: 2.0,
+            retry_level_histogram: [0; 12],
         };
 
         let agg = SolverStatsDelta::aggregate(&[d1, d2]);
@@ -331,6 +365,7 @@ mod tests {
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.05,
+            retry_level_histogram: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let s2 = SolverStatistics {
             solve_count: 20,
@@ -348,6 +383,7 @@ mod tests {
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.15,
+            retry_level_histogram: [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
         let agg = aggregate_solver_statistics(&[s1, s2]);
@@ -366,5 +402,8 @@ mod tests {
         assert!((agg.total_add_rows_time_seconds - 2.0).abs() < 1e-10);
         assert!((agg.total_set_bounds_time_seconds - 1.0).abs() < 1e-10);
         assert!((agg.total_basis_set_time_seconds - 0.2).abs() < 1e-10);
+        assert_eq!(agg.retry_level_histogram[0], 1);
+        assert_eq!(agg.retry_level_histogram[1], 2);
+        assert_eq!(agg.retry_level_histogram[2], 0);
     }
 }

@@ -23,6 +23,12 @@ pub(crate) fn costs_schema() -> Schema {
         Field::new("storage_violation_cost", DataType::Float64, false),
         Field::new("filling_target_cost", DataType::Float64, false),
         Field::new("hydro_violation_cost", DataType::Float64, false),
+        Field::new("outflow_violation_below_cost", DataType::Float64, false),
+        Field::new("outflow_violation_above_cost", DataType::Float64, false),
+        Field::new("turbined_violation_cost", DataType::Float64, false),
+        Field::new("generation_violation_cost", DataType::Float64, false),
+        Field::new("evaporation_violation_cost", DataType::Float64, false),
+        Field::new("withdrawal_violation_cost", DataType::Float64, false),
         Field::new("inflow_penalty_cost", DataType::Float64, false),
         Field::new("generic_violation_cost", DataType::Float64, false),
         Field::new("spillage_cost", DataType::Float64, false),
@@ -35,7 +41,7 @@ pub(crate) fn costs_schema() -> Schema {
 
 /// Schema for `simulation/hydros/` — hydro plant dispatch results.
 ///
-/// 28 fields. See output-schemas.md SS5.2.
+/// 31 fields. See output-schemas.md SS5.2.
 pub(crate) fn hydros_schema() -> Schema {
     Schema::new(vec![
         Field::new("stage_id", DataType::Int32, false),
@@ -64,9 +70,19 @@ pub(crate) fn hydros_schema() -> Schema {
         Field::new("generation_slack_mw", DataType::Float64, false),
         Field::new("storage_violation_below_hm3", DataType::Float64, false),
         Field::new("filling_target_violation_hm3", DataType::Float64, false),
-        Field::new("evaporation_violation_m3s", DataType::Float64, false),
+        Field::new("evaporation_violation_pos_m3s", DataType::Float64, false),
+        Field::new("evaporation_violation_neg_m3s", DataType::Float64, false),
         Field::new("inflow_nonnegativity_slack_m3s", DataType::Float64, false),
-        Field::new("water_withdrawal_violation_m3s", DataType::Float64, false),
+        Field::new(
+            "water_withdrawal_violation_pos_m3s",
+            DataType::Float64,
+            false,
+        ),
+        Field::new(
+            "water_withdrawal_violation_neg_m3s",
+            DataType::Float64,
+            false,
+        ),
     ])
 }
 
@@ -281,6 +297,18 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
+        Field::new("retry_l0", DataType::UInt64, false),
+        Field::new("retry_l1", DataType::UInt64, false),
+        Field::new("retry_l2", DataType::UInt64, false),
+        Field::new("retry_l3", DataType::UInt64, false),
+        Field::new("retry_l4", DataType::UInt64, false),
+        Field::new("retry_l5", DataType::UInt64, false),
+        Field::new("retry_l6", DataType::UInt64, false),
+        Field::new("retry_l7", DataType::UInt64, false),
+        Field::new("retry_l8", DataType::UInt64, false),
+        Field::new("retry_l9", DataType::UInt64, false),
+        Field::new("retry_l10", DataType::UInt64, false),
+        Field::new("retry_l11", DataType::UInt64, false),
     ])
 }
 
@@ -339,8 +367,8 @@ mod tests {
         let schema = costs_schema();
         assert_eq!(
             schema.fields().len(),
-            20,
-            "costs schema must have 20 fields"
+            26,
+            "costs schema must have 26 fields"
         );
         let names = field_names(&schema);
         assert_eq!(
@@ -359,6 +387,12 @@ mod tests {
                 "storage_violation_cost",
                 "filling_target_cost",
                 "hydro_violation_cost",
+                "outflow_violation_below_cost",
+                "outflow_violation_above_cost",
+                "turbined_violation_cost",
+                "generation_violation_cost",
+                "evaporation_violation_cost",
+                "withdrawal_violation_cost",
                 "inflow_penalty_cost",
                 "generic_violation_cost",
                 "spillage_cost",
@@ -392,6 +426,12 @@ mod tests {
             "storage_violation_cost",
             "filling_target_cost",
             "hydro_violation_cost",
+            "outflow_violation_below_cost",
+            "outflow_violation_above_cost",
+            "turbined_violation_cost",
+            "generation_violation_cost",
+            "evaporation_violation_cost",
+            "withdrawal_violation_cost",
             "inflow_penalty_cost",
             "generic_violation_cost",
             "spillage_cost",
@@ -415,13 +455,12 @@ mod tests {
     #[test]
     fn hydros_schema_field_count_and_names() {
         let schema = hydros_schema();
-        // The spec (output-schemas.md SS5.2) defines 29 data columns.
-        // The ticket's acceptance criterion listed 26, which is a stale count;
-        // the spec is the authoritative source.
+        // The spec (output-schemas.md SS5.2) defines 31 data columns.
+        // Bidirectional withdrawal/evaporation slacks added pos/neg pairs.
         assert_eq!(
             schema.fields().len(),
-            29,
-            "hydros schema must have 29 fields"
+            31,
+            "hydros schema must have 31 fields"
         );
         let names = field_names(&schema);
         assert_eq!(
@@ -453,9 +492,11 @@ mod tests {
                 "generation_slack_mw",
                 "storage_violation_below_hm3",
                 "filling_target_violation_hm3",
-                "evaporation_violation_m3s",
+                "evaporation_violation_pos_m3s",
+                "evaporation_violation_neg_m3s",
                 "inflow_nonnegativity_slack_m3s",
-                "water_withdrawal_violation_m3s",
+                "water_withdrawal_violation_pos_m3s",
+                "water_withdrawal_violation_neg_m3s",
             ]
         );
     }
@@ -497,9 +538,11 @@ mod tests {
             "generation_slack_mw",
             "storage_violation_below_hm3",
             "filling_target_violation_hm3",
-            "evaporation_violation_m3s",
+            "evaporation_violation_pos_m3s",
+            "evaporation_violation_neg_m3s",
             "inflow_nonnegativity_slack_m3s",
-            "water_withdrawal_violation_m3s",
+            "water_withdrawal_violation_pos_m3s",
+            "water_withdrawal_violation_neg_m3s",
         ] {
             assert!(
                 !is_nullable(&schema, col),
@@ -742,8 +785,8 @@ mod tests {
             .map(|(s, n)| (*n, s.fields().len()))
             .collect();
         let expected: &[(&str, usize)] = &[
-            ("costs", 20),
-            ("hydros", 29),
+            ("costs", 26),
+            ("hydros", 31),
             ("thermals", 10),
             ("exchanges", 11),
             ("buses", 10),

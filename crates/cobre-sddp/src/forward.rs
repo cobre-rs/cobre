@@ -101,7 +101,7 @@ pub struct ForwardResult {
     pub lp_solves: u64,
 }
 
-/// Global upper bound statistics from forward synchronisation step (`allreduce`).
+/// Global upper bound statistics from forward synchronisation step.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct SyncResult {
@@ -114,7 +114,7 @@ pub struct SyncResult {
     /// 95% confidence interval half-width: `1.96 * std / sqrt(N)`.
     pub ci_95_half_width: f64,
 
-    /// Wall-clock time in milliseconds for the `allreduce` call.
+    /// Wall-clock time in milliseconds for the forward synchronization call.
     pub sync_time_ms: u64,
 }
 
@@ -265,6 +265,26 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
+/// Push one negated, scaled coefficient entry into the cut row batch.
+///
+/// Shared by the sparse and dense paths in [`build_cut_row_batch_into`] to
+/// prevent the two branches from drifting apart during maintenance.
+#[inline]
+fn push_scaled_coefficient(batch: &mut RowBatch, j: usize, coeff: f64, col_scale: &[f64]) {
+    debug_assert!(
+        i32::try_from(j).is_ok(),
+        "column index j={j} exceeds i32::MAX"
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    batch.col_indices.push(j as i32);
+    let d = if col_scale.is_empty() {
+        1.0
+    } else {
+        col_scale[j]
+    };
+    batch.values.push(-coeff * d);
+}
+
 /// Fill a pre-allocated [`RowBatch`] with Benders cut rows from the FCF.
 ///
 /// Clears `batch` and repopulates it with active cuts from `fcf` at the
@@ -272,6 +292,11 @@ pub fn sync_forward<C: Communicator>(
 /// across calls, eliminating heap allocation on the hot path.
 ///
 /// This is the allocation-free core used by `build_cut_row_batch`.
+///
+/// # Panics
+///
+/// Panics if the total number of non-zeros exceeds `i32::MAX` (the `HiGHS`
+/// API limit for CSR indices).
 pub fn build_cut_row_batch_into(
     batch: &mut RowBatch,
     fcf: &FutureCostFunction,
@@ -316,37 +341,16 @@ pub fn build_cut_row_batch_into(
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch.row_starts.push(nz_offset as i32);
 
+        // Unified state coefficient loop: sparse iterates over the nonzero
+        // mask, dense iterates over all state indices. Both yield (col_index,
+        // coefficient) pairs and share the same push logic.
         if is_sparse {
-            // Sparse path: iterate only over nonzero state indices.
             for &j in mask {
-                debug_assert!(
-                    i32::try_from(j).is_ok(),
-                    "column index j={j} exceeds i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                batch.col_indices.push(j as i32);
-                let d = if col_scale.is_empty() {
-                    1.0
-                } else {
-                    col_scale[j]
-                };
-                batch.values.push(-coefficients[j] * d);
+                push_scaled_coefficient(batch, j, coefficients[j], col_scale);
             }
         } else {
-            // Dense path: iterate over all state indices (backward compatible).
             for (j, &c) in coefficients.iter().enumerate() {
-                debug_assert!(
-                    i32::try_from(j).is_ok(),
-                    "column index j={j} exceeds i32::MAX"
-                );
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                batch.col_indices.push(j as i32);
-                let d = if col_scale.is_empty() {
-                    1.0
-                } else {
-                    col_scale[j]
-                };
-                batch.values.push(-c * d);
+                push_scaled_coefficient(batch, j, c, col_scale);
             }
         }
 
@@ -771,23 +775,9 @@ fn run_forward_stage<S: SolverInterface + Send>(
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
+    // Skip dual storage: rec.dual is not read by the backward pass or any
+    // training-path code. Simulation reads duals directly from the solver view.
     rec.dual.clear();
-    // Unscale duals: structural rows use row_scale[i]; cut rows (i >= num_rows)
-    // have implicit row_scale = 1.0 and are used as-is.
-    let row_scale = &ctx.templates[t].row_scale;
-    if row_scale.is_empty() {
-        rec.dual.extend_from_slice(view.dual);
-    } else {
-        rec.dual.reserve(view.dual.len());
-        for (i, &d) in view.dual.iter().enumerate() {
-            let scale = if i < row_scale.len() {
-                row_scale[i]
-            } else {
-                1.0
-            };
-            rec.dual.push(d * scale);
-        }
-    }
     rec.stage_cost = stage_cost;
 
     // Save incoming lag values before overwriting state with primal.
@@ -799,26 +789,18 @@ fn run_forward_stage<S: SolverInterface + Send>(
         .lag_matrix_buf
         .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
 
-    rec.state.clear();
-    rec.state
-        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+    // Compute shifted lag state once into ws.current_state, then copy to rec.state.
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
-
-    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
-    crate::noise::shift_lag_state(
-        &mut rec.state,
-        &ws.scratch.lag_matrix_buf,
-        unscaled_primal,
-        indexer,
-    );
     crate::noise::shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         unscaled_primal,
         indexer,
     );
+    rec.state.clear();
+    rec.state.extend_from_slice(&ws.current_state);
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {
@@ -1323,6 +1305,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
         let make_stage = |idx: usize, id: i32| Stage {
@@ -1535,7 +1522,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -1620,7 +1611,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -1711,7 +1706,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -2087,7 +2086,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
 
         let templates = vec![
@@ -2504,6 +2507,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
         let stage = Stage {
@@ -2761,7 +2769,11 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
+
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let templates = vec![
             minimal_template_1_0(),
@@ -2883,6 +2895,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
         let stage = Stage {

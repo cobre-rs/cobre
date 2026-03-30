@@ -54,6 +54,8 @@ pub mod inflow_method;
 pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
+pub mod policy_export;
+pub mod policy_load;
 pub mod risk_measure;
 pub mod scaling_report;
 pub mod setup;
@@ -88,7 +90,7 @@ pub use hydro_models::{
     resolve_production_models,
 };
 pub use indexer::{
-    EquipmentCounts, EvapConfig, EvaporationIndices, FphaConfig, FphaRowRange, StageIndexer,
+    EquipmentCounts, EvapConfig, EvaporationIndices, FphaColumnLayout, FphaRowRange, StageIndexer,
 };
 pub use inflow_method::InflowNonNegativityMethod;
 pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
@@ -96,6 +98,7 @@ pub use lp_builder::{
     GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
     build_stage_templates,
 };
+pub use policy_load::{build_basis_cache_from_checkpoint, validate_policy_compatibility};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{

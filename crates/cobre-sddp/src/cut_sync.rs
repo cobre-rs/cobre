@@ -339,6 +339,149 @@ impl CutSyncBuffers {
         Ok(remote_count)
     }
 
+    /// Pack the current iteration's local cuts directly from the FCF into the
+    /// send buffer, returning the number of cuts packed.
+    ///
+    /// This replaces the two-step collect-then-serialize pattern by reading
+    /// coefficients directly from the pool's `coefficients` slice, avoiding
+    /// the per-cut `Vec<f64>` clone that `collect_local_cuts_for_stage` used.
+    ///
+    /// Only cuts generated at the given `iteration` and currently active are
+    /// included.
+    ///
+    /// # Panics (debug builds only)
+    ///
+    /// Panics if the number of eligible cuts exceeds the send buffer capacity.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn pack_local_cuts(
+        &mut self,
+        fcf: &FutureCostFunction,
+        stage: usize,
+        iteration: u64,
+    ) -> usize {
+        let pool = &fcf.pools[stage];
+        let mut n_packed = 0usize;
+
+        for slot in 0..pool.populated_count {
+            if !pool.active[slot] {
+                continue;
+            }
+            let meta = &pool.metadata[slot];
+            if meta.iteration_generated != iteration {
+                continue;
+            }
+
+            let start = n_packed * self.record_size;
+            debug_assert!(
+                start + self.record_size <= self.send_buf.len(),
+                "pack_local_cuts: cut {n_packed} exceeds send_buf capacity {}",
+                self.send_buf.len()
+            );
+            serialize_cut(
+                &mut self.send_buf[start..start + self.record_size],
+                slot as u32,
+                iteration as u32,
+                meta.forward_pass_index,
+                pool.intercepts[slot],
+                &pool.coefficients[slot],
+            );
+            n_packed += 1;
+        }
+
+        n_packed
+    }
+
+    /// Exchange pre-packed local cuts and insert remote cuts into the FCF.
+    ///
+    /// The caller must have already packed local cuts into the send buffer via
+    /// [`pack_local_cuts`](Self::pack_local_cuts). This method broadcasts the
+    /// packed data via `allgatherv`, then deserializes and inserts only remote
+    /// cuts into the FCF (the local rank's segment is skipped).
+    ///
+    /// # Arguments
+    ///
+    /// - `n_local` — number of cuts packed into the send buffer.
+    /// - `fcf` — Future Cost Function to receive remote cuts.
+    /// - `comm` — communicator for the `allgatherv` call.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(n)` where `n` is the number of remote cuts inserted into `fcf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(SddpError::Communication(_))` if the underlying
+    /// `allgatherv` call fails.
+    pub fn sync_packed_cuts<C: Communicator>(
+        &mut self,
+        stage: usize,
+        n_local: usize,
+        fcf: &mut FutureCostFunction,
+        comm: &C,
+    ) -> Result<usize, SddpError> {
+        let send_len = n_local * self.record_size;
+
+        debug_assert!(
+            send_len <= self.send_buf.len(),
+            "send_len {send_len} exceeds send_buf capacity {}",
+            self.send_buf.len()
+        );
+
+        let my_rank = comm.rank();
+        for r in 0..self.num_ranks {
+            let cuts_for_r = if r == my_rank {
+                n_local
+            } else {
+                self.per_rank_cuts[r]
+            };
+            self.counts[r] = cuts_for_r * self.record_size;
+        }
+        self.displs[0] = 0;
+        for r in 1..self.num_ranks {
+            self.displs[r] = self.displs[r - 1] + self.counts[r - 1];
+        }
+
+        let recv_len: usize = self.counts.iter().sum();
+        debug_assert!(
+            recv_len <= self.recv_buf.len(),
+            "recv_len {recv_len} exceeds recv_buf capacity {}",
+            self.recv_buf.len()
+        );
+
+        comm.allgatherv(
+            &self.send_buf[..send_len],
+            &mut self.recv_buf[..recv_len],
+            &self.counts,
+            &self.displs,
+        )?;
+
+        let local_rank = comm.rank();
+        let mut remote_count = 0usize;
+
+        for r in 0..self.num_ranks {
+            if r == local_rank {
+                continue;
+            }
+
+            let start = self.displs[r];
+            let end = start + self.counts[r];
+            let slice = &self.recv_buf[start..end];
+            let cuts = deserialize_cuts_from_buffer(slice, self.n_state);
+            for (header, coefficients) in cuts {
+                fcf.add_cut(
+                    stage,
+                    u64::from(header.iteration),
+                    header.forward_pass_index,
+                    header.intercept,
+                    &coefficients,
+                );
+                remote_count += 1;
+            }
+        }
+
+        Ok(remote_count)
+    }
+
     /// Return the send buffer capacity in bytes.
     #[must_use]
     pub fn send_capacity(&self) -> usize {
@@ -350,47 +493,6 @@ impl CutSyncBuffers {
     pub fn recv_capacity(&self) -> usize {
         self.recv_buf.len()
     }
-}
-
-/// Collect the current iteration's local cuts from the FCF for a given stage.
-///
-/// Returns a vector of `(slot, iteration, forward_pass_index, intercept,
-/// coefficients)` tuples — the format consumed by
-/// [`CutSyncBuffers::sync_cuts`].
-#[must_use]
-///
-/// Only cuts generated at the given `iteration` and currently active are
-/// included. This is called once per stage inside the backward per-stage loop
-/// to prepare the local data for the `allgatherv` exchange.
-#[allow(clippy::cast_possible_truncation)]
-pub fn collect_local_cuts_for_stage(
-    fcf: &FutureCostFunction,
-    stage: usize,
-    iteration: u64,
-) -> Vec<(u32, u32, u32, f64, Vec<f64>)> {
-    let pool = &fcf.pools[stage];
-    let mut result = Vec::new();
-    for slot in 0..pool.populated_count {
-        if !pool.active[slot] {
-            continue;
-        }
-        let meta = &pool.metadata[slot];
-        if meta.iteration_generated != iteration {
-            continue;
-        }
-        let intercept = pool.intercepts[slot];
-        let coefficients = pool.coefficients[slot].clone();
-        let slot_u32 = slot as u32;
-        let iter_u32 = iteration as u32;
-        result.push((
-            slot_u32,
-            iter_u32,
-            meta.forward_pass_index,
-            intercept,
-            coefficients,
-        ));
-    }
-    result
 }
 
 #[cfg(test)]

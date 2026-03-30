@@ -68,7 +68,7 @@ use super::error::OutputError;
 /// without copying (coefficient vectors can reach 2,080 `f64` values at production
 /// scale).
 ///
-/// Field names correspond to the cut table (`BendersCut`) in SS3.1 of the policy schema
+/// Field names correspond to the cut record table in SS3.1 of the policy schema
 /// specification.
 #[derive(Debug, Clone)]
 pub struct PolicyCutRecord<'a> {
@@ -173,6 +173,13 @@ pub struct PolicyCheckpointMetadata {
     /// Number of cuts loaded from a previous policy at run start.
     pub warm_start_cuts: u32,
     /// RNG seed used by the scenario sampler.
+    ///
+    /// The noise sampling architecture derives per-draw seeds from
+    /// `(rng_seed, iteration, scenario, stage)` via SipHash-1-3. This
+    /// makes noise at any given iteration deterministic from the seed
+    /// alone — no accumulated RNG state is needed for resume. A resumed
+    /// training run with the same `rng_seed` and `forward_passes` will
+    /// produce identical noise sequences at each iteration.
     pub rng_seed: u64,
 }
 
@@ -239,7 +246,7 @@ fn build_cut_table(
 ///
 /// Produces a buffer containing a root `StageCuts` table. The buffer is ready
 /// for writing directly to a `.bin` policy file. Field layout matches the
-/// `StageCuts` table and cut table (`BendersCut`) declarations in SS3.1 of the policy schema
+/// `StageCuts` table and cut record table declarations in SS3.1 of the policy schema
 /// specification.
 ///
 /// The function is infallible: the `FlatBuffers` builder API only allocates and
@@ -554,7 +561,7 @@ pub fn write_policy_checkpoint(
 /// Unlike [`PolicyCutRecord<'a>`], this type owns its `coefficients` vector so it
 /// can be returned from a deserialization function that does not borrow from the
 /// input buffer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OwnedPolicyCutRecord {
     /// Unique identifier for this cut across all iterations.
     pub cut_id: u64,
@@ -578,7 +585,7 @@ pub struct OwnedPolicyCutRecord {
 ///
 /// Unlike [`PolicyBasisRecord<'a>`], this type owns its status byte vectors so it
 /// can be returned from a deserialization function.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OwnedPolicyBasisRecord {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -596,7 +603,7 @@ pub struct OwnedPolicyBasisRecord {
 ///
 /// Contains the stage-level fields stored in the `StageCuts` root table plus the
 /// vector of deserialized cut records.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StageCutsReadResult {
     /// Stage index (0-based).
     pub stage_id: u32,
@@ -613,7 +620,7 @@ pub struct StageCutsReadResult {
 }
 
 /// Complete deserialized policy checkpoint returned by [`read_policy_checkpoint`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PolicyCheckpoint {
     /// Policy metadata read from `metadata.json`.
     pub metadata: PolicyCheckpointMetadata,
@@ -826,7 +833,7 @@ fn read_table_vector_positions(buf: &[u8], vec_pos: usize) -> Option<Vec<usize>>
 
 /// Deserialize a `StageCuts` `FlatBuffers` buffer into an owned [`StageCutsReadResult`].
 ///
-/// Reads the root `StageCuts` table and each nested cut table (`BendersCut`) using safe
+/// Reads the root `StageCuts` table and each nested cut record table using safe
 /// raw byte parsing of the `FlatBuffers` wire format. No `unsafe` code is used.
 ///
 /// # Errors
@@ -924,7 +931,7 @@ pub fn deserialize_stage_cuts(buf: &[u8]) -> Result<StageCutsReadResult, OutputE
     })
 }
 
-/// Deserialize a single `BendersCut` nested table at `cut_table_pos`.
+/// Deserialize a single cut record nested table at `cut_table_pos`.
 fn deserialize_cut_table(buf: &[u8], cut_table_pos: usize) -> Option<OwnedPolicyCutRecord> {
     let vtable_pos = resolve_vtable_pos(buf, cut_table_pos)?;
 

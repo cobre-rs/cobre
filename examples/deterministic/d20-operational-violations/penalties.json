@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/penalties.schema.json",
+  "bus": {
+    "deficit_segments": [
+      {
+        "depth_mw": null,
+        "cost": 1000.0
+      }
+    ],
+    "excess_cost": 0.01
+  },
+  "line": {
+    "exchange_cost": 0.01
+  },
+  "hydro": {
+    "spillage_cost": 0.01,
+    "fpha_turbined_cost": 0.01,
+    "diversion_cost": 0.01,
+    "storage_violation_below_cost": 10000.0,
+    "filling_target_violation_cost": 10000.0,
+    "turbined_violation_below_cost": 5000.0,
+    "outflow_violation_below_cost": 5000.0,
+    "outflow_violation_above_cost": 5000.0,
+    "generation_violation_below_cost": 5000.0,
+    "evaporation_violation_cost": 10000.0,
+    "water_withdrawal_violation_cost": 10000.0
+  },
+  "non_controllable_source": {
+    "curtailment_cost": 0.005
+  }
+}

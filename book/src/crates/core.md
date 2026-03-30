@@ -152,14 +152,15 @@ and optional cascade connectivity. It has 22 fields.
 
 **Optional hydraulic sub-models:**
 
-| Field                         | Type                           | Description                                             |
-| ----------------------------- | ------------------------------ | ------------------------------------------------------- |
-| `tailrace`                    | `Option<TailraceModel>`        | Downstream water level model; `None` = zero             |
-| `hydraulic_losses`            | `Option<HydraulicLossesModel>` | Penstock loss model; `None` = lossless                  |
-| `efficiency`                  | `Option<EfficiencyModel>`      | Turbine efficiency model; `None` = 100%                 |
-| `evaporation_coefficients_mm` | `Option<[f64; 12]>`            | Monthly evaporation [mm/month]; `None` = no evaporation |
-| `diversion`                   | `Option<DiversionChannel>`     | Diversion channel; `None` = no diversion                |
-| `filling`                     | `Option<FillingConfig>`        | Filling operation config; `None` = no filling           |
+| Field                               | Type                           | Description                                                   |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------------- |
+| `tailrace`                          | `Option<TailraceModel>`        | Downstream water level model; `None` = zero                   |
+| `hydraulic_losses`                  | `Option<HydraulicLossesModel>` | Penstock loss model; `None` = lossless                        |
+| `efficiency`                        | `Option<EfficiencyModel>`      | Turbine efficiency model; `None` = 100%                       |
+| `evaporation_coefficients_mm`       | `Option<[f64; 12]>`            | Monthly evaporation [mm/month]; `None` = no evaporation       |
+| `evaporation_reference_volumes_hm3` | `Option<[f64; 12]>`            | Monthly reference volumes [hm³] for evaporation linearization |
+| `diversion`                         | `Option<DiversionChannel>`     | Diversion channel; `None` = no diversion                      |
+| `filling`                           | `Option<FillingConfig>`        | Filling operation config; `None` = no filling                 |
 
 **Penalties:**
 
@@ -679,14 +680,16 @@ and `Sequential` (replay in file order, cycling when the end is reached).
 Raw PAR(p) model parameters for a single (hydro, stage) pair, loaded from
 `inflow_seasonal_stats.parquet` and `inflow_ar_coefficients.parquet`.
 
-| Field             | Type       | Description                                              |
-| ----------------- | ---------- | -------------------------------------------------------- |
-| `hydro_id`        | `EntityId` | Hydro plant this model belongs to                        |
-| `stage_id`        | `i32`      | Stage index this model applies to                        |
-| `mean_m3s`        | `f64`      | Seasonal mean inflow μ [m³/s]                            |
-| `std_m3s`         | `f64`      | Seasonal standard deviation σ [m³/s]                     |
-| `ar_order`        | `usize`    | AR model order p; zero means white-noise inflow          |
-| `ar_coefficients` | `Vec<f64>` | AR lag coefficients [ψ₁, ψ₂, …, ψₚ]; length = `ar_order` |
+| Field                | Type       | Description                                                          |
+| -------------------- | ---------- | -------------------------------------------------------------------- |
+| `hydro_id`           | `EntityId` | Hydro plant this model belongs to                                    |
+| `stage_id`           | `i32`      | Stage index this model applies to                                    |
+| `mean_m3s`           | `f64`      | Seasonal mean inflow μ [m³/s]                                        |
+| `std_m3s`            | `f64`      | Seasonal standard deviation σ [m³/s]                                 |
+| `ar_coefficients`    | `Vec<f64>` | AR lag coefficients [ψ₁, ψ₂, …, ψₚ]; empty when p == 0 (white noise) |
+| `residual_std_ratio` | `f64`      | Ratio σ_m / s_m; in (0, 1]; 1.0 when `ar_coefficients` is empty      |
+
+The method `ar_order()` returns the AR model order p (i.e., `ar_coefficients.len()`).
 
 ```rust
 use cobre_core::{EntityId, scenario::InflowModel};
@@ -696,10 +699,10 @@ let model = InflowModel {
     stage_id: 3,
     mean_m3s: 150.0,
     std_m3s: 30.0,
-    ar_order: 2,
     ar_coefficients: vec![0.45, 0.22],
+    residual_std_ratio: 0.85,
 };
-assert_eq!(model.ar_order, 2);
+assert_eq!(model.ar_order(), 2);
 assert_eq!(model.ar_coefficients.len(), 2);
 ```
 

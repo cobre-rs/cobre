@@ -452,18 +452,17 @@ generates correlated inflow scenarios across stages.
 
 Expected columns:
 
-| Column     | Type   | Description                                             |
-| ---------- | ------ | ------------------------------------------------------- |
-| `hydro_id` | INT32  | Hydro plant identifier (matches `id` in `hydros.json`)  |
-| `stage_id` | INT32  | Stage identifier (matches `id` in `stages.json`)        |
-| `mean_m3s` | DOUBLE | Seasonal mean inflow in m³/s                            |
-| `std_m3s`  | DOUBLE | Seasonal standard deviation in m³/s (must be >= 0)      |
-| `ar_order` | INT32  | Number of AR lags in the PAR(p) model (0 = white noise) |
+| Column     | Type   | Description                                            |
+| ---------- | ------ | ------------------------------------------------------ |
+| `hydro_id` | INT32  | Hydro plant identifier (matches `id` in `hydros.json`) |
+| `stage_id` | INT32  | Stage identifier (matches `id` in `stages.json`)       |
+| `mean_m3s` | DOUBLE | Seasonal mean inflow in m³/s (must be finite)          |
+| `std_m3s`  | DOUBLE | Seasonal standard deviation in m³/s (must be >= 0)     |
 
 The 1dtoy file has 4 rows, one for each stage, for the single hydro plant `UHE1`
-(hydro_id = 0). When `ar_order > 0`, Cobre also looks for an
-`inflow_ar_coefficients.parquet` file containing the lag coefficients. The 1dtoy
-case uses `ar_order = 0` (white noise), so no coefficients file is needed.
+(hydro_id = 0). When an `inflow_ar_coefficients.parquet` file is also present,
+Cobre uses the lag coefficients to build a PAR(p) model. The 1dtoy case has no
+AR coefficients file, so all inflows use white noise (order 0).
 
 To inspect a Parquet file on your machine, use any of:
 
@@ -492,13 +491,12 @@ and simulation.
 
 Expected columns:
 
-| Column     | Type   | Description                                             |
-| ---------- | ------ | ------------------------------------------------------- |
-| `bus_id`   | INT32  | Bus identifier (matches `id` in `buses.json`)           |
-| `stage_id` | INT32  | Stage identifier (matches `id` in `stages.json`)        |
-| `mean_mw`  | DOUBLE | Seasonal mean load in MW                                |
-| `std_mw`   | DOUBLE | Seasonal standard deviation in MW (must be >= 0)        |
-| `ar_order` | INT32  | Number of AR lags in the PAR(p) model (0 = white noise) |
+| Column     | Type   | Description                                                         |
+| ---------- | ------ | ------------------------------------------------------------------- |
+| `bus_id`   | INT32  | Bus identifier (matches `id` in `buses.json`)                       |
+| `stage_id` | INT32  | Stage identifier (matches `id` in `stages.json`)                    |
+| `mean_mw`  | DOUBLE | Seasonal mean load in MW (must be finite)                           |
+| `std_mw`   | DOUBLE | Seasonal standard deviation in MW (must be >= 0, 0 = deterministic) |
 
 The 1dtoy file has 4 rows, one for each stage, for the single bus `SIN`
 (bus_id = 0). The load mean and standard deviation determine how much demand

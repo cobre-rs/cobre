@@ -9,7 +9,7 @@
 //! Each iteration follows the corrected ordering from the LB plan fix (F-019):
 //!
 //! 1. Forward pass — scenario simulation, local UB statistics.
-//! 2. Forward sync — global `allreduce` for UB statistics.
+//! 2. Forward sync — global synchronization for UB statistics.
 //! 3. State exchange — `allgatherv` trial points for the backward pass.
 //! 4. Backward pass — Benders cut generation.
 //! 5. Cut sync — `allgatherv` new cuts across ranks.
@@ -26,8 +26,7 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -45,7 +44,6 @@ use crate::{
     convergence::ConvergenceMonitor,
     cut::CutRowMap,
     cut::fcf::FutureCostFunction,
-    cut_selection::CutSelectionStrategy,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
     forward::{ForwardPassBatch, run_forward_pass, sync_forward},
@@ -206,8 +204,8 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
 /// let result = train(
 ///     &mut solver, config, &mut fcf, &templates, &base_rows,
 ///     &indexer, &initial_state, &opening_tree, &stochastic,
-///     &horizon, &risk, stopping, None, None, &comm,
-///     1, || HiggsBackend::new(),
+///     &horizon, &risk, stopping, &comm,
+///     || HiggsBackend::new(),
 /// )?;
 ///
 /// println!("converged in {} iterations, gap={:.4}", result.result.iterations, result.result.final_gap);
@@ -232,8 +230,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     opening_tree: &OpeningTree,
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
-    cut_selection: Option<&CutSelectionStrategy>,
-    shutdown_flag: Option<&Arc<AtomicBool>>,
     comm: &C,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
 ) -> Result<TrainingOutcome, SddpError> {
@@ -302,8 +298,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         forward_passes: config_forward_passes,
         max_iterations,
         event_sender,
+        cut_selection,
+        shutdown_flag,
+        start_iteration,
         ..
     } = config;
+    let cut_selection = cut_selection.as_ref();
+    let shutdown_flag = shutdown_flag.as_ref();
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -324,7 +325,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut final_ub = 0.0;
     let mut final_ub_std = 0.0;
     let mut final_gap = 0.0;
-    let mut completed_iterations = 0u64;
+    let mut completed_iterations = start_iteration;
     let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
     let mut solver_stats_log: Vec<SolverStatsEntry> = Vec::new();
 
@@ -398,7 +399,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         }};
     }
 
-    for iteration in 1..=max_iterations {
+    // Pre-allocated backward-pass buffers, reused across iterations to avoid
+    // per-iteration allocation. Declared outside the loop so capacity persists.
+    let mut bwd_probabilities_buf: Vec<f64> = Vec::new();
+    let mut bwd_successor_active_slots_buf: Vec<usize> = Vec::new();
+
+    for iteration in (start_iteration + 1)..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
         if let Some(flag) = shutdown_flag {
@@ -494,6 +500,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             risk_measures,
             cut_activity_tolerance,
             cut_sync_bufs: &mut cut_sync_bufs,
+            probabilities_buf: &mut bwd_probabilities_buf,
+            successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
         };
 
         let backward_result = match run_backward_pass(
@@ -509,6 +517,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             Ok(r) => r,
             Err(e) => on_error!(e),
         };
+
+        // Buffers are borrowed by bwd_spec and automatically available for
+        // the next iteration after bwd_spec is dropped here.
 
         // Store per-stage backward deltas and compute aggregate solve time.
         let bwd_solve_time_ms = {
@@ -1116,6 +1127,11 @@ mod tests {
                 generation_violation_below_cost: 0.0,
                 evaporation_violation_cost: 0.0,
                 water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
             },
         };
 
@@ -1234,6 +1250,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1265,8 +1284,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1307,6 +1324,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1338,8 +1358,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::infeasible()),
         );
@@ -1398,6 +1416,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1429,8 +1450,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1523,6 +1542,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1554,8 +1576,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1594,6 +1614,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1625,8 +1648,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         );
@@ -1662,6 +1683,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1693,8 +1717,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(1),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1738,6 +1760,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1769,8 +1794,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1821,11 +1844,12 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
-        };
-
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 3,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 3,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1857,8 +1881,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            Some(&strategy),
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1919,11 +1941,12 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
-        };
-
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 2,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1955,8 +1978,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
-            Some(&strategy),
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2031,6 +2052,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2062,8 +2086,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(3),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2108,6 +2130,9 @@ mod tests {
             cut_activity_tolerance: 0.0,
             n_fwd_threads: 1,
             max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2143,8 +2168,6 @@ mod tests {
             &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
-            None,
-            None,
             &comm,
             || Ok(MockSolver::infeasible()),
         )
@@ -2174,5 +2197,152 @@ mod tests {
         if let Some(TrainingEvent::TrainingFinished { reason, .. }) = finished {
             assert_eq!(reason, "error", "TrainingFinished reason must be 'error'");
         }
+    }
+
+    /// When `start_iteration = 3` and `max_iterations = 5`, the training loop
+    /// executes exactly 2 iterations (4 and 5) and reports `iterations = 5`.
+    #[test]
+    fn start_iteration_resumes_from_offset() {
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let opening_tree = make_opening_tree(1);
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 5,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 3,
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+        };
+        let outcome = train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &opening_tree,
+            &risk_measures,
+            iteration_limit_rules(5),
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.result.iterations, 5,
+            "iterations must report the absolute iteration number (5), not the delta (2)"
+        );
+        assert_eq!(outcome.result.reason, "iteration_limit");
+    }
+
+    /// When `start_iteration >= max_iterations`, the training loop executes zero
+    /// iterations and returns immediately with `iterations = start_iteration`.
+    #[test]
+    fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let opening_tree = make_opening_tree(1);
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 5,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 5,
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+        };
+        let outcome = train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+            },
+            &opening_tree,
+            &risk_measures,
+            iteration_limit_rules(5),
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.result.iterations, 5,
+            "iterations must equal start_iteration when no loop iterations execute"
+        );
+        assert_eq!(
+            outcome.result.reason, "iteration_limit",
+            "reason should be iteration_limit when loop range is empty"
+        );
     }
 }

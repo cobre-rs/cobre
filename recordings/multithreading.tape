@@ -20,12 +20,12 @@ Output multithreading.gif
 
 Type "cobre init --template 1dtoy demo/"
 Enter
-Sleep 2s
+Sleep 4s
 
 # Increase forward passes to 8 and simulation scenarios to 1000 for a longer run
 Type "jq '.training.forward_passes = 8 | .simulation.num_scenarios = 1000' demo/config.json > tmp.json && mv tmp.json demo/config.json"
 Enter
-Sleep 1s
+Sleep 4s
 
 Type "cobre run demo/ --threads 1"
 Enter
@@ -33,6 +33,6 @@ Sleep 30s
 
 Type "cobre run demo/ --threads 4"
 Enter
-Sleep 10s
+Sleep 15s
 
 Sleep 2s

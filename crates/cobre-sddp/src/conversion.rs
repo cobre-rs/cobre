@@ -30,6 +30,12 @@ impl From<SimulationCostResult> for CostWriteRecord {
             storage_violation_cost: s.storage_violation_cost,
             filling_target_cost: s.filling_target_cost,
             hydro_violation_cost: s.hydro_violation_cost,
+            outflow_violation_below_cost: s.outflow_violation_below_cost,
+            outflow_violation_above_cost: s.outflow_violation_above_cost,
+            turbined_violation_cost: s.turbined_violation_cost,
+            generation_violation_cost: s.generation_violation_cost,
+            evaporation_violation_cost: s.evaporation_violation_cost,
+            withdrawal_violation_cost: s.withdrawal_violation_cost,
             inflow_penalty_cost: s.inflow_penalty_cost,
             generic_violation_cost: s.generic_violation_cost,
             spillage_cost: s.spillage_cost,
@@ -68,9 +74,11 @@ impl From<SimulationHydroResult> for HydroWriteRecord {
             generation_slack_mw: s.generation_slack_mw,
             storage_violation_below_hm3: s.storage_violation_below_hm3,
             filling_target_violation_hm3: s.filling_target_violation_hm3,
-            evaporation_violation_m3s: s.evaporation_violation_m3s,
+            evaporation_violation_pos_m3s: s.evaporation_violation_pos_m3s,
+            evaporation_violation_neg_m3s: s.evaporation_violation_neg_m3s,
             inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
-            water_withdrawal_violation_m3s: s.water_withdrawal_violation_m3s,
+            water_withdrawal_violation_pos_m3s: s.water_withdrawal_violation_pos_m3s,
+            water_withdrawal_violation_neg_m3s: s.water_withdrawal_violation_neg_m3s,
         }
     }
 }
@@ -233,6 +241,12 @@ mod tests {
             storage_violation_cost: 8.0,
             filling_target_cost: 9.0,
             hydro_violation_cost: 10.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            turbined_violation_cost: 0.0,
+            generation_violation_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            withdrawal_violation_cost: 0.0,
             inflow_penalty_cost: 11.0,
             generic_violation_cost: 12.0,
             spillage_cost: 13.0,
@@ -269,9 +283,11 @@ mod tests {
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_pos_m3s: 0.0,
+            evaporation_violation_neg_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
-            water_withdrawal_violation_m3s: 0.0,
+            water_withdrawal_violation_pos_m3s: 0.0,
+            water_withdrawal_violation_neg_m3s: 0.0,
         }
     }
 

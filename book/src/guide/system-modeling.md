@@ -33,7 +33,7 @@ model but do not yet contribute LP variables in the current release.
 | Line             | Full   | `system/lines.json`                    | Transmission interconnection between two buses with flow limits and losses. See [Network Topology](./network-topology.md).                         |
 | Hydro            | Full   | `system/hydros.json`                   | Reservoir-turbine-spillway system with cascade linkage. See [Hydro Plants](./hydro-plants.md).                                                     |
 | Thermal          | Full   | `system/thermals.json`                 | Dispatchable generator with piecewise-linear cost curve. See [Thermal Units](./thermal-units.md).                                                  |
-| Contract         | Stub   | `system/contracts.json`                | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                                                    |
+| Contract         | Stub   | `system/energy_contracts.json`         | Energy purchase or sale obligation. Entity exists in registry; no LP variables in this release.                                                    |
 | Pumping Station  | Stub   | `system/pumping_stations.json`         | Pumped-storage or water-transfer station. Entity exists in registry; no LP variables in this release.                                              |
 | Non-Controllable | Full   | `system/non_controllable_sources.json` | Variable renewable source (wind, solar, run-of-river). Generation variable bounded by available capacity × block factor, with curtailment penalty. |
 

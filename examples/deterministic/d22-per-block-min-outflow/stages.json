@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-02-01",
+      "blocks": [
+        { "id": 0, "name": "PEAK", "hours": 200 },
+        { "id": 1, "name": "SHOULDER", "hours": 300 },
+        { "id": 2, "name": "OFF_PEAK", "hours": 230 }
+      ],
+      "num_scenarios": 1
+    },
+    {
+      "id": 1,
+      "start_date": "2024-02-01",
+      "end_date": "2024-03-01",
+      "blocks": [
+        { "id": 0, "name": "PEAK", "hours": 200 },
+        { "id": 1, "name": "SHOULDER", "hours": 300 },
+        { "id": 2, "name": "OFF_PEAK", "hours": 230 }
+      ],
+      "num_scenarios": 1
+    }
+  ]
+}

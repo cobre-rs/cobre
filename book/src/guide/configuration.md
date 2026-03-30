@@ -9,7 +9,6 @@ case directory. This page documents every section and field.
 
 ```json
 {
-  "version": "2.0.0",
   "training": {
     "forward_passes": 50,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 100 }]
@@ -165,15 +164,18 @@ Controls physical modeling options.
 
 ### `inflow_non_negativity`
 
-| Field          | Type   | Default     | Description                                                                        |
-| -------------- | ------ | ----------- | ---------------------------------------------------------------------------------- |
-| `method`       | string | `"penalty"` | One of `"none"`, `"penalty"`, or `"truncation"`.                                   |
-| `penalty_cost` | float  | `1000.0`    | Penalty coefficient applied to negative inflow slack when `method` is `"penalty"`. |
+| Field          | Type   | Default     | Description                                                                                                       |
+| -------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `method`       | string | `"penalty"` | One of `"none"`, `"penalty"`, `"truncation"`, or `"truncation_with_penalty"`.                                     |
+| `penalty_cost` | float  | `1000.0`    | Penalty coefficient applied to negative inflow slack when `method` is `"penalty"` or `"truncation_with_penalty"`. |
 
 - `"none"` -- no treatment; negative inflows are passed through to the LP.
 - `"penalty"` -- adds a penalty variable to the LP that penalizes negative inflow
   draws at the specified cost per unit.
 - `"truncation"` -- clamps negative PAR model draws to zero before applying noise.
+- `"truncation_with_penalty"` -- combines both: clamps the inflow to zero and adds
+  a bounded slack variable penalised at `penalty_cost`, providing a smooth backstop
+  for extreme tail realisations.
 
 Example:
 
@@ -343,6 +345,27 @@ Controls which outputs are written to the results directory.
   }
 }
 ```
+
+---
+
+## Advanced Fields
+
+The `Config` struct supports additional sections not documented on this page.
+These fields are deserialized from `config.json` when present but are intended
+for advanced use cases and may change between releases:
+
+| Section                           | Purpose                                                     |
+| --------------------------------- | ----------------------------------------------------------- |
+| `upper_bound_evaluation`          | Inner approximation upper-bound evaluation settings         |
+| `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)           |
+| `training.forward_pass.pass_type` | Forward pass strategy selection                             |
+| `training.solver`                 | LP solver retry budget and attempt limits                   |
+| `simulation.sampling_scheme`      | Simulation scenario sampling strategy                       |
+| `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing |
+
+All fields have defaults and can be omitted. For the complete list of fields
+and their types, see the `Config` struct in the
+[cobre-io API docs](https://docs.rs/cobre-io).
 
 ---
 

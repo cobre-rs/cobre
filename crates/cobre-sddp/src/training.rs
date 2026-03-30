@@ -36,6 +36,7 @@ use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
 use cobre_stochastic::OpeningTree;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
@@ -44,6 +45,7 @@ use crate::{
     convergence::ConvergenceMonitor,
     cut::CutRowMap,
     cut::fcf::FutureCostFunction,
+    cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
     forward::{ForwardPassBatch, run_forward_pass, sync_forward},
@@ -292,6 +294,24 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut cut_sync_bufs =
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
+    // Visited-states archive for dominated cut selection. Only allocated when
+    // Dominated strategy is active; Level1/LML1/None pay zero overhead.
+    let mut visited_archive = config.cut_selection.as_ref().and_then(|s| {
+        if matches!(
+            s,
+            crate::cut_selection::CutSelectionStrategy::Dominated { .. }
+        ) {
+            Some(crate::visited_states::VisitedStatesArchive::new(
+                num_stages,
+                n_state,
+                config.max_iterations,
+                total_forward_passes,
+            ))
+        } else {
+            None
+        }
+    });
+
     let start_time = Instant::now();
 
     let TrainingConfig {
@@ -502,6 +522,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             cut_sync_bufs: &mut cut_sync_bufs,
             probabilities_buf: &mut bwd_probabilities_buf,
             successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
+            visited_archive: visited_archive.as_mut(),
         };
 
         let backward_result = match run_backward_pass(
@@ -594,14 +615,29 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     });
                 }
 
+                // Compute deactivation sets in parallel across stages.
+                // Selection is the expensive step (O(active * states) for
+                // Dominated); deactivation is O(deactivated) per stage and
+                // requires &mut, so it stays sequential.
+                let archive_ref = visited_archive.as_ref();
                 #[allow(clippy::cast_possible_truncation)]
-                for stage in 1..num_sel_stages {
+                let deactivations: Vec<(usize, DeactivationSet)> = (1..num_sel_stages)
+                    .into_par_iter()
+                    .map(|stage| {
+                        let pool = &fcf.pools[stage];
+                        let states =
+                            archive_ref.map_or(&[] as &[f64], |a| a.states_for_stage(stage));
+                        let deact =
+                            strategy.select_for_stage(pool, states, iteration, stage as u32);
+                        (stage, deact)
+                    })
+                    .collect();
+
+                #[allow(clippy::cast_possible_truncation)]
+                for (stage, deact) in deactivations {
                     let pool = &fcf.pools[stage];
                     let populated = pool.populated_count as u32;
                     let active_before = pool.active_count() as u32;
-
-                    let stage_u32 = stage as u32;
-                    let deact = strategy.select_for_stage(pool, &[], iteration, stage_u32);
                     let n_deact = deact.indices.len() as u32;
                     cuts_deactivated += n_deact;
 
@@ -609,7 +645,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
                     let active_after = fcf.pools[stage].active_count() as u32;
                     per_stage.push(StageSelectionRecord {
-                        stage: stage_u32,
+                        stage: stage as u32,
                         cuts_populated: populated,
                         cuts_active_before: active_before,
                         cuts_deactivated: n_deact,

@@ -154,7 +154,7 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest pytest-cov
+          pip install maturin pytest pytest-cov pyarrow
       - name: Build and install cobre-python
         working-directory: crates/cobre-python
         run: |

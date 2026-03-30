@@ -811,6 +811,7 @@ pub fn extract_stage_result(
         spec.indexer,
         spec.col_scale,
         generic_violation_cost,
+        spec.cumulative_discount_factor,
         ncs_curtailment_cost,
         stage_id,
     )];
@@ -843,6 +844,7 @@ fn compute_cost_result(
     indexer: &StageIndexer,
     col_scale: &[f64],
     generic_violation_cost: f64,
+    cumulative_discount_factor: f64,
     ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
@@ -987,7 +989,7 @@ fn compute_cost_result(
         total_cost: view.objective * COST_SCALE_FACTOR,
         immediate_cost,
         future_cost,
-        discount_factor: 1.0,
+        discount_factor: cumulative_discount_factor,
         thermal_cost,
         contract_cost: 0.0,
         deficit_cost,

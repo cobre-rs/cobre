@@ -1,9 +1,11 @@
 //! Horizon mode abstraction for SDDP stage traversal.
 //!
 //! [`HorizonMode`] is a flat enum that controls how the training loop traverses
-//! stages, determines terminal conditions, and computes discount factors for
-//! future cost variables. Only `Finite` horizon is implemented;
-//! `Cyclic` horizon is deferred to a future release.
+//! stages and determines terminal conditions. Only `Finite` horizon is
+//! implemented; `Cyclic` horizon is deferred to a future release.
+//!
+//! Discount factors are computed from the [`PolicyGraph`](cobre_core::PolicyGraph)
+//! at setup time and stored in [`StageTemplates`](crate::StageTemplates).
 //!
 //! ## Stage indexing convention
 //!
@@ -26,15 +28,13 @@
 //! assert_eq!(horizon.successors(3), vec![4]);
 //! assert!(horizon.is_terminal(5));
 //! assert!(!horizon.is_terminal(4));
-//! assert_eq!(horizon.discount_factor(3), 1.0);
 //! assert!(horizon.validate().is_ok());
 //! assert_eq!(horizon.num_stages(), 5);
 //! ```
 
 use crate::SddpError;
 
-/// Horizon mode controlling stage traversal, terminal conditions, and
-/// discount factors.
+/// Horizon mode controlling stage traversal and terminal conditions.
 ///
 /// A single `HorizonMode` value governs the structural topology of the entire
 /// training run. The enum is matched at each forward and backward pass stage to
@@ -132,31 +132,6 @@ impl HorizonMode {
     pub fn is_terminal(&self, stage: usize) -> bool {
         match self {
             HorizonMode::Finite { num_stages } => stage >= *num_stages,
-        }
-    }
-
-    /// Return the discount factor for the transition departing from `stage`.
-    ///
-    /// For `Finite` horizon without discounting, the discount factor is
-    /// always `1.0`. Discounting via `annual_discount_rate` is handled
-    /// at a higher level when `stages.json` specifies a non-zero rate;
-    /// this method returns the undiscounted factor.
-    ///
-    /// The returned value is always in `(0, 1]`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cobre_sddp::horizon_mode::HorizonMode;
-    ///
-    /// let h = HorizonMode::Finite { num_stages: 5 };
-    /// assert_eq!(h.discount_factor(2), 1.0);
-    /// assert_eq!(h.discount_factor(5), 1.0);
-    /// ```
-    #[must_use]
-    pub fn discount_factor(&self, _stage: usize) -> f64 {
-        match self {
-            HorizonMode::Finite { .. } => 1.0,
         }
     }
 
@@ -299,19 +274,6 @@ mod tests {
         // Even for num_stages=1 (invalid config), stage 1 should be terminal.
         let h = HorizonMode::Finite { num_stages: 1 };
         assert!(h.is_terminal(1));
-    }
-
-    // ── discount_factor ───────────────────────────────────────────────────────
-
-    #[test]
-    fn discount_factor_returns_one_for_all_stages() {
-        let h = HorizonMode::Finite { num_stages: 5 };
-        for stage in 1..=5 {
-            assert!(
-                (h.discount_factor(stage) - 1.0).abs() < f64::EPSILON,
-                "stage {stage}: expected discount_factor 1.0"
-            );
-        }
     }
 
     // ── validate ─────────────────────────────────────────────────────────────

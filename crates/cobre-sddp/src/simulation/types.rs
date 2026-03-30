@@ -37,7 +37,12 @@ pub struct SimulationCostResult {
     pub immediate_cost: f64,
     /// Future cost function (theta variable value) at this stage.
     pub future_cost: f64,
-    /// Cumulative discount factor applied to this stage cost.
+    /// Cumulative discount factor at this stage for present-value reporting.
+    ///
+    /// `D_0 = 1.0`, `D_t = D_{t-1} * d_{t-1}` where `d_t` is the one-step
+    /// discount factor for the transition departing stage `t`. The present
+    /// value of `immediate_cost` is `discount_factor * immediate_cost`.
+    /// When `annual_discount_rate == 0.0`, this field is `1.0` for all stages.
     pub discount_factor: f64,
     // Resource costs
     /// Cost attributed to thermal generation dispatch.

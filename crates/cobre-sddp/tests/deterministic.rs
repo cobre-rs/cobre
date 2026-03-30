@@ -2502,3 +2502,83 @@ fn d24_productivity_override() {
         assert_bus_balance(stage, 1e-3, "D24");
     }
 }
+
+// ---------------------------------------------------------------------------
+// D25: Discount rate
+// ---------------------------------------------------------------------------
+
+/// Expected cost for D25 (single hydro, 2 stages, 12% annual discount rate).
+///
+/// Same physical system as D02 but with `annual_discount_rate: 0.12`.
+/// The one-step discount factor for stage 0 (31-day January) is:
+///
+/// `d_0 = 1 / (1.12)^(31/365.25) ≈ 0.9904`
+///
+/// The discount factor multiplies the theta (future cost) coefficient in
+/// the stage-0 LP objective, reducing the present value of future costs.
+/// This shifts the optimal dispatch toward less water conservation, yielding
+/// a lower total present-value cost than the undiscounted D02 case.
+const D25_EXPECTED_COST: f64 = 2_611_454.584_787_283;
+
+/// D25: Two-stage single-hydro with 12% annual discount rate.
+///
+/// Verifies that the discounted SDDP lower bound converges to the correct
+/// present-value cost, and that it is strictly less than D02's undiscounted LB.
+#[test]
+fn d25_discount_rate() {
+    let case_dir = Path::new("../../examples/deterministic/d25-discount-rate");
+    let result = run_deterministic(case_dir);
+    assert_cost(result.final_lb, D25_EXPECTED_COST, 1e-4, "D25");
+    assert!(
+        result.iterations <= 10,
+        "D25: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D25: gap={:.2e}",
+        result.final_gap
+    );
+    // Discounted LB must be strictly less than undiscounted D02 LB.
+    assert!(
+        result.final_lb < D02_EXPECTED_COST,
+        "D25: discounted LB ({}) must be < undiscounted D02 LB ({})",
+        result.final_lb,
+        D02_EXPECTED_COST,
+    );
+}
+
+/// D25: Verify simulation discount factors match expected cumulative factors.
+///
+/// Runs training + simulation on the D25 case and asserts that:
+/// - Stage 0 cumulative discount factor = 1.0 (always)
+/// - Stage 1 cumulative discount factor = d_0 = 1/(1.12)^(31/365.25)
+#[test]
+fn d25_simulation_discount_factors() {
+    let case_dir = Path::new("../../examples/deterministic/d25-discount-rate");
+    let (result, scenarios, _summary) = run_with_simulation(case_dir);
+
+    // Training LB must still match.
+    assert_cost(result.final_lb, D25_EXPECTED_COST, 1e-4, "D25-sim");
+
+    // 1 scenario, 2 stages.
+    assert_eq!(scenarios.len(), 1, "D25: expected 1 simulation scenario");
+    let stages = &scenarios[0].stages;
+    assert_eq!(stages.len(), 2, "D25: expected 2 stages");
+
+    // Stage 0: cumulative discount factor = 1.0 (always).
+    let df0 = stages[0].costs[0].discount_factor;
+    assert!(
+        (df0 - 1.0).abs() < 1e-12,
+        "D25: stage 0 discount_factor expected 1.0, got {df0}"
+    );
+
+    // Stage 1: cumulative discount factor = d_0.
+    // d_0 = 1 / (1.12)^(31 / 365.25)
+    let d0 = 1.0_f64 / 1.12_f64.powf(31.0 / 365.25);
+    let df1 = stages[1].costs[0].discount_factor;
+    assert!(
+        (df1 - d0).abs() < 1e-10,
+        "D25: stage 1 discount_factor expected {d0}, got {df1}"
+    );
+}

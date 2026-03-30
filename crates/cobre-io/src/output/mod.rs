@@ -393,7 +393,6 @@ impl SimulationOutput {
 /// # Ok(())
 /// # }
 /// ```
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

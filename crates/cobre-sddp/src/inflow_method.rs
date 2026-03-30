@@ -57,7 +57,7 @@ pub enum InflowNonNegativityMethod {
     /// The PAR(p) noise is clamped (identical to [`Truncation`]) so that the
     /// mean + noise inflow is never negative. In addition, penalty slack
     /// columns are added (identical to [`Penalty`]) so the solver can "undo"
-    /// part of the clamping if cost-effective. This matches SPTcpp's
+    /// part of the clamping if cost-effective. This matches `SPTcpp`'s
     /// `truncamento_penalizacao` mode.
     TruncationWithPenalty {
         /// Legacy global cost (deprecated in favor of penalty cascade).

@@ -35,6 +35,10 @@ use crate::Config;
 ///
 /// This function is one half of the split from [`write_results`]; it can be
 /// called independently to persist training outputs before simulation starts.
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if any directory creation or file write fails.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn write_training_results(
     output_dir: &Path,

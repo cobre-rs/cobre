@@ -18,7 +18,8 @@ use crate::training::TrainingResult;
 ///
 /// Each record borrows its `coefficients` slice from the FCF, so the returned
 /// vectors are valid as long as `fcf` is alive.
-pub fn build_stage_cut_records<'a>(fcf: &'a FutureCostFunction) -> Vec<Vec<PolicyCutRecord<'a>>> {
+#[must_use]
+pub fn build_stage_cut_records(fcf: &FutureCostFunction) -> Vec<Vec<PolicyCutRecord<'_>>> {
     fcf.pools
         .iter()
         .map(|pool| {
@@ -44,6 +45,7 @@ pub fn build_stage_cut_records<'a>(fcf: &'a FutureCostFunction) -> Vec<Vec<Polic
 }
 
 /// Build per-stage active cut index lists from the stage cut records.
+#[must_use]
 pub fn build_active_indices(stage_records: &[Vec<PolicyCutRecord<'_>>]) -> Vec<Vec<u32>> {
     stage_records
         .iter()
@@ -55,6 +57,7 @@ pub fn build_active_indices(stage_records: &[Vec<PolicyCutRecord<'_>>]) -> Vec<V
 ///
 /// `stage_records` and `stage_active_indices` must have been built from the
 /// same `fcf` via [`build_stage_cut_records`] and [`build_active_indices`].
+#[must_use]
 pub fn build_stage_cuts_payloads<'a>(
     fcf: &FutureCostFunction,
     stage_records: &'a [Vec<PolicyCutRecord<'a>>],
@@ -77,8 +80,9 @@ pub fn build_stage_cuts_payloads<'a>(
 
 /// Convert the solver basis cache from i32 status codes to u8 byte vectors.
 ///
-/// HiGHS status codes are in the range 0..=4, so the truncation is safe.
+/// `HiGHS` status codes are in the range 0..=4, so the truncation is safe.
 /// Returns `(col_status_bytes, row_status_bytes)`.
+#[must_use]
 pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let col = training_result
         .basis_cache
@@ -102,6 +106,7 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
 }
 
 /// Build per-stage [`PolicyBasisRecord`] references from pre-converted basis data.
+#[must_use]
 pub fn build_stage_basis_records<'a>(
     fcf: &FutureCostFunction,
     training_result: &TrainingResult,

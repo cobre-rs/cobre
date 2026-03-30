@@ -1067,10 +1067,9 @@ fn constraint_extraction_regression_guard() {
             let overlaps = range_a.start < range_b.end && range_b.start < range_a.end;
             assert!(
                 !overlaps,
-                "Slack column range overlap detected between {name_a} ({:?}) and \
-                 {name_b} ({:?}). This indicates a layout arithmetic bug in \
-                 StageIndexer::with_equipment.",
-                range_a, range_b
+                "Slack column range overlap detected between {name_a} ({range_a:?}) and \
+                 {name_b} ({range_b:?}). This indicates a layout arithmetic bug in \
+                 StageIndexer::with_equipment."
             );
         }
     }

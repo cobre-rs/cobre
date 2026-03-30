@@ -213,150 +213,22 @@ impl PrecomputedPar {
         let mut sigma = vec![0.0f64; n2];
         let mut psi = vec![0.0f64; n3];
 
-        // For lag lookups we also need stages before the study horizon
-        // (pre-study stages have negative IDs and are included in `inflow_models`
-        // but NOT in `stages`). We carry all models, so we look them up via the
-        // model map using the stage_id value directly.
-        //
-        // We need a mapping from stage_id → std_m3s for lag computation.
-        // Build a map (hydro_index, stage_id) → (mean_m3s, std_m3s).
-        let model_stats: HashMap<(usize, i32), (f64, f64)> = inflow_models
-            .iter()
-            .filter_map(|m| {
-                hydro_index
-                    .get(&m.hydro_id)
-                    .map(|&h_idx| ((h_idx, m.stage_id), (m.mean_m3s, m.std_m3s)))
-            })
-            .collect();
-
-        // Season-based fallback for pre-study lag stages (negative stage_id).
-        //
-        // When the exact (h_idx, lag_stage_id) is not in model_stats (because
-        // the estimation pipeline or external files did not emit pre-study
-        // entries), we resolve lag_stage_id to a season_id via modular
-        // arithmetic on the season cycle length, then look up (h_idx, season_id)
-        // in season_stats.
-        let n_seasons = stages
-            .iter()
-            .filter_map(|s| s.season_id)
-            .collect::<HashSet<_>>()
-            .len();
-
-        let stage_to_season: HashMap<i32, usize> = stages
-            .iter()
-            .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
-            .collect();
-
-        let season_stats: HashMap<(usize, usize), (f64, f64)> = model_stats
-            .iter()
-            .filter_map(|(&(h_idx, stage_id), &stats)| {
-                stage_to_season
-                    .get(&stage_id)
-                    .map(|&sid| ((h_idx, sid), stats))
-            })
-            .collect();
-
-        // For converting ψ* → ψ we need std_m3s for the lag stage's season.
-        // The lag stage's stage_id is: current_stage.id - l (for lag l).
-        // We look up (h_idx, stage_id - l) in model_stats. If that misses,
-        // fall back to season_stats via modular arithmetic on n_seasons.
-
-        for (s_idx, stage) in stages.iter().enumerate() {
-            let stage_id = stage.id;
-
-            for (h_idx, &hydro_id) in hydro_ids.iter().enumerate() {
-                let flat2 = s_idx * n_hydros + h_idx;
-
-                // Look up the InflowModel for this (stage, hydro) pair.
-                let model = model_map.get(&(hydro_id.0, stage_id));
-
-                match model {
-                    None => {
-                        // No model for this pair: deterministic zero inflow.
-                        deterministic_base[flat2] = 0.0;
-                        sigma[flat2] = 0.0;
-                        // psi stays 0.0 (already initialized)
-                    }
-                    Some(m) => {
-                        let s_m = m.std_m3s;
-                        let mu_m = m.mean_m3s;
-                        let order = m.ar_order();
-
-                        // sigma = s_m * residual_std_ratio
-                        sigma[flat2] = s_m * m.residual_std_ratio;
-
-                        // Convert ψ* → ψ and compute the deterministic base.
-                        //
-                        // ψ_{m,ℓ} = ψ*_{m,ℓ} · s_m / s_{m-ℓ}
-                        //
-                        // deterministic_base = μ_m - Σ_ℓ ψ_{m,ℓ} · μ_{m-ℓ}
-                        let mut base = mu_m;
-
-                        for lag in 0..order {
-                            // lag is 0-based: coefficient index 0 corresponds to lag ℓ=1.
-                            let lag_stage_id =
-                                stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
-
-                            // Two-tier lookup for lag stage statistics:
-                            //
-                            // Tier 1: exact stage_id match (covers study-stage lags
-                            // and any pre-study entries explicitly present in
-                            // inflow_models).
-                            //
-                            // Tier 2: season-based fallback using modular arithmetic.
-                            // For negative lag_stage_id, resolve to season_id via:
-                            //   season_id = ((lag_stage_id % n) + n) % n
-                            // where n = n_seasons (i32 cast).
-                            let (mu_lag, s_lag) =
-                                if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
-                                    stats
-                                } else if n_seasons > 0 {
-                                    let season_id = resolve_season_id(lag_stage_id, n_seasons);
-                                    season_stats
-                                        .get(&(h_idx, season_id))
-                                        .copied()
-                                        .unwrap_or((0.0, 0.0))
-                                } else {
-                                    // No seasons defined -- cannot resolve; zero fallback.
-                                    (0.0, 0.0)
-                                };
-
-                            // Avoid divide-by-zero: if s_lag == 0.0, the ratio is
-                            // undefined. Treat psi as zero (no AR contribution from
-                            // that lag). The caller is responsible for validating that
-                            // lag stages with AR order > 0 have positive std.
-                            let psi_star = m.ar_coefficients[lag];
-                            let psi_val = if s_lag == 0.0 {
-                                0.0
-                            } else {
-                                psi_star * s_m / s_lag
-                            };
-
-                            // Store in flat 3-D array.
-                            let flat3 = s_idx * n_hydros * max_order + h_idx * max_order + lag;
-                            psi[flat3] = psi_val;
-
-                            base -= psi_val * mu_lag;
-                        }
-
-                        // Verify that we have a valid season_id when AR order > 0.
-                        // (Season is needed for upstream validation; here we confirm
-                        //  the stage is properly configured.)
-                        if order > 0 && stage.season_id.is_none() {
-                            return Err(StochasticError::InvalidParParameters {
-                                hydro_id: hydro_id.0,
-                                stage_id,
-                                reason: "stage has AR order > 0 but no season_id; \
-                                         cannot perform coefficient unit conversion"
-                                    .to_string(),
-                            });
-                        }
-
-                        deterministic_base[flat2] = base;
-                    }
-                }
-            }
-        }
+        // Build season fallback structures and fill the flat output arrays.
+        let mut bufs = StageArrayBuffers {
+            deterministic_base: &mut deterministic_base,
+            sigma: &mut sigma,
+            psi: &mut psi,
+            n_hydros,
+            max_order,
+        };
+        fill_stage_arrays(
+            stages,
+            hydro_ids,
+            &hydro_index,
+            &model_map,
+            inflow_models,
+            &mut bufs,
+        )?;
 
         Ok(Self {
             deterministic_base: deterministic_base.into_boxed_slice(),
@@ -494,6 +366,196 @@ impl Default for PrecomputedPar {
             max_order: 0,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers
+// ---------------------------------------------------------------------------
+
+/// Mutable output buffers and dimension metadata for [`fill_stage_arrays`].
+///
+/// Bundles the three flat arrays and their two governing size scalars so that
+/// [`fill_stage_arrays`] stays within the allowed parameter count.
+struct StageArrayBuffers<'a> {
+    /// See [`PrecomputedPar::deterministic_base`].
+    deterministic_base: &'a mut Vec<f64>,
+    /// See [`PrecomputedPar::sigma`].
+    sigma: &'a mut Vec<f64>,
+    /// See [`PrecomputedPar::psi`].
+    psi: &'a mut Vec<f64>,
+    /// Number of series elements (hydros).
+    n_hydros: usize,
+    /// Maximum AR order across all hydros and stages.
+    max_order: usize,
+}
+
+/// Fill the flat output arrays for every (stage, hydro) pair.
+///
+/// Builds the season-based fallback lookup structures from `inflow_models`
+/// and `stages`, then iterates over every (stage, hydro) combination to
+/// populate `bufs.deterministic_base`, `bufs.sigma`, and `bufs.psi`.
+///
+/// The season fallback is needed because pre-study lag stages (negative
+/// `stage_id`) may not appear as explicit entries in `inflow_models`. When
+/// an exact stage lookup misses, the lag stage id is mapped to a season via
+/// modular arithmetic on `n_seasons` and the per-season statistics are used
+/// instead.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InvalidParParameters`] when a study stage has
+/// AR order > 0 but no `season_id`.
+fn fill_stage_arrays(
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    hydro_index: &HashMap<EntityId, usize>,
+    model_map: &HashMap<(i32, i32), &InflowModel>,
+    inflow_models: &[InflowModel],
+    bufs: &mut StageArrayBuffers<'_>,
+) -> Result<(), StochasticError> {
+    let n_hydros = bufs.n_hydros;
+    let max_order = bufs.max_order;
+
+    // Build a map (hydro_index, stage_id) → (mean_m3s, std_m3s) covering all
+    // entries in inflow_models, including pre-study stages with negative IDs.
+    let model_stats: HashMap<(usize, i32), (f64, f64)> = inflow_models
+        .iter()
+        .filter_map(|m| {
+            hydro_index
+                .get(&m.hydro_id)
+                .map(|&h_idx| ((h_idx, m.stage_id), (m.mean_m3s, m.std_m3s)))
+        })
+        .collect();
+
+    // Season-based fallback for pre-study lag stages (negative stage_id).
+    //
+    // When the exact (h_idx, lag_stage_id) is not in model_stats (because
+    // the estimation pipeline or external files did not emit pre-study
+    // entries), we resolve lag_stage_id to a season_id via modular
+    // arithmetic on the season cycle length, then look up (h_idx, season_id)
+    // in season_stats.
+    let n_seasons = stages
+        .iter()
+        .filter_map(|s| s.season_id)
+        .collect::<HashSet<_>>()
+        .len();
+
+    let stage_to_season: HashMap<i32, usize> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
+
+    let season_stats: HashMap<(usize, usize), (f64, f64)> = model_stats
+        .iter()
+        .filter_map(|(&(h_idx, stage_id), &stats)| {
+            stage_to_season
+                .get(&stage_id)
+                .map(|&sid| ((h_idx, sid), stats))
+        })
+        .collect();
+
+    // For converting ψ* → ψ we need std_m3s for the lag stage's season.
+    // The lag stage's stage_id is: current_stage.id - l (for lag l).
+    // We look up (h_idx, stage_id - l) in model_stats. If that misses,
+    // fall back to season_stats via modular arithmetic on n_seasons.
+
+    for (s_idx, stage) in stages.iter().enumerate() {
+        let stage_id = stage.id;
+
+        for (h_idx, &hydro_id) in hydro_ids.iter().enumerate() {
+            let flat2 = s_idx * n_hydros + h_idx;
+
+            // Look up the InflowModel for this (stage, hydro) pair.
+            let model = model_map.get(&(hydro_id.0, stage_id));
+
+            match model {
+                None => {
+                    // No model for this pair: deterministic zero inflow.
+                    bufs.deterministic_base[flat2] = 0.0;
+                    bufs.sigma[flat2] = 0.0;
+                    // psi stays 0.0 (already initialized)
+                }
+                Some(m) => {
+                    let s_m = m.std_m3s;
+                    let mu_m = m.mean_m3s;
+                    let order = m.ar_order();
+
+                    // sigma = s_m * residual_std_ratio
+                    bufs.sigma[flat2] = s_m * m.residual_std_ratio;
+
+                    // Convert ψ* → ψ and compute the deterministic base.
+                    //
+                    // ψ_{m,ℓ} = ψ*_{m,ℓ} · s_m / s_{m-ℓ}
+                    //
+                    // deterministic_base = μ_m - Σ_ℓ ψ_{m,ℓ} · μ_{m-ℓ}
+                    let mut base = mu_m;
+
+                    for lag in 0..order {
+                        // lag is 0-based: coefficient index 0 corresponds to lag ℓ=1.
+                        let lag_stage_id = stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
+
+                        // Two-tier lookup for lag stage statistics:
+                        //
+                        // Tier 1: exact stage_id match (covers study-stage lags
+                        // and any pre-study entries explicitly present in
+                        // inflow_models).
+                        //
+                        // Tier 2: season-based fallback using modular arithmetic.
+                        // For negative lag_stage_id, resolve to season_id via:
+                        //   season_id = ((lag_stage_id % n) + n) % n
+                        // where n = n_seasons (i32 cast).
+                        let (mu_lag, s_lag) =
+                            if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
+                                stats
+                            } else if n_seasons > 0 {
+                                let season_id = resolve_season_id(lag_stage_id, n_seasons);
+                                season_stats
+                                    .get(&(h_idx, season_id))
+                                    .copied()
+                                    .unwrap_or((0.0, 0.0))
+                            } else {
+                                // No seasons defined -- cannot resolve; zero fallback.
+                                (0.0, 0.0)
+                            };
+
+                        // Avoid divide-by-zero: if s_lag == 0.0, the ratio is
+                        // undefined. Treat psi as zero (no AR contribution from
+                        // that lag). The caller is responsible for validating that
+                        // lag stages with AR order > 0 have positive std.
+                        let psi_star = m.ar_coefficients[lag];
+                        let psi_val = if s_lag == 0.0 {
+                            0.0
+                        } else {
+                            psi_star * s_m / s_lag
+                        };
+
+                        // Store in flat 3-D array.
+                        let flat3 = s_idx * n_hydros * max_order + h_idx * max_order + lag;
+                        bufs.psi[flat3] = psi_val;
+
+                        base -= psi_val * mu_lag;
+                    }
+
+                    // Verify that we have a valid season_id when AR order > 0.
+                    // (Season is needed for upstream validation; here we confirm
+                    //  the stage is properly configured.)
+                    if order > 0 && stage.season_id.is_none() {
+                        return Err(StochasticError::InvalidParParameters {
+                            hydro_id: hydro_id.0,
+                            stage_id,
+                            reason: "stage has AR order > 0 but no season_id; \
+                                     cannot perform coefficient unit conversion"
+                                .to_string(),
+                        });
+                    }
+
+                    bufs.deterministic_base[flat2] = base;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

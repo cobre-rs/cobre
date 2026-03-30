@@ -610,9 +610,6 @@ impl StudySetup {
         })
     }
 
-    /// Build study state from broadcast parameters with a pre-loaded policy.
-    ///
-
     // ── Accessors: LP templates ───────────────────────────────────────────────
 
     /// Return a reference to the full [`StageTemplates`] struct.

@@ -571,7 +571,7 @@ mod tests {
         state_dimension: u32,
         cuts: Vec<cobre_io::OwnedPolicyCutRecord>,
     ) -> cobre_io::StageCutsReadResult {
-        let populated_count = cuts.len() as u32;
+        let populated_count = u32::try_from(cuts.len()).expect("cuts count fits in u32");
         cobre_io::StageCutsReadResult {
             stage_id,
             state_dimension,

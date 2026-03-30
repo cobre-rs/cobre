@@ -52,7 +52,7 @@
 //! [ws_end+3*N*K,    ws_end+4*N*K)  generation_below_slack — per-block min-generation violation
 //! ```
 //!
-//! where ws_end = `withdrawal_slack_pos.end`, H = `hydro_count`, K = `n_blks`,
+//! where `ws_end` = `withdrawal_slack_pos.end`, H = `hydro_count`, K = `n_blks`,
 //! T = `n_thermals`, Ln = `n_lines`, B = `n_buses`, S = `max_deficit_segments`.
 //!
 //! ## Row layout (Solver Abstraction SS2.2)
@@ -116,6 +116,86 @@ pub struct FphaRowRange {
     pub start: usize,
     /// Number of hyperplanes per block.
     pub planes_per_block: usize,
+}
+
+/// Build the inflow-penalty slack column range.
+///
+/// Returns `(range, active)` where `active` is `true` when the penalty method
+/// applies. When inactive, the range is empty (`0..0`).
+fn build_inflow_slack_range(
+    has_inflow_penalty: bool,
+    hydro_count: usize,
+    excess_end: usize,
+) -> (Range<usize>, bool) {
+    if has_inflow_penalty && hydro_count > 0 {
+        (excess_end..excess_end + hydro_count, true)
+    } else {
+        (0..0, false)
+    }
+}
+
+/// Column and row ranges for the four operational-violation slack families.
+///
+/// Produced by [`build_oper_violation_ranges`] and consumed by
+/// [`StageIndexer::with_equipment_and_evaporation`].
+struct OperViolationRanges {
+    outflow_below_slack: Range<usize>,
+    outflow_above_slack: Range<usize>,
+    turbine_below_slack: Range<usize>,
+    generation_below_slack: Range<usize>,
+    min_outflow_rows: Range<usize>,
+    max_outflow_rows: Range<usize>,
+    min_turbine_rows: Range<usize>,
+    min_generation_rows: Range<usize>,
+    has_operational_violations: bool,
+}
+
+/// Build operational-violation column and row ranges.
+///
+/// When `hydro_count == 0`, all ranges are empty (`0..0`) and
+/// `has_operational_violations` is `false`. Otherwise the four slack column
+/// families are laid out immediately after `ws_end` (the end of the withdrawal
+/// slack columns), and the four constraint row families are laid out immediately
+/// after `evap_rows_end`.
+fn build_oper_violation_ranges(
+    hydro_count: usize,
+    n_blks: usize,
+    ws_end: usize,
+    evap_rows_end: usize,
+) -> OperViolationRanges {
+    if hydro_count == 0 {
+        return OperViolationRanges {
+            outflow_below_slack: 0..0,
+            outflow_above_slack: 0..0,
+            turbine_below_slack: 0..0,
+            generation_below_slack: 0..0,
+            min_outflow_rows: 0..0,
+            max_outflow_rows: 0..0,
+            min_turbine_rows: 0..0,
+            min_generation_rows: 0..0,
+            has_operational_violations: false,
+        };
+    }
+    let n_op = hydro_count * n_blks;
+    let ob = ws_end..ws_end + n_op;
+    let oa = ob.end..ob.end + n_op;
+    let tb = oa.end..oa.end + n_op;
+    let gb = tb.end..tb.end + n_op;
+    let r_min_out = evap_rows_end..evap_rows_end + n_op;
+    let r_max_out = r_min_out.end..r_min_out.end + n_op;
+    let r_min_turb = r_max_out.end..r_max_out.end + n_op;
+    let r_min_gen = r_min_turb.end..r_min_turb.end + n_op;
+    OperViolationRanges {
+        outflow_below_slack: ob,
+        outflow_above_slack: oa,
+        turbine_below_slack: tb,
+        generation_below_slack: gb,
+        min_outflow_rows: r_min_out,
+        max_outflow_rows: r_max_out,
+        min_turbine_rows: r_min_turb,
+        min_generation_rows: r_min_gen,
+        has_operational_violations: true,
+    }
 }
 
 /// Read-only LP layout index map for one SDDP stage subproblem.
@@ -802,14 +882,12 @@ impl StageIndexer {
         let n_buses = counts.n_buses;
         let n_blks = counts.n_blks;
         let has_inflow_penalty = counts.has_inflow_penalty;
-        let max_deficit_segments = counts.max_deficit_segments;
         let fpha_hydro_indices = fpha.hydro_indices.clone();
-        let fpha_planes_per_hydro = &fpha.planes_per_hydro;
         let evap_hydro_indices = evap.hydro_indices.clone();
 
         debug_assert_eq!(
             fpha_hydro_indices.len(),
-            fpha_planes_per_hydro.len(),
+            fpha.planes_per_hydro.len(),
             "fpha_hydro_indices and fpha_planes_per_hydro must have equal length"
         );
 
@@ -823,19 +901,15 @@ impl StageIndexer {
         let line_fwd_start = thermal_start + n_thermals * n_blks;
         let line_rev_start = line_fwd_start + n_lines * n_blks;
         let deficit_start = line_rev_start + n_lines * n_blks;
+        let max_deficit_segments = counts.max_deficit_segments; // also assigned to Self
         let excess_start = deficit_start + n_buses * max_deficit_segments * n_blks;
         let excess_end = excess_start + n_buses * n_blks;
 
-        // Inflow slack columns are appended after excess when the penalty method
-        // is active and there is at least one hydro.
-        let (inflow_slack, active_penalty) = if has_inflow_penalty && hydro_count > 0 {
-            (excess_end..excess_end + hydro_count, true)
-        } else {
-            (0..0, false)
-        };
+        // Inflow slack columns are appended after excess when penalty is active.
+        let (inflow_slack, active_penalty) =
+            build_inflow_slack_range(has_inflow_penalty, hydro_count, excess_end);
 
-        // FPHA generation columns are placed immediately after inflow_slack (or after
-        // excess when no penalty), one column per FPHA hydro per block.
+        // FPHA generation columns: after inflow_slack (or excess when no penalty).
         let n_fpha_hydros = fpha_hydro_indices.len();
         let generation_start = if active_penalty {
             inflow_slack.end
@@ -849,12 +923,8 @@ impl StageIndexer {
             0..0
         };
 
-        // Evaporation columns: 3 per evaporation hydro (stage-level, not per-block),
-        // placed immediately after FPHA generation columns.
-        // Layout within the evaporation region for local evaporation index `i`:
-        //   Q_ev_col        = evap_start + i * 3
-        //   f_evap_plus_col = evap_start + i * 3 + 1
-        //   f_evap_minus_col= evap_start + i * 3 + 2
+        // Evaporation columns: 3 per evap hydro (stage-level), after FPHA generation columns.
+        // Layout: Q_ev_col = evap_start+i*3, f_evap_plus = +1, f_evap_minus = +2.
         let n_evap_hydros = evap_hydro_indices.len();
         let evap_col_start = generation_end;
 
@@ -864,11 +934,10 @@ impl StageIndexer {
         let load_balance_end = load_balance_start + n_buses * n_blks;
 
         let (fpha_rows, fpha_row_cursor) =
-            Self::build_fpha_rows(fpha_planes_per_hydro, n_blks, load_balance_end);
+            Self::build_fpha_rows(&fpha.planes_per_hydro, n_blks, load_balance_end);
 
         let evap_indices_vec =
             Self::build_evap_indices(n_evap_hydros, evap_col_start, fpha_row_cursor);
-
         let evap_col_end = evap_col_start + n_evap_hydros * 3;
         let (withdrawal_slack_neg, withdrawal_slack_pos, has_withdrawal) = if hydro_count > 0 {
             let neg = evap_col_end..evap_col_end + hydro_count;
@@ -878,37 +947,11 @@ impl StageIndexer {
             (0..0, 0..0, false)
         };
 
-        // Operational violation slack columns: 4 families * (hydro_count * n_blks), placed after withdrawal slack.
+        // Operational violation slack columns: 4 families * (hydro_count * n_blks).
+        // Columns are placed after withdrawal slack; rows after evaporation rows.
         let evap_rows_end = fpha_row_cursor + n_evap_hydros;
-        let (
-            outflow_below_slack,
-            outflow_above_slack,
-            turbine_below_slack,
-            generation_below_slack,
-            min_outflow_rows,
-            max_outflow_rows,
-            min_turbine_rows,
-            min_generation_rows,
-            has_operational_violations,
-        ) = if hydro_count > 0 {
-            let n_op = hydro_count * n_blks;
-            let ws_end = withdrawal_slack_pos.end;
-            let ob = ws_end..ws_end + n_op;
-            let oa = ob.end..ob.end + n_op;
-            let tb = oa.end..oa.end + n_op;
-            let gb = tb.end..tb.end + n_op;
-
-            let r_min_out = evap_rows_end..evap_rows_end + n_op;
-            let r_max_out = r_min_out.end..r_min_out.end + n_op;
-            let r_min_turb = r_max_out.end..r_max_out.end + n_op;
-            let r_min_gen = r_min_turb.end..r_min_turb.end + n_op;
-
-            (
-                ob, oa, tb, gb, r_min_out, r_max_out, r_min_turb, r_min_gen, true,
-            )
-        } else {
-            (0..0, 0..0, 0..0, 0..0, 0..0, 0..0, 0..0, 0..0, false)
-        };
+        let ws_end = withdrawal_slack_pos.end;
+        let op = build_oper_violation_ranges(hydro_count, n_blks, ws_end, evap_rows_end);
 
         // z_inflow columns are at fixed offset N*(1+L), inherited from base.
         // No re-computation needed; the base constructor already places them correctly.
@@ -942,15 +985,15 @@ impl StageIndexer {
             withdrawal_slack_neg,
             withdrawal_slack_pos,
             has_withdrawal,
-            outflow_below_slack,
-            outflow_above_slack,
-            turbine_below_slack,
-            generation_below_slack,
-            min_outflow_rows,
-            max_outflow_rows,
-            min_turbine_rows,
-            min_generation_rows,
-            has_operational_violations,
+            outflow_below_slack: op.outflow_below_slack,
+            outflow_above_slack: op.outflow_above_slack,
+            turbine_below_slack: op.turbine_below_slack,
+            generation_below_slack: op.generation_below_slack,
+            min_outflow_rows: op.min_outflow_rows,
+            max_outflow_rows: op.max_outflow_rows,
+            min_turbine_rows: op.min_turbine_rows,
+            min_generation_rows: op.min_generation_rows,
+            has_operational_violations: op.has_operational_violations,
             // z_inflow, z_inflow_rows, z_inflow_row_start inherited from base
             // (fixed offset N*(1+L), stage-invariant)
             ..base

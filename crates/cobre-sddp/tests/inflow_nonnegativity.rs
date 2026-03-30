@@ -766,7 +766,7 @@ fn test_simulation_slack_output_populated() {
     );
 }
 
-/// T-015: TruncationWithPenalty mode -- training completes and inflow slack columns
+/// T-015: `TruncationWithPenalty` mode -- training completes and inflow slack columns
 /// are present.
 ///
 /// Verifies that the hybrid mode (clamping + penalty slack) works end-to-end:
@@ -787,7 +787,7 @@ fn truncation_with_penalty_training_completes() {
 
     // Verify the LP template has inflow slack columns in the indexer.
     assert!(
-        fx.indexer.inflow_slack.len() > 0,
+        !fx.indexer.inflow_slack.is_empty(),
         "indexer.inflow_slack must be non-empty for TruncationWithPenalty"
     );
 

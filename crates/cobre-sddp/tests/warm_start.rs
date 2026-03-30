@@ -1,7 +1,7 @@
 //! Integration test for warm-start training.
 //!
 //! Trains a policy, saves it, then warm-starts a new training run from the
-//! saved cuts. Verifies that the warm-start FCF has non-zero warm_start_count
+//! saved cuts. Verifies that the warm-start FCF has non-zero `warm_start_count`
 //! and that training produces correct slot layouts.
 
 #![allow(
@@ -10,8 +10,7 @@
     clippy::panic,
     clippy::float_cmp,
     clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::too_many_lines
+    clippy::cast_possible_truncation
 )]
 
 use std::path::Path;
@@ -19,13 +18,7 @@ use std::path::Path;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_io::output::policy::{read_policy_checkpoint, write_policy_checkpoint};
 use cobre_sddp::{
-    FutureCostFunction, StudySetup,
-    hydro_models::prepare_hydro_models,
-    policy_export::{
-        build_active_indices, build_stage_basis_records, build_stage_cut_records,
-        build_stage_cuts_payloads, convert_basis_cache,
-    },
-    setup::prepare_stochastic,
+    FutureCostFunction, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
 
@@ -71,17 +64,69 @@ impl Communicator for StubComm {
     }
 }
 
+/// Return the path to the d01-thermal-dispatch example case.
+fn d01_case_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples/deterministic/d01-thermal-dispatch")
+}
+
+/// Write a policy checkpoint to `policy_dir` from the given setup and training result.
+///
+/// Convenience helper to avoid duplicating the 20-line metadata + write block
+/// in every test that exercises the checkpoint round-trip.
+fn write_test_checkpoint(
+    policy_dir: &Path,
+    setup: &StudySetup,
+    result: &cobre_sddp::TrainingResult,
+    seed: u64,
+) {
+    use cobre_sddp::policy_export::{
+        build_active_indices, build_stage_basis_records, build_stage_cut_records,
+        build_stage_cuts_payloads, convert_basis_cache,
+    };
+    let fcf = setup.fcf();
+    let stage_records = build_stage_cut_records(fcf);
+    let stage_active_indices = build_active_indices(&stage_records);
+    let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
+    let (basis_col, basis_row) = convert_basis_cache(result);
+    let stage_bases = build_stage_basis_records(fcf, result, &basis_col, &basis_row);
+    let metadata = cobre_io::PolicyCheckpointMetadata {
+        version: "1.0.0".to_string(),
+        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: "2026-03-29T00:00:00Z".to_string(),
+        completed_iterations: result.iterations as u32,
+        final_lower_bound: result.final_lb,
+        best_upper_bound: Some(result.final_ub),
+        state_dimension: fcf.state_dimension as u32,
+        num_stages: fcf.pools.len() as u32,
+        config_hash: String::new(),
+        system_hash: String::new(),
+        max_iterations: setup.max_iterations() as u32,
+        forward_passes: setup.forward_passes(),
+        warm_start_cuts: 0,
+        rng_seed: seed,
+    };
+    write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata)
+        .expect("write checkpoint");
+}
+
+/// Build a `StudySetup` for the given case directory and config, using seed 42.
+fn build_setup(case_dir: &Path, config: &cobre_io::Config) -> StudySetup {
+    let system = cobre_io::load_case(case_dir).expect("load_case");
+    let prep = prepare_stochastic(system, case_dir, config, 42).expect("prepare_stochastic");
+    let hydro_models = prepare_hydro_models(&prep.system, case_dir).expect("prepare_hydro_models");
+    StudySetup::new(&prep.system, config, prep.stochastic, hydro_models).expect("StudySetup::new")
+}
+
 /// Train for 5 iterations, save a checkpoint, resume from iteration 5 up to 10,
 /// verify the resumed run reports 10 total iterations and a non-worse lower bound.
 #[test]
 fn resume_training_from_checkpoint() {
-    let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/deterministic/d01-thermal-dispatch");
-
+    let case_dir = d01_case_dir();
     let config_path = case_dir.join("config.json");
     let config_full = cobre_io::parse_config(&config_path).expect("config must parse");
 
@@ -93,24 +138,7 @@ fn resume_training_from_checkpoint() {
         }]);
 
     // Phase 1: Train for exactly 5 iterations.
-    // Load fresh system and stochastic; hold `system` as an owned value so that
-    // `&system` can be passed to prepare_hydro_models and StudySetup::new.
-    let prep_phase1 = {
-        let system = cobre_io::load_case(&case_dir).expect("load_case phase1");
-        prepare_stochastic(system, &case_dir, &config_phase1, 42)
-            .expect("prepare_stochastic phase1")
-    };
-    let system_phase1 = prep_phase1.system;
-    let hydro_models_phase1 =
-        prepare_hydro_models(&system_phase1, &case_dir).expect("prepare_hydro_models phase1");
-    let mut setup_phase1 = StudySetup::new(
-        &system_phase1,
-        &config_phase1,
-        prep_phase1.stochastic,
-        hydro_models_phase1,
-    )
-    .expect("setup phase1");
-
+    let mut setup_phase1 = build_setup(&case_dir, &config_phase1);
     let comm = StubComm;
     let mut solver_phase1 = HighsSolver::new().expect("HighsSolver");
     let outcome_phase1 = setup_phase1
@@ -127,48 +155,11 @@ fn resume_training_from_checkpoint() {
     // Save the checkpoint from phase 1.
     let tmpdir = tempfile::tempdir().expect("tempdir");
     let policy_dir = tmpdir.path().join("policy");
-    let fcf_phase1 = setup_phase1.fcf();
-    let stage_records = build_stage_cut_records(fcf_phase1);
-    let stage_active_indices = build_active_indices(&stage_records);
-    let stage_cuts = build_stage_cuts_payloads(fcf_phase1, &stage_records, &stage_active_indices);
-    let (basis_col, basis_row) = convert_basis_cache(&result_phase1);
-    let stage_bases = build_stage_basis_records(fcf_phase1, &result_phase1, &basis_col, &basis_row);
-    let metadata = cobre_io::PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
-        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at: "2026-03-29T00:00:00Z".to_string(),
-        completed_iterations: result_phase1.iterations as u32,
-        final_lower_bound: result_phase1.final_lb,
-        best_upper_bound: Some(result_phase1.final_ub),
-        state_dimension: fcf_phase1.state_dimension as u32,
-        num_stages: fcf_phase1.pools.len() as u32,
-        config_hash: String::new(),
-        system_hash: String::new(),
-        max_iterations: setup_phase1.max_iterations() as u32,
-        forward_passes: setup_phase1.forward_passes(),
-        warm_start_cuts: 0,
-        rng_seed: 42,
-    };
-    write_policy_checkpoint(&policy_dir, &stage_cuts, &stage_bases, &metadata)
-        .expect("write checkpoint");
+    write_test_checkpoint(&policy_dir, &setup_phase1, &result_phase1, 42);
 
     // Phase 2: Resume from the checkpoint using the full 10-iteration config.
     let checkpoint = read_policy_checkpoint(&policy_dir).expect("read checkpoint");
-
-    let prep_phase2 = {
-        let system = cobre_io::load_case(&case_dir).expect("load_case phase2");
-        prepare_stochastic(system, &case_dir, &config_full, 42).expect("prepare_stochastic phase2")
-    };
-    let system_phase2 = prep_phase2.system;
-    let hydro_models_phase2 =
-        prepare_hydro_models(&system_phase2, &case_dir).expect("prepare_hydro_models phase2");
-    let mut setup_phase2 = StudySetup::new(
-        &system_phase2,
-        &config_full,
-        prep_phase2.stochastic,
-        hydro_models_phase2,
-    )
-    .expect("setup phase2");
+    let mut setup_phase2 = build_setup(&case_dir, &config_full);
 
     // Replace the FCF with a warm-start version loaded from the checkpoint, then
     // set the start iteration so the training loop begins at iteration 6.
@@ -179,7 +170,7 @@ fn resume_training_from_checkpoint() {
     )
     .expect("warm-start FCF");
     setup_phase2.replace_fcf(warm_fcf);
-    setup_phase2.set_start_iteration(checkpoint.metadata.completed_iterations as u64);
+    setup_phase2.set_start_iteration(u64::from(checkpoint.metadata.completed_iterations));
 
     let mut solver_phase2 = HighsSolver::new().expect("HighsSolver");
     let outcome_phase2 = setup_phase2
@@ -207,35 +198,12 @@ fn resume_training_from_checkpoint() {
 /// Train fresh, save policy, warm-start train, verify improvement and cut counts.
 #[test]
 fn warm_start_training_preserves_cuts_and_trains_further() {
-    let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/deterministic/d01-thermal-dispatch");
-
+    let case_dir = d01_case_dir();
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config must parse");
-    let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
-    let prepare_result =
-        prepare_stochastic(system, &case_dir, &config, 42).expect("prepare_stochastic");
-    let system = prepare_result.system;
 
     // Phase 1: Fresh training.
-    let stochastic_fresh = {
-        let prep = prepare_stochastic(
-            cobre_io::load_case(&case_dir).unwrap(),
-            &case_dir,
-            &config,
-            42,
-        )
-        .unwrap();
-        prep.stochastic
-    };
-    let hydro_models_fresh =
-        prepare_hydro_models(&system, &case_dir).expect("prepare_hydro_models");
-    let mut setup_fresh =
-        StudySetup::new(&system, &config, stochastic_fresh, hydro_models_fresh).expect("setup");
+    let mut setup_fresh = build_setup(&case_dir, &config);
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver");
     let fresh_outcome = setup_fresh
@@ -249,47 +217,11 @@ fn warm_start_training_preserves_cuts_and_trains_further() {
     // Write policy checkpoint.
     let tmpdir = tempfile::tempdir().expect("tempdir");
     let policy_dir = tmpdir.path().join("policy");
-    let fcf = setup_fresh.fcf();
-    let stage_records = build_stage_cut_records(fcf);
-    let stage_active_indices = build_active_indices(&stage_records);
-    let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
-    let (basis_col, basis_row) = convert_basis_cache(&fresh_result);
-    let stage_bases = build_stage_basis_records(fcf, &fresh_result, &basis_col, &basis_row);
-    let metadata = cobre_io::PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
-        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at: "2026-03-29T00:00:00Z".to_string(),
-        completed_iterations: fresh_result.iterations as u32,
-        final_lower_bound: fresh_result.final_lb,
-        best_upper_bound: Some(fresh_result.final_ub),
-        state_dimension: fcf.state_dimension as u32,
-        num_stages: fcf.pools.len() as u32,
-        config_hash: String::new(),
-        system_hash: String::new(),
-        max_iterations: setup_fresh.max_iterations() as u32,
-        forward_passes: setup_fresh.forward_passes(),
-        warm_start_cuts: 0,
-        rng_seed: 42,
-    };
-    write_policy_checkpoint(&policy_dir, &stage_cuts, &stage_bases, &metadata)
-        .expect("write checkpoint");
+    write_test_checkpoint(&policy_dir, &setup_fresh, &fresh_result, 42);
 
     // Phase 2: Warm-start training.
     let checkpoint = read_policy_checkpoint(&policy_dir).expect("read checkpoint");
-
-    let stochastic_warm = {
-        let prep = prepare_stochastic(
-            cobre_io::load_case(&case_dir).unwrap(),
-            &case_dir,
-            &config,
-            42,
-        )
-        .unwrap();
-        prep.stochastic
-    };
-    let hydro_models_warm = prepare_hydro_models(&system, &case_dir).expect("prepare_hydro_models");
-    let mut setup_warm =
-        StudySetup::new(&system, &config, stochastic_warm, hydro_models_warm).expect("setup");
+    let mut setup_warm = build_setup(&case_dir, &config);
 
     // Build warm-start FCF and replace the fresh one.
     // Use max_iterations + 1 for capacity, matching the original FCF constructor

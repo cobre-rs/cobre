@@ -2087,7 +2087,7 @@ pub const D22_EXPECTED_COST: f64 = 140_376_666.666_666_66;
 /// cargo test -p cobre-sddp --test deterministic -- --ignored d20_convertido2
 /// ```
 #[test]
-#[ignore]
+#[ignore = "requires external case data at ~/git/cobre-bridge/example/convertido2/"]
 fn d20_convertido2_truncation_feasibility() {
     let case_dir = Path::new(env!("HOME")).join("git/cobre-bridge/example/convertido2");
     if !case_dir.exists() {

@@ -277,10 +277,10 @@ fn extract_hydro_no_turbine(
     let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
         if indexer.has_operational_violations {
             let n_blks = indexer.n_blks;
-            let base_tb = indexer.turbine_below_slack.start + h * n_blks;
-            let base_ob = indexer.outflow_below_slack.start + h * n_blks;
-            let base_oa = indexer.outflow_above_slack.start + h * n_blks;
-            let base_gb = indexer.generation_below_slack.start + h * n_blks;
+            let base_turbine_below = indexer.turbine_below_slack.start + h * n_blks;
+            let base_outflow_below = indexer.outflow_below_slack.start + h * n_blks;
+            let base_outflow_above = indexer.outflow_above_slack.start + h * n_blks;
+            let base_gen_below = indexer.generation_below_slack.start + h * n_blks;
             let mut tb = 0.0_f64;
             let mut ob = 0.0_f64;
             let mut oa = 0.0_f64;
@@ -288,10 +288,10 @@ fn extract_hydro_no_turbine(
             let total_hours: f64 = spec.block_hours.iter().sum();
             for blk in 0..n_blks {
                 let w = spec.block_hours[blk] / total_hours;
-                tb += view.primal[base_tb + blk] * w;
-                ob += view.primal[base_ob + blk] * w;
-                oa += view.primal[base_oa + blk] * w;
-                gb += view.primal[base_gb + blk] * w;
+                tb += view.primal[base_turbine_below + blk] * w;
+                ob += view.primal[base_outflow_below + blk] * w;
+                oa += view.primal[base_outflow_above + blk] * w;
+                gb += view.primal[base_gen_below + blk] * w;
             }
             (tb, ob, oa, gb)
         } else {
@@ -352,6 +352,99 @@ fn extract_hydro_no_turbine(
     }
 }
 
+/// Stage-level (non-per-block) data extracted for one hydro plant.
+///
+/// Captures values that are constant across all blocks within a stage so that
+/// the per-block closure in [`extract_hydro_per_block`] only needs to read
+/// per-block columns.
+struct HydroStageContext {
+    storage_final: f64,
+    storage_initial: f64,
+    incremental_inflow: f64,
+    inflow_slack: f64,
+    withdrawal_neg: f64,
+    withdrawal_pos: f64,
+    water_value: f64,
+    fpha_local: Option<usize>,
+    productivity_mw_per_m3s: Option<f64>,
+    evaporation_m3s: Option<f64>,
+    evaporation_violation_neg_m3s: f64,
+    evaporation_violation_pos_m3s: f64,
+}
+
+impl HydroStageContext {
+    /// Read all stage-level scalars for hydro at system index `h`.
+    fn new(view: &SolutionView<'_>, spec: &StageExtractionSpec<'_>, h: usize) -> Self {
+        let indexer = spec.indexer;
+        let storage_final = view.primal[indexer.storage.start + h];
+        let storage_initial = view.primal[indexer.storage_in.start + h];
+        let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
+            spec.inflow_m3s_per_hydro[h]
+        } else if indexer.max_par_order > 0 {
+            view.primal[indexer.inflow_lags.start + h]
+        } else {
+            0.0
+        };
+        let inflow_slack = if indexer.has_inflow_penalty {
+            view.primal[indexer.inflow_slack.start + h]
+        } else {
+            0.0
+        };
+        let withdrawal_neg = if indexer.has_withdrawal {
+            view.primal[indexer.withdrawal_slack_neg.start + h]
+        } else {
+            0.0
+        };
+        let withdrawal_pos = if indexer.has_withdrawal {
+            view.primal[indexer.withdrawal_slack_pos.start + h]
+        } else {
+            0.0
+        };
+        let water_value = view
+            .dual
+            .get(indexer.water_balance.start + h)
+            .copied()
+            .unwrap_or(0.0)
+            * COST_SCALE_FACTOR;
+        // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
+        // can read generation from the LP `g_{h,k}` column rather than computing
+        // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
+        // because they use a piecewise function, not a scalar constant.
+        let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
+        let productivity_mw_per_m3s = if fpha_local.is_some() {
+            None
+        } else {
+            Some(spec.hydro_productivities[h])
+        };
+        // Evaporation: stage-level (one column per hydro, same for all blocks).
+        let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
+        let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
+            if let Some(lei) = local_evap {
+                let ei = &indexer.evap_indices[lei];
+                let q_ev = view.primal[ei.q_ev_col];
+                let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
+                let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
+                (Some(q_ev), neg, pos)
+            } else {
+                (Some(0.0), 0.0, 0.0)
+            };
+        Self {
+            storage_final,
+            storage_initial,
+            incremental_inflow,
+            inflow_slack,
+            withdrawal_neg,
+            withdrawal_pos,
+            water_value,
+            fpha_local,
+            productivity_mw_per_m3s,
+            evaporation_m3s,
+            evaporation_violation_neg_m3s,
+            evaporation_violation_pos_m3s,
+        }
+    }
+}
+
 /// Extract per-block hydro results for one hydro plant (turbined/spillage branch).
 fn extract_hydro_per_block<'a>(
     view: &'a SolutionView<'a>,
@@ -362,60 +455,9 @@ fn extract_hydro_per_block<'a>(
 ) -> impl Iterator<Item = SimulationHydroResult> + 'a {
     let indexer = spec.indexer;
     let n_blks = indexer.n_blks;
-    let storage_final = view.primal[indexer.storage.start + h];
-    let storage_initial = view.primal[indexer.storage_in.start + h];
-    let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
-        spec.inflow_m3s_per_hydro[h]
-    } else if indexer.max_par_order > 0 {
-        view.primal[indexer.inflow_lags.start + h]
-    } else {
-        0.0
-    };
-    let inflow_slack = if indexer.has_inflow_penalty {
-        view.primal[indexer.inflow_slack.start + h]
-    } else {
-        0.0
-    };
-    let withdrawal_neg = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack_neg.start + h]
-    } else {
-        0.0
-    };
-    let withdrawal_pos = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack_pos.start + h]
-    } else {
-        0.0
-    };
-    let water_value = view
-        .dual
-        .get(indexer.water_balance.start + h)
-        .copied()
-        .unwrap_or(0.0)
-        * COST_SCALE_FACTOR;
 
-    // Determine if hydro `h` is FPHA. If so, record its local FPHA index so we
-    // can read generation from the LP `g_{h,k}` column rather than computing
-    // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
-    // because they use a piecewise function, not a scalar constant.
-    let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
-    let productivity_mw_per_m3s = if fpha_local.is_some() {
-        None
-    } else {
-        Some(spec.hydro_productivities[h])
-    };
-
-    // Evaporation: stage-level (one column per hydro, same for all blocks).
-    let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
-    let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
-        if let Some(lei) = local_evap {
-            let ei = &indexer.evap_indices[lei];
-            let q_ev = view.primal[ei.q_ev_col];
-            let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
-            let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
-            (Some(q_ev), neg, pos)
-        } else {
-            (Some(0.0), 0.0, 0.0)
-        };
+    // Extract stage-level scalars once; the per-block closure captures them.
+    let ctx = HydroStageContext::new(view, spec, h);
 
     // Look up diversion source indices for this hydro (for inflow computation).
     let hydro_entity_id = EntityId(hydro_id);
@@ -447,7 +489,7 @@ fn extract_hydro_per_block<'a>(
 
         // For FPHA hydros, read generation from the LP `g_{h,k}` column.
         // For constant-productivity hydros, compute generation as turbined * productivity.
-        let generation_mw = if let Some(local_fpha_idx) = fpha_local {
+        let generation_mw = if let Some(local_fpha_idx) = ctx.fpha_local {
             view.primal[indexer.generation.start + local_fpha_idx * n_blks + b]
         } else {
             turbined * spec.hydro_productivities[h]
@@ -474,18 +516,18 @@ fn extract_hydro_per_block<'a>(
             hydro_id,
             turbined_m3s: turbined,
             spillage_m3s: spillage,
-            evaporation_m3s,
+            evaporation_m3s: ctx.evaporation_m3s,
             diverted_inflow_m3s: Some(diverted_inflow),
             diverted_outflow_m3s: Some(diverted_outflow),
-            incremental_inflow_m3s: incremental_inflow,
-            inflow_m3s: incremental_inflow,
-            storage_initial_hm3: storage_initial,
-            storage_final_hm3: storage_final,
+            incremental_inflow_m3s: ctx.incremental_inflow,
+            inflow_m3s: ctx.incremental_inflow,
+            storage_initial_hm3: ctx.storage_initial,
+            storage_final_hm3: ctx.storage_final,
             generation_mw,
-            productivity_mw_per_m3s,
+            productivity_mw_per_m3s: ctx.productivity_mw_per_m3s,
             spillage_cost: spillage * view.objective_coeffs[s_col] / spec.col_scale_factor(s_col)
                 * COST_SCALE_FACTOR,
-            water_value_per_hm3: water_value,
+            water_value_per_hm3: ctx.water_value,
             storage_binding_code: 0,
             operative_state_code: 1,
             turbined_slack_m3s: turbined_slack,
@@ -494,11 +536,11 @@ fn extract_hydro_per_block<'a>(
             generation_slack_mw: generation_slack,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_pos_m3s,
-            evaporation_violation_neg_m3s,
-            inflow_nonnegativity_slack_m3s: inflow_slack,
-            water_withdrawal_violation_pos_m3s: withdrawal_pos,
-            water_withdrawal_violation_neg_m3s: withdrawal_neg,
+            evaporation_violation_pos_m3s: ctx.evaporation_violation_pos_m3s,
+            evaporation_violation_neg_m3s: ctx.evaporation_violation_neg_m3s,
+            inflow_nonnegativity_slack_m3s: ctx.inflow_slack,
+            water_withdrawal_violation_pos_m3s: ctx.withdrawal_pos,
+            water_withdrawal_violation_neg_m3s: ctx.withdrawal_neg,
         }
     })
 }

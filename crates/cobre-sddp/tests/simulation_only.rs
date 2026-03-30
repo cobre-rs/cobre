@@ -10,8 +10,7 @@
     clippy::panic,
     clippy::float_cmp,
     clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::too_many_lines
+    clippy::cast_possible_truncation
 )]
 
 use std::path::Path;
@@ -182,10 +181,10 @@ fn simulation_only_fcf_round_trip() {
     );
 
     // Verify evaluate_at_state produces identical results.
-    for stage in 0..n_stages {
+    for (stage, &expected_eval) in original_evals.iter().enumerate().take(n_stages) {
         let loaded_eval = loaded_fcf.evaluate_at_state(stage, &test_state);
         assert_eq!(
-            loaded_eval, original_evals[stage],
+            loaded_eval, expected_eval,
             "evaluate_at_state mismatch at stage {stage}"
         );
     }
@@ -198,6 +197,6 @@ fn simulation_only_fcf_round_trip() {
         "basis cache length must match"
     );
     // At least some stages should have basis data.
-    let has_basis = loaded_basis_cache.iter().any(|b| b.is_some());
+    let has_basis = loaded_basis_cache.iter().any(Option::is_some);
     assert!(has_basis, "at least one stage should have basis data");
 }

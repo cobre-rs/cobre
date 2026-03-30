@@ -8384,8 +8384,8 @@ mod tests {
         );
 
         let block_hours = [720.0, 48.0];
-        for blk in 0..n_blks {
-            let expected = 1000.0 * block_hours[blk] / COST_SCALE_FACTOR;
+        for (blk, &hours) in block_hours.iter().enumerate().take(n_blks) {
+            let expected = 1000.0 * hours / COST_SCALE_FACTOR;
             for &start in &[
                 indexer.outflow_below_slack.start,
                 indexer.outflow_above_slack.start,

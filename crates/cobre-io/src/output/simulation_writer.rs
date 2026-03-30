@@ -821,122 +821,186 @@ fn build_costs_batch(records: &[&CostWriteRecord]) -> Result<RecordBatch, Output
     .map_err(|e| OutputError::serialization("costs", e.to_string()))
 }
 
+/// Arrow column builders for the hydros `RecordBatch`.
+///
+/// Groups the 30 per-column builders so that [`fill_hydro_builders`] can
+/// accept them as a single argument without exceeding the parameter limit.
+struct HydroBuilders {
+    stage_id: Int32Builder,
+    block_id: Int32Builder,
+    hydro_id: Int32Builder,
+    turbined_m3s: Float64Builder,
+    spillage_m3s: Float64Builder,
+    outflow_m3s: Float64Builder,
+    evaporation_m3s: Float64Builder,
+    diverted_inflow_m3s: Float64Builder,
+    diverted_outflow_m3s: Float64Builder,
+    incremental_inflow_m3s: Float64Builder,
+    inflow_m3s: Float64Builder,
+    storage_initial_hm3: Float64Builder,
+    storage_final_hm3: Float64Builder,
+    generation_mw: Float64Builder,
+    generation_mwh: Float64Builder,
+    productivity_mw_per_m3s: Float64Builder,
+    spillage_cost: Float64Builder,
+    water_value_per_hm3: Float64Builder,
+    storage_binding_code: Int8Builder,
+    operative_state_code: Int8Builder,
+    turbined_slack_m3s: Float64Builder,
+    outflow_slack_below_m3s: Float64Builder,
+    outflow_slack_above_m3s: Float64Builder,
+    generation_slack_mw: Float64Builder,
+    storage_violation_below_hm3: Float64Builder,
+    filling_target_violation_hm3: Float64Builder,
+    evaporation_violation_pos_m3s: Float64Builder,
+    evaporation_violation_neg_m3s: Float64Builder,
+    inflow_nonnegativity_slack_m3s: Float64Builder,
+    water_withdrawal_violation_pos_m3s: Float64Builder,
+    water_withdrawal_violation_neg_m3s: Float64Builder,
+}
+
+impl HydroBuilders {
+    fn with_capacity(n: usize) -> Self {
+        Self {
+            stage_id: Int32Builder::with_capacity(n),
+            block_id: Int32Builder::with_capacity(n),
+            hydro_id: Int32Builder::with_capacity(n),
+            turbined_m3s: Float64Builder::with_capacity(n),
+            spillage_m3s: Float64Builder::with_capacity(n),
+            outflow_m3s: Float64Builder::with_capacity(n),
+            evaporation_m3s: Float64Builder::with_capacity(n),
+            diverted_inflow_m3s: Float64Builder::with_capacity(n),
+            diverted_outflow_m3s: Float64Builder::with_capacity(n),
+            incremental_inflow_m3s: Float64Builder::with_capacity(n),
+            inflow_m3s: Float64Builder::with_capacity(n),
+            storage_initial_hm3: Float64Builder::with_capacity(n),
+            storage_final_hm3: Float64Builder::with_capacity(n),
+            generation_mw: Float64Builder::with_capacity(n),
+            generation_mwh: Float64Builder::with_capacity(n),
+            productivity_mw_per_m3s: Float64Builder::with_capacity(n),
+            spillage_cost: Float64Builder::with_capacity(n),
+            water_value_per_hm3: Float64Builder::with_capacity(n),
+            storage_binding_code: Int8Builder::with_capacity(n),
+            operative_state_code: Int8Builder::with_capacity(n),
+            turbined_slack_m3s: Float64Builder::with_capacity(n),
+            outflow_slack_below_m3s: Float64Builder::with_capacity(n),
+            outflow_slack_above_m3s: Float64Builder::with_capacity(n),
+            generation_slack_mw: Float64Builder::with_capacity(n),
+            storage_violation_below_hm3: Float64Builder::with_capacity(n),
+            filling_target_violation_hm3: Float64Builder::with_capacity(n),
+            evaporation_violation_pos_m3s: Float64Builder::with_capacity(n),
+            evaporation_violation_neg_m3s: Float64Builder::with_capacity(n),
+            inflow_nonnegativity_slack_m3s: Float64Builder::with_capacity(n),
+            water_withdrawal_violation_pos_m3s: Float64Builder::with_capacity(n),
+            water_withdrawal_violation_neg_m3s: Float64Builder::with_capacity(n),
+        }
+    }
+}
+
+/// Append one row per `HydroWriteRecord` into `b`, computing the two derived columns.
+///
+/// Derived columns:
+/// - `outflow_m3s = turbined_m3s + spillage_m3s`
+/// - `generation_mwh = generation_mw * block_duration_hours`
+#[allow(clippy::cast_possible_wrap)]
+fn fill_hydro_builders(
+    records: &[&HydroWriteRecord],
+    block_durations: &[Vec<f64>],
+    b: &mut HydroBuilders,
+) {
+    for r in records {
+        let dur = block_duration(block_durations, r.stage_id, r.block_id);
+        b.stage_id.append_value(r.stage_id as i32);
+        b.block_id.append_option(r.block_id.map(|v| v as i32));
+        b.hydro_id.append_value(r.hydro_id);
+        b.turbined_m3s.append_value(r.turbined_m3s);
+        b.spillage_m3s.append_value(r.spillage_m3s);
+        b.outflow_m3s.append_value(r.turbined_m3s + r.spillage_m3s);
+        b.evaporation_m3s.append_option(r.evaporation_m3s);
+        b.diverted_inflow_m3s.append_option(r.diverted_inflow_m3s);
+        b.diverted_outflow_m3s.append_option(r.diverted_outflow_m3s);
+        b.incremental_inflow_m3s
+            .append_value(r.incremental_inflow_m3s);
+        b.inflow_m3s.append_value(r.inflow_m3s);
+        b.storage_initial_hm3.append_value(r.storage_initial_hm3);
+        b.storage_final_hm3.append_value(r.storage_final_hm3);
+        b.generation_mw.append_value(r.generation_mw);
+        b.generation_mwh.append_value(r.generation_mw * dur);
+        b.productivity_mw_per_m3s
+            .append_option(r.productivity_mw_per_m3s);
+        b.spillage_cost.append_value(r.spillage_cost);
+        b.water_value_per_hm3.append_value(r.water_value_per_hm3);
+        b.storage_binding_code.append_value(r.storage_binding_code);
+        b.operative_state_code.append_value(r.operative_state_code);
+        b.turbined_slack_m3s.append_value(r.turbined_slack_m3s);
+        b.outflow_slack_below_m3s
+            .append_value(r.outflow_slack_below_m3s);
+        b.outflow_slack_above_m3s
+            .append_value(r.outflow_slack_above_m3s);
+        b.generation_slack_mw.append_value(r.generation_slack_mw);
+        b.storage_violation_below_hm3
+            .append_value(r.storage_violation_below_hm3);
+        b.filling_target_violation_hm3
+            .append_value(r.filling_target_violation_hm3);
+        b.evaporation_violation_pos_m3s
+            .append_value(r.evaporation_violation_pos_m3s);
+        b.evaporation_violation_neg_m3s
+            .append_value(r.evaporation_violation_neg_m3s);
+        b.inflow_nonnegativity_slack_m3s
+            .append_value(r.inflow_nonnegativity_slack_m3s);
+        b.water_withdrawal_violation_pos_m3s
+            .append_value(r.water_withdrawal_violation_pos_m3s);
+        b.water_withdrawal_violation_neg_m3s
+            .append_value(r.water_withdrawal_violation_neg_m3s);
+    }
+}
+
 /// Build the hydros `RecordBatch`, computing derived columns.
 ///
 /// Derived columns:
 /// - `generation_mwh = generation_mw * block_duration_hours`
 /// - `outflow_m3s = turbined_m3s + spillage_m3s`
-#[allow(clippy::cast_possible_wrap)]
 fn build_hydros_batch(
     records: &[&HydroWriteRecord],
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(hydros_schema());
-    let n = records.len();
-
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut hydro_id = Int32Builder::with_capacity(n);
-    let mut turbined_m3s = Float64Builder::with_capacity(n);
-    let mut spillage_m3s = Float64Builder::with_capacity(n);
-    let mut outflow_m3s = Float64Builder::with_capacity(n);
-    let mut evaporation_m3s = Float64Builder::with_capacity(n);
-    let mut diverted_inflow_m3s = Float64Builder::with_capacity(n);
-    let mut diverted_outflow_m3s = Float64Builder::with_capacity(n);
-    let mut incremental_inflow_m3s = Float64Builder::with_capacity(n);
-    let mut inflow_m3s = Float64Builder::with_capacity(n);
-    let mut storage_initial_hm3 = Float64Builder::with_capacity(n);
-    let mut storage_final_hm3 = Float64Builder::with_capacity(n);
-    let mut generation_mw = Float64Builder::with_capacity(n);
-    let mut generation_mwh = Float64Builder::with_capacity(n);
-    let mut productivity_mw_per_m3s = Float64Builder::with_capacity(n);
-    let mut spillage_cost = Float64Builder::with_capacity(n);
-    let mut water_value_per_hm3 = Float64Builder::with_capacity(n);
-    let mut storage_binding_code = Int8Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
-    let mut turbined_slack_m3s = Float64Builder::with_capacity(n);
-    let mut outflow_slack_below_m3s = Float64Builder::with_capacity(n);
-    let mut outflow_slack_above_m3s = Float64Builder::with_capacity(n);
-    let mut generation_slack_mw = Float64Builder::with_capacity(n);
-    let mut storage_violation_below_hm3 = Float64Builder::with_capacity(n);
-    let mut filling_target_violation_hm3 = Float64Builder::with_capacity(n);
-    let mut evaporation_violation_pos_m3s = Float64Builder::with_capacity(n);
-    let mut evaporation_violation_neg_m3s = Float64Builder::with_capacity(n);
-    let mut inflow_nonnegativity_slack_m3s = Float64Builder::with_capacity(n);
-    let mut water_withdrawal_violation_pos_m3s = Float64Builder::with_capacity(n);
-    let mut water_withdrawal_violation_neg_m3s = Float64Builder::with_capacity(n);
-
-    for r in records {
-        let dur = block_duration(block_durations, r.stage_id, r.block_id);
-        stage_id.append_value(r.stage_id as i32);
-        block_id.append_option(r.block_id.map(|b| b as i32));
-        hydro_id.append_value(r.hydro_id);
-        turbined_m3s.append_value(r.turbined_m3s);
-        spillage_m3s.append_value(r.spillage_m3s);
-        // Derived: outflow_m3s = turbined_m3s + spillage_m3s
-        outflow_m3s.append_value(r.turbined_m3s + r.spillage_m3s);
-        evaporation_m3s.append_option(r.evaporation_m3s);
-        diverted_inflow_m3s.append_option(r.diverted_inflow_m3s);
-        diverted_outflow_m3s.append_option(r.diverted_outflow_m3s);
-        incremental_inflow_m3s.append_value(r.incremental_inflow_m3s);
-        inflow_m3s.append_value(r.inflow_m3s);
-        storage_initial_hm3.append_value(r.storage_initial_hm3);
-        storage_final_hm3.append_value(r.storage_final_hm3);
-        generation_mw.append_value(r.generation_mw);
-        // Derived: generation_mwh = generation_mw * block_duration_hours
-        generation_mwh.append_value(r.generation_mw * dur);
-        productivity_mw_per_m3s.append_option(r.productivity_mw_per_m3s);
-        spillage_cost.append_value(r.spillage_cost);
-        water_value_per_hm3.append_value(r.water_value_per_hm3);
-        storage_binding_code.append_value(r.storage_binding_code);
-        operative_state_code.append_value(r.operative_state_code);
-        turbined_slack_m3s.append_value(r.turbined_slack_m3s);
-        outflow_slack_below_m3s.append_value(r.outflow_slack_below_m3s);
-        outflow_slack_above_m3s.append_value(r.outflow_slack_above_m3s);
-        generation_slack_mw.append_value(r.generation_slack_mw);
-        storage_violation_below_hm3.append_value(r.storage_violation_below_hm3);
-        filling_target_violation_hm3.append_value(r.filling_target_violation_hm3);
-        evaporation_violation_pos_m3s.append_value(r.evaporation_violation_pos_m3s);
-        evaporation_violation_neg_m3s.append_value(r.evaporation_violation_neg_m3s);
-        inflow_nonnegativity_slack_m3s.append_value(r.inflow_nonnegativity_slack_m3s);
-        water_withdrawal_violation_pos_m3s.append_value(r.water_withdrawal_violation_pos_m3s);
-        water_withdrawal_violation_neg_m3s.append_value(r.water_withdrawal_violation_neg_m3s);
-    }
-
+    let mut b = HydroBuilders::with_capacity(records.len());
+    fill_hydro_builders(records, block_durations, &mut b);
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(stage_id.finish()),
-            Arc::new(block_id.finish()),
-            Arc::new(hydro_id.finish()),
-            Arc::new(turbined_m3s.finish()),
-            Arc::new(spillage_m3s.finish()),
-            Arc::new(outflow_m3s.finish()),
-            Arc::new(evaporation_m3s.finish()),
-            Arc::new(diverted_inflow_m3s.finish()),
-            Arc::new(diverted_outflow_m3s.finish()),
-            Arc::new(incremental_inflow_m3s.finish()),
-            Arc::new(inflow_m3s.finish()),
-            Arc::new(storage_initial_hm3.finish()),
-            Arc::new(storage_final_hm3.finish()),
-            Arc::new(generation_mw.finish()),
-            Arc::new(generation_mwh.finish()),
-            Arc::new(productivity_mw_per_m3s.finish()),
-            Arc::new(spillage_cost.finish()),
-            Arc::new(water_value_per_hm3.finish()),
-            Arc::new(storage_binding_code.finish()),
-            Arc::new(operative_state_code.finish()),
-            Arc::new(turbined_slack_m3s.finish()),
-            Arc::new(outflow_slack_below_m3s.finish()),
-            Arc::new(outflow_slack_above_m3s.finish()),
-            Arc::new(generation_slack_mw.finish()),
-            Arc::new(storage_violation_below_hm3.finish()),
-            Arc::new(filling_target_violation_hm3.finish()),
-            Arc::new(evaporation_violation_pos_m3s.finish()),
-            Arc::new(evaporation_violation_neg_m3s.finish()),
-            Arc::new(inflow_nonnegativity_slack_m3s.finish()),
-            Arc::new(water_withdrawal_violation_pos_m3s.finish()),
-            Arc::new(water_withdrawal_violation_neg_m3s.finish()),
+            Arc::new(b.stage_id.finish()),
+            Arc::new(b.block_id.finish()),
+            Arc::new(b.hydro_id.finish()),
+            Arc::new(b.turbined_m3s.finish()),
+            Arc::new(b.spillage_m3s.finish()),
+            Arc::new(b.outflow_m3s.finish()),
+            Arc::new(b.evaporation_m3s.finish()),
+            Arc::new(b.diverted_inflow_m3s.finish()),
+            Arc::new(b.diverted_outflow_m3s.finish()),
+            Arc::new(b.incremental_inflow_m3s.finish()),
+            Arc::new(b.inflow_m3s.finish()),
+            Arc::new(b.storage_initial_hm3.finish()),
+            Arc::new(b.storage_final_hm3.finish()),
+            Arc::new(b.generation_mw.finish()),
+            Arc::new(b.generation_mwh.finish()),
+            Arc::new(b.productivity_mw_per_m3s.finish()),
+            Arc::new(b.spillage_cost.finish()),
+            Arc::new(b.water_value_per_hm3.finish()),
+            Arc::new(b.storage_binding_code.finish()),
+            Arc::new(b.operative_state_code.finish()),
+            Arc::new(b.turbined_slack_m3s.finish()),
+            Arc::new(b.outflow_slack_below_m3s.finish()),
+            Arc::new(b.outflow_slack_above_m3s.finish()),
+            Arc::new(b.generation_slack_mw.finish()),
+            Arc::new(b.storage_violation_below_hm3.finish()),
+            Arc::new(b.filling_target_violation_hm3.finish()),
+            Arc::new(b.evaporation_violation_pos_m3s.finish()),
+            Arc::new(b.evaporation_violation_neg_m3s.finish()),
+            Arc::new(b.inflow_nonnegativity_slack_m3s.finish()),
+            Arc::new(b.water_withdrawal_violation_pos_m3s.finish()),
+            Arc::new(b.water_withdrawal_violation_neg_m3s.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("hydros", e.to_string()))

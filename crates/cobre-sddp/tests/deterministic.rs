@@ -2284,3 +2284,221 @@ fn d23_bidirectional_withdrawal() {
         );
     }
 }
+
+/// Verify bus balance: generation + deficit - excess + net_exchange = load for each block.
+///
+/// This catches LP-extraction mismatches where the bus balance coefficient
+/// (e.g., productivity) differs between the LP builder and the extraction
+/// pipeline. For every block in the stage, the helper sums all generation
+/// injections (hydro + thermal + NCS), deficit, excess, and net exchange,
+/// then asserts that the supply equals the extracted load within `tolerance`.
+///
+/// # Limitations
+///
+/// Entity result structs do not carry a `bus_id`, so this helper sums all
+/// generation across all buses. It is accurate for single-bus systems. For
+/// multi-bus systems with exchange lines, a bus-entity mapping would be needed
+/// to validate per-bus balance individually.
+fn assert_bus_balance(stage: &cobre_sddp::SimulationStageResult, tolerance: f64, label: &str) {
+    // Collect unique block IDs from bus results (buses always have block_id set).
+    let mut block_ids: Vec<u32> = stage.buses.iter().filter_map(|b| b.block_id).collect();
+    block_ids.sort_unstable();
+    block_ids.dedup();
+
+    for &block_id in &block_ids {
+        let hydro_gen: f64 = stage
+            .hydros
+            .iter()
+            .filter(|h| h.block_id == Some(block_id))
+            .map(|h| h.generation_mw)
+            .sum();
+        let thermal_gen: f64 = stage
+            .thermals
+            .iter()
+            .filter(|t| t.block_id == Some(block_id))
+            .map(|t| t.generation_mw)
+            .sum();
+        let ncs_gen: f64 = stage
+            .non_controllables
+            .iter()
+            .filter(|n| n.block_id == Some(block_id))
+            .map(|n| n.generation_mw)
+            .sum();
+        let deficit: f64 = stage
+            .buses
+            .iter()
+            .filter(|b| b.block_id == Some(block_id))
+            .map(|b| b.deficit_mw)
+            .sum();
+        let excess: f64 = stage
+            .buses
+            .iter()
+            .filter(|b| b.block_id == Some(block_id))
+            .map(|b| b.excess_mw)
+            .sum();
+        // Net exchange: direct flow enters the system, reverse flow leaves.
+        // For a single-bus system with no lines this sums to zero.
+        let net_exchange: f64 = stage
+            .exchanges
+            .iter()
+            .filter(|e| e.block_id == Some(block_id))
+            .map(|e| e.direct_flow_mw - e.reverse_flow_mw)
+            .sum();
+        let load: f64 = stage
+            .buses
+            .iter()
+            .filter(|b| b.block_id == Some(block_id))
+            .map(|b| b.load_mw)
+            .sum();
+
+        let supply = hydro_gen + thermal_gen + ncs_gen + deficit - excess + net_exchange;
+        let mismatch = (supply - load).abs();
+        assert!(
+            mismatch < tolerance,
+            "{label} stage {} block {block_id}: bus balance mismatch: \
+             supply={supply:.6} (hydro={hydro_gen:.6} + thermal={thermal_gen:.6} \
+             + ncs={ncs_gen:.6} + deficit={deficit:.6} - excess={excess:.6} \
+             + exchange={net_exchange:.6}) vs load={load:.6}, diff={mismatch:.2e}",
+            stage.stage_id
+        );
+    }
+}
+
+/// Expected cost for D24: per-stage productivity override (rho_0=0.8, rho_1=1.2).
+///
+/// ## Case setup
+///
+/// Same physical system as D02: 1 bus, 1 thermal (T0: 100 MW at $50/MWh),
+/// 1 hydro (H0: max 50 m3/s, storage 0-200 hm3, max_generation 50 MW),
+/// demand 80 MW, 2 stages x 730 h, initial storage 100 hm3, deterministic
+/// inflows 40/10 m3/s.
+///
+/// Unlike D02, H0 uses per-stage productivity overrides via
+/// `hydro_production_models.json`: stage 0 rho=0.8, stage 1 rho=1.2.
+/// The entity-level `productivity_mw_per_m3s = 1.0` must NOT be used.
+///
+/// ## Expected cost derivation
+///
+/// kappa = 730 * 3600 / 1e6 = 657/250 = 2.628 hm3/(m3/s * stage).
+///
+/// Key constraint interaction: with rho_1=1.2, the generation cap (50 MW)
+/// limits effective turbining: gen_h1 = 1.2 * q1 <= 50 => q1 <= 125/3 m3/s.
+/// In stage 0, rho_0=0.8 leaves q0 <= 50 (gen_h0 = 0.8*50 = 40 < 50 MW).
+///
+/// Since rho_1 > rho_0, water is more valuable in stage 1. The optimizer
+/// stores water in stage 0 to use it at higher productivity in stage 1.
+/// The optimal V1 = (125/3 - 10) * kappa = 4161/50 = 83.22 hm3, making
+/// V2 = 0 with q1 = 125/3 m3/s (generation cap binding).
+///
+/// Stage 0: q0 = 30475/657 m3/s, gen_h0 = 0.8 * q0 = 24380/657 MW,
+///   g_th0 = 80 - 24380/657 = 28180/657 MW.
+///   Cost_0 = 50 * 730 * 28180/657 = 14090000/9.
+///
+/// Stage 1: q1 = 125/3 m3/s, gen_h1 = 1.2 * 125/3 = 50 MW (cap),
+///   g_th1 = 80 - 50 = 30 MW, V2 = 0 hm3.
+///   Cost_1 = 50 * 730 * 30 = 1095000.
+///
+/// Total = 14090000/9 + 1095000 = 23945000/9 ~ 2660555.56 $.
+///
+/// ## Bug detection
+///
+/// If the bug were present (using entity rho=1.0 instead of the overrides),
+/// the cost would equal D02: 23635000/9 ~ 2626111.11 $. The difference
+/// (~ $34444) is well above the 1e-4 tolerance, so the test catches the bug.
+pub const D24_EXPECTED_COST: f64 = 23_945_000.0 / 9.0;
+
+/// D24: Productivity override — per-stage productivity from `hydro_production_models.json`.
+///
+/// Same physical system as D02 except H0 has per-stage productivity overrides:
+/// stage 0 -> rho = 0.8, stage 1 -> rho = 1.2 (entity model says 1.0).
+///
+/// This test catches the bus balance productivity mismatch bug: if the LP uses
+/// the entity-level productivity (1.0) instead of the per-stage override, the
+/// optimal cost would differ.
+#[test]
+fn d24_productivity_override() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d24-productivity-override");
+
+    // Create scenario parquet files (deterministic: std=0).
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::try_new(
+        Arc::clone(&inflow_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![40.0, 10.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("inflow RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
+        .expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![80.0, 80.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
+        .expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    let (result, scenario_results, _summary) = run_with_simulation(case_dir);
+    assert_cost(result.final_lb, D24_EXPECTED_COST, 1e-4, "D24");
+    assert!(
+        result.iterations <= 10,
+        "D24: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D24: gap={:.2e}",
+        result.final_gap
+    );
+    // Verify cost differs from D02 (entity productivity 1.0).
+    assert!(
+        (result.final_lb - D02_EXPECTED_COST).abs() > 1.0,
+        "D24: cost must differ from D02 (per-stage overrides change economics)"
+    );
+
+    // Bus balance validation: verify that extracted generation + deficit - excess = load
+    // for every (stage, block) in the simulation output.
+    assert_eq!(
+        scenario_results.len(),
+        1,
+        "D24: expected 1 simulation scenario"
+    );
+    for stage in &scenario_results[0].stages {
+        assert_bus_balance(stage, 1e-3, "D24");
+    }
+}

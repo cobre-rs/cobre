@@ -136,7 +136,7 @@ jobs:
       - name: Install wheel and test dependencies
         run: |
           pip install --find-links dist/ cobre-python
-          pip install pytest
+          pip install pytest pyarrow
 
       - name: Run tests
         run: pytest crates/cobre-python/tests/ -v

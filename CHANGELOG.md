@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Policy warm-start and resume-from-checkpoint** -- Training can now load a
+  prior policy checkpoint and either warm-start (inject cuts into a fresh FCF)
+  or resume (continue from the saved iteration). Configured via
+  `policy.mode`: `"fresh"`, `"warm_start"`, or `"resume"`.
+- **Simulation-only mode** -- Run simulation against a saved policy without
+  re-training. Enabled when `training.enabled = false` with a valid policy.
+- **Truncation-with-penalty inflow method** -- Combined truncation and penalty
+  enforcement for inflow non-negativity, matching SPTcpp's
+  `truncamento_penalizacao` mode. Configured via
+  `modeling.inflow_non_negativity.method = "truncation_with_penalty"`.
+- **Per-plant inflow penalty via cascade** -- Inflow non-negativity penalty
+  cost can now be overridden per hydro plant through the penalty cascade
+  (`penalties.json` hydro overrides → `inflow_nonnegativity_cost`).
+- **Bidirectional withdrawal and evaporation slacks** -- Withdrawal and
+  evaporation violation slacks are now split into directional (pos/neg)
+  components with independent costs, enabling asymmetric penalisation.
+- **Per-block operational violations** -- Min/max outflow, turbined flow, and
+  generation constraints now have per-block slack columns with independent
+  penalty costs.
+- **Cost decomposition** -- Simulation output now includes 6 granular violation
+  cost columns (`outflow_violation_below_cost`, `outflow_violation_above_cost`,
+  `turbined_violation_cost`, `generation_violation_cost`,
+  `evaporation_violation_cost`, `withdrawal_violation_cost`) alongside the
+  aggregate `hydro_violation_cost`.
+- **Per-stage productivity override** -- `hydro_production_models.json` can now
+  override the generation model for specific hydros at specific stages,
+  validated via the D24 regression test.
+- **Deterministic regression tests D19--D24** covering multi-hydro PAR(p),
+  operational violations, min-outflow regression, per-block violations,
+  bidirectional withdrawal, and productivity override.
+
+### Fixed
+
+- **LP bus balance productivity** -- Constant-productivity hydros now use the
+  resolved per-stage production model (accounting for `hydro_production_models`
+  overrides) instead of the static entity model. Fixes incorrect load-balance
+  coefficients when per-stage overrides are active.
+- **Withdrawal cost extraction** -- `compute_cost_result` now sums both
+  `withdrawal_slack_neg` and `withdrawal_slack_pos`, fixing understated
+  withdrawal violation costs in simulation output.
+- **Pre-study stage handling in estimation** -- PAR(p) estimation pipeline
+  correctly handles pre-study stages with season fallback for lag statistics.
+
+### Changed
+
+- **`policy.mode` is now a validated enum** -- Invalid values (typos like
+  `"warmstart"`) are rejected at config parse time with a clear error message
+  listing valid options, instead of silently defaulting to fresh training.
+
 ## [0.2.2] - 2026-03-27
 
 ### Fixed

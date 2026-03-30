@@ -107,7 +107,7 @@ fn write_policy_checkpoint(
         system_hash: String::new(),
         max_iterations: max_iterations as u32,
         forward_passes,
-        warm_start_cuts: 0,
+        warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
         rng_seed: seed,
     };
 
@@ -448,7 +448,7 @@ fn run_inner(
 
     if training_enabled {
         // Warm-start: load prior policy and inject cuts before training.
-        if config.policy.mode == "warm_start" {
+        if config.policy.mode == cobre_io::PolicyMode::WarmStart {
             let policy_dir = output_dir.join(setup.policy_path());
             if !policy_dir.exists() {
                 return Err(format!(
@@ -482,7 +482,7 @@ fn run_inner(
             )
             .map_err(|e| format!("warm-start FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
-        } else if config.policy.mode == "resume" {
+        } else if config.policy.mode == cobre_io::PolicyMode::Resume {
             let policy_dir = output_dir.join(setup.policy_path());
             if !policy_dir.exists() {
                 return Err(format!(

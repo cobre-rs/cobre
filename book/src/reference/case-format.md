@@ -413,7 +413,29 @@ Key fields:
 | `hydros[].evaporation`                        | No                 | Evaporation config: `coefficients_mm` (12 values) and optional `reference_volumes_hm3` |
 | `hydros[].diversion`                          | No                 | Diversion channel: `downstream_id` and `max_flow_m3s`                                  |
 | `hydros[].filling`                            | No                 | Filling config: `start_stage_id` and `filling_inflow_m3s`                              |
-| `hydros[].penalties`                          | No                 | Entity-level hydro penalty overrides (all 11 fields optional, fall back to global)     |
+| `hydros[].penalties`                          | No                 | Entity-level hydro penalty overrides (all fields optional, fall back to global)        |
+
+All fields within `hydros[].penalties` are optional. When a field is absent the
+global default from `penalties.json` is used. The following fields are supported:
+
+| Field within `penalties`              | Optional | Description                                                                                                                               |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `spillage_cost`                       | Yes      | Spillage penalty ($/m³/s).                                                                                                                |
+| `fpha_turbined_cost`                  | Yes      | FPHA turbined flow violation penalty.                                                                                                     |
+| `diversion_cost`                      | Yes      | Diversion flow penalty.                                                                                                                   |
+| `storage_violation_below_cost`        | Yes      | Storage below-minimum violation penalty.                                                                                                  |
+| `filling_target_violation_cost`       | Yes      | Filling target violation penalty.                                                                                                         |
+| `turbined_violation_below_cost`       | Yes      | Turbined flow below-minimum violation penalty.                                                                                            |
+| `outflow_violation_below_cost`        | Yes      | Total outflow below-minimum violation penalty.                                                                                            |
+| `outflow_violation_above_cost`        | Yes      | Total outflow above-maximum violation penalty.                                                                                            |
+| `generation_violation_below_cost`     | Yes      | Generation below-minimum violation penalty.                                                                                               |
+| `evaporation_violation_cost`          | Yes      | Symmetric evaporation violation penalty (applies to both directions when directional fields are absent).                                  |
+| `water_withdrawal_violation_cost`     | Yes      | Symmetric water withdrawal violation penalty (applies to both directions when directional fields are absent).                             |
+| `water_withdrawal_violation_pos_cost` | Yes      | Override cost for over-withdrawal violations (actual > target). Supersedes `water_withdrawal_violation_cost` for the positive direction.  |
+| `water_withdrawal_violation_neg_cost` | Yes      | Override cost for under-withdrawal violations (actual < target). Supersedes `water_withdrawal_violation_cost` for the negative direction. |
+| `evaporation_violation_pos_cost`      | Yes      | Override cost for over-evaporation violations (actual > modelled). Supersedes `evaporation_violation_cost` for the positive direction.    |
+| `evaporation_violation_neg_cost`      | Yes      | Override cost for under-evaporation violations (actual < modelled). Supersedes `evaporation_violation_cost` for the negative direction.   |
+| `inflow_nonnegativity_cost`           | Yes      | Override global inflow non-negativity penalty cost for this plant ($/m³/s).                                                               |
 
 ---
 

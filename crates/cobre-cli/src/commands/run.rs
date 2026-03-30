@@ -169,7 +169,7 @@ struct LoadBroadcastResult {
     /// Whether the training phase is enabled (broadcast from rank 0).
     training_enabled: bool,
     /// Policy initialization mode (broadcast from rank 0).
-    policy_mode: String,
+    policy_mode: cobre_io::PolicyMode,
 }
 
 /// Result of the training phase.
@@ -226,7 +226,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
 
     if training_enabled {
         // Warm-start: load prior policy and inject cuts before training.
-        if policy_mode == "warm_start" {
+        if policy_mode == cobre_io::PolicyMode::WarmStart {
             let policy_dir = ctx.output_dir.join(setup.policy_path());
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
@@ -279,7 +279,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                     "Warm-start: loaded {warm_count} cuts per stage from prior policy."
                 ));
             }
-        } else if policy_mode == "resume" {
+        } else if policy_mode == cobre_io::PolicyMode::Resume {
             let policy_dir = ctx.output_dir.join(setup.policy_path());
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
@@ -619,7 +619,7 @@ fn broadcast_and_build_setup(
     };
 
     let training_enabled = bcast_config.training_enabled;
-    let policy_mode = bcast_config.policy_mode.clone();
+    let policy_mode = bcast_config.policy_mode;
     let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
 
     Ok(LoadBroadcastResult {

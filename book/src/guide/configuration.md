@@ -164,15 +164,18 @@ Controls physical modeling options.
 
 ### `inflow_non_negativity`
 
-| Field          | Type   | Default     | Description                                                                        |
-| -------------- | ------ | ----------- | ---------------------------------------------------------------------------------- |
-| `method`       | string | `"penalty"` | One of `"none"`, `"penalty"`, or `"truncation"`.                                   |
-| `penalty_cost` | float  | `1000.0`    | Penalty coefficient applied to negative inflow slack when `method` is `"penalty"`. |
+| Field          | Type   | Default     | Description                                                                                                       |
+| -------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `method`       | string | `"penalty"` | One of `"none"`, `"penalty"`, `"truncation"`, or `"truncation_with_penalty"`.                                     |
+| `penalty_cost` | float  | `1000.0`    | Penalty coefficient applied to negative inflow slack when `method` is `"penalty"` or `"truncation_with_penalty"`. |
 
 - `"none"` -- no treatment; negative inflows are passed through to the LP.
 - `"penalty"` -- adds a penalty variable to the LP that penalizes negative inflow
   draws at the specified cost per unit.
 - `"truncation"` -- clamps negative PAR model draws to zero before applying noise.
+- `"truncation_with_penalty"` -- combines both: clamps the inflow to zero and adds
+  a bounded slack variable penalised at `penalty_cost`, providing a smooth backstop
+  for extreme tail realisations.
 
 Example:
 

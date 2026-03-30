@@ -427,7 +427,7 @@ fn make_config() -> Config {
         upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
         policy: PolicyConfig {
             path: "./policy".to_string(),
-            mode: "fresh".to_string(),
+            mode: cobre_io::PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
         },

@@ -41,7 +41,7 @@ pub(crate) fn costs_schema() -> Schema {
 
 /// Schema for `simulation/hydros/` — hydro plant dispatch results.
 ///
-/// 28 fields. See output-schemas.md SS5.2.
+/// 31 fields. See output-schemas.md SS5.2.
 pub(crate) fn hydros_schema() -> Schema {
     Schema::new(vec![
         Field::new("stage_id", DataType::Int32, false),

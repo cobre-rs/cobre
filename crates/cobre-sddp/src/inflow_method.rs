@@ -108,7 +108,8 @@ impl InflowNonNegativityMethod {
 impl From<&cobre_io::config::InflowNonNegativityConfig> for InflowNonNegativityMethod {
     /// Convert from the cobre-io config type.
     ///
-    /// Recognised method strings are `"none"`, `"truncation"`, and `"penalty"`.
+    /// Recognised method strings are `"none"`, `"truncation"`, `"penalty"`,
+    /// and `"truncation_with_penalty"`.
     /// Any other value is treated as `None`.  Method string validation is the
     /// responsibility of the cobre-io loading pipeline (five-layer validation),
     /// so unrecognised values indicate a programming error that should have been

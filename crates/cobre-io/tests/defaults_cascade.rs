@@ -77,7 +77,8 @@ fn test_minimal_config_all_defaults() {
 
     // policy defaults
     assert_eq!(
-        cfg.policy.mode, "fresh",
+        cfg.policy.mode,
+        cobre_io::PolicyMode::Fresh,
         "policy.mode should default to 'fresh'"
     );
     assert_eq!(
@@ -202,7 +203,7 @@ fn test_config_all_sections_explicit_no_defaults_applied() {
 
     // policy: non-default values preserved
     assert_eq!(cfg.policy.path, "./my_policy");
-    assert_eq!(cfg.policy.mode, "warm_start");
+    assert_eq!(cfg.policy.mode, cobre_io::PolicyMode::WarmStart);
     assert!(!cfg.policy.validate_compatibility);
 
     // exports: non-default values preserved

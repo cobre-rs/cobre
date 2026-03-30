@@ -16,10 +16,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "deficit_segments",
-        "excess_cost"
-      ],
+      "required": ["deficit_segments", "excess_cost"],
       "type": "object"
     },
     "RawDeficitSegment": {
@@ -33,15 +30,10 @@
         "depth_mw": {
           "description": "MW depth of this segment. `null` means the segment is unbounded (last segment).",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         }
       },
-      "required": [
-        "cost"
-      ],
+      "required": ["cost"],
       "type": "object"
     },
     "RawHydroPenalties": {
@@ -90,6 +82,31 @@
         "water_withdrawal_violation_cost": {
           "format": "double",
           "type": "number"
+        },
+        "water_withdrawal_violation_pos_cost": {
+          "description": "Over-withdrawal violation cost [$/m³/s]. Optional, overrides symmetric cost.",
+          "format": "double",
+          "type": "number"
+        },
+        "water_withdrawal_violation_neg_cost": {
+          "description": "Under-withdrawal violation cost [$/m³/s]. Optional, overrides symmetric cost.",
+          "format": "double",
+          "type": "number"
+        },
+        "evaporation_violation_pos_cost": {
+          "description": "Over-evaporation violation cost [$/mm]. Optional, overrides symmetric cost.",
+          "format": "double",
+          "type": "number"
+        },
+        "evaporation_violation_neg_cost": {
+          "description": "Under-evaporation violation cost [$/mm]. Optional, overrides symmetric cost.",
+          "format": "double",
+          "type": "number"
+        },
+        "inflow_nonnegativity_cost": {
+          "description": "Inflow non-negativity penalty cost [$/m³/s]. Optional, overrides global default.",
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
@@ -116,9 +133,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "exchange_cost"
-      ],
+      "required": ["exchange_cost"],
       "type": "object"
     },
     "RawNcsPenalties": {
@@ -130,9 +145,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "curtailment_cost"
-      ],
+      "required": ["curtailment_cost"],
       "type": "object"
     }
   },
@@ -141,10 +154,7 @@
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "bus": {
       "$ref": "#/$defs/RawBusPenalties",
@@ -164,18 +174,10 @@
     },
     "version": {
       "description": "File format version — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     }
   },
-  "required": [
-    "bus",
-    "line",
-    "hydro",
-    "non_controllable_source"
-  ],
+  "required": ["bus", "line", "hydro", "non_controllable_source"],
   "title": "RawPenalties",
   "type": "object"
 }

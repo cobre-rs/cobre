@@ -103,7 +103,7 @@ pub fn write_training_results(
             seed: config.training.seed,
             forward_passes: config.training.forward_passes,
             stopping_mode: config.training.stopping_mode.clone(),
-            policy_mode: config.policy.mode.clone(),
+            policy_mode: config.policy.mode.to_string(),
         },
         problem_dimensions: MetadataProblemDimensions {
             num_stages: system.n_stages() as u32,
@@ -264,7 +264,7 @@ mod tests {
     fn make_config() -> crate::Config {
         use crate::config::{
             CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
-            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, SimulationConfig,
+            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
             SimulationSamplingConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
             UpperBoundEvaluationConfig,
         };
@@ -287,7 +287,7 @@ mod tests {
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig {
                 path: "./policy".to_string(),
-                mode: "fresh".to_string(),
+                mode: PolicyMode::Fresh,
                 validate_compatibility: true,
                 checkpointing: CheckpointingConfig::default(),
             },

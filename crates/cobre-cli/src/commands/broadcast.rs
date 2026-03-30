@@ -116,8 +116,8 @@ pub(crate) struct BroadcastConfig {
     /// Whether the training phase is enabled. When `false`, all ranks skip
     /// training and proceed directly to simulation (or exit).
     pub(crate) training_enabled: bool,
-    /// Policy initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
-    pub(crate) policy_mode: String,
+    /// Policy initialization mode.
+    pub(crate) policy_mode: cobre_io::PolicyMode,
 }
 
 impl BroadcastConfig {
@@ -176,7 +176,7 @@ impl BroadcastConfig {
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
             training_enabled: config.training.enabled,
-            policy_mode: config.policy.mode.clone(),
+            policy_mode: config.policy.mode,
         })
     }
 }

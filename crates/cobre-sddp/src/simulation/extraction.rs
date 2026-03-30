@@ -14,8 +14,9 @@
 //! ```text
 //! [0, N)             storage      — outgoing storage volumes
 //! [N, N*(1+L))       inflow_lags  — AR lag variables (hydro-major order)
-//! [N*(1+L), N*(2+L)) storage_in   — incoming storage volumes (fixed vars)
-//! N*(2+L)            theta        — future cost variable
+//! [N*(1+L), N*(2+L)) z_inflow     — realized inflow (auxiliary, not state)
+//! [N*(2+L), N*(3+L)) storage_in   — incoming storage volumes (fixed vars)
+//! N*(3+L)            theta        — future cost variable
 //! [theta+1, ...)     equipment    — turbine, spillage, thermal, lines, deficit, excess
 //! ```
 //!
@@ -881,11 +882,13 @@ fn compute_cost_result(
         .sum::<f64>()
         * COST_SCALE_FACTOR;
 
-    // Water withdrawal violation slacks.
+    // Water withdrawal violation slacks (both under- and over-withdrawal).
     let withdrawal_violation_cost = if indexer.withdrawal_slack_neg.is_empty() {
         0.0
     } else {
-        range_sum(indexer.withdrawal_slack_neg.clone()) * COST_SCALE_FACTOR
+        (range_sum(indexer.withdrawal_slack_neg.clone())
+            + range_sum(indexer.withdrawal_slack_pos.clone()))
+            * COST_SCALE_FACTOR
     };
 
     // Operational violation slacks: 4 separate constraint types.

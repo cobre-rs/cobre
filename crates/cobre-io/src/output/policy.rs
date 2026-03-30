@@ -931,7 +931,7 @@ pub fn deserialize_stage_cuts(buf: &[u8]) -> Result<StageCutsReadResult, OutputE
     })
 }
 
-/// Deserialize a single `BendersCut` nested table at `cut_table_pos`.
+/// Deserialize a single cut record nested table at `cut_table_pos`.
 fn deserialize_cut_table(buf: &[u8], cut_table_pos: usize) -> Option<OwnedPolicyCutRecord> {
     let vtable_pos = resolve_vtable_pos(buf, cut_table_pos)?;
 

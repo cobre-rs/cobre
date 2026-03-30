@@ -59,7 +59,7 @@ pub fn write_checkpoint(
         system_hash: String::new(),
         max_iterations: params.max_iterations as u32,
         forward_passes: params.forward_passes,
-        warm_start_cuts: 0,
+        warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
         rng_seed: params.seed,
     };
 

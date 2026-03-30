@@ -542,11 +542,25 @@ slightly negative are treated as zero-inflow scenarios, which is
 conservative but physically interpretable. For most well-specified studies,
 both methods produce similar results because negative realisations are rare.
 
-### Truncation with penalty (deferred)
+### Truncation with penalty
 
-A combined **truncation with penalty** method — which applies bounded slack
-variables on top of the clamped LP bounds — is not yet available in the
-current release. It remains on the roadmap for a future version.
+A combined **truncation with penalty** method is available, configured by
+setting `method` to `"truncation_with_penalty"` in `config.json`:
+
+```json
+{
+  "modeling": {
+    "inflow_non_negativity": {
+      "method": "truncation_with_penalty",
+      "penalty_cost": 1000.0
+    }
+  }
+}
+```
+
+This method applies both truncation and a bounded slack variable: the inflow
+is clamped to zero and a slack penalised at `penalty_cost` is added, providing
+a smooth backstop for extreme tail realisations.
 
 For the mathematical theory behind all three methods, see the
 [Inflow Non-Negativity](https://cobre-rs.github.io/cobre-docs/theory/inflow-non-negativity.html)

@@ -503,67 +503,76 @@ scenario stored in a `scenario_id=NNNN/` subdirectory. See
 
 ### `simulation/costs/`
 
-Stage and block-level cost breakdown. One row per (stage, block) pair. 20 columns.
+Stage and block-level cost breakdown. One row per (stage, block) pair. 26 columns.
 
-| Column                   | Type    | Nullable | Description                                                                    |
-| ------------------------ | ------- | -------- | ------------------------------------------------------------------------------ |
-| `stage_id`               | Int32   | No       | Stage index (0-based).                                                         |
-| `block_id`               | Int32   | Yes      | Load block index within the stage. `null` for stage-level (non-block) records. |
-| `total_cost`             | Float64 | No       | Total discounted cost for this stage/block (monetary units).                   |
-| `immediate_cost`         | Float64 | No       | Immediate (undiscounted) cost for this stage/block.                            |
-| `future_cost`            | Float64 | No       | Future cost estimate (Benders cut value) at the end of this stage.             |
-| `discount_factor`        | Float64 | No       | Discount factor applied to this stage's costs.                                 |
-| `thermal_cost`           | Float64 | No       | Thermal generation cost component.                                             |
-| `contract_cost`          | Float64 | No       | Energy contract cost component (positive for imports, negative for exports).   |
-| `deficit_cost`           | Float64 | No       | Cost of unserved load (deficit penalty).                                       |
-| `excess_cost`            | Float64 | No       | Cost of excess generation (excess penalty).                                    |
-| `storage_violation_cost` | Float64 | No       | Cost of reservoir storage bound violations.                                    |
-| `filling_target_cost`    | Float64 | No       | Cost of missing reservoir filling targets.                                     |
-| `hydro_violation_cost`   | Float64 | No       | Cost of hydro operational bound violations.                                    |
-| `inflow_penalty_cost`    | Float64 | No       | Cost of inflow non-negativity slack (numerical penalty).                       |
-| `generic_violation_cost` | Float64 | No       | Cost of generic constraint violations.                                         |
-| `spillage_cost`          | Float64 | No       | Cost of reservoir spillage.                                                    |
-| `fpha_turbined_cost`     | Float64 | No       | Turbined flow penalty from the future-production hydro approximation.          |
-| `curtailment_cost`       | Float64 | No       | Cost of non-controllable source curtailment.                                   |
-| `exchange_cost`          | Float64 | No       | Transmission exchange cost component.                                          |
-| `pumping_cost`           | Float64 | No       | Pumping station energy cost component.                                         |
+| Column                         | Type    | Nullable | Description                                                                    |
+| ------------------------------ | ------- | -------- | ------------------------------------------------------------------------------ |
+| `stage_id`                     | Int32   | No       | Stage index (0-based).                                                         |
+| `block_id`                     | Int32   | Yes      | Load block index within the stage. `null` for stage-level (non-block) records. |
+| `total_cost`                   | Float64 | No       | Total discounted cost for this stage/block (monetary units).                   |
+| `immediate_cost`               | Float64 | No       | Immediate (undiscounted) cost for this stage/block.                            |
+| `future_cost`                  | Float64 | No       | Future cost estimate (Benders cut value) at the end of this stage.             |
+| `discount_factor`              | Float64 | No       | Discount factor applied to this stage's costs.                                 |
+| `thermal_cost`                 | Float64 | No       | Thermal generation cost component.                                             |
+| `contract_cost`                | Float64 | No       | Energy contract cost component (positive for imports, negative for exports).   |
+| `deficit_cost`                 | Float64 | No       | Cost of unserved load (deficit penalty).                                       |
+| `excess_cost`                  | Float64 | No       | Cost of excess generation (excess penalty).                                    |
+| `storage_violation_cost`       | Float64 | No       | Cost of reservoir storage bound violations.                                    |
+| `filling_target_cost`          | Float64 | No       | Cost of missing reservoir filling targets.                                     |
+| `hydro_violation_cost`         | Float64 | No       | Cost of hydro operational bound violations.                                    |
+| `outflow_violation_below_cost` | Float64 | No       | Cost of total outflow below-minimum violations.                                |
+| `outflow_violation_above_cost` | Float64 | No       | Cost of total outflow above-maximum violations.                                |
+| `turbined_violation_cost`      | Float64 | No       | Cost of turbined flow bound violations.                                        |
+| `generation_violation_cost`    | Float64 | No       | Cost of generation bound violations.                                           |
+| `evaporation_violation_cost`   | Float64 | No       | Cost of evaporation violations.                                                |
+| `withdrawal_violation_cost`    | Float64 | No       | Cost of water withdrawal violations.                                           |
+| `inflow_penalty_cost`          | Float64 | No       | Cost of inflow non-negativity slack (numerical penalty).                       |
+| `generic_violation_cost`       | Float64 | No       | Cost of generic constraint violations.                                         |
+| `spillage_cost`                | Float64 | No       | Cost of reservoir spillage.                                                    |
+| `fpha_turbined_cost`           | Float64 | No       | Turbined flow penalty from the future-production hydro approximation.          |
+| `curtailment_cost`             | Float64 | No       | Cost of non-controllable source curtailment.                                   |
+| `exchange_cost`                | Float64 | No       | Transmission exchange cost component.                                          |
+| `pumping_cost`                 | Float64 | No       | Pumping station energy cost component.                                         |
 
 ---
 
 ### `simulation/hydros/`
 
-Hydro plant dispatch results. One row per (stage, block, hydro) triplet. 28 columns.
+Hydro plant dispatch results. One row per (stage, block, hydro) triplet. 31 columns.
 
-| Column                           | Type    | Nullable | Description                                                                                                              |
-| -------------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `stage_id`                       | Int32   | No       | Stage index (0-based).                                                                                                   |
-| `block_id`                       | Int32   | Yes      | Load block index. `null` for stage-level records.                                                                        |
-| `hydro_id`                       | Int32   | No       | Hydro plant ID.                                                                                                          |
-| `turbined_m3s`                   | Float64 | No       | Turbined flow in cubic metres per second (m³/s).                                                                         |
-| `spillage_m3s`                   | Float64 | No       | Spilled flow in m³/s.                                                                                                    |
-| `outflow_m3s`                    | Float64 | No       | Total outflow (turbined + spilled) in m³/s.                                                                              |
-| `evaporation_m3s`                | Float64 | Yes      | Evaporation loss in m³/s. `null` if evaporation is not modelled for this plant.                                          |
-| `diverted_inflow_m3s`            | Float64 | Yes      | Diverted inflow to this reservoir in m³/s. `null` if no diversion is configured.                                         |
-| `diverted_outflow_m3s`           | Float64 | Yes      | Diverted outflow from this reservoir in m³/s. `null` if no diversion is configured.                                      |
-| `incremental_inflow_m3s`         | Float64 | No       | Natural incremental inflow to this reservoir in m³/s (excluding upstream contributions).                                 |
-| `inflow_m3s`                     | Float64 | No       | Total inflow to this reservoir in m³/s (including upstream contributions).                                               |
-| `storage_initial_hm3`            | Float64 | No       | Reservoir storage at the start of the stage in hectare-metres cubed (hm³).                                               |
-| `storage_final_hm3`              | Float64 | No       | Reservoir storage at the end of the stage in hm³.                                                                        |
-| `generation_mw`                  | Float64 | No       | Average power generation over the block in megawatts (MW).                                                               |
-| `generation_mwh`                 | Float64 | No       | Total energy generated over the block in megawatt-hours (MWh).                                                           |
-| `productivity_mw_per_m3s`        | Float64 | Yes      | Effective productivity factor in MW/(m³/s). `null` for fixed-productivity plants when productivity is not stage-varying. |
-| `spillage_cost`                  | Float64 | No       | Monetary cost attributed to spillage.                                                                                    |
-| `water_value_per_hm3`            | Float64 | No       | Shadow price of the reservoir water balance constraint (monetary units per hm³).                                         |
-| `storage_binding_code`           | Int8    | No       | Whether the storage bounds were binding (see `codes.json` `storage_binding` mapping).                                    |
-| `operative_state_code`           | Int8    | No       | Operative state code (see `codes.json` `operative_state` mapping).                                                       |
-| `turbined_slack_m3s`             | Float64 | No       | Turbined flow slack variable (non-negativity enforcement). Zero under normal operation.                                  |
-| `outflow_slack_below_m3s`        | Float64 | No       | Outflow lower-bound slack in m³/s.                                                                                       |
-| `outflow_slack_above_m3s`        | Float64 | No       | Outflow upper-bound slack in m³/s.                                                                                       |
-| `generation_slack_mw`            | Float64 | No       | Generation bound slack in MW.                                                                                            |
-| `storage_violation_below_hm3`    | Float64 | No       | Reservoir storage below-minimum violation in hm³. Zero under feasible operation.                                         |
-| `filling_target_violation_hm3`   | Float64 | No       | Filling target miss in hm³. Zero when the target is met.                                                                 |
-| `evaporation_violation_m3s`      | Float64 | No       | Evaporation non-negativity violation in m³/s. Zero under normal operation.                                               |
-| `inflow_nonnegativity_slack_m3s` | Float64 | No       | Inflow non-negativity slack in m³/s. Zero under normal operation.                                                        |
+| Column                               | Type    | Nullable | Description                                                                                                              |
+| ------------------------------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `stage_id`                           | Int32   | No       | Stage index (0-based).                                                                                                   |
+| `block_id`                           | Int32   | Yes      | Load block index. `null` for stage-level records.                                                                        |
+| `hydro_id`                           | Int32   | No       | Hydro plant ID.                                                                                                          |
+| `turbined_m3s`                       | Float64 | No       | Turbined flow in cubic metres per second (m³/s).                                                                         |
+| `spillage_m3s`                       | Float64 | No       | Spilled flow in m³/s.                                                                                                    |
+| `outflow_m3s`                        | Float64 | No       | Total outflow (turbined + spilled) in m³/s.                                                                              |
+| `evaporation_m3s`                    | Float64 | Yes      | Evaporation loss in m³/s. `null` if evaporation is not modelled for this plant.                                          |
+| `diverted_inflow_m3s`                | Float64 | Yes      | Diverted inflow to this reservoir in m³/s. `null` if no diversion is configured.                                         |
+| `diverted_outflow_m3s`               | Float64 | Yes      | Diverted outflow from this reservoir in m³/s. `null` if no diversion is configured.                                      |
+| `incremental_inflow_m3s`             | Float64 | No       | Natural incremental inflow to this reservoir in m³/s (excluding upstream contributions).                                 |
+| `inflow_m3s`                         | Float64 | No       | Total inflow to this reservoir in m³/s (including upstream contributions).                                               |
+| `storage_initial_hm3`                | Float64 | No       | Reservoir storage at the start of the stage in hectare-metres cubed (hm³).                                               |
+| `storage_final_hm3`                  | Float64 | No       | Reservoir storage at the end of the stage in hm³.                                                                        |
+| `generation_mw`                      | Float64 | No       | Average power generation over the block in megawatts (MW).                                                               |
+| `generation_mwh`                     | Float64 | No       | Total energy generated over the block in megawatt-hours (MWh).                                                           |
+| `productivity_mw_per_m3s`            | Float64 | Yes      | Effective productivity factor in MW/(m³/s). `null` for fixed-productivity plants when productivity is not stage-varying. |
+| `spillage_cost`                      | Float64 | No       | Monetary cost attributed to spillage.                                                                                    |
+| `water_value_per_hm3`                | Float64 | No       | Shadow price of the reservoir water balance constraint (monetary units per hm³).                                         |
+| `storage_binding_code`               | Int8    | No       | Whether the storage bounds were binding (see `codes.json` `storage_binding` mapping).                                    |
+| `operative_state_code`               | Int8    | No       | Operative state code (see `codes.json` `operative_state` mapping).                                                       |
+| `turbined_slack_m3s`                 | Float64 | No       | Turbined flow slack variable (non-negativity enforcement). Zero under normal operation.                                  |
+| `outflow_slack_below_m3s`            | Float64 | No       | Outflow lower-bound slack in m³/s.                                                                                       |
+| `outflow_slack_above_m3s`            | Float64 | No       | Outflow upper-bound slack in m³/s.                                                                                       |
+| `generation_slack_mw`                | Float64 | No       | Generation bound slack in MW.                                                                                            |
+| `storage_violation_below_hm3`        | Float64 | No       | Reservoir storage below-minimum violation in hm³. Zero under feasible operation.                                         |
+| `filling_target_violation_hm3`       | Float64 | No       | Filling target miss in hm³. Zero when the target is met.                                                                 |
+| `evaporation_violation_pos_m3s`      | Float64 | No       | Evaporation over-target violation in m³/s (actual > modelled). Zero under normal operation.                              |
+| `evaporation_violation_neg_m3s`      | Float64 | No       | Evaporation under-target violation in m³/s (actual < modelled). Zero under normal operation.                             |
+| `inflow_nonnegativity_slack_m3s`     | Float64 | No       | Inflow non-negativity slack in m³/s. Zero under normal operation.                                                        |
+| `water_withdrawal_violation_pos_m3s` | Float64 | No       | Water withdrawal over-target violation in m³/s. Zero when withdrawal is at or below target.                              |
+| `water_withdrawal_violation_neg_m3s` | Float64 | No       | Water withdrawal under-target violation in m³/s. Zero when withdrawal is at or above target.                             |
 
 ---
 

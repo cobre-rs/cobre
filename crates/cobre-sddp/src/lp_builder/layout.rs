@@ -12,7 +12,6 @@ use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
 use crate::indexer::StageIndexer;
-use crate::inflow_method::InflowNonNegativityMethod;
 
 use super::{GenericConstraintRowEntry, M3S_TO_HM3};
 
@@ -34,7 +33,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) thermal_pos: HashMap<EntityId, usize>,
     pub(crate) line_pos: HashMap<EntityId, usize>,
     pub(crate) bus_pos: HashMap<EntityId, usize>,
-    pub(crate) inflow_method: &'a InflowNonNegativityMethod,
     pub(crate) par_lp: &'a PrecomputedPar,
     /// Resolved production models for all (hydro, stage) pairs.
     pub(crate) production_models: &'a ProductionModelSet,

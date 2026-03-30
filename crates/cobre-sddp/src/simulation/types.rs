@@ -142,13 +142,18 @@ pub struct SimulationHydroResult {
     pub storage_violation_below_hm3: f64,
     /// Filling target violation in hm³.
     pub filling_target_violation_hm3: f64,
-    /// Evaporation constraint violation in m³/s.
-    pub evaporation_violation_m3s: f64,
+    /// Over-evaporation violation in m³/s (evaporated more than target).
+    pub evaporation_violation_pos_m3s: f64,
+    /// Under-evaporation violation in m³/s (evaporated less than target).
+    pub evaporation_violation_neg_m3s: f64,
     /// Inflow non-negativity constraint slack in m³/s.
     pub inflow_nonnegativity_slack_m3s: f64,
-    /// Water withdrawal violation slack in m³/s.
+    /// Over-withdrawal violation in m³/s (withdrew more than target).
+    /// Zero when no withdrawal is modeled.
+    pub water_withdrawal_violation_pos_m3s: f64,
+    /// Under-withdrawal violation in m³/s (withdrew less than target).
     /// Zero when no withdrawal is modeled or withdrawal is fully sustained.
-    pub water_withdrawal_violation_m3s: f64,
+    pub water_withdrawal_violation_neg_m3s: f64,
 }
 
 /// Thermal unit result for one (stage, block, thermal) tuple.
@@ -613,9 +618,11 @@ mod tests {
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_pos_m3s: 0.0,
+            evaporation_violation_neg_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
-            water_withdrawal_violation_m3s: 0.0,
+            water_withdrawal_violation_pos_m3s: 0.0,
+            water_withdrawal_violation_neg_m3s: 0.0,
         };
 
         assert_eq!(r.hydro_id, 5);

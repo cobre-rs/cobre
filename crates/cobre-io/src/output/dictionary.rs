@@ -372,9 +372,11 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "turbined_slack_m3s"
         | "outflow_slack_below_m3s"
         | "outflow_slack_above_m3s"
-        | "evaporation_violation_m3s"
+        | "evaporation_violation_pos_m3s"
+        | "evaporation_violation_neg_m3s"
         | "inflow_nonnegativity_slack_m3s"
-        | "water_withdrawal_violation_m3s"
+        | "water_withdrawal_violation_pos_m3s"
+        | "water_withdrawal_violation_neg_m3s"
         | "pumped_volume_hm3" => return "m3/s",
         "storage_initial_hm3"
         | "storage_final_hm3"
@@ -499,9 +501,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("hydros", "generation_slack_mw") => "Generation minimum slack",
         ("hydros", "storage_violation_below_hm3") => "Storage below dead-volume violation",
         ("hydros", "filling_target_violation_hm3") => "Filling target violation",
-        ("hydros", "evaporation_violation_m3s") => "Evaporation constraint violation",
+        ("hydros", "evaporation_violation_pos_m3s") => "Over-evaporation constraint violation",
+        ("hydros", "evaporation_violation_neg_m3s") => "Under-evaporation constraint violation",
         ("hydros", "inflow_nonnegativity_slack_m3s") => "Inflow non-negativity slack",
-        ("hydros", "water_withdrawal_violation_m3s") => "Water withdrawal constraint violation",
+        ("hydros", "water_withdrawal_violation_pos_m3s") => "Over-withdrawal constraint violation",
+        ("hydros", "water_withdrawal_violation_neg_m3s") => "Under-withdrawal constraint violation",
         // ── thermals ───────────────────────────────────────────────────────
         ("thermals", "stage_id") => "Stage index",
         ("thermals", "block_id") => "Block index within stage (nullable)",

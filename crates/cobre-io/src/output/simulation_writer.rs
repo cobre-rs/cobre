@@ -164,12 +164,16 @@ pub struct HydroWriteRecord {
     pub storage_violation_below_hm3: f64,
     /// Filling target violation in hm³.
     pub filling_target_violation_hm3: f64,
-    /// Evaporation constraint violation in m³/s.
-    pub evaporation_violation_m3s: f64,
+    /// Over-evaporation violation in m³/s.
+    pub evaporation_violation_pos_m3s: f64,
+    /// Under-evaporation violation in m³/s.
+    pub evaporation_violation_neg_m3s: f64,
     /// Inflow non-negativity slack in m³/s.
     pub inflow_nonnegativity_slack_m3s: f64,
-    /// Water withdrawal constraint violation in m³/s.
-    pub water_withdrawal_violation_m3s: f64,
+    /// Over-withdrawal violation in m³/s.
+    pub water_withdrawal_violation_pos_m3s: f64,
+    /// Under-withdrawal violation in m³/s.
+    pub water_withdrawal_violation_neg_m3s: f64,
 }
 
 /// Thermal unit result for one (stage, block, thermal) tuple.
@@ -856,9 +860,11 @@ fn build_hydros_batch(
     let mut generation_slack_mw = Float64Builder::with_capacity(n);
     let mut storage_violation_below_hm3 = Float64Builder::with_capacity(n);
     let mut filling_target_violation_hm3 = Float64Builder::with_capacity(n);
-    let mut evaporation_violation_m3s = Float64Builder::with_capacity(n);
+    let mut evaporation_violation_pos_m3s = Float64Builder::with_capacity(n);
+    let mut evaporation_violation_neg_m3s = Float64Builder::with_capacity(n);
     let mut inflow_nonnegativity_slack_m3s = Float64Builder::with_capacity(n);
-    let mut water_withdrawal_violation_m3s = Float64Builder::with_capacity(n);
+    let mut water_withdrawal_violation_pos_m3s = Float64Builder::with_capacity(n);
+    let mut water_withdrawal_violation_neg_m3s = Float64Builder::with_capacity(n);
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -890,9 +896,11 @@ fn build_hydros_batch(
         generation_slack_mw.append_value(r.generation_slack_mw);
         storage_violation_below_hm3.append_value(r.storage_violation_below_hm3);
         filling_target_violation_hm3.append_value(r.filling_target_violation_hm3);
-        evaporation_violation_m3s.append_value(r.evaporation_violation_m3s);
+        evaporation_violation_pos_m3s.append_value(r.evaporation_violation_pos_m3s);
+        evaporation_violation_neg_m3s.append_value(r.evaporation_violation_neg_m3s);
         inflow_nonnegativity_slack_m3s.append_value(r.inflow_nonnegativity_slack_m3s);
-        water_withdrawal_violation_m3s.append_value(r.water_withdrawal_violation_m3s);
+        water_withdrawal_violation_pos_m3s.append_value(r.water_withdrawal_violation_pos_m3s);
+        water_withdrawal_violation_neg_m3s.append_value(r.water_withdrawal_violation_neg_m3s);
     }
 
     RecordBatch::try_new(
@@ -924,9 +932,11 @@ fn build_hydros_batch(
             Arc::new(generation_slack_mw.finish()),
             Arc::new(storage_violation_below_hm3.finish()),
             Arc::new(filling_target_violation_hm3.finish()),
-            Arc::new(evaporation_violation_m3s.finish()),
+            Arc::new(evaporation_violation_pos_m3s.finish()),
+            Arc::new(evaporation_violation_neg_m3s.finish()),
             Arc::new(inflow_nonnegativity_slack_m3s.finish()),
-            Arc::new(water_withdrawal_violation_m3s.finish()),
+            Arc::new(water_withdrawal_violation_pos_m3s.finish()),
+            Arc::new(water_withdrawal_violation_neg_m3s.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("hydros", e.to_string()))
@@ -1615,9 +1625,11 @@ mod tests {
             generation_slack_mw: 0.0,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s: 0.0,
+            evaporation_violation_pos_m3s: 0.0,
+            evaporation_violation_neg_m3s: 0.0,
             inflow_nonnegativity_slack_m3s: 0.0,
-            water_withdrawal_violation_m3s: 0.0,
+            water_withdrawal_violation_pos_m3s: 0.0,
+            water_withdrawal_violation_neg_m3s: 0.0,
         }
     }
 
@@ -1720,12 +1732,12 @@ mod tests {
         assert_eq!(outflow_arr.value(1), 90.0);
 
         let ww_col = batch
-            .column_by_name("water_withdrawal_violation_m3s")
-            .expect("water_withdrawal_violation_m3s column must exist");
+            .column_by_name("water_withdrawal_violation_neg_m3s")
+            .expect("water_withdrawal_violation_neg_m3s column must exist");
         let ww_arr = ww_col
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
-            .expect("water_withdrawal_violation_m3s must be Float64Array");
+            .expect("water_withdrawal_violation_neg_m3s must be Float64Array");
         assert_eq!(
             ww_arr.value(0),
             2.5,

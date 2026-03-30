@@ -70,9 +70,19 @@ pub(crate) fn hydros_schema() -> Schema {
         Field::new("generation_slack_mw", DataType::Float64, false),
         Field::new("storage_violation_below_hm3", DataType::Float64, false),
         Field::new("filling_target_violation_hm3", DataType::Float64, false),
-        Field::new("evaporation_violation_m3s", DataType::Float64, false),
+        Field::new("evaporation_violation_pos_m3s", DataType::Float64, false),
+        Field::new("evaporation_violation_neg_m3s", DataType::Float64, false),
         Field::new("inflow_nonnegativity_slack_m3s", DataType::Float64, false),
-        Field::new("water_withdrawal_violation_m3s", DataType::Float64, false),
+        Field::new(
+            "water_withdrawal_violation_pos_m3s",
+            DataType::Float64,
+            false,
+        ),
+        Field::new(
+            "water_withdrawal_violation_neg_m3s",
+            DataType::Float64,
+            false,
+        ),
     ])
 }
 
@@ -483,9 +493,11 @@ mod tests {
                 "generation_slack_mw",
                 "storage_violation_below_hm3",
                 "filling_target_violation_hm3",
-                "evaporation_violation_m3s",
+                "evaporation_violation_pos_m3s",
+                "evaporation_violation_neg_m3s",
                 "inflow_nonnegativity_slack_m3s",
-                "water_withdrawal_violation_m3s",
+                "water_withdrawal_violation_pos_m3s",
+                "water_withdrawal_violation_neg_m3s",
             ]
         );
     }
@@ -527,9 +539,11 @@ mod tests {
             "generation_slack_mw",
             "storage_violation_below_hm3",
             "filling_target_violation_hm3",
-            "evaporation_violation_m3s",
+            "evaporation_violation_pos_m3s",
+            "evaporation_violation_neg_m3s",
             "inflow_nonnegativity_slack_m3s",
-            "water_withdrawal_violation_m3s",
+            "water_withdrawal_violation_pos_m3s",
+            "water_withdrawal_violation_neg_m3s",
         ] {
             assert!(
                 !is_nullable(&schema, col),

@@ -74,9 +74,11 @@ impl From<SimulationHydroResult> for HydroWriteRecord {
             generation_slack_mw: s.generation_slack_mw,
             storage_violation_below_hm3: s.storage_violation_below_hm3,
             filling_target_violation_hm3: s.filling_target_violation_hm3,
-            evaporation_violation_m3s: s.evaporation_violation_m3s,
+            evaporation_violation_pos_m3s: s.evaporation_violation_pos_m3s,
+            evaporation_violation_neg_m3s: s.evaporation_violation_neg_m3s,
             inflow_nonnegativity_slack_m3s: s.inflow_nonnegativity_slack_m3s,
-            water_withdrawal_violation_m3s: s.water_withdrawal_violation_m3s,
+            water_withdrawal_violation_pos_m3s: s.water_withdrawal_violation_pos_m3s,
+            water_withdrawal_violation_neg_m3s: s.water_withdrawal_violation_neg_m3s,
         }
     }
 }

@@ -254,8 +254,13 @@ fn extract_hydro_no_turbine(
     } else {
         0.0
     };
-    let withdrawal_violation = if indexer.has_withdrawal {
+    let withdrawal_neg = if indexer.has_withdrawal {
         view.primal[indexer.withdrawal_slack_neg.start + h]
+    } else {
+        0.0
+    };
+    let withdrawal_pos = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack_pos.start + h]
     } else {
         0.0
     };
@@ -302,14 +307,15 @@ fn extract_hydro_no_turbine(
     };
 
     // Evaporation: read from LP columns when present; fall back to 0.0.
-    let (evaporation_m3s, evaporation_violation_m3s) =
+    let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
         if let Some(local_evap_idx) = indexer.evap_hydro_indices.iter().position(|&e| e == h) {
             let ei = &indexer.evap_indices[local_evap_idx];
             let q_ev = view.primal[ei.q_ev_col];
-            let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
-            (Some(q_ev), violation)
+            let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
+            let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
+            (Some(q_ev), neg, pos)
         } else {
-            (Some(0.0), 0.0)
+            (Some(0.0), 0.0, 0.0)
         };
 
     SimulationHydroResult {
@@ -337,9 +343,11 @@ fn extract_hydro_no_turbine(
         generation_slack_mw: generation_slack,
         storage_violation_below_hm3: 0.0,
         filling_target_violation_hm3: 0.0,
-        evaporation_violation_m3s,
+        evaporation_violation_pos_m3s,
+        evaporation_violation_neg_m3s,
         inflow_nonnegativity_slack_m3s: inflow_slack,
-        water_withdrawal_violation_m3s: withdrawal_violation,
+        water_withdrawal_violation_pos_m3s: withdrawal_pos,
+        water_withdrawal_violation_neg_m3s: withdrawal_neg,
     }
 }
 
@@ -367,8 +375,13 @@ fn extract_hydro_per_block<'a>(
     } else {
         0.0
     };
-    let withdrawal_violation = if indexer.has_withdrawal {
+    let withdrawal_neg = if indexer.has_withdrawal {
         view.primal[indexer.withdrawal_slack_neg.start + h]
+    } else {
+        0.0
+    };
+    let withdrawal_pos = if indexer.has_withdrawal {
+        view.primal[indexer.withdrawal_slack_pos.start + h]
     } else {
         0.0
     };
@@ -392,14 +405,16 @@ fn extract_hydro_per_block<'a>(
 
     // Evaporation: stage-level (one column per hydro, same for all blocks).
     let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
-    let (evaporation_m3s, evaporation_violation_m3s) = if let Some(lei) = local_evap {
-        let ei = &indexer.evap_indices[lei];
-        let q_ev = view.primal[ei.q_ev_col];
-        let violation = view.primal[ei.f_evap_plus_col] + view.primal[ei.f_evap_minus_col];
-        (Some(q_ev), violation)
-    } else {
-        (Some(0.0), 0.0)
-    };
+    let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
+        if let Some(lei) = local_evap {
+            let ei = &indexer.evap_indices[lei];
+            let q_ev = view.primal[ei.q_ev_col];
+            let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
+            let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
+            (Some(q_ev), neg, pos)
+        } else {
+            (Some(0.0), 0.0, 0.0)
+        };
 
     // Look up diversion source indices for this hydro (for inflow computation).
     let hydro_entity_id = EntityId(hydro_id);
@@ -478,9 +493,11 @@ fn extract_hydro_per_block<'a>(
             generation_slack_mw: generation_slack,
             storage_violation_below_hm3: 0.0,
             filling_target_violation_hm3: 0.0,
-            evaporation_violation_m3s,
+            evaporation_violation_pos_m3s,
+            evaporation_violation_neg_m3s,
             inflow_nonnegativity_slack_m3s: inflow_slack,
-            water_withdrawal_violation_m3s: withdrawal_violation,
+            water_withdrawal_violation_pos_m3s: withdrawal_pos,
+            water_withdrawal_violation_neg_m3s: withdrawal_neg,
         }
     })
 }

@@ -123,6 +123,55 @@ cobre --color always run /data/cases/hydro_study
 mpiexec -np 4 cobre run /data/cases/hydro_study
 ```
 
+### SLURM clusters
+
+On SLURM-managed clusters, launch Cobre with `srun` instead of `mpiexec`.
+SLURM handles process placement, CPU binding, and NUMA-aware memory
+allocation automatically.
+
+**Basic launch:**
+
+```bash
+srun --mpi=pmi2 -n 4 ./cobre-mpi run /data/cases/hydro_study
+```
+
+**Hybrid MPI + threads** (recommended for production):
+
+Cobre uses MPI for inter-node communication and rayon threads for
+intra-node parallel LP solves. Set `--cpus-per-task` to control the
+thread count per rank:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=cobre
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-bind=local
+#SBATCH --output=cobre_%j.log
+
+# Pin each rank to its allocated cores; use NUMA-local memory.
+srun --cpu-bind=cores --mpi=pmi2 ./cobre-mpi run /data/case \
+    --threads "$SLURM_CPUS_PER_TASK"
+```
+
+**Key SLURM flags for Cobre:**
+
+| Flag                         | Purpose                                                       |
+| ---------------------------- | ------------------------------------------------------------- |
+| `--mpi=pmi2`                 | Use PMI-2 process startup (recommended for MPICH)             |
+| `--mpi=pmix`                 | Alternative: use PMIx (SLURM 22.05+, MPICH 4+)                |
+| `--ntasks-per-node=N`        | MPI ranks per node                                            |
+| `--cpus-per-task=T`          | Cores per rank (sets rayon thread pool size)                  |
+| `--cpu-bind=cores`           | Pin each rank's threads to specific cores                     |
+| `--mem-bind=local`           | Allocate memory from the NUMA node closest to the bound cores |
+| `--distribution=block:block` | Pack ranks on nodes, cores on sockets                         |
+| `--hint=compute_bound`       | Use all cores per socket                                      |
+
+> **Tip:** On modern SLURM clusters (22.05+), `--mpi=pmix` is preferred
+> over `--mpi=pmi2` for better scalability. Check your cluster's default
+> with `srun --mpi=list`.
+
 ---
 
 ## `cobre validate`

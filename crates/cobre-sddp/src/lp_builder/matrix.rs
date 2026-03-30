@@ -709,34 +709,19 @@ pub(super) fn fill_load_balance_entries(
                 }
             }
         } else {
-            // Constant productivity (or LinearizedHead used as constant): rho * turbine.
-            let rho = match &hydro.generation_model {
-                HydroGenerationModel::ConstantProductivity {
-                    productivity_mw_per_m3s,
-                }
-                | HydroGenerationModel::LinearizedHead {
-                    productivity_mw_per_m3s,
-                } => *productivity_mw_per_m3s,
-                HydroGenerationModel::Fpha => {
-                    // Hydro has Fpha entity model but the resolved production model at this
-                    // stage is ConstantProductivity. This is allowed when the preprocessing
-                    // pipeline falls back to constant productivity for this stage.
-                    // In practice this arm should not be reached because the preprocessing
-                    // pipeline always returns Fpha when the entity model is Fpha.
-                    // Use the productivity from the resolved model as a safe fallback.
-                    if let ResolvedProductionModel::ConstantProductivity { productivity } =
-                        ctx.production_models.model(h_idx, stage_idx)
-                    {
-                        *productivity
-                    } else {
-                        // Both entity model and resolved model are FPHA but local-idx table
-                        // says non-FPHA. This is a bug in the caller; assert in debug builds.
-                        debug_assert!(
-                            false,
-                            "Fpha entity model with non-Fpha resolved model and no local index for hydro {h_idx}"
-                        );
-                        0.0
-                    }
+            // Constant productivity: use the resolved per-stage production model,
+            // which accounts for hydro_production_models.json overrides.
+            let rho = match ctx.production_models.model(h_idx, stage_idx) {
+                ResolvedProductionModel::ConstantProductivity { productivity } => *productivity,
+                ResolvedProductionModel::Fpha { .. } => {
+                    // This branch should not be reached because FPHA hydros are handled
+                    // by the `if let Some(local_idx) = fpha_local[h_idx]` branch above.
+                    // If we get here, the FPHA local-index table is inconsistent.
+                    debug_assert!(
+                        false,
+                        "non-FPHA branch reached for FPHA resolved model at hydro {h_idx}"
+                    );
+                    0.0
                 }
             };
             if let Some(&b_idx) = ctx.bus_pos.get(&hydro.bus_id) {

@@ -85,6 +85,18 @@ pub struct CostWriteRecord {
     pub filling_target_cost: f64,
     /// Hydro operational violation cost.
     pub hydro_violation_cost: f64,
+    /// Cost of minimum outflow violations.
+    pub outflow_violation_below_cost: f64,
+    /// Cost of maximum outflow violations.
+    pub outflow_violation_above_cost: f64,
+    /// Cost of minimum turbining violations.
+    pub turbined_violation_cost: f64,
+    /// Cost of minimum generation violations.
+    pub generation_violation_cost: f64,
+    /// Cost of evaporation constraint violations.
+    pub evaporation_violation_cost: f64,
+    /// Cost of water withdrawal constraint violations.
+    pub withdrawal_violation_cost: f64,
     /// Inflow non-negativity violation cost.
     pub inflow_penalty_cost: f64,
     /// Generic constraint violation cost.
@@ -728,6 +740,12 @@ fn build_costs_batch(records: &[&CostWriteRecord]) -> Result<RecordBatch, Output
     let mut storage_violation_cost = Float64Builder::with_capacity(n);
     let mut filling_target_cost = Float64Builder::with_capacity(n);
     let mut hydro_violation_cost = Float64Builder::with_capacity(n);
+    let mut outflow_violation_below_cost = Float64Builder::with_capacity(n);
+    let mut outflow_violation_above_cost = Float64Builder::with_capacity(n);
+    let mut turbined_violation_cost = Float64Builder::with_capacity(n);
+    let mut generation_violation_cost = Float64Builder::with_capacity(n);
+    let mut evaporation_violation_cost = Float64Builder::with_capacity(n);
+    let mut withdrawal_violation_cost = Float64Builder::with_capacity(n);
     let mut inflow_penalty_cost = Float64Builder::with_capacity(n);
     let mut generic_violation_cost = Float64Builder::with_capacity(n);
     let mut spillage_cost = Float64Builder::with_capacity(n);
@@ -750,6 +768,12 @@ fn build_costs_batch(records: &[&CostWriteRecord]) -> Result<RecordBatch, Output
         storage_violation_cost.append_value(r.storage_violation_cost);
         filling_target_cost.append_value(r.filling_target_cost);
         hydro_violation_cost.append_value(r.hydro_violation_cost);
+        outflow_violation_below_cost.append_value(r.outflow_violation_below_cost);
+        outflow_violation_above_cost.append_value(r.outflow_violation_above_cost);
+        turbined_violation_cost.append_value(r.turbined_violation_cost);
+        generation_violation_cost.append_value(r.generation_violation_cost);
+        evaporation_violation_cost.append_value(r.evaporation_violation_cost);
+        withdrawal_violation_cost.append_value(r.withdrawal_violation_cost);
         inflow_penalty_cost.append_value(r.inflow_penalty_cost);
         generic_violation_cost.append_value(r.generic_violation_cost);
         spillage_cost.append_value(r.spillage_cost);
@@ -775,6 +799,12 @@ fn build_costs_batch(records: &[&CostWriteRecord]) -> Result<RecordBatch, Output
             Arc::new(storage_violation_cost.finish()),
             Arc::new(filling_target_cost.finish()),
             Arc::new(hydro_violation_cost.finish()),
+            Arc::new(outflow_violation_below_cost.finish()),
+            Arc::new(outflow_violation_above_cost.finish()),
+            Arc::new(turbined_violation_cost.finish()),
+            Arc::new(generation_violation_cost.finish()),
+            Arc::new(evaporation_violation_cost.finish()),
+            Arc::new(withdrawal_violation_cost.finish()),
             Arc::new(inflow_penalty_cost.finish()),
             Arc::new(generic_violation_cost.finish()),
             Arc::new(spillage_cost.finish()),
@@ -1539,6 +1569,12 @@ mod tests {
             storage_violation_cost: 0.0,
             filling_target_cost: 0.0,
             hydro_violation_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            turbined_violation_cost: 0.0,
+            generation_violation_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            withdrawal_violation_cost: 0.0,
             inflow_penalty_cost: 0.0,
             generic_violation_cost: 0.0,
             spillage_cost: 5.0,
@@ -1618,7 +1654,7 @@ mod tests {
         let batch = build_costs_batch(&records).expect("costs batch must build");
 
         assert_eq!(batch.num_rows(), 2, "must have 2 rows");
-        assert_eq!(batch.num_columns(), 20, "costs schema has 20 columns");
+        assert_eq!(batch.num_columns(), 26, "costs schema has 26 columns");
 
         let expected = costs_schema();
         assert_eq!(
@@ -1935,7 +1971,7 @@ mod tests {
             .expect("must have rows")
             .expect("batch must be Ok");
         assert_eq!(batch.num_rows(), 2, "costs parquet must have 2 rows");
-        assert_eq!(batch.num_columns(), 20, "costs schema has 20 columns");
+        assert_eq!(batch.num_columns(), 26, "costs schema has 26 columns");
     }
 
     #[test]

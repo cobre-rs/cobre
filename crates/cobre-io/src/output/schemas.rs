@@ -23,6 +23,12 @@ pub(crate) fn costs_schema() -> Schema {
         Field::new("storage_violation_cost", DataType::Float64, false),
         Field::new("filling_target_cost", DataType::Float64, false),
         Field::new("hydro_violation_cost", DataType::Float64, false),
+        Field::new("outflow_violation_below_cost", DataType::Float64, false),
+        Field::new("outflow_violation_above_cost", DataType::Float64, false),
+        Field::new("turbined_violation_cost", DataType::Float64, false),
+        Field::new("generation_violation_cost", DataType::Float64, false),
+        Field::new("evaporation_violation_cost", DataType::Float64, false),
+        Field::new("withdrawal_violation_cost", DataType::Float64, false),
         Field::new("inflow_penalty_cost", DataType::Float64, false),
         Field::new("generic_violation_cost", DataType::Float64, false),
         Field::new("spillage_cost", DataType::Float64, false),
@@ -351,8 +357,8 @@ mod tests {
         let schema = costs_schema();
         assert_eq!(
             schema.fields().len(),
-            20,
-            "costs schema must have 20 fields"
+            26,
+            "costs schema must have 26 fields"
         );
         let names = field_names(&schema);
         assert_eq!(
@@ -371,6 +377,12 @@ mod tests {
                 "storage_violation_cost",
                 "filling_target_cost",
                 "hydro_violation_cost",
+                "outflow_violation_below_cost",
+                "outflow_violation_above_cost",
+                "turbined_violation_cost",
+                "generation_violation_cost",
+                "evaporation_violation_cost",
+                "withdrawal_violation_cost",
                 "inflow_penalty_cost",
                 "generic_violation_cost",
                 "spillage_cost",
@@ -404,6 +416,12 @@ mod tests {
             "storage_violation_cost",
             "filling_target_cost",
             "hydro_violation_cost",
+            "outflow_violation_below_cost",
+            "outflow_violation_above_cost",
+            "turbined_violation_cost",
+            "generation_violation_cost",
+            "evaporation_violation_cost",
+            "withdrawal_violation_cost",
             "inflow_penalty_cost",
             "generic_violation_cost",
             "spillage_cost",
@@ -754,7 +772,7 @@ mod tests {
             .map(|(s, n)| (*n, s.fields().len()))
             .collect();
         let expected: &[(&str, usize)] = &[
-            ("costs", 20),
+            ("costs", 26),
             ("hydros", 29),
             ("thermals", 10),
             ("exchanges", 11),

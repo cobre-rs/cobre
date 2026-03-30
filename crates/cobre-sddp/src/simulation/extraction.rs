@@ -847,31 +847,57 @@ fn compute_cost_result(
         range_sum(indexer.inflow_slack.clone()) * COST_SCALE_FACTOR
     };
 
-    // Hydro violation cost: evaporation violation slacks + withdrawal violation
-    // slacks. These are penalty-bearing LP columns that absorb constraint
-    // violations for linearised evaporation and minimum withdrawal flow.
-    let evap_violation_cost: f64 = indexer
+    // Hydro violation cost: decomposed into 6 per-constraint components.
+    // Evaporation violation slacks (linearised evaporation constraint).
+    let evaporation_violation_cost: f64 = indexer
         .evap_indices
         .iter()
         .map(|ei| col_cost(ei.f_evap_plus_col) + col_cost(ei.f_evap_minus_col))
         .sum::<f64>()
         * COST_SCALE_FACTOR;
+
+    // Water withdrawal violation slacks.
     let withdrawal_violation_cost = if indexer.withdrawal_slack.is_empty() {
         0.0
     } else {
         range_sum(indexer.withdrawal_slack.clone()) * COST_SCALE_FACTOR
     };
-    let operational_violation_cost = if indexer.has_operational_violations {
-        (range_sum(indexer.outflow_below_slack.clone())
-            + range_sum(indexer.outflow_above_slack.clone())
-            + range_sum(indexer.turbine_below_slack.clone())
-            + range_sum(indexer.generation_below_slack.clone()))
-            * COST_SCALE_FACTOR
+
+    // Operational violation slacks: 4 separate constraint types.
+    let (
+        outflow_violation_below_cost,
+        outflow_violation_above_cost,
+        turbined_violation_cost,
+        generation_violation_cost,
+    ) = if indexer.has_operational_violations {
+        (
+            range_sum(indexer.outflow_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.outflow_above_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.turbine_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.generation_below_slack.clone()) * COST_SCALE_FACTOR,
+        )
     } else {
-        0.0
+        (0.0, 0.0, 0.0, 0.0)
     };
-    let hydro_violation_cost =
-        evap_violation_cost + withdrawal_violation_cost + operational_violation_cost;
+
+    let hydro_violation_cost = evaporation_violation_cost
+        + withdrawal_violation_cost
+        + outflow_violation_below_cost
+        + outflow_violation_above_cost
+        + turbined_violation_cost
+        + generation_violation_cost;
+    debug_assert!(
+        (hydro_violation_cost
+            - (outflow_violation_below_cost
+                + outflow_violation_above_cost
+                + turbined_violation_cost
+                + generation_violation_cost
+                + evaporation_violation_cost
+                + withdrawal_violation_cost))
+            .abs()
+            < 1e-6,
+        "hydro_violation_cost must equal sum of components"
+    );
 
     // Diversion cost: regularisation term on diversion flow variables.
     let diversion_cost = if indexer.diversion.is_empty() {
@@ -894,6 +920,12 @@ fn compute_cost_result(
         storage_violation_cost: 0.0,
         filling_target_cost: 0.0,
         hydro_violation_cost,
+        outflow_violation_below_cost,
+        outflow_violation_above_cost,
+        turbined_violation_cost,
+        generation_violation_cost,
+        evaporation_violation_cost,
+        withdrawal_violation_cost,
         inflow_penalty_cost,
         generic_violation_cost,
         spillage_cost: spillage_cost + diversion_cost,
@@ -1145,6 +1177,12 @@ fn extract_stub_collections(
 ///     storage_violation_cost: 20.0,
 ///     filling_target_cost: 30.0,
 ///     hydro_violation_cost: 5.0,
+///     outflow_violation_below_cost: 0.0,
+///     outflow_violation_above_cost: 0.0,
+///     turbined_violation_cost: 0.0,
+///     generation_violation_cost: 0.0,
+///     evaporation_violation_cost: 0.0,
+///     withdrawal_violation_cost: 0.0,
 ///     inflow_penalty_cost: 3.0,
 ///     generic_violation_cost: 2.0,
 ///     spillage_cost: 1.0,
@@ -1887,6 +1925,12 @@ mod tests {
             storage_violation_cost: storage_violation,
             filling_target_cost: filling,
             hydro_violation_cost: hydro_violation,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            turbined_violation_cost: 0.0,
+            generation_violation_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            withdrawal_violation_cost: 0.0,
             inflow_penalty_cost: inflow_penalty,
             generic_violation_cost: generic_violation,
             spillage_cost: spillage,
@@ -2887,6 +2931,155 @@ mod tests {
             (cost.fpha_turbined_cost - 150.0).abs() < 1e-6,
             "fpha_turbined_cost should be 150.0 (unscaled by col_scale=2.0), got {}",
             cost.fpha_turbined_cost
+        );
+    }
+
+    /// Verify that `compute_cost_result` decomposes `hydro_violation_cost` into
+    /// the 6 per-constraint components, and that the sum invariant holds.
+    #[test]
+    fn hydro_violation_cost_decomposition() {
+        let indexer = make_indexer_2h_1fpha_1blk();
+        // Layout (see make_indexer_2h_1fpha_1blk):
+        //   withdrawal_slack:       14..16
+        //   outflow_below_slack:    16..18
+        //   outflow_above_slack:    18..20
+        //   turbine_below_slack:    20..22
+        //   generation_below_slack: 22..24
+        assert_eq!(indexer.withdrawal_slack, 14..16);
+        assert_eq!(indexer.outflow_below_slack, 16..18);
+        assert_eq!(indexer.outflow_above_slack, 18..20);
+        assert_eq!(indexer.turbine_below_slack, 20..22);
+        assert_eq!(indexer.generation_below_slack, 22..24);
+        assert!(indexer.has_operational_violations);
+
+        let n_cols = indexer.generation_below_slack.end;
+        let mut primal = vec![0.0_f64; n_cols];
+        let mut obj = vec![0.0_f64; n_cols];
+
+        // Set theta so objective algebra works.
+        primal[indexer.theta] = 0.0;
+
+        // Assign known primal (slack) and objective (penalty) values per
+        // constraint type. Each slack * penalty gives a known cost contribution.
+        // COST_SCALE_FACTOR = 1000.0 is applied inside the extraction.
+
+        // outflow_below: h0=2.0 * 10.0, h1=3.0 * 10.0  => (20+30) * 1000 = 50000
+        primal[16] = 2.0;
+        obj[16] = 10.0;
+        primal[17] = 3.0;
+        obj[17] = 10.0;
+
+        // outflow_above: h0=1.0 * 5.0, h1=0.0  => 5 * 1000 = 5000
+        primal[18] = 1.0;
+        obj[18] = 5.0;
+
+        // turbine_below: h0=4.0 * 8.0, h1=0.0  => 32 * 1000 = 32000
+        primal[20] = 4.0;
+        obj[20] = 8.0;
+
+        // generation_below: h0=0.0, h1=6.0 * 3.0  => 18 * 1000 = 18000
+        primal[23] = 6.0;
+        obj[23] = 3.0;
+
+        // withdrawal: h0=0.5 * 20.0, h1=0.0  => 10 * 1000 = 10000
+        primal[14] = 0.5;
+        obj[14] = 20.0;
+
+        // Total objective for the LP (sum of primal * obj):
+        let total_obj: f64 = primal.iter().zip(obj.iter()).map(|(p, o)| p * o).sum();
+
+        let dual = vec![0.0_f64; 2];
+        let row_lower = vec![0.0_f64; 1];
+
+        let counts = EntityCounts {
+            hydro_ids: vec![1, 2],
+            hydro_productivities: vec![0.0, 1.5],
+            thermal_ids: vec![],
+            line_ids: vec![],
+            bus_ids: vec![],
+            pumping_station_ids: vec![],
+            contract_ids: vec![],
+            non_controllable_ids: vec![],
+        };
+
+        let result = extract_stage_result(
+            &SolutionView {
+                primal: &primal,
+                dual: &dual,
+                objective: total_obj,
+                objective_coeffs: &obj,
+                row_lower: &row_lower,
+            },
+            &StageExtractionSpec {
+                indexer: &indexer,
+                entity_counts: &counts,
+                inflow_m3s_per_hydro: &[],
+                block_hours: &[],
+                generic_constraint_entries: &[],
+                ncs_col_start: 0,
+                n_ncs: 0,
+                ncs_entity_ids: &[],
+                ncs_col_upper: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities: &[0.0, 1.5],
+                col_scale: &[],
+                row_scale: &[],
+            },
+            0,
+        );
+
+        let cost = &result.costs[0];
+
+        // Expected values (primal * obj * COST_SCALE_FACTOR):
+        let expected_outflow_below = (2.0 * 10.0 + 3.0 * 10.0) * 1000.0;
+        let expected_outflow_above = (1.0 * 5.0) * 1000.0;
+        let expected_turbined = (4.0 * 8.0) * 1000.0;
+        let expected_generation = (6.0 * 3.0) * 1000.0;
+        let expected_withdrawal = (0.5 * 20.0) * 1000.0;
+        let expected_evaporation = 0.0; // no evaporation hydros
+
+        assert!(
+            (cost.outflow_violation_below_cost - expected_outflow_below).abs() < 1e-6,
+            "outflow_below: expected {expected_outflow_below}, got {}",
+            cost.outflow_violation_below_cost
+        );
+        assert!(
+            (cost.outflow_violation_above_cost - expected_outflow_above).abs() < 1e-6,
+            "outflow_above: expected {expected_outflow_above}, got {}",
+            cost.outflow_violation_above_cost
+        );
+        assert!(
+            (cost.turbined_violation_cost - expected_turbined).abs() < 1e-6,
+            "turbined: expected {expected_turbined}, got {}",
+            cost.turbined_violation_cost
+        );
+        assert!(
+            (cost.generation_violation_cost - expected_generation).abs() < 1e-6,
+            "generation: expected {expected_generation}, got {}",
+            cost.generation_violation_cost
+        );
+        assert!(
+            (cost.evaporation_violation_cost - expected_evaporation).abs() < 1e-6,
+            "evaporation: expected {expected_evaporation}, got {}",
+            cost.evaporation_violation_cost
+        );
+        assert!(
+            (cost.withdrawal_violation_cost - expected_withdrawal).abs() < 1e-6,
+            "withdrawal: expected {expected_withdrawal}, got {}",
+            cost.withdrawal_violation_cost
+        );
+
+        // Sum invariant: hydro_violation_cost == sum of all 6 components.
+        let component_sum = cost.outflow_violation_below_cost
+            + cost.outflow_violation_above_cost
+            + cost.turbined_violation_cost
+            + cost.generation_violation_cost
+            + cost.evaporation_violation_cost
+            + cost.withdrawal_violation_cost;
+        assert!(
+            (cost.hydro_violation_cost - component_sum).abs() < 1e-6,
+            "hydro_violation_cost ({}) must equal sum of components ({component_sum})",
+            cost.hydro_violation_cost
         );
     }
 }

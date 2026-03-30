@@ -8744,4 +8744,119 @@ mod tests {
             t.n_dual_relevant
         );
     }
+
+    // LP consistency gap investigation: the template is structurally correct.
+    // Hypotheses 1-3 (indexer path, scaling, solver rebuild) ruled out.
+    // Zero slacks occur when constraints are non-binding (correct behavior).
+    // See plans/lp-consistency-gap/ for the full investigation log.
+
+    #[test]
+    fn diagnostic_template_operational_violation_correctness() {
+        let result = build_active_violations_template();
+        let t = &result.templates[0];
+
+        let indexer = StageIndexer::with_equipment(
+            &crate::indexer::EquipmentCounts {
+                hydro_count: 1,
+                max_par_order: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_buses: 1,
+                n_blks: 2,
+                has_inflow_penalty: false,
+                max_deficit_segments: 1,
+            },
+            &crate::indexer::FphaColumnLayout {
+                hydro_indices: vec![],
+                planes_per_hydro: vec![],
+            },
+        );
+
+        assert!(
+            indexer.has_operational_violations,
+            "indexer.has_operational_violations must be true when hydros exist"
+        );
+
+        let total_hours = 720.0 + 48.0;
+        let zeta = total_hours * M3S_TO_HM3;
+        let expected_row_lower = 50.0 * zeta;
+
+        let row = indexer.min_outflow_rows.start;
+        assert!(
+            (t.row_lower[row] - expected_row_lower).abs() < 1e-10,
+            "min_outflow row_lower = {}, expected {} (= 50.0 * zeta)",
+            t.row_lower[row],
+            expected_row_lower
+        );
+        assert_eq!(
+            t.row_upper[row],
+            f64::INFINITY,
+            "min_outflow row_upper must be +inf for >= constraint"
+        );
+
+        let col = indexer.outflow_below_slack.start;
+        assert_eq!(
+            t.col_lower[col], 0.0,
+            "outflow_below_slack col_lower must be 0"
+        );
+        assert_eq!(
+            t.col_upper[col],
+            f64::INFINITY,
+            "outflow_below_slack col_upper must be +inf when min_outflow > 0"
+        );
+
+        let expected_objective = 1000.0 * total_hours / COST_SCALE_FACTOR;
+        assert!(
+            t.objective[col] > 0.0,
+            "outflow_below_slack objective must be positive (penalty), got {}",
+            t.objective[col]
+        );
+        assert!(
+            (t.objective[col] - expected_objective).abs() < 1e-10,
+            "outflow_below_slack objective = {}, expected {} (= 1000 * {} / {})",
+            t.objective[col],
+            expected_objective,
+            total_hours,
+            COST_SCALE_FACTOR
+        );
+
+        let col_above = indexer.outflow_above_slack.start;
+        assert_eq!(t.col_upper[col_above], f64::INFINITY);
+        assert!(t.objective[col_above] > 0.0);
+
+        let col_turb = indexer.turbine_below_slack.start;
+        assert_eq!(t.col_upper[col_turb], f64::INFINITY);
+        assert!(t.objective[col_turb] > 0.0);
+
+        let col_gen = indexer.generation_below_slack.start;
+        assert_eq!(t.col_upper[col_gen], f64::INFINITY);
+        assert!(t.objective[col_gen] > 0.0);
+
+        let min_turb_row = indexer.min_turbine_rows.start;
+        let expected_turb_lower = 10.0 * zeta;
+        assert!(
+            (t.row_lower[min_turb_row] - expected_turb_lower).abs() < 1e-10,
+            "min_turbine row_lower = {}, expected {}",
+            t.row_lower[min_turb_row],
+            expected_turb_lower
+        );
+
+        let min_gen_row = indexer.min_generation_rows.start;
+        let expected_gen_lower = 5.0 * total_hours;
+        assert!(
+            (t.row_lower[min_gen_row] - expected_gen_lower).abs() < 1e-10,
+            "min_generation row_lower = {}, expected {}",
+            t.row_lower[min_gen_row],
+            expected_gen_lower
+        );
+
+        let max_outflow_row = indexer.max_outflow_rows.start;
+        let expected_max_upper = 800.0 * zeta;
+        assert!(
+            (t.row_upper[max_outflow_row] - expected_max_upper).abs() < 1e-10,
+            "max_outflow row_upper = {}, expected {}",
+            t.row_upper[max_outflow_row],
+            expected_max_upper
+        );
+    }
 }

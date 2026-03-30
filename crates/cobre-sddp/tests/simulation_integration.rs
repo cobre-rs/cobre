@@ -720,13 +720,7 @@ fn train_simulate_write_cycle() {
 
     let (result_tx, result_rx) = mpsc::sync_channel(4);
 
-    let io_thread = std::thread::spawn(move || {
-        let mut collected = Vec::new();
-        while let Ok(r) = result_rx.recv() {
-            collected.push(r);
-        }
-        collected
-    });
+    let io_thread = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
         sim_solver,
@@ -876,4 +870,519 @@ fn train_simulate_write_cycle() {
     }
 
     assert!(policy_dir.join("basis").is_dir());
+}
+
+/// Mock solver that returns a configurable primal vector sized to match a
+/// real LP template. Used to verify the extraction path reads slack columns.
+struct SizedMockSolver {
+    primal: Vec<f64>,
+    dual: Vec<f64>,
+}
+
+impl SizedMockSolver {
+    fn new(num_cols: usize, num_rows: usize) -> Self {
+        Self {
+            primal: vec![0.0; num_cols],
+            dual: vec![0.0; num_rows],
+        }
+    }
+
+    fn set_primal(&mut self, index: usize, value: f64) {
+        self.primal[index] = value;
+    }
+}
+
+impl SolverInterface for SizedMockSolver {
+    fn load_model(&mut self, template: &StageTemplate) {
+        self.primal.resize(template.num_cols, 0.0);
+        self.dual.resize(template.num_rows, 0.0);
+    }
+
+    fn add_rows(&mut self, cuts: &RowBatch) {
+        self.dual.resize(self.dual.len() + cuts.num_rows, 0.0);
+    }
+
+    fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+    fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+
+    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        Ok(cobre_solver::SolutionView {
+            objective: 1000.0,
+            primal: &self.primal,
+            dual: &self.dual,
+            reduced_costs: &self.primal,
+            iterations: 0,
+            solve_time_seconds: 0.0,
+        })
+    }
+
+    fn reset(&mut self) {}
+
+    fn get_basis(&mut self, _out: &mut Basis) {}
+
+    fn solve_with_basis(
+        &mut self,
+        _basis: &Basis,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        self.solve()
+    }
+
+    fn statistics(&self) -> SolverStatistics {
+        SolverStatistics::default()
+    }
+
+    fn name(&self) -> &'static str {
+        "SizedMockSolver"
+    }
+}
+
+/// Build a 1-hydro, 1-bus system with `min_outflow_m3s` > 0 for integration testing.
+#[allow(clippy::cast_possible_wrap)]
+fn make_min_outflow_system() -> cobre_core::System {
+    use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+    use cobre_core::scenario::InflowModel;
+    use cobre_core::{
+        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
+    };
+
+    let bus = Bus {
+        id: EntityId(0),
+        name: "B0".to_string(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 1000.0,
+        }],
+        excess_cost: 0.0,
+    };
+
+    let hydro = Hydro {
+        id: EntityId(1),
+        name: "H1".to_string(),
+        bus_id: EntityId(0),
+        downstream_id: None,
+        entry_stage_id: None,
+        exit_stage_id: None,
+        min_storage_hm3: 0.0,
+        max_storage_hm3: 200.0,
+        min_outflow_m3s: 50.0,
+        max_outflow_m3s: None,
+        generation_model: HydroGenerationModel::ConstantProductivity {
+            productivity_mw_per_m3s: 1.0,
+        },
+        min_turbined_m3s: 0.0,
+        max_turbined_m3s: 100.0,
+        min_generation_mw: 0.0,
+        max_generation_mw: 100.0,
+        tailrace: None,
+        hydraulic_losses: None,
+        efficiency: None,
+        evaporation_coefficients_mm: None,
+        evaporation_reference_volumes_hm3: None,
+        diversion: None,
+        filling: None,
+        penalties: HydroPenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            fpha_turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 5000.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+        },
+    };
+
+    let n_stages = 2;
+    let make_stage = |idx: usize| {
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        Stage {
+            index: idx,
+            id: idx as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    };
+
+    let stages: Vec<_> = (0..n_stages).map(make_stage).collect();
+
+    let inflow_models: Vec<InflowModel> = (0..n_stages)
+        .map(|i| InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 0.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        })
+        .collect();
+
+    let load_models: Vec<cobre_core::scenario::LoadModel> = (0..n_stages)
+        .map(|i| cobre_core::scenario::LoadModel {
+            bus_id: EntityId(0),
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        })
+        .collect();
+
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 1,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 50.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            thermal: ThermalStageBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            line: LineStageBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping: PumpingStageBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract: ContractStageBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 1,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages,
+        },
+        &PenaltiesDefaults {
+            hydro: HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 5000.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+            },
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    let mut profiles = BTreeMap::new();
+    profiles.insert(
+        "default".to_string(),
+        CorrelationProfile {
+            groups: vec![CorrelationGroup {
+                name: "g1".to_string(),
+                entities: vec![CorrelationEntity {
+                    entity_type: "inflow".to_string(),
+                    id: EntityId(1),
+                }],
+                matrix: vec![vec![1.0]],
+            }],
+        },
+    );
+    let correlation = CorrelationModel {
+        method: "cholesky".to_string(),
+        profiles,
+        schedule: vec![],
+    };
+
+    cobre_core::SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .correlation(correlation)
+        .build()
+        .unwrap()
+}
+
+/// Integration test: simulation with `min_outflow_m3s` > 0 produces non-zero
+/// `outflow_slack_below_m3s` when the primal vector has non-zero slack values.
+///
+/// This test uses the real LP template builder (`build_stage_templates`) to
+/// construct correctly-sized templates, then a `SizedMockSolver` whose primal
+/// vector has sentinel non-zero values at the `outflow_below_slack` column.
+/// The simulation extracts results from the primal, and we verify that the
+/// operational violation slack propagates correctly to the output.
+#[test]
+fn simulation_min_outflow_slack_extracted_from_primal() {
+    use cobre_sddp::lp_builder::build_stage_templates;
+
+    let system = make_min_outflow_system();
+    let n_stages = 2;
+
+    let stochastic = make_stochastic_context(n_stages, 1);
+
+    let hydro_models =
+        cobre_sddp::hydro_models::PrepareHydroModelsResult::default_from_system(&system);
+
+    let templates_result = build_stage_templates(
+        &system,
+        &InflowNonNegativityMethod::None,
+        stochastic.par(),
+        stochastic.normal(),
+        &hydro_models.production,
+        &hydro_models.evaporation,
+    )
+    .expect("build_stage_templates must succeed");
+
+    let t0 = &templates_result.templates[0];
+
+    // Build indexer matching the template layout.
+    let indexer = StageIndexer::with_equipment(
+        &cobre_sddp::indexer::EquipmentCounts {
+            hydro_count: 1,
+            max_par_order: 0,
+            n_thermals: 0,
+            n_lines: 0,
+            n_buses: 1,
+            n_blks: 1,
+            has_inflow_penalty: false,
+            max_deficit_segments: 1,
+        },
+        &cobre_sddp::indexer::FphaColumnLayout {
+            hydro_indices: vec![],
+            planes_per_hydro: vec![],
+        },
+    );
+
+    assert!(indexer.has_operational_violations);
+    assert!(!indexer.outflow_below_slack.is_empty());
+
+    let slack_col = indexer.outflow_below_slack.start;
+    assert!(
+        slack_col < t0.num_cols,
+        "outflow_below_slack col {} must be within template cols {}",
+        slack_col,
+        t0.num_cols
+    );
+    assert_eq!(
+        t0.col_upper[slack_col],
+        f64::INFINITY,
+        "outflow_below_slack col_upper must be +inf when min_outflow > 0"
+    );
+
+    let min_outflow_row = indexer.min_outflow_rows.start;
+    let total_hours = 744.0_f64;
+    let m3s_to_hm3 = 3_600.0 / 1_000_000.0;
+    let zeta = total_hours * m3s_to_hm3;
+    let expected_row_lower = 50.0 * zeta;
+    assert!(
+        (t0.row_lower[min_outflow_row] - expected_row_lower).abs() < 1e-10,
+        "min_outflow row_lower = {}, expected {} (= 50.0 * zeta)",
+        t0.row_lower[min_outflow_row],
+        expected_row_lower
+    );
+
+    // Inject a sentinel non-zero value at the slack column in the primal.
+    let sentinel_hm3 = 5.0;
+    let expected_slack_m3s = sentinel_hm3 / zeta;
+    let mut solver = SizedMockSolver::new(t0.num_cols, t0.num_rows);
+    solver.set_primal(slack_col, sentinel_hm3);
+
+    let templates = vec![t0.clone(); n_stages];
+    let base_rows = vec![templates_result.base_rows[0]; n_stages];
+    let initial_state = vec![100.0_f64; indexer.n_state];
+    let opening_tree = make_opening_tree(1);
+    let horizon = HorizonMode::Finite {
+        num_stages: n_stages,
+    };
+
+    let mut fcf = make_fcf(n_stages);
+
+    let block_counts = vec![1usize; n_stages];
+    let stage_ctx = StageContext {
+        templates: &templates,
+        base_rows: &base_rows,
+        noise_scale: &templates_result.noise_scale,
+        n_hydros: 1,
+        n_load_buses: 0,
+        load_balance_row_starts: &templates_result.load_balance_row_starts,
+        load_bus_indices: &[],
+        block_counts_per_stage: &block_counts,
+        ncs_max_gen: &[],
+    };
+
+    let training_config = TrainingConfig {
+        forward_passes: 1,
+        max_iterations: 1,
+        checkpoint_interval: None,
+        warm_start_cuts: 0,
+        event_sender: None,
+        cut_activity_tolerance: 0.0,
+        n_fwd_threads: 1,
+        max_blocks: 1,
+        cut_selection: None,
+        shutdown_flag: None,
+        start_iteration: 0,
+    };
+
+    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+    train(
+        &mut solver,
+        training_config,
+        &mut fcf,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+        },
+        &opening_tree,
+        &risk_measures,
+        iteration_limit(1),
+        &StubComm,
+        || Ok(SizedMockSolver::new(t0.num_cols, t0.num_rows)),
+    )
+    .expect("training must succeed");
+
+    let sim_config = SimulationConfig {
+        n_scenarios: 1,
+        io_channel_capacity: 4,
+    };
+
+    let entity_counts = EntityCounts {
+        hydro_ids: vec![1],
+        hydro_productivities: vec![1.0],
+        thermal_ids: vec![],
+        line_ids: vec![],
+        bus_ids: vec![0],
+        pumping_station_ids: vec![],
+        contract_ids: vec![],
+        non_controllable_ids: vec![],
+    };
+
+    let zeta_per_stage = vec![zeta; n_stages];
+    let block_hours_per_stage = vec![vec![total_hours]; n_stages];
+    let hydro_productivities_per_stage = vec![vec![1.0]; n_stages];
+
+    let (result_tx, result_rx) = mpsc::sync_channel(4);
+
+    let io_thread = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
+
+    let mut sim_solver = SizedMockSolver::new(t0.num_cols, t0.num_rows);
+    sim_solver.set_primal(slack_col, sentinel_hm3);
+
+    let mut sim_workspaces = vec![SolverWorkspace::new(
+        sim_solver,
+        PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0),
+        indexer.n_state,
+        indexer.hydro_count,
+        indexer.max_par_order,
+        0,
+        0,
+    )];
+
+    simulate(
+        &mut sim_workspaces,
+        &stage_ctx,
+        &fcf,
+        &TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+        },
+        &sim_config,
+        SimulationOutputSpec {
+            result_tx: &result_tx,
+            zeta_per_stage: &zeta_per_stage,
+            block_hours_per_stage: &block_hours_per_stage,
+            entity_counts: &entity_counts,
+            generic_constraint_row_entries: &[],
+            ncs_col_starts: &[],
+            n_ncs_per_stage: &[],
+            ncs_entity_ids_per_stage: &[],
+            diversion_upstream: &HashMap::new(),
+            hydro_productivities_per_stage: &hydro_productivities_per_stage,
+            event_sender: None,
+        },
+        &[],
+        &StubComm,
+    )
+    .expect("simulate must succeed");
+
+    drop(result_tx);
+
+    let results = io_thread.join().expect("I/O thread must not panic");
+    assert_eq!(results.len(), 1, "expected exactly 1 scenario result");
+
+    let scenario = &results[0];
+    let mut found_nonzero_slack = false;
+    for stage_result in &scenario.stages {
+        for hydro_result in &stage_result.hydros {
+            if (hydro_result.outflow_slack_below_m3s - expected_slack_m3s).abs() < 1e-6 {
+                found_nonzero_slack = true;
+            }
+        }
+    }
+    assert!(
+        found_nonzero_slack,
+        "Expected at least one hydro result with outflow_slack_below_m3s = {expected_slack_m3s:.6} \
+         (sentinel_hm3={sentinel_hm3} / zeta={zeta}), but all were zero. \
+         This indicates the extraction path does not read from the slack column.",
+    );
 }

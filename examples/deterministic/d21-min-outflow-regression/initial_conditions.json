@@ -3,7 +3,7 @@
   "storage": [
     {
       "hydro_id": 0,
-      "value_hm3": 10.0
+      "value_hm3": 5.0
     }
   ],
   "filling_storage": []

@@ -142,6 +142,75 @@ fn run_deterministic(case_dir: &Path) -> cobre_sddp::TrainingResult {
     outcome.result
 }
 
+/// Train with simulation enabled, then simulate and return scenario results.
+///
+/// Loads the case, enables 1-scenario simulation, trains, runs simulation with
+/// HiGHS, and returns (training result, scenario results, simulation summary).
+fn run_with_simulation(
+    case_dir: &Path,
+) -> (
+    cobre_sddp::TrainingResult,
+    Vec<cobre_sddp::SimulationScenarioResult>,
+    cobre_sddp::SimulationSummary,
+) {
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let pr =
+        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+    let system = pr.system;
+    let stochastic = pr.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut config_with_sim = config.clone();
+    config_with_sim.simulation.enabled = true;
+    config_with_sim.simulation.num_scenarios = 1;
+
+    let mut setup = StudySetup::new(&system, &config_with_sim, stochastic, hydro_models)
+        .expect("StudySetup must build");
+
+    let comm = StubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+    let result = outcome.result;
+
+    let mut pool = setup
+        .create_workspace_pool(1, HighsSolver::new)
+        .expect("simulation workspace pool must build");
+
+    let io_capacity = setup.io_channel_capacity().max(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
+
+    let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
+
+    let local_costs = setup
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &result_tx,
+            None,
+            &result.basis_cache,
+        )
+        .expect("simulate must return Ok");
+
+    drop(result_tx);
+    let scenario_results = drain_handle.join().expect("drain thread must not panic");
+
+    let sim_config = setup.simulation_config();
+    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+        .expect("aggregate_simulation must succeed");
+
+    (result, scenario_results, summary)
+}
+
 /// Assert that `actual` is within `tolerance` of `expected`.
 ///
 /// Panics with a diagnostic message identifying the case and the actual vs
@@ -1609,24 +1678,24 @@ pub const D19_EXPECTED_COST: f64 = 1_218_090.894_148_668;
 ///
 /// - 1 bus, 1 hydro, 0 thermals, 1 block (730h), 2 stages, deterministic.
 /// - Hydro: min_outflow=40, max_outflow=50, min_turbined=30, min_generation=20,
-///   max_turbined=50, productivity=1.0, max_storage=200, initial_storage=100.
+///   max_turbined=50, productivity=1.0, max_storage=200, initial_storage=10.
 /// - Inflows: stage 0 = 40 m3/s, stage 1 = 10 m3/s (zero std_dev).
 /// - Penalty costs: all 4 operational violations = 5000 $/MWh, deficit = 1000 $/MWh.
 ///
 /// ## Expected behaviour
 ///
-/// Stage 2 (low inflow): min_outflow (40 m3/s) and min_turbined (30 m3/s)
-/// cannot be fully met with 10 m3/s inflow plus stored water, triggering
-/// operational violation slacks at penalty cost. This proves the soft-constraint
-/// mechanism works end-to-end.
+/// With low initial storage (10 hm3), the hydro cannot sustain 40 m3/s
+/// min_outflow at either stage. At stage 0, total available water is
+/// 10 + 40*2.628 = 115.12 hm3, but the optimizer splits water across
+/// stages, leading to outflow below 40 m3/s. At stage 1, even less water
+/// is available, forcing min_outflow and min_turbined violation slacks.
 ///
-/// The expected cost is recorded empirically and locked for regression. If
-/// operational violation slack columns or constraint rows are incorrect, the
-/// LP cost will change (or become infeasible), failing this assertion.
+/// The expected cost is recorded empirically and locked for regression.
+/// Simulation is also run to verify non-zero operational violation slacks.
 #[test]
 fn d20_operational_violations() {
     let case_dir = Path::new("../../examples/deterministic/d20-operational-violations");
-    let result = run_deterministic(case_dir);
+    let (result, scenario_results, summary) = run_with_simulation(case_dir);
 
     assert!(
         result.iterations <= 20,
@@ -1639,13 +1708,168 @@ fn d20_operational_violations() {
         result.final_gap
     );
     assert_cost(result.final_lb, D20_EXPECTED_COST, 1e-2, "D20");
+    assert_eq!(summary.n_scenarios, 1);
+    assert_cost(summary.mean_cost, D20_EXPECTED_COST, 1e-2, "D20-sim");
+
+    // Verify operational violation slacks are non-zero in at least one stage.
+    assert_eq!(scenario_results.len(), 1);
+    let scenario = &scenario_results[0];
+    assert_eq!(scenario.stages.len(), 2);
+
+    let mut found_outflow_below = false;
+    let mut found_turbine_below = false;
+    for stage_result in &scenario.stages {
+        for hydro_result in &stage_result.hydros {
+            if hydro_result.outflow_slack_below_m3s > 1e-10 {
+                found_outflow_below = true;
+            }
+            if hydro_result.turbined_slack_m3s > 1e-10 {
+                found_turbine_below = true;
+            }
+        }
+    }
+    assert!(
+        found_outflow_below,
+        "D20: expected non-zero outflow_slack_below_m3s"
+    );
+    assert!(
+        found_turbine_below,
+        "D20: expected non-zero turbined_slack_m3s"
+    );
 }
 
-/// Expected cost for D20 (operational violation slacks, 2 stages).
-///
-/// Recorded empirically. The cost includes both deficit cost (load not covered
-/// by hydro generation) and operational violation penalty costs.
-pub const D20_EXPECTED_COST: f64 = 52_522_222.222;
+/// Recorded empirically with initial_storage=10 hm3.
+pub const D20_EXPECTED_COST: f64 = 388_210_222.222_222;
+
+/// LP consistency test: cost consistency between outflow violation slacks
+/// and `hydro_violation_cost`. 1 hydro (min_outflow=50 m3/s), 1 thermal,
+/// inflow=10 m3/s (insufficient), initial_storage=5 hm3, penalty=5000.
+#[test]
+fn d21_min_outflow_regression() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let case_dir = Path::new("../../examples/deterministic/d21-min-outflow-regression");
+
+    // Create scenario parquet files (deterministic: std=0).
+    let scenarios_dir = case_dir.join("scenarios");
+    std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
+
+    let load_schema = Arc::new(Schema::new(vec![
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_mw", DataType::Float64, false),
+        Field::new("std_mw", DataType::Float64, false),
+    ]));
+    let load_batch = RecordBatch::try_new(
+        Arc::clone(&load_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![20.0, 20.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("load RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
+        .expect("create load parquet");
+    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
+    writer.write(&load_batch).expect("write load batch");
+    writer.close().expect("close load writer");
+
+    let inflow_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("mean_m3s", DataType::Float64, false),
+        Field::new("std_m3s", DataType::Float64, false),
+    ]));
+    let inflow_batch = RecordBatch::try_new(
+        Arc::clone(&inflow_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Float64Array::from(vec![10.0, 10.0])),
+            Arc::new(Float64Array::from(vec![0.0, 0.0])),
+        ],
+    )
+    .expect("inflow RecordBatch");
+    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
+        .expect("create inflow parquet");
+    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
+    writer.write(&inflow_batch).expect("write inflow batch");
+    writer.close().expect("close inflow writer");
+
+    // Train + simulate.
+    let (result, scenario_results, summary) = run_with_simulation(case_dir);
+
+    assert!(
+        result.iterations <= 20,
+        "D21: iterations={} (expected <= 20)",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D21: gap={:.2e} (expected < 1e-6)",
+        result.final_gap
+    );
+    assert_cost(result.final_lb, D21_EXPECTED_COST, 1e-2, "D21");
+    assert_eq!(summary.n_scenarios, 1);
+    assert_cost(
+        summary.mean_cost,
+        result.final_lb,
+        1e-2,
+        "D21-sim-vs-training",
+    );
+
+    // Verify non-zero outflow violation slacks.
+    assert_eq!(scenario_results.len(), 1);
+    let scenario = &scenario_results[0];
+    assert_eq!(scenario.stages.len(), 2);
+
+    let found_outflow_below = scenario
+        .stages
+        .iter()
+        .flat_map(|s| &s.hydros)
+        .any(|h| h.outflow_slack_below_m3s > 1e-10);
+    assert!(
+        found_outflow_below,
+        "D21: expected non-zero outflow_slack_below_m3s"
+    );
+
+    // Verify cost consistency: hydro_violation_cost = slack * hours^2 * M3S_TO_HM3 * penalty.
+    let penalty = 5000.0_f64;
+    let hours = 730.0_f64;
+    let m3s_to_hm3 = 3_600.0 / 1_000_000.0;
+
+    let mut total_hydro_violation_cost = 0.0;
+    for (s, stage_result) in scenario.stages.iter().enumerate() {
+        assert_eq!(stage_result.hydros.len(), 1);
+        assert_eq!(stage_result.costs.len(), 1);
+        let slack_m3s = stage_result.hydros[0].outflow_slack_below_m3s;
+        let stage_violation_cost = stage_result.costs[0].hydro_violation_cost;
+        total_hydro_violation_cost += stage_violation_cost;
+
+        if slack_m3s > 1e-10 {
+            let expected_cost = slack_m3s * hours * hours * m3s_to_hm3 * penalty;
+            let cost_diff = (stage_violation_cost - expected_cost).abs();
+            assert!(
+                cost_diff < 1e-2,
+                "D21 stage {s}: hydro_violation_cost={stage_violation_cost}, \
+                 expected={expected_cost}, diff={cost_diff}"
+            );
+        }
+    }
+    assert!(
+        total_hydro_violation_cost > 0.0,
+        "D21: hydro_violation_cost must be positive"
+    );
+}
+
+/// Recorded empirically with initial_storage=5 hm3 and inflow=10 m3/s.
+pub const D21_EXPECTED_COST: f64 = 749_786_555.555_555_5;
 
 /// Real-case validation: convertido2 (158 hydros) with truncation method.
 ///

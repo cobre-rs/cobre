@@ -390,6 +390,12 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "storage_violation_cost"
         | "filling_target_cost"
         | "hydro_violation_cost"
+        | "outflow_violation_below_cost"
+        | "outflow_violation_above_cost"
+        | "turbined_violation_cost"
+        | "generation_violation_cost"
+        | "evaporation_violation_cost"
+        | "withdrawal_violation_cost"
         | "inflow_penalty_cost"
         | "generic_violation_cost"
         | "spillage_cost"
@@ -453,6 +459,12 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("costs", "storage_violation_cost") => "Total storage violation penalty",
         ("costs", "filling_target_cost") => "Total filling-target violation cost",
         ("costs", "hydro_violation_cost") => "Total hydro constraint violation cost",
+        ("costs", "outflow_violation_below_cost") => "Cost of minimum outflow violations",
+        ("costs", "outflow_violation_above_cost") => "Cost of maximum outflow violations",
+        ("costs", "turbined_violation_cost") => "Cost of minimum turbining violations",
+        ("costs", "generation_violation_cost") => "Cost of minimum generation violations",
+        ("costs", "evaporation_violation_cost") => "Cost of evaporation constraint violations",
+        ("costs", "withdrawal_violation_cost") => "Cost of water withdrawal constraint violations",
         ("costs", "inflow_penalty_cost") => "Total inflow non-negativity penalty",
         ("costs", "generic_violation_cost") => "Total generic constraint violation cost",
         ("costs", "spillage_cost") => "Total spillage regularization cost",
@@ -1355,8 +1367,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 156,
-            "variables.csv must have exactly 156 data rows (one per column across all 14 schemas)"
+            row_count, 162,
+            "variables.csv must have exactly 162 data rows (one per column across all 14 schemas)"
         );
     }
 

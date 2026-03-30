@@ -14,7 +14,7 @@ use super::layout::{StageLayout, TemplateBuildCtx};
 use super::{COST_SCALE_FACTOR, GenericConstraintRowEntry, matrix, scaling};
 
 /// Outcome of [`build_stage_templates`]: one [`StageTemplate`] per study stage
-/// plus the per-stage `base_rows` offsets needed by [`PatchBuffer`].
+/// plus the per-stage `base_rows` offsets needed by `PatchBuffer`.
 ///
 /// `base_rows[s]` is the row index of the first water-balance (AR dynamics)
 /// constraint in stage `s`.  It equals `template.n_dual_relevant` for every
@@ -27,7 +27,7 @@ pub struct StageTemplates {
     pub templates: Vec<StageTemplate>,
     /// Row index of the first water-balance constraint in each stage's LP.
     ///
-    /// Length equals `templates.len()`.  Used by [`PatchBuffer::fill_forward_patches`]
+    /// Length equals `templates.len()`.  Used by `PatchBuffer::fill_forward_patches`
     /// to locate the noise-injection rows (Category 3 patches).
     pub base_rows: Vec<usize>,
     /// Pre-computed noise scale `ζ_stage * σ_{stage,hydro}` for each (stage, hydro) pair.
@@ -253,7 +253,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///
 /// ## Column and row layout
 ///
-/// See the [module-level documentation](self) for the full LP layout.
+/// See the module-level documentation for the full LP layout.
 /// Key dimensions for a stage with N hydros, T thermals, Lines lines,
 /// B buses, K blocks per stage, and F FPHA hydros each with M planes:
 ///
@@ -319,7 +319,7 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// ## Evaporation hydros
 ///
 /// For hydros whose evaporation model is
-/// [`EvaporationModel::Linearized`],
+/// `EvaporationModel::Linearized`,
 /// three stage-level columns are added per hydro (`Q_ev`, `f_evap_plus`,
 /// `f_evap_minus`), all bounded `[0, +inf)` with objective coefficient 0.0.
 /// One equality constraint row is added per evaporation hydro with

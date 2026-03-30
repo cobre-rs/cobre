@@ -30,11 +30,14 @@ use std::ops::Range;
 
 use cobre_comm::Communicator;
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{OpeningTree, StochasticContext};
+use cobre_stochastic::{OpeningTree, StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
 use crate::{
-    FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer,
-    forward::build_cut_row_batch_into, lp_builder::COST_SCALE_FACTOR, noise::transform_ncs_noise,
+    FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
+    StageIndexer,
+    forward::build_cut_row_batch_into,
+    lp_builder::COST_SCALE_FACTOR,
+    noise::{compute_effective_eta, transform_ncs_noise},
 };
 use cobre_solver::StageTemplate;
 
@@ -71,6 +74,12 @@ pub struct LbEvalSpec<'a> {
     /// Column range for NCS generation variables in the stage-0 LP.
     /// Empty when no NCS entities are present; NCS patching is skipped.
     pub ncs_generation: Range<usize>,
+    /// Inflow non-negativity treatment method.
+    ///
+    /// When `Truncation` or `TruncationWithPenalty`, the opening loop clamps
+    /// negative PAR(p) inflows to zero before patching the LP. When `None` or
+    /// `Penalty`, raw noise is used directly.
+    pub inflow_method: &'a InflowNonNegativityMethod,
 }
 
 /// Evaluate the global lower bound for the current FCF approximation.
@@ -128,6 +137,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
         ncs_max_gen,
         block_count,
         ncs_generation,
+        inflow_method,
     } = spec;
     let (base_row, n_hydros, n_load_buses, block_count) =
         (*base_row, *n_hydros, *n_load_buses, *block_count);
@@ -193,19 +203,80 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             }
         }
 
+        // Truncation precomputation: lag matrix and eta floor are constant
+        // across openings (same initial_state, same stage 0).
+        let needs_truncation = matches!(
+            inflow_method,
+            InflowNonNegativityMethod::Truncation
+                | InflowNonNegativityMethod::TruncationWithPenalty { .. }
+        );
+
+        // Resolve the PAR LP once; used for both truncation and z-inflow RHS.
+        let par_lp_opt = stochastic.map(StochasticContext::par);
+        let truncation_par = if needs_truncation {
+            par_lp_opt.filter(|p| p.n_stages() > 0 && p.n_hydros() == n_hydros)
+        } else {
+            None
+        };
+
+        let mut lag_matrix_buf = Vec::new();
+        let mut eta_floor_buf = Vec::new();
+        let mut par_inflow_buf = vec![0.0_f64; n_hydros];
+        let mut effective_eta_buf = Vec::with_capacity(n_hydros);
+
+        if let Some(par_lp) = truncation_par {
+            let max_order = indexer.max_par_order;
+            let lag_len = max_order * n_hydros;
+            lag_matrix_buf.resize(lag_len, 0.0);
+            for h in 0..n_hydros {
+                for l in 0..max_order {
+                    lag_matrix_buf[l * n_hydros + h] =
+                        initial_state[indexer.inflow_lags.start + l * n_hydros + h];
+                }
+            }
+
+            // eta_floor is constant across openings: depends only on lags
+            // (initial_state) and stage (0), not on the opening noise.
+            eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+            let zero_targets = vec![0.0_f64; n_hydros];
+            solve_par_noise_batch(
+                par_lp,
+                0,
+                &lag_matrix_buf,
+                &zero_targets,
+                &mut eta_floor_buf,
+            );
+        }
+
         for opening_idx in 0..n_openings {
             let raw_noise = opening_tree.opening(0, opening_idx);
             noise_buf.clear();
             z_inflow_rhs_buf.clear();
-            for (h, &eta) in raw_noise.iter().enumerate().take(n_hydros) {
-                noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta);
-                // Z-inflow RHS: base + sigma * eta (m3/s, no zeta, no withdrawal).
+
+            // Per-opening: evaluate PAR inflows (only when truncation active).
+            if let Some(par_lp) = truncation_par {
+                evaluate_par_batch(par_lp, 0, &lag_matrix_buf, raw_noise, &mut par_inflow_buf);
+            }
+
+            // Compute effective eta (clamped or raw).
+            compute_effective_eta(
+                raw_noise,
+                n_hydros,
+                inflow_method,
+                &par_inflow_buf,
+                &eta_floor_buf,
+                &mut effective_eta_buf,
+            );
+
+            // Build noise_buf and z_inflow_rhs_buf from effective eta.
+            for (h, &eta_eff) in effective_eta_buf.iter().enumerate() {
+                noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta_eff);
                 if let Some(stoch) = stochastic {
                     let par_lp = stoch.par();
                     if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
                         let base = par_lp.deterministic_base(0, h);
                         let sigma = par_lp.sigma(0, h);
-                        z_inflow_rhs_buf.push(base + sigma * eta);
+                        z_inflow_rhs_buf.push(base + sigma * eta_eff);
                     } else {
                         z_inflow_rhs_buf.push(0.0);
                     }
@@ -289,7 +360,10 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
 )]
 mod tests {
     use super::{LbEvalSpec, evaluate_lower_bound};
-    use crate::{FutureCostFunction, PatchBuffer, RiskMeasure, SddpError, StageIndexer};
+    use crate::{
+        FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
+        StageIndexer,
+    };
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
         Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -611,6 +685,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -658,6 +733,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -712,6 +788,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -763,6 +840,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -810,6 +888,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let result = evaluate_lower_bound(
             &mut solver,
@@ -855,6 +934,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let result = evaluate_lower_bound(
             &mut solver,
@@ -907,6 +987,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
         let lb = evaluate_lower_bound(
             &mut solver,
@@ -956,6 +1037,7 @@ mod tests {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
 
         // First call: solver returns [50, 100] → LB = 75.
@@ -991,6 +1073,156 @@ mod tests {
         assert!(
             lb2 >= lb1,
             "second LB ({lb2}) must be >= first LB ({lb1}) when cuts are tighter"
+        );
+    }
+
+    // ── Inflow truncation tests ─────────────────────────────────────────────
+
+    /// `None` method passes raw noise through unchanged (regression test).
+    ///
+    /// With `stochastic: None`, the truncation path is a no-op since
+    /// `has_par == false`. This validates that the `compute_effective_eta`
+    /// control flow works correctly when no PAR model is present.
+    #[test]
+    fn test_lb_none_method_unchanged() {
+        let indexer = StageIndexer::new(1, 0);
+        let template = minimal_template();
+        let fcf = make_fcf(2, indexer.n_state);
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
+        let opening_tree = simple_opening_tree(2);
+        let rm = RiskMeasure::Expectation;
+        let comm = LocalComm;
+
+        let mut solver = MockSolver::with_objectives(vec![60.0, 80.0]);
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
+        };
+        let lb = evaluate_lower_bound(
+            &mut solver,
+            &fcf,
+            &initial_state,
+            &indexer,
+            &mut patch_buf,
+            &mut empty_row_batch(),
+            &spec,
+            &comm,
+            None,
+        )
+        .unwrap();
+
+        // E[60, 80] = 70.0; * COST_SCALE_FACTOR = 70_000.0
+        assert!(
+            (lb - 70_000.0).abs() < 1e-7,
+            "None method must produce correct LB, got {lb}"
+        );
+    }
+
+    /// `Truncation` method does not cause a crash or infeasibility.
+    ///
+    /// With `stochastic: None`, the truncation path is a no-op since
+    /// `has_par == false`, but this validates that the control flow
+    /// (`needs_truncation` = true, `truncation_par` = `None`) does not panic.
+    #[test]
+    fn test_lb_truncation_no_crash() {
+        let indexer = StageIndexer::new(1, 0);
+        let template = minimal_template();
+        let fcf = make_fcf(2, indexer.n_state);
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
+        let opening_tree = simple_opening_tree(1);
+        let rm = RiskMeasure::Expectation;
+        let comm = LocalComm;
+
+        let mut solver = MockSolver::with_objectives(vec![100.0]);
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::Truncation,
+        };
+        let result = evaluate_lower_bound(
+            &mut solver,
+            &fcf,
+            &initial_state,
+            &indexer,
+            &mut patch_buf,
+            &mut empty_row_batch(),
+            &spec,
+            &comm,
+            None,
+        );
+
+        assert!(
+            result.is_ok(),
+            "Truncation method must not panic or fail, got {result:?}"
+        );
+    }
+
+    /// `TruncationWithPenalty` method does not cause a crash or infeasibility.
+    #[test]
+    fn test_lb_truncation_with_penalty_no_crash() {
+        let indexer = StageIndexer::new(1, 0);
+        let template = minimal_template();
+        let fcf = make_fcf(2, indexer.n_state);
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
+        let opening_tree = simple_opening_tree(1);
+        let rm = RiskMeasure::Expectation;
+        let comm = LocalComm;
+
+        let mut solver = MockSolver::with_objectives(vec![100.0]);
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 1,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::TruncationWithPenalty { cost: 100.0 },
+        };
+        let result = evaluate_lower_bound(
+            &mut solver,
+            &fcf,
+            &initial_state,
+            &indexer,
+            &mut patch_buf,
+            &mut empty_row_batch(),
+            &spec,
+            &comm,
+            None,
+        );
+
+        assert!(
+            result.is_ok(),
+            "TruncationWithPenalty method must not panic or fail, got {result:?}"
         );
     }
 }

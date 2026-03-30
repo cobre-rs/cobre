@@ -668,6 +668,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             ncs_max_gen: stage_ctx.ncs_max_gen,
             block_count: stage_ctx.block_counts_per_stage[0],
             ncs_generation: indexer.ncs_generation.clone(),
+            inflow_method: training_ctx.inflow_method,
         };
         let lb = match evaluate_lower_bound(
             solver,

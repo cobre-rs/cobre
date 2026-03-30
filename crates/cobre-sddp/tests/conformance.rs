@@ -771,7 +771,7 @@ mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
     use cobre_sddp::{
-        PatchBuffer, RiskMeasure, StageIndexer,
+        InflowNonNegativityMethod, PatchBuffer, RiskMeasure, StageIndexer,
         lower_bound::{LbEvalSpec, evaluate_lower_bound},
     };
     use cobre_solver::RowBatch;
@@ -807,6 +807,7 @@ mod lb_conformance {
             ncs_max_gen: &[],
             block_count: 1,
             ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
         };
 
         let mut lb_cut_batch = RowBatch {

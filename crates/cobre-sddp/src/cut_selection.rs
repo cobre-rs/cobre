@@ -10,13 +10,14 @@
 //! infallible. Configuration parameters are validated at load time, so runtime
 //! panics from zero `check_frequency` are impossible.
 //!
-//! The `Dominated` variant's `select` is a stub returning an empty
-//! [`DeactivationSet`]; full implementation requires access to forward pass
-//! visited states and is deferred to Epic 04.
+//! The `Dominated` variant identifies cuts that are dominated at every visited
+//! forward-pass state: if a cut is always below the best active cut minus a
+//! tolerance, it contributes nothing and is deactivated.
 //!
 //! ## Usage
 //!
 //! ```rust
+//! use cobre_sddp::cut::CutPool;
 //! use cobre_sddp::cut_selection::{
 //!     CutMetadata, CutSelectionStrategy, DeactivationSet,
 //! };
@@ -33,14 +34,12 @@
 //! assert!(strategy.should_run(10));
 //!
 //! // Cuts with zero active_count are deactivated.
-//! let metadata = vec![
-//!     CutMetadata { iteration_generated: 1, forward_pass_index: 0,
-//!                   active_count: 0, last_active_iter: 1, domination_count: 0 },
-//!     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
-//!                   active_count: 3, last_active_iter: 5, domination_count: 0 },
-//! ];
-//! let active = vec![true, true];
-//! let deact = strategy.select(&metadata, &active, 10);
+//! let mut pool = CutPool::new(2, 1, 1, 0);
+//! pool.add_cut(0, 0, 1.0, &[1.0]);
+//! pool.add_cut(1, 0, 2.0, &[2.0]);
+//! pool.metadata[0].active_count = 0;
+//! pool.metadata[1].active_count = 3;
+//! let deact = strategy.select(&pool, &[], 10);
 //! assert_eq!(deact.indices, vec![0]);
 //! ```
 
@@ -162,12 +161,8 @@ pub enum CutSelectionStrategy {
     ///
     /// A cut is dominated if at every visited forward pass state, some other
     /// active cut achieves a higher (or equal within threshold) value.
-    /// Computationally expensive: O(|active cuts| × |visited states|) per
+    /// Computationally expensive: O(|active cuts| x |visited states|) per
     /// stage per check.
-    ///
-    /// **Note:** `select` for this variant is a stub returning an empty
-    /// [`DeactivationSet`]. Full implementation requires visited states from
-    /// the forward pass and is deferred to Epic 04.
     Dominated {
         /// Activity threshold epsilon. Ignored by the stub implementation.
         threshold: f64,
@@ -231,53 +226,56 @@ impl CutSelectionStrategy {
     /// - **Level1**: deactivates cuts with `active_count <= threshold`.
     /// - **Lml1**: deactivates cuts with
     ///   `current_iteration - last_active_iter > memory_window`.
-    /// - **Dominated**: stub — always returns an empty set (Epic 04).
+    /// - **Dominated**: deactivates cuts dominated at every visited state.
     ///
     /// # Examples
     ///
     /// ```rust
+    /// use cobre_sddp::cut::{CutPool};
     /// use cobre_sddp::cut_selection::{CutMetadata, CutSelectionStrategy};
     ///
     /// let strategy = CutSelectionStrategy::Level1 { threshold: 0, check_frequency: 5 };
-    /// let metadata = vec![
-    ///     CutMetadata { iteration_generated: 1, forward_pass_index: 0,
-    ///                   active_count: 0, last_active_iter: 1, domination_count: 0 },
-    ///     CutMetadata { iteration_generated: 1, forward_pass_index: 1,
-    ///                   active_count: 2, last_active_iter: 5, domination_count: 0 },
-    /// ];
-    /// let active = vec![true, true];
-    /// let deact = strategy.select(&metadata, &active, 10);
+    /// let mut pool = CutPool::new(2, 1, 1, 0);
+    /// pool.add_cut(0, 0, 1.0, &[1.0]);
+    /// pool.add_cut(1, 0, 2.0, &[2.0]);
+    /// pool.metadata[0].active_count = 0;
+    /// pool.metadata[1].active_count = 2;
+    /// let deact = strategy.select(&pool, &[], 10);
     /// assert_eq!(deact.indices, vec![0]);
     /// ```
     #[must_use]
     pub fn select(
         &self,
-        metadata: &[CutMetadata],
-        active: &[bool],
+        pool: &crate::cut::CutPool,
+        visited_states: &[f64],
         current_iteration: u64,
     ) -> DeactivationSet {
-        self.select_for_stage(metadata, active, current_iteration, 0)
+        self.select_for_stage(pool, visited_states, current_iteration, 0)
     }
 
-    /// Scan the cut pool metadata for a specific stage and identify cuts to
-    /// deactivate.
+    /// Scan the cut pool for a specific stage and identify cuts to deactivate.
     ///
-    /// Identical to [`select`] but also sets [`DeactivationSet::stage_index`].
+    /// Accepts the full [`CutPool`](crate::cut::CutPool) reference so that the
+    /// `Dominated` variant can access coefficients and intercepts. `Level1`
+    /// and `Lml1` read only `pool.metadata` and `pool.active`.
+    ///
+    /// `visited_states` is a flat `&[f64]` of visited forward-pass state
+    /// vectors (row-major, one state per `pool.state_dimension` elements).
+    /// Pass `&[]` when using `Level1` or `Lml1`.
     ///
     /// [`select`]: CutSelectionStrategy::select
     #[must_use]
     pub fn select_for_stage(
         &self,
-        metadata: &[CutMetadata],
-        active: &[bool],
+        pool: &crate::cut::CutPool,
+        visited_states: &[f64],
         current_iteration: u64,
         stage_index: u32,
     ) -> DeactivationSet {
-        debug_assert_eq!(
-            metadata.len(),
-            active.len(),
-            "metadata and active slices must have the same length"
-        );
+        let populated = pool.populated_count;
+        let metadata = &pool.metadata[..populated];
+        let active = &pool.active[..populated];
+
         // Cut pool capacity is bounded by a u32 field in the pool header, so
         // enumerate indices always fit in u32. The cast is safe by structural
         // invariant established at pool construction time.
@@ -305,9 +303,9 @@ impl CutSelectionStrategy {
                 .map(|(i, _)| i as u32)
                 .collect(),
 
-            // Stub: Dominated selection requires visited forward pass states.
-            // Full implementation deferred to Epic 04.
-            Self::Dominated { .. } => vec![],
+            Self::Dominated { threshold, .. } => {
+                select_dominated(pool, visited_states, *threshold, current_iteration)
+            }
         };
 
         DeactivationSet {
@@ -365,6 +363,96 @@ impl CutSelectionStrategy {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dominated selection algorithm
+// ---------------------------------------------------------------------------
+
+/// Identify cuts that are dominated at every visited forward-pass state.
+///
+/// A cut `k` is *dominated* if, for every state `x_hat` in `visited_states`,
+/// there exists another active cut whose value at `x_hat` exceeds (or matches
+/// within `threshold`) the value of cut `k`.  Dominated cuts contribute
+/// nothing to the policy and can safely be deactivated.
+///
+/// Returns the slot indices of dominated cuts as `Vec<u32>`.
+#[allow(clippy::cast_possible_truncation, clippy::needless_range_loop)]
+fn select_dominated(
+    pool: &crate::cut::CutPool,
+    visited_states: &[f64],
+    threshold: f64,
+    current_iteration: u64,
+) -> Vec<u32> {
+    let populated = pool.populated_count;
+    let n_state = pool.state_dimension;
+
+    // No states means no evidence of domination.
+    if visited_states.is_empty() || n_state == 0 {
+        return vec![];
+    }
+
+    // Need at least 2 active cuts for one to dominate another.
+    if pool.active_count() < 2 {
+        return vec![];
+    }
+
+    // is_candidate[k] = true means cut k is still a candidate for
+    // deactivation (it has been dominated at every state seen so far).
+    // Initialize to active && not from the current iteration.
+    let mut is_candidate: Vec<bool> = pool.active[..populated]
+        .iter()
+        .zip(pool.metadata[..populated].iter())
+        .map(|(&a, m)| a && m.iteration_generated < current_iteration)
+        .collect();
+
+    let mut n_candidates: usize = is_candidate.iter().filter(|&&c| c).count();
+    if n_candidates == 0 {
+        return vec![];
+    }
+
+    // Scratch buffer for cut values at the current state.
+    let mut scratch = vec![0.0_f64; populated];
+
+    for x_hat in visited_states.chunks_exact(n_state) {
+        // Step 1: compute values for all active cuts, find max.
+        let mut max_val = f64::NEG_INFINITY;
+        for k in 0..populated {
+            if pool.active[k] {
+                let val = pool.intercepts[k]
+                    + pool.coefficients[k]
+                        .iter()
+                        .zip(x_hat)
+                        .map(|(c, x)| c * x)
+                        .sum::<f64>();
+                scratch[k] = val;
+                if val > max_val {
+                    max_val = val;
+                }
+            }
+        }
+
+        // Step 2: any candidate that achieves (max - threshold) is NOT
+        // dominated at this state -- remove it from candidates.
+        let cutoff = max_val - threshold;
+        for k in 0..populated {
+            if is_candidate[k] && scratch[k] >= cutoff {
+                is_candidate[k] = false;
+                n_candidates -= 1;
+            }
+        }
+
+        // Step 3: early exit when no candidates remain.
+        if n_candidates == 0 {
+            break;
+        }
+    }
+
+    // Remaining candidates are dominated at ALL visited states.
+    (0..populated)
+        .filter(|&k| is_candidate[k])
+        .map(|k| k as u32)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +517,7 @@ pub fn parse_cut_selection_config(
 mod tests {
     use super::parse_cut_selection_config;
     use super::{CutMetadata, CutSelectionStrategy, DeactivationSet};
+    use crate::cut::CutPool;
     use cobre_io::config::CutSelectionConfig;
 
     fn make_meta(active_count: u64, last_active_iter: u64, domination_count: u64) -> CutMetadata {
@@ -439,6 +528,21 @@ mod tests {
             last_active_iter,
             domination_count,
         }
+    }
+
+    /// Build a `CutPool` pre-populated with the given metadata and active flags.
+    #[allow(clippy::cast_possible_truncation)]
+    fn make_pool(metadata: &[CutMetadata], active: &[bool]) -> CutPool {
+        let n = metadata.len();
+        let mut pool = CutPool::new(n, 1, 1, 0);
+        // Populate dummy cuts so populated_count advances.
+        for i in 0..n {
+            pool.add_cut(0, i as u32, 0.0, &[0.0]);
+        }
+        pool.metadata[..n].clone_from_slice(metadata);
+        pool.active[..n].clone_from_slice(active);
+        pool.cached_active_count = active.iter().filter(|&&a| a).count();
+        pool
     }
 
     #[test]
@@ -499,9 +603,8 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0)];
-        let active = vec![true, true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(&[make_meta(0, 1, 0), make_meta(1, 5, 0)], &[true, true]);
+        let deact = strategy.select(&pool, &[], 10);
         assert_eq!(
             deact.indices,
             vec![0],
@@ -515,9 +618,8 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(3, 1, 0), make_meta(7, 5, 0)];
-        let active = vec![true, true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(&[make_meta(3, 1, 0), make_meta(7, 5, 0)], &[true, true]);
+        let deact = strategy.select(&pool, &[], 10);
         assert!(
             deact.indices.is_empty(),
             "no cuts should be deactivated when all have activity"
@@ -530,9 +632,11 @@ mod tests {
             threshold: 1,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 1, 0), make_meta(1, 5, 0), make_meta(2, 8, 0)];
-        let active = vec![true, true, true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(
+            &[make_meta(0, 1, 0), make_meta(1, 5, 0), make_meta(2, 8, 0)],
+            &[true, true, true],
+        );
+        let deact = strategy.select(&pool, &[], 10);
         assert_eq!(deact.indices, vec![0, 1]);
     }
 
@@ -542,7 +646,8 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let deact = strategy.select(&[], &[], 10);
+        let pool = CutPool::new(0, 1, 1, 0);
+        let deact = strategy.select(&pool, &[], 10);
         assert!(deact.indices.is_empty());
     }
 
@@ -552,9 +657,8 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 5, 0)]; // last_active_iter = 5
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(&[make_meta(0, 5, 0)], &[true]);
+        let deact = strategy.select(&pool, &[], 20);
         assert_eq!(deact.indices, vec![0]);
     }
 
@@ -566,9 +670,8 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 12, 0)];
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(&[make_meta(0, 12, 0)], &[true]);
+        let deact = strategy.select(&pool, &[], 20);
         assert!(deact.indices.is_empty());
     }
 
@@ -578,9 +681,8 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 10, 0)];
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(&[make_meta(0, 10, 0)], &[true]);
+        let deact = strategy.select(&pool, &[], 20);
         assert!(
             deact.indices.is_empty(),
             "boundary case: exactly at window edge, retained"
@@ -593,9 +695,11 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 5, 0), make_meta(0, 12, 0), make_meta(0, 1, 0)];
-        let active = vec![true, true, true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(
+            &[make_meta(0, 5, 0), make_meta(0, 12, 0), make_meta(0, 1, 0)],
+            &[true, true, true],
+        );
+        let deact = strategy.select(&pool, &[], 20);
         assert_eq!(deact.indices, vec![0, 2]);
     }
 
@@ -607,9 +711,8 @@ mod tests {
             threshold: 0.001,
             check_frequency: 10,
         };
-        let metadata = vec![make_meta(0, 1, 5), make_meta(0, 1, 10)];
-        let active = vec![true, true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(&[make_meta(0, 1, 5), make_meta(0, 1, 10)], &[true, true]);
+        let deact = strategy.select(&pool, &[], 20);
         assert!(deact.indices.is_empty());
     }
 
@@ -693,15 +796,17 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let metadata = vec![CutMetadata {
-            iteration_generated: 1,
-            forward_pass_index: 0,
-            active_count: 0,
-            last_active_iter: 1,
-            domination_count: 0,
-        }];
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(
+            &[CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 1,
+                domination_count: 0,
+            }],
+            &[true],
+        );
+        let deact = strategy.select(&pool, &[], 10);
         assert!(deact.indices.contains(&0));
     }
 
@@ -711,15 +816,17 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let metadata = vec![CutMetadata {
-            iteration_generated: 1,
-            forward_pass_index: 0,
-            active_count: 0,
-            last_active_iter: 5,
-            domination_count: 0,
-        }];
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 20);
+        let pool = make_pool(
+            &[CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 5,
+                domination_count: 0,
+            }],
+            &[true],
+        );
+        let deact = strategy.select(&pool, &[], 20);
         assert!(deact.indices.contains(&0));
     }
 
@@ -729,9 +836,8 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let metadata = vec![make_meta(0, 1, 0)];
-        let active = vec![true];
-        let deact = strategy.select_for_stage(&metadata, &active, 10, 7);
+        let pool = make_pool(&[make_meta(0, 1, 0)], &[true]);
+        let deact = strategy.select_for_stage(&pool, &[], 10, 7);
         assert_eq!(deact.stage_index, 7);
     }
 
@@ -741,8 +847,8 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let metadata: Vec<CutMetadata> = vec![];
-        let deact = strategy.select(&metadata, &[], 10);
+        let pool = CutPool::new(0, 1, 1, 0);
+        let deact = strategy.select(&pool, &[], 10);
         assert_eq!(deact.stage_index, 0);
     }
 
@@ -930,8 +1036,6 @@ mod tests {
     /// verifies the safety invariant via the cut pool directly.
     #[test]
     fn select_skips_already_inactive_slots() {
-        use crate::cut::pool::CutPool;
-
         let mut pool = CutPool::new(10, 1, 1, 0);
         pool.add_cut(0, 0, 1.0, &[1.0]); // slot 0, active
         pool.add_cut(1, 0, 2.0, &[2.0]); // slot 1, active
@@ -952,8 +1056,7 @@ mod tests {
             threshold: 0,
             check_frequency: 1,
         };
-        let pc = pool.populated_count;
-        let deact = strategy.select_for_stage(&pool.metadata[..pc], &pool.active[..pc], 5, 0);
+        let deact = strategy.select_for_stage(&pool, &[], 5, 0);
         assert!(
             deact.indices.is_empty(),
             "no cuts should be selected: slot 0 is already inactive, \
@@ -976,16 +1079,17 @@ mod tests {
             memory_window: 3,
             check_frequency: 1,
         };
-        let metadata = vec![
-            make_meta(0, 1, 0),  // last_active_iter = 1
-            make_meta(0, 5, 0),  // last_active_iter = 5
-            make_meta(0, 7, 0),  // last_active_iter = 7 (boundary)
-            make_meta(0, 8, 0),  // last_active_iter = 8
-            make_meta(0, 10, 0), // last_active_iter = 10
-        ];
-
-        let active = vec![true; 5];
-        let deact = strategy.select_for_stage(&metadata, &active, 10, 0);
+        let pool = make_pool(
+            &[
+                make_meta(0, 1, 0),  // last_active_iter = 1
+                make_meta(0, 5, 0),  // last_active_iter = 5
+                make_meta(0, 7, 0),  // last_active_iter = 7 (boundary)
+                make_meta(0, 8, 0),  // last_active_iter = 8
+                make_meta(0, 10, 0), // last_active_iter = 10
+            ],
+            &[true; 5],
+        );
+        let deact = strategy.select_for_stage(&pool, &[], 10, 0);
 
         // Slots 0 and 1 deactivated, slots 2-4 retained.
         assert_eq!(
@@ -1005,24 +1109,26 @@ mod tests {
             threshold: 0,
             check_frequency: 1,
         };
-        let metadata = vec![
-            CutMetadata {
-                iteration_generated: 10, // same as current_iteration
-                forward_pass_index: 0,
-                active_count: 0,
-                last_active_iter: 10,
-                domination_count: 0,
-            },
-            CutMetadata {
-                iteration_generated: 5, // older, zero activity
-                forward_pass_index: 0,
-                active_count: 0,
-                last_active_iter: 5,
-                domination_count: 0,
-            },
-        ];
-        let active = vec![true, true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(
+            &[
+                CutMetadata {
+                    iteration_generated: 10, // same as current_iteration
+                    forward_pass_index: 0,
+                    active_count: 0,
+                    last_active_iter: 10,
+                    domination_count: 0,
+                },
+                CutMetadata {
+                    iteration_generated: 5, // older, zero activity
+                    forward_pass_index: 0,
+                    active_count: 0,
+                    last_active_iter: 5,
+                    domination_count: 0,
+                },
+            ],
+            &[true, true],
+        );
+        let deact = strategy.select(&pool, &[], 10);
         assert_eq!(
             deact.indices,
             vec![1],
@@ -1040,18 +1146,299 @@ mod tests {
             memory_window: 0,
             check_frequency: 1,
         };
-        let metadata = vec![CutMetadata {
-            iteration_generated: 10,
-            forward_pass_index: 0,
-            active_count: 0,
-            last_active_iter: 10,
-            domination_count: 0,
-        }];
-        let active = vec![true];
-        let deact = strategy.select(&metadata, &active, 10);
+        let pool = make_pool(
+            &[CutMetadata {
+                iteration_generated: 10,
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 10,
+                domination_count: 0,
+            }],
+            &[true],
+        );
+        let deact = strategy.select(&pool, &[], 10);
         assert!(
             deact.indices.is_empty(),
             "current-iteration cut must not be deactivated even with memory_window=0"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Dominated algorithm tests (SS1.3 conformance + aggressiveness ordering)
+    // -----------------------------------------------------------------------
+
+    /// Build a `CutPool` with known coefficients, intercepts, and metadata
+    /// for testing the dominated selection algorithm.
+    #[allow(clippy::cast_possible_truncation)]
+    fn make_dominated_pool(
+        intercepts: &[f64],
+        coefficients: &[Vec<f64>],
+        active: &[bool],
+        metadata: &[CutMetadata],
+    ) -> CutPool {
+        let n = intercepts.len();
+        let state_dim = coefficients[0].len();
+        let mut pool = CutPool::new(n, state_dim, 1, 0);
+        for i in 0..n {
+            // Use add_cut to advance populated_count correctly.
+            pool.add_cut(0, i as u32, intercepts[i], &coefficients[i]);
+            pool.metadata[i] = metadata[i].clone();
+            pool.active[i] = active[i];
+        }
+        pool.cached_active_count = active.iter().filter(|&&a| a).count();
+        pool
+    }
+
+    fn default_meta_at(iter: u64) -> CutMetadata {
+        CutMetadata {
+            iteration_generated: iter,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: iter,
+            domination_count: 0,
+        }
+    }
+
+    fn default_meta_vec(n: usize, iter: u64) -> Vec<CutMetadata> {
+        (0..n).map(|_| default_meta_at(iter)).collect()
+    }
+
+    /// SS1.3 test 1: 5 cuts, 3 states (1D). Cuts 0,3,4 dominated at all states.
+    #[test]
+    fn dominated_select_deactivate_dominated() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        let pool = make_dominated_pool(
+            &[1.0, 0.0, 3.0, 0.5, 0.0],
+            &[
+                vec![0.0],  // cut 0: constant 1
+                vec![2.0],  // cut 1: 2x
+                vec![-1.0], // cut 2: 3 - x
+                vec![0.0],  // cut 3: constant 0.5
+                vec![0.5],  // cut 4: 0.5x
+            ],
+            &[true; 5],
+            &default_meta_vec(5, 1),
+        );
+        let states: Vec<f64> = vec![0.0, 1.0, 3.0];
+        let deact = strategy.select(&pool, &states, 10);
+        assert_eq!(deact.indices, vec![0, 3, 4]);
+    }
+
+    /// SS1.3 test 2: cut dominated at 2/3 states but tied at 1 -> retained.
+    #[test]
+    fn dominated_select_partial_domination_retained() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        // Cut 0: intercept=2, slope=0 (constant 2)
+        // Cut 1: intercept=0, slope=2 (2x)
+        // At x=0: values=[2, 0] -> max=2, cut 0 achieves max -> not dominated
+        // At x=1: values=[2, 2] -> max=2, cut 0 achieves max -> not dominated
+        // At x=3: values=[2, 6] -> max=6, cut 0 below -> dominated at this state
+        // Net: cut 0 is NOT dominated (achieves max at x=0 and x=1)
+        let pool = make_dominated_pool(
+            &[2.0, 0.0],
+            &[vec![0.0], vec![2.0]],
+            &[true, true],
+            &default_meta_vec(2, 1),
+        );
+        let states: Vec<f64> = vec![0.0, 1.0, 3.0];
+        let deact = strategy.select(&pool, &states, 10);
+        assert!(
+            deact.indices.is_empty(),
+            "cut 0 achieves max at x=0 and x=1, must not be deactivated"
+        );
+    }
+
+    /// SS1.3 test 3: 3 cuts, each achieves max at >= 1 state.
+    /// But cut 2 never achieves max alone (always below another).
+    #[test]
+    fn dominated_select_none_dominated_when_all_achieve_max() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        // Cut 0: 5 - 2x (max at x=0: 5)
+        // Cut 1: 0 + 3x (max at x=3: 9)
+        // Cut 2: 2 + 0x (constant 2, never achieves max)
+        // At x=0: [5, 0, 2] -> max=5, cut 0 achieves max
+        // At x=1: [3, 3, 2] -> max=3, cuts 0,1 achieve max
+        // At x=3: [−1, 9, 2] -> max=9, cut 1 achieves max
+        // Dominated: cut 2 (never achieves max)
+        let pool = make_dominated_pool(
+            &[5.0, 0.0, 2.0],
+            &[vec![-2.0], vec![3.0], vec![0.0]],
+            &[true; 3],
+            &default_meta_vec(3, 1),
+        );
+        let states: Vec<f64> = vec![0.0, 1.0, 3.0];
+        let deact = strategy.select(&pool, &states, 10);
+        assert_eq!(
+            deact.indices,
+            vec![2],
+            "only cut 2 (constant 2) should be dominated"
+        );
+    }
+
+    /// SS1.3 test 4: empty `visited_states` returns empty set.
+    #[test]
+    fn dominated_select_empty_states() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        let pool = make_dominated_pool(
+            &[1.0, 2.0],
+            &[vec![0.0], vec![0.0]],
+            &[true, true],
+            &default_meta_vec(2, 1),
+        );
+        let deact = strategy.select(&pool, &[], 10);
+        assert!(
+            deact.indices.is_empty(),
+            "empty visited_states must produce empty deactivation set"
+        );
+    }
+
+    /// SS1.3 test 5: single active cut returns empty set.
+    #[test]
+    fn dominated_select_single_active_cut() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        let pool = make_dominated_pool(
+            &[1.0, 2.0, 3.0],
+            &[vec![0.0], vec![0.0], vec![0.0]],
+            &[true, false, false],
+            &default_meta_vec(3, 1),
+        );
+        let states: Vec<f64> = vec![0.0, 1.0];
+        let deact = strategy.select(&pool, &states, 10);
+        assert!(
+            deact.indices.is_empty(),
+            "single active cut cannot be dominated"
+        );
+    }
+
+    /// SS1.3 test 6: cut from current iteration excluded from deactivation.
+    #[test]
+    fn dominated_select_current_iteration_excluded() {
+        let strategy = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        // Cut 0: constant 1 (from current iteration 10 -- protected)
+        // Cut 1: constant 5 (from iteration 1 -- dominates cut 0)
+        let pool = make_dominated_pool(
+            &[1.0, 5.0],
+            &[vec![0.0], vec![0.0]],
+            &[true, true],
+            &[default_meta_at(10), default_meta_at(1)],
+        );
+        let states: Vec<f64> = vec![0.0, 1.0];
+        let deact = strategy.select(&pool, &states, 10);
+        assert!(
+            deact.indices.is_empty(),
+            "cut from current iteration must not be deactivated even if dominated"
+        );
+    }
+
+    /// Aggressiveness ordering: |Level1| <= |LML1| <= |Dominated|.
+    ///
+    /// Build a fixture where:
+    /// - Level1 (threshold=0) deactivates cuts with 0 activity count
+    /// - LML1 (window=3) deactivates those + cuts with old `last_active_iter`
+    /// - Dominated deactivates geometrically dominated cuts
+    #[test]
+    fn aggressiveness_ordering_level1_leq_lml1_leq_dominated() {
+        // 5 cuts (1D):
+        // Cut 0: intercept=0, slope=0 (constant 0), activity=0, last_active=1
+        // Cut 1: intercept=0, slope=0.1, activity=0, last_active=2
+        // Cut 2: intercept=1, slope=0, activity=3, last_active=3
+        // Cut 3: intercept=0, slope=2, activity=5, last_active=10
+        // Cut 4: intercept=5, slope=-1, activity=5, last_active=10
+        let meta = [
+            CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 0,
+                active_count: 0,
+                last_active_iter: 1,
+                domination_count: 0,
+            },
+            CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 1,
+                active_count: 0,
+                last_active_iter: 2,
+                domination_count: 0,
+            },
+            CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 2,
+                active_count: 3,
+                last_active_iter: 3,
+                domination_count: 0,
+            },
+            CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 3,
+                active_count: 5,
+                last_active_iter: 10,
+                domination_count: 0,
+            },
+            CutMetadata {
+                iteration_generated: 1,
+                forward_pass_index: 4,
+                active_count: 5,
+                last_active_iter: 10,
+                domination_count: 0,
+            },
+        ];
+        let pool = make_dominated_pool(
+            &[0.0, 0.0, 1.0, 0.0, 5.0],
+            &[vec![0.0], vec![0.1], vec![0.0], vec![2.0], vec![-1.0]],
+            &[true; 5],
+            &meta,
+        );
+        let states: Vec<f64> = vec![0.0, 1.0, 3.0, 5.0];
+
+        // Level1 threshold=0: deactivates cuts with active_count=0
+        let l1 = CutSelectionStrategy::Level1 {
+            threshold: 0,
+            check_frequency: 1,
+        };
+        let deact_l1 = l1.select(&pool, &[], 11);
+
+        // LML1 window=3: deactivates cuts with last_active_iter < 11-3=8
+        let lml1 = CutSelectionStrategy::Lml1 {
+            memory_window: 3,
+            check_frequency: 1,
+        };
+        let deact_lml1 = lml1.select(&pool, &[], 11);
+
+        // Dominated threshold=0
+        let dom = CutSelectionStrategy::Dominated {
+            threshold: 0.0,
+            check_frequency: 1,
+        };
+        let deact_dom = dom.select(&pool, &states, 11);
+
+        assert!(
+            deact_l1.indices.len() <= deact_lml1.indices.len(),
+            "Level1 ({}) should deactivate <= LML1 ({})",
+            deact_l1.indices.len(),
+            deact_lml1.indices.len()
+        );
+        assert!(
+            deact_lml1.indices.len() <= deact_dom.indices.len(),
+            "LML1 ({}) should deactivate <= Dominated ({})",
+            deact_lml1.indices.len(),
+            deact_dom.indices.len()
         );
     }
 }

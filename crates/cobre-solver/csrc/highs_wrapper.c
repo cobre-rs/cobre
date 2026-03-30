@@ -12,9 +12,10 @@
 
 /* Compile-time guard: cobre-solver assumes HighsInt is 32-bit (i32 on the
  * Rust side). If HiGHS was built with -DHIGHSINT64=ON, all FFI calls would
- * silently corrupt memory. Fail the build early instead. */
-_Static_assert(sizeof(HighsInt) == sizeof(int32_t),
-    "cobre-solver assumes HighsInt is 32-bit; rebuild HiGHS without HIGHSINT64");
+ * silently corrupt memory. Fail the build early instead.
+ * MSVC does not support C11 _Static_assert in C mode; use a negative-sized
+ * array trick that works on all compilers. */
+typedef char cobre_highs_int_size_check_[(sizeof(HighsInt) == sizeof(int32_t)) ? 1 : -1];
 
 /* =========================================================================
  * Lifecycle

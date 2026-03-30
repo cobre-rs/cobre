@@ -612,57 +612,6 @@ impl StudySetup {
 
     /// Build study state from broadcast parameters with a pre-loaded policy.
     ///
-    /// Calls [`from_broadcast_params`] to perform all standard setup, then
-    /// replaces the freshly allocated FCF with one reconstructed from the
-    /// loaded policy checkpoint using [`FutureCostFunction::from_deserialized`].
-    ///
-    /// This enables simulation-only mode: the returned `StudySetup` has a
-    /// populated FCF without any training.
-    ///
-    /// # Errors
-    ///
-    /// Propagates errors from [`from_broadcast_params`] and from
-    /// [`FutureCostFunction::from_deserialized`].
-    ///
-    /// [`from_broadcast_params`]: StudySetup::from_broadcast_params
-    /// [`FutureCostFunction::from_deserialized`]: FutureCostFunction::from_deserialized
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_broadcast_params_with_policy(
-        system: &System,
-        stochastic: StochasticContext,
-        seed: u64,
-        forward_passes: u32,
-        stopping_rule_set: StoppingRuleSet,
-        n_scenarios: u32,
-        io_channel_capacity: usize,
-        policy_path: String,
-        inflow_method: InflowNonNegativityMethod,
-        cut_selection: Option<CutSelectionStrategy>,
-        cut_activity_tolerance: f64,
-        hydro_models: PrepareHydroModelsResult,
-        checkpoint: &cobre_io::PolicyCheckpoint,
-    ) -> Result<Self, SddpError> {
-        let mut setup = Self::from_broadcast_params(
-            system,
-            stochastic,
-            seed,
-            forward_passes,
-            stopping_rule_set,
-            n_scenarios,
-            io_channel_capacity,
-            policy_path,
-            inflow_method,
-            cut_selection,
-            cut_activity_tolerance,
-            hydro_models,
-        )?;
-
-        // Replace the empty FCF with one reconstructed from the checkpoint.
-        let loaded_fcf = FutureCostFunction::from_deserialized(&checkpoint.stage_cuts)?;
-        setup.fcf = loaded_fcf;
-
-        Ok(setup)
-    }
 
     // ── Accessors: LP templates ───────────────────────────────────────────────
 

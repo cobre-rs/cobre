@@ -16,8 +16,8 @@ categories = ["science", "parser-implementations"]
 schema = ["dep:schemars"]
 
 [dependencies]
-cobre-core = { version = "0.2.0", path = "../cobre-core", features = ["serde"] }
-cobre-stochastic = { version = "0.2.0", path = "../cobre-stochastic" }
+cobre-core = { version = "0.3.0", path = "../cobre-core", features = ["serde"] }
+cobre-stochastic = { version = "0.3.0", path = "../cobre-stochastic" }
 arrow = { version = "58", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"

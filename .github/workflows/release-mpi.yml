@@ -79,15 +79,15 @@ jobs:
           wget -q "https://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz"
           tar xzf "mpich-${MPICH_VERSION}.tar.gz"
           cd "mpich-${MPICH_VERSION}"
+          # ch3:nemesis is used for compile-time headers only. At runtime,
+          # the user's cluster MPICH (typically ch4:ofi) is loaded via
+          # LD_LIBRARY_PATH or module system. ABI compatibility is maintained
+          # regardless of device layer.
           ./configure --prefix=/opt/mpich \
               --disable-fortran \
               --disable-cxx \
               --disable-romio \
               --disable-doc \
-              # ch3:nemesis is used for compile-time headers only. At runtime,
-              # the user's cluster MPICH (typically ch4:ofi) is loaded via
-              # LD_LIBRARY_PATH or module system. ABI compatibility is maintained
-              # regardless of device layer.
               --with-device=ch3:nemesis
           make -j"$(nproc)"
           make install

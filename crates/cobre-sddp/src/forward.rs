@@ -771,7 +771,8 @@ fn run_forward_stage<S: SolverInterface + Send>(
         }
     }
 
-    let stage_cost = (view.objective - unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
+    let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
+    let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
     rec.primal.clear();
     rec.primal.extend_from_slice(unscaled_primal);
@@ -965,7 +966,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         iteration: *iteration,
                         raw_noise,
                     };
-                    trajectory_costs[local_m] += run_forward_stage(
+                    let immediate = run_forward_stage(
                         ws,
                         &mut basis_slice,
                         ctx,
@@ -973,6 +974,12 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         &key,
                         worker_records,
                     )?;
+                    let cum_d = ctx
+                        .cumulative_discount_factors
+                        .get(t)
+                        .copied()
+                        .unwrap_or(1.0);
+                    trajectory_costs[local_m] += cum_d * immediate;
                 }
             }
 
@@ -1551,6 +1558,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
@@ -1641,6 +1649,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
@@ -1737,6 +1746,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
@@ -2116,6 +2126,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         run_forward_pass(
@@ -2261,6 +2272,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
 
@@ -2383,6 +2395,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let _result = run_forward_pass(
@@ -2645,6 +2658,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let _ = run_forward_pass(
@@ -2804,6 +2818,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
@@ -3018,6 +3033,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = run_forward_pass(
@@ -3127,6 +3143,7 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
@@ -3231,6 +3248,7 @@ mod tests {
             load_bus_indices: &load_bus_indices,
             block_counts_per_stage: &block_counts_per_stage,
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(
@@ -3312,6 +3330,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1, 1, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let _fwd = run_forward_pass(

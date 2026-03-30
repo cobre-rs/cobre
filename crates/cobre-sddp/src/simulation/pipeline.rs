@@ -451,7 +451,13 @@ fn extract_sim_stage_result(
     n_stochastic_ncs: usize,
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
-    let immediate_cost = (view.objective - view.primal[indexer.theta]) * COST_SCALE_FACTOR;
+    let theta_obj_coeff = ctx
+        .templates
+        .get(t)
+        .and_then(|tmpl| tmpl.objective.get(indexer.theta).copied())
+        .unwrap_or(1.0);
+    let theta_contribution = view.primal[indexer.theta] * theta_obj_coeff;
+    let immediate_cost = (view.objective - theta_contribution) * COST_SCALE_FACTOR;
     // Read realized inflow Z_t directly from the LP primal solution.
     // The z_h variables are defined by the z-inflow constraint:
     //   z_h = base_h + sum_l[psi_l * lag_in[h,l]] + sigma_h * eta_h
@@ -633,9 +639,12 @@ fn process_scenario_stages<S: SolverInterface>(
             },
             stage_bases.get(t).and_then(Option::as_ref),
         )?;
-        // Advance state for next stage: already updated inside solve_simulation_stage, but
-        // we need indexer.theta for cost accumulation (view already consumed). Cost is immediate only.
-        total_cost += cost;
+        let cum_d = ctx
+            .cumulative_discount_factors
+            .get(t)
+            .copied()
+            .unwrap_or(1.0);
+        total_cost += cum_d * cost;
         // Re-read state update: solve_simulation_stage already called ws.current_state.extend_from_slice.
         // However, the noise transforms above consumed ws.scratch; we must NOT re-run them.
         // The state was already advanced inside solve_simulation_stage. ✓
@@ -1328,6 +1337,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1423,6 +1433,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1508,6 +1519,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1591,6 +1603,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1676,6 +1689,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1758,6 +1772,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1840,6 +1855,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1919,6 +1935,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -1985,6 +2002,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2094,6 +2112,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2197,6 +2216,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2285,6 +2305,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2384,6 +2405,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2482,6 +2504,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2595,6 +2618,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -2871,6 +2895,7 @@ mod tests {
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -3004,6 +3029,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[1],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -3140,6 +3166,7 @@ mod tests {
                 load_bus_indices: &load_bus_indices,
                 block_counts_per_stage: &block_counts_per_stage,
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -3445,6 +3472,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,
@@ -3542,6 +3570,7 @@ mod tests {
                 load_bus_indices: &[],
                 block_counts_per_stage: &[n_stages],
                 ncs_max_gen: &[],
+                discount_factors: &[],
                 cumulative_discount_factors: &[],
             },
             &fcf,

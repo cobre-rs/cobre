@@ -559,6 +559,7 @@ fn train_fixture(
         load_bus_indices: &fx.stage_templates.load_bus_indices,
         block_counts_per_stage: &block_counts,
         ncs_max_gen: &[],
+        discount_factors: &[],
         cumulative_discount_factors: &[],
     };
     train(
@@ -640,6 +641,7 @@ fn simulate_fixture(
             load_bus_indices: &fx.stage_templates.load_bus_indices,
             block_counts_per_stage: &block_counts_sim,
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         },
         fcf,

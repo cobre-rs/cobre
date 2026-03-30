@@ -573,6 +573,7 @@ fn run_training(
         load_bus_indices: &[],
         block_counts_per_stage: &[1usize; 5],
         ncs_max_gen: &[],
+        discount_factors: &[],
         cumulative_discount_factors: &[],
     };
     let result = pool
@@ -675,6 +676,7 @@ fn run_simulation(
                     load_bus_indices: &[],
                     block_counts_per_stage: &[],
                     ncs_max_gen: &[],
+                    discount_factors: &[],
                     cumulative_discount_factors: &[],
                 },
                 fcf,

@@ -30,7 +30,13 @@ pub struct StageContext<'a> {
     /// Maximum generation (MW) per stochastic NCS entity, sorted by entity ID.
     /// Length equals the number of stochastic NCS entities. Empty when none exist.
     pub ncs_max_gen: &'a [f64],
-    /// Cumulative discount factor at each stage for reporting.
+    /// One-step discount factor for the transition departing each stage.
+    ///
+    /// `discount_factors[t] = 1 / (1 + r)^(Dt / 365.25)` where `r` is the
+    /// annual discount rate and `Dt` is the stage duration in days.
+    /// Length equals the number of study stages. All `1.0` when no discount.
+    pub discount_factors: &'a [f64],
+    /// Cumulative discount factor at each stage for present-value costing.
     ///
     /// `cumulative_discount_factors[t]` is the product of all one-step discount
     /// factors for transitions preceding stage `t`. `[0] == 1.0` always.

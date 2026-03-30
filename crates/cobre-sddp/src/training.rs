@@ -1268,6 +1268,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -1343,6 +1344,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -1436,6 +1438,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         train(
@@ -1563,6 +1566,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -1636,6 +1640,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -1706,6 +1711,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -1784,6 +1790,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         train(
@@ -1872,6 +1879,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         train(
@@ -1970,6 +1978,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         train(
@@ -2079,6 +2088,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let result = train(
@@ -2162,6 +2172,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let outcome = train(
@@ -2254,6 +2265,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let outcome = train(
@@ -2327,6 +2339,7 @@ mod tests {
             load_bus_indices: &[],
             block_counts_per_stage: &[1usize, 1],
             ncs_max_gen: &[],
+            discount_factors: &[],
             cumulative_discount_factors: &[],
         };
         let outcome = train(

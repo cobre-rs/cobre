@@ -376,7 +376,7 @@ mod tests {
     ///   excess:     [73, 73+2*3) = 73..79  (2 buses * 3 blocks)
     ///   generation: [79, 79+2*3) = 79..85  (2 FPHA hydros * 3 blocks)
     ///   evap: none
-    ///   withdrawal_slack: [85, 89) (4 hydros, since hydro_count > 0)
+    ///   withdrawal_slack_neg: [85, 89)  withdrawal_slack_pos: [89, 93) (4 hydros)
     ///
     /// Storage: 0..4
     fn make_indexer() -> StageIndexer {

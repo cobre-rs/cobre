@@ -6,7 +6,7 @@ use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
 use crate::indexer::StageIndexer;
 
 use super::layout::{StageLayout, TemplateBuildCtx};
-use super::{M3S_TO_HM3, OVER_EVAPORATION_COST_MULTIPLIER, Q_EV_SAFETY_MARGIN};
+use super::{M3S_TO_HM3, Q_EV_SAFETY_MARGIN};
 
 /// Fill column lower/upper bounds and objective coefficients for one stage.
 ///
@@ -216,24 +216,22 @@ pub(super) fn fill_stage_columns(
         col_upper[col_f_plus] = f64::INFINITY;
         col_lower[col_f_minus] = 0.0;
         col_upper[col_f_minus] = f64::INFINITY;
-        // Violation cost: read from resolved penalties and scale by stage duration.
+        // Violation cost: read directional costs from resolved penalties.
         // Q_ev (offset 0) keeps objective = 0.0 (already the vec initialisation default).
-        // f_minus (over-evaporation) is penalized asymmetrically at 100x the base cost
-        // to deter the solver from inflating evaporation beyond the linearized value.
+        // f_evap_plus = under-evaporation (evaporated less than target).
+        // f_evap_minus = over-evaporation (evaporated more than target).
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        let obj = hp.evaporation_violation_cost * total_stage_hours;
-        objective[col_f_plus] = obj;
-        objective[col_f_minus] = obj * OVER_EVAPORATION_COST_MULTIPLIER;
+        objective[col_f_plus] = hp.evaporation_violation_neg_cost * total_stage_hours;
+        objective[col_f_minus] = hp.evaporation_violation_pos_cost * total_stage_hours;
     }
 
-    // Withdrawal violation slack columns (sigma^r_h), one per hydro.
+    // Withdrawal violation slack columns — neg (under-withdrawal), one per hydro.
     // Bounds [0, +inf) when water_withdrawal_m3s > 0; pinned to [0, 0] otherwise.
     // Pinning to zero when there is no scheduled withdrawal ensures the column has
     // no LP effect (it is presolve-eliminated), preserving identical behaviour to
     // the pre-withdrawal implementation for cases where withdrawal is absent.
-    // Objective cost: water_withdrawal_violation_cost * total_stage_hours.
     for h_idx in 0..layout.n_h {
-        let col = layout.col_withdrawal_slack_start + h_idx;
+        let col = layout.col_withdrawal_neg_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         if hb.water_withdrawal_m3s > 0.0 {
             col_upper[col] = f64::INFINITY;
@@ -241,7 +239,21 @@ pub(super) fn fill_stage_columns(
             col_upper[col] = 0.0;
         }
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.water_withdrawal_violation_cost * total_stage_hours;
+        objective[col] = hp.water_withdrawal_violation_neg_cost * total_stage_hours;
+    }
+
+    // Withdrawal violation slack columns — pos (over-withdrawal), one per hydro.
+    // Same activation logic as neg: active only when withdrawal target > 0.
+    for h_idx in 0..layout.n_h {
+        let col = layout.col_withdrawal_pos_start + h_idx;
+        let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
+        if hb.water_withdrawal_m3s > 0.0 {
+            col_upper[col] = f64::INFINITY;
+        } else {
+            col_upper[col] = 0.0;
+        }
+        let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
+        objective[col] = hp.water_withdrawal_violation_pos_cost * total_stage_hours;
     }
 
     // Operational violation slack columns: 4 regions of n_h * n_blks columns each.
@@ -632,14 +644,22 @@ pub(super) fn fill_state_and_water_entries(
         col_entries[col_q_ev].push((row, zeta));
     }
 
-    // Withdrawal violation slack: sigma^r_h enters water balance with -ζ.
-    // When the reservoir cannot sustain the full scheduled withdrawal, the slack
-    // absorbs the difference and reduces the effective withdrawal in that stage,
-    // restoring LP feasibility at a penalty cost.
+    // Under-withdrawal slack (neg): adds water back to the balance.
+    // When the reservoir cannot sustain the full scheduled withdrawal, the neg slack
+    // absorbs the difference, reducing the effective withdrawal in that stage.
     for h_idx in 0..n_h {
-        let col = layout.col_withdrawal_slack_start + h_idx;
+        let col = layout.col_withdrawal_neg_start + h_idx;
         let row = row_water + h_idx;
         col_entries[col].push((row, -zeta));
+    }
+
+    // Over-withdrawal slack (pos): removes additional water from the balance.
+    // When the solver withdraws more than the target, the pos slack accounts for
+    // the excess withdrawal at a penalty cost.
+    for h_idx in 0..n_h {
+        let col = layout.col_withdrawal_pos_start + h_idx;
+        let row = row_water + h_idx;
+        col_entries[col].push((row, zeta));
     }
 }
 

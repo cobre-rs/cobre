@@ -38,7 +38,8 @@
 //! appended when `hydro_count > 0`:
 //!
 //! ```text
-//! [evap_end, evap_end+N)  withdrawal_slack — sigma^r_h (m³/s), one per hydro
+//! [evap_end, evap_end+N)    withdrawal_slack_neg — under-withdrawal (m³/s), one per hydro
+//! [evap_end+N, evap_end+2N) withdrawal_slack_pos — over-withdrawal (m³/s), one per hydro
 //! ```
 //!
 //! After withdrawal slack columns, 4 operational violation slack column regions are
@@ -51,7 +52,7 @@
 //! [ws_end+3*N*K,    ws_end+4*N*K)  generation_below_slack — per-block min-generation violation
 //! ```
 //!
-//! where ws_end = `withdrawal_slack.end`, H = `hydro_count`, K = `n_blks`,
+//! where ws_end = `withdrawal_slack_pos.end`, H = `hydro_count`, K = `n_blks`,
 //! T = `n_thermals`, Ln = `n_lines`, B = `n_buses`, S = `max_deficit_segments`.
 //!
 //! ## Row layout (Solver Abstraction SS2.2)
@@ -368,9 +369,9 @@ pub struct StageIndexer {
     /// [`StageIndexer::new`].
     pub evap_indices: Vec<EvaporationIndices>,
 
-    // ── Withdrawal slack column range ──────────────────────────────────────
+    // ── Withdrawal slack column ranges ─────────────────────────────────────
     // Populated only by `with_equipment_and_evaporation`; empty when built via `new`.
-    /// Column range for water-withdrawal violation slack variables `sigma^r_h`.
+    /// Column range for under-withdrawal slack (withdrew less than target).
     ///
     /// One slack per operating hydro, appended after the evaporation columns.
     /// Columns are stage-level (not per-block); the slack absorbs violations of
@@ -379,7 +380,14 @@ pub struct StageIndexer {
     /// Allocated whenever `hydro_count > 0`, matching the `inflow_slack` pattern.
     /// Empty (`0..0`) when `hydro_count == 0` or when built via
     /// [`StageIndexer::new`].
-    pub withdrawal_slack: Range<usize>,
+    /// Layout: `withdrawal_slack_neg.start + h_idx`.
+    pub withdrawal_slack_neg: Range<usize>,
+
+    /// Column range for over-withdrawal slack (withdrew more than target).
+    ///
+    /// One slack per operating hydro, immediately following `withdrawal_slack_neg`.
+    /// Layout: `withdrawal_slack_pos.start + h_idx`.
+    pub withdrawal_slack_pos: Range<usize>,
 
     /// Whether withdrawal slack columns are present.
     ///
@@ -657,7 +665,8 @@ impl StageIndexer {
             n_evap_hydros: 0,
             evap_hydro_indices: Vec::new(),
             evap_indices: Vec::new(),
-            withdrawal_slack: 0..0,
+            withdrawal_slack_neg: 0..0,
+            withdrawal_slack_pos: 0..0,
             has_withdrawal: false,
             outflow_below_slack: 0..0,
             outflow_above_slack: 0..0,
@@ -861,10 +870,12 @@ impl StageIndexer {
             Self::build_evap_indices(n_evap_hydros, evap_col_start, fpha_row_cursor);
 
         let evap_col_end = evap_col_start + n_evap_hydros * 3;
-        let (withdrawal_slack, has_withdrawal) = if hydro_count > 0 {
-            (evap_col_end..evap_col_end + hydro_count, true)
+        let (withdrawal_slack_neg, withdrawal_slack_pos, has_withdrawal) = if hydro_count > 0 {
+            let neg = evap_col_end..evap_col_end + hydro_count;
+            let pos = neg.end..neg.end + hydro_count;
+            (neg, pos, true)
         } else {
-            (0..0, false)
+            (0..0, 0..0, false)
         };
 
         // Operational violation slack columns: 4 families * (hydro_count * n_blks), placed after withdrawal slack.
@@ -881,7 +892,7 @@ impl StageIndexer {
             has_operational_violations,
         ) = if hydro_count > 0 {
             let n_op = hydro_count * n_blks;
-            let ws_end = withdrawal_slack.end;
+            let ws_end = withdrawal_slack_pos.end;
             let ob = ws_end..ws_end + n_op;
             let oa = ob.end..ob.end + n_op;
             let tb = oa.end..oa.end + n_op;
@@ -928,7 +939,8 @@ impl StageIndexer {
             n_evap_hydros,
             evap_hydro_indices,
             evap_indices: evap_indices_vec,
-            withdrawal_slack,
+            withdrawal_slack_neg,
+            withdrawal_slack_pos,
             has_withdrawal,
             outflow_below_slack,
             outflow_above_slack,
@@ -1828,7 +1840,7 @@ mod tests {
     // ── Withdrawal slack field tests ───────────────────────────────────────
 
     // AC: with_equipment_and_evaporation, N=3 hydros, 1 evap hydro →
-    // withdrawal_slack starts at evap_col_end and has length 3.
+    // withdrawal_slack_neg starts at evap_col_end, withdrawal_slack_pos follows.
     //
     // N=3, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, 1 evap hydro.
     // theta = N*(3+L) = 3*(3+0) = 9
@@ -1840,7 +1852,8 @@ mod tests {
     // excess:     [20, 21)
     // generation: empty (no FPHA)
     // evap cols:  [21, 24)  (1 evap hydro * 3 columns)
-    // withdrawal_slack: [24, 27)  (3 hydros)
+    // withdrawal_slack_neg: [24, 27)  (3 hydros)
+    // withdrawal_slack_pos: [27, 30)  (3 hydros)
     #[test]
     fn withdrawal_slack_with_equipment_and_evaporation_n3_evap1() {
         let idx = StageIndexer::with_equipment_and_evaporation(
@@ -1850,21 +1863,19 @@ mod tests {
         );
 
         assert!(idx.has_withdrawal);
-        // withdrawal_slack.start must equal the end of the evaporation columns
         let evap_col_end = idx.evap_indices(0).f_evap_minus_col + 1;
         assert_eq!(
-            idx.withdrawal_slack.start, evap_col_end,
-            "withdrawal_slack.start must equal evap_col_end"
+            idx.withdrawal_slack_neg.start, evap_col_end,
+            "withdrawal_slack_neg.start must equal evap_col_end"
         );
-        assert_eq!(
-            idx.withdrawal_slack.len(),
-            3,
-            "withdrawal_slack must contain exactly hydro_count columns"
-        );
-        assert_eq!(idx.withdrawal_slack, 24..27);
+        assert_eq!(idx.withdrawal_slack_neg.len(), 3);
+        assert_eq!(idx.withdrawal_slack_neg, 24..27);
+        assert_eq!(idx.withdrawal_slack_pos.start, idx.withdrawal_slack_neg.end);
+        assert_eq!(idx.withdrawal_slack_pos.len(), 3);
+        assert_eq!(idx.withdrawal_slack_pos, 27..30);
     }
 
-    // AC: with_equipment_and_evaporation, N=0 → withdrawal_slack is 0..0.
+    // AC: with_equipment_and_evaporation, N=0 → both withdrawal slacks are 0..0.
     #[test]
     fn withdrawal_slack_zero_hydros_is_empty() {
         let idx = StageIndexer::with_equipment_and_evaporation(
@@ -1874,18 +1885,20 @@ mod tests {
         );
 
         assert!(!idx.has_withdrawal);
-        assert_eq!(idx.withdrawal_slack, 0..0);
+        assert_eq!(idx.withdrawal_slack_neg, 0..0);
+        assert_eq!(idx.withdrawal_slack_pos, 0..0);
     }
 
-    // AC: new() → withdrawal_slack is 0..0.
+    // AC: new() → both withdrawal slacks are 0..0.
     #[test]
     fn withdrawal_slack_from_new_is_empty() {
         let idx = StageIndexer::new(3, 2);
         assert!(!idx.has_withdrawal);
-        assert_eq!(idx.withdrawal_slack, 0..0);
+        assert_eq!(idx.withdrawal_slack_neg, 0..0);
+        assert_eq!(idx.withdrawal_slack_pos, 0..0);
     }
 
-    // AC: withdrawal_slack length equals hydro_count for various hydro counts (1, 5).
+    // AC: both withdrawal_slack ranges have length == hydro_count.
     #[test]
     fn withdrawal_slack_length_equals_hydro_count() {
         for n in [1_usize, 5] {
@@ -1906,18 +1919,24 @@ mod tests {
 
             assert!(idx.has_withdrawal, "has_withdrawal must be true for n={n}");
             assert_eq!(
-                idx.withdrawal_slack.len(),
+                idx.withdrawal_slack_neg.len(),
                 n,
-                "withdrawal_slack length must equal hydro_count for n={n}"
+                "withdrawal_slack_neg length must equal hydro_count for n={n}"
+            );
+            assert_eq!(
+                idx.withdrawal_slack_pos.len(),
+                n,
+                "withdrawal_slack_pos length must equal hydro_count for n={n}"
             );
         }
     }
 
-    // AC: withdrawal_slack.start == evap_col_end (immediately after evaporation columns).
+    // AC: withdrawal_slack_neg.start == evap_col_end, pos starts at neg.end.
     //
     // N=2, L=0, no penalty, no FPHA, 1 evap hydro.
     // evap cols: [excess_end, excess_end+3) = [15, 18)
-    // withdrawal_slack: [18, 20)
+    // withdrawal_slack_neg: [18, 20)
+    // withdrawal_slack_pos: [20, 22)
     #[test]
     fn withdrawal_slack_immediately_after_evap_columns() {
         let idx = StageIndexer::with_equipment_and_evaporation(
@@ -1926,20 +1945,18 @@ mod tests {
             &evap(vec![0]),
         );
 
-        // evap_col_end = evap_col_start + n_evap_hydros * 3
-        // evap_col_start = generation_end = excess_end (no FPHA, no penalty)
-        // excess_end = excess_start + n_buses * n_blks = ... = 15
-        // evap_col_end = 15 + 1*3 = 18
         assert_eq!(
-            idx.withdrawal_slack.start, 18,
-            "withdrawal_slack must start at evap_col_end=18"
+            idx.withdrawal_slack_neg.start, 18,
+            "withdrawal_slack_neg must start at evap_col_end=18"
         );
+        assert_eq!(idx.withdrawal_slack_neg.len(), 2);
+        assert_eq!(idx.withdrawal_slack_neg, 18..20);
+        assert_eq!(idx.withdrawal_slack_pos, 20..22);
+        // Operational slacks must start at pos.end
         assert_eq!(
-            idx.withdrawal_slack.len(),
-            2,
-            "withdrawal_slack length must equal hydro_count=2"
+            idx.outflow_below_slack.start, idx.withdrawal_slack_pos.end,
+            "outflow_below_slack must start at withdrawal_slack_pos.end"
         );
-        assert_eq!(idx.withdrawal_slack, 18..20);
     }
 
     // EvaporationIndices is Debug + Clone + Copy.

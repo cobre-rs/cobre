@@ -947,10 +947,14 @@ fn indexer_constraint_inventory() {
         "inflow_slack must be non-empty when has_inflow_penalty=true"
     );
 
-    // Water withdrawal slack.
+    // Water withdrawal slacks (bidirectional).
     assert!(
-        !indexer.withdrawal_slack.is_empty(),
-        "withdrawal_slack must be non-empty when hydro_count > 0"
+        !indexer.withdrawal_slack_neg.is_empty(),
+        "withdrawal_slack_neg must be non-empty when hydro_count > 0"
+    );
+    assert!(
+        !indexer.withdrawal_slack_pos.is_empty(),
+        "withdrawal_slack_pos must be non-empty when hydro_count > 0"
     );
 
     // Operational violation slack columns must be contiguous: each range
@@ -976,7 +980,8 @@ fn indexer_constraint_inventory() {
     assert_eq!(indexer.outflow_above_slack.len(), n_op);
     assert_eq!(indexer.turbine_below_slack.len(), n_op);
     assert_eq!(indexer.generation_below_slack.len(), n_op);
-    assert_eq!(indexer.withdrawal_slack.len(), hydro_count);
+    assert_eq!(indexer.withdrawal_slack_neg.len(), hydro_count);
+    assert_eq!(indexer.withdrawal_slack_pos.len(), hydro_count);
 
     // Constraint rows must also span hydro_count * n_blks each.
     assert_eq!(indexer.min_outflow_rows.len(), n_op);
@@ -1028,11 +1033,12 @@ fn constraint_extraction_regression_guard() {
         ("outflow_above_slack", &indexer.outflow_above_slack),
         ("turbine_below_slack", &indexer.turbine_below_slack),
         ("generation_below_slack", &indexer.generation_below_slack),
-        ("withdrawal_slack", &indexer.withdrawal_slack),
+        ("withdrawal_slack_neg", &indexer.withdrawal_slack_neg),
+        ("withdrawal_slack_pos", &indexer.withdrawal_slack_pos),
         ("inflow_slack", &indexer.inflow_slack),
     ];
 
-    // Guard: exactly 6 hydro-related slack column families.
+    // Guard: exactly 7 hydro-related slack column families.
     // If you are adding a new constraint type, update:
     //   1. StageIndexer — add the new Range<usize> field
     //   2. accumulate_category_costs() — extract the new cost component
@@ -1041,8 +1047,8 @@ fn constraint_extraction_regression_guard() {
     //   5. This test — add the new family to `slack_families` and bump the count
     assert_eq!(
         slack_families.len(),
-        6,
-        "Expected exactly 6 hydro-related slack column families. \
+        7,
+        "Expected exactly 7 hydro-related slack column families. \
          If you added a new constraint type, update: (a) accumulate_category_costs, \
          (b) SimulationCostResult, (c) CostWriteRecord + costs_schema, \
          (d) this regression guard."

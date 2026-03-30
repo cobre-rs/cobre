@@ -95,6 +95,10 @@ pub struct PenaltiesOverrides<'a> {
 ///     generation_violation_below_cost: 500.0,
 ///     evaporation_violation_cost: 500.0,
 ///     water_withdrawal_violation_cost: 500.0,
+///     water_withdrawal_violation_pos_cost: 500.0,
+///     water_withdrawal_violation_neg_cost: 500.0,
+///     evaporation_violation_pos_cost: 500.0,
+///     evaporation_violation_neg_cost: 500.0,
 /// };
 ///
 /// let make_hydro = |id: i32| Hydro {
@@ -138,6 +142,10 @@ pub struct PenaltiesOverrides<'a> {
 ///     generation_violation_below_cost: None,
 ///     evaporation_violation_cost: None,
 ///     water_withdrawal_violation_cost: None,
+///     water_withdrawal_violation_pos_cost: None,
+///     water_withdrawal_violation_neg_cost: None,
+///     evaporation_violation_pos_cost: None,
+///     evaporation_violation_neg_cost: None,
 /// };
 ///
 /// let stage_index: std::collections::HashMap<i32, usize> =
@@ -215,6 +223,10 @@ pub fn resolve_penalties(
             generation_violation_below_cost: 0.0,
             evaporation_violation_cost: 0.0,
             water_withdrawal_violation_cost: 0.0,
+            water_withdrawal_violation_pos_cost: 0.0,
+            water_withdrawal_violation_neg_cost: 0.0,
+            evaporation_violation_pos_cost: 0.0,
+            evaporation_violation_neg_cost: 0.0,
         },
         hydro_stage_penalties,
     );
@@ -349,6 +361,18 @@ pub fn resolve_penalties(
         if let Some(v) = row.water_withdrawal_violation_cost {
             cell.water_withdrawal_violation_cost = v;
         }
+        if let Some(v) = row.water_withdrawal_violation_pos_cost {
+            cell.water_withdrawal_violation_pos_cost = v;
+        }
+        if let Some(v) = row.water_withdrawal_violation_neg_cost {
+            cell.water_withdrawal_violation_neg_cost = v;
+        }
+        if let Some(v) = row.evaporation_violation_pos_cost {
+            cell.evaporation_violation_pos_cost = v;
+        }
+        if let Some(v) = row.evaporation_violation_neg_cost {
+            cell.evaporation_violation_neg_cost = v;
+        }
     }
 
     for row in bus_overrides {
@@ -413,6 +437,10 @@ fn hydro_stage_penalties(hydro: &Hydro) -> HydroStagePenalties {
         generation_violation_below_cost: p.generation_violation_below_cost,
         evaporation_violation_cost: p.evaporation_violation_cost,
         water_withdrawal_violation_cost: p.water_withdrawal_violation_cost,
+        water_withdrawal_violation_pos_cost: p.water_withdrawal_violation_pos_cost,
+        water_withdrawal_violation_neg_cost: p.water_withdrawal_violation_neg_cost,
+        evaporation_violation_pos_cost: p.evaporation_violation_pos_cost,
+        evaporation_violation_neg_cost: p.evaporation_violation_neg_cost,
     }
 }
 
@@ -506,6 +534,10 @@ mod tests {
                 generation_violation_below_cost: penalty_value,
                 evaporation_violation_cost: penalty_value,
                 water_withdrawal_violation_cost: penalty_value,
+                water_withdrawal_violation_pos_cost: penalty_value,
+                water_withdrawal_violation_neg_cost: penalty_value,
+                evaporation_violation_pos_cost: penalty_value,
+                evaporation_violation_neg_cost: penalty_value,
             },
         }
     }
@@ -549,6 +581,10 @@ mod tests {
                 generation_violation_below_cost: 200.0,
                 evaporation_violation_cost: 150.0,
                 water_withdrawal_violation_cost: 100.0,
+                water_withdrawal_violation_pos_cost: 100.0,
+                water_withdrawal_violation_neg_cost: 100.0,
+                evaporation_violation_pos_cost: 150.0,
+                evaporation_violation_neg_cost: 150.0,
             },
         }
     }
@@ -607,6 +643,10 @@ mod tests {
             generation_violation_below_cost: None,
             evaporation_violation_cost: None,
             water_withdrawal_violation_cost: None,
+            water_withdrawal_violation_pos_cost: None,
+            water_withdrawal_violation_neg_cost: None,
+            evaporation_violation_pos_cost: None,
+            evaporation_violation_neg_cost: None,
         }
     }
 
@@ -688,6 +728,10 @@ mod tests {
             generation_violation_below_cost: Some(99.0),
             evaporation_violation_cost: Some(110.0),
             water_withdrawal_violation_cost: Some(120.0),
+            water_withdrawal_violation_pos_cost: Some(120.0),
+            water_withdrawal_violation_neg_cost: Some(120.0),
+            evaporation_violation_pos_cost: Some(110.0),
+            evaporation_violation_neg_cost: Some(110.0),
         };
 
         let result = resolve_penalties(&hydros, &[], &[], &[], 2, &[override_row], &[], &[], &[]);

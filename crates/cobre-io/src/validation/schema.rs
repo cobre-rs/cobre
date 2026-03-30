@@ -736,6 +736,10 @@ fn sentinel_penalties() -> GlobalPenaltyDefaults {
             generation_violation_below_cost: 1.0,
             evaporation_violation_cost: 1.0,
             water_withdrawal_violation_cost: 1.0,
+            water_withdrawal_violation_pos_cost: 1.0,
+            water_withdrawal_violation_neg_cost: 1.0,
+            evaporation_violation_pos_cost: 1.0,
+            evaporation_violation_neg_cost: 1.0,
         },
         ncs_curtailment_cost: 1.0,
     }

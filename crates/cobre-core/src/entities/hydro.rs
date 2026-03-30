@@ -77,6 +77,14 @@ pub struct HydroPenalties {
     pub evaporation_violation_cost: f64,
     /// Penalty per m³/s of water withdrawal constraint violation \[$/m³/s\].
     pub water_withdrawal_violation_cost: f64,
+    /// Penalty per m³/s of over-withdrawal (withdrew more than target) \[$/m³/s\].
+    pub water_withdrawal_violation_pos_cost: f64,
+    /// Penalty per m³/s of under-withdrawal (withdrew less than target) \[$/m³/s\].
+    pub water_withdrawal_violation_neg_cost: f64,
+    /// Penalty per mm of over-evaporation \[$/mm\].
+    pub evaporation_violation_pos_cost: f64,
+    /// Penalty per mm of under-evaporation \[$/mm\].
+    pub evaporation_violation_neg_cost: f64,
 }
 
 /// Production function model for a hydro plant.
@@ -246,6 +254,10 @@ mod tests {
             generation_violation_below_cost: v,
             evaporation_violation_cost: v,
             water_withdrawal_violation_cost: v,
+            water_withdrawal_violation_pos_cost: v,
+            water_withdrawal_violation_neg_cost: v,
+            evaporation_violation_pos_cost: v,
+            evaporation_violation_neg_cost: v,
         }
     }
     fn minimal_hydro(model: HydroGenerationModel) -> Hydro {
@@ -456,6 +468,10 @@ mod tests {
             generation_violation_below_cost: 9.0,
             evaporation_violation_cost: 10.0,
             water_withdrawal_violation_cost: 11.0,
+            water_withdrawal_violation_pos_cost: 11.0,
+            water_withdrawal_violation_neg_cost: 11.0,
+            evaporation_violation_pos_cost: 10.0,
+            evaporation_violation_neg_cost: 10.0,
         };
 
         assert!((p.spillage_cost - 1.0).abs() < f64::EPSILON);
@@ -535,6 +551,10 @@ mod tests {
                 generation_violation_below_cost: 6.0,
                 evaporation_violation_cost: 7.0,
                 water_withdrawal_violation_cost: 8.0,
+                water_withdrawal_violation_pos_cost: 8.0,
+                water_withdrawal_violation_neg_cost: 8.0,
+                evaporation_violation_pos_cost: 7.0,
+                evaporation_violation_neg_cost: 7.0,
             },
         };
         let json = serde_json::to_string(&hydro).unwrap();

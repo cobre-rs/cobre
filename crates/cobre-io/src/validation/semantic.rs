@@ -1361,6 +1361,10 @@ mod tests {
             generation_violation_below_cost: v,
             evaporation_violation_cost: v,
             water_withdrawal_violation_cost: v,
+            water_withdrawal_violation_pos_cost: v,
+            water_withdrawal_violation_neg_cost: v,
+            evaporation_violation_pos_cost: v,
+            evaporation_violation_neg_cost: v,
         }
     }
 
@@ -1551,6 +1555,10 @@ mod tests {
                 generation_violation_below_cost: 1.0,
                 evaporation_violation_cost: 1.0,
                 water_withdrawal_violation_cost: 1.0,
+                water_withdrawal_violation_pos_cost: 1.0,
+                water_withdrawal_violation_neg_cost: 1.0,
+                evaporation_violation_pos_cost: 1.0,
+                evaporation_violation_neg_cost: 1.0,
             },
             ncs_curtailment_cost: 1.0,
         }
@@ -2429,6 +2437,10 @@ mod tests {
             generation_violation_below_cost: 50.0,
             evaporation_violation_cost: 50.0,
             water_withdrawal_violation_cost: 50.0,
+            water_withdrawal_violation_pos_cost: 50.0,
+            water_withdrawal_violation_neg_cost: 50.0,
+            evaporation_violation_pos_cost: 50.0,
+            evaporation_violation_neg_cost: 50.0,
             spillage_cost: 1.0,
             diversion_cost: 1.0,
             fpha_turbined_cost: 2.0,

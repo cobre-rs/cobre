@@ -70,6 +70,14 @@ pub struct HydroPenaltyOverrides {
     pub evaporation_violation_cost: Option<f64>,
     /// Override for water withdrawal violation cost [$/m³/s]. `None` = use global default.
     pub water_withdrawal_violation_cost: Option<f64>,
+    /// Override for over-withdrawal violation cost [$/m³/s]. `None` = use symmetric.
+    pub water_withdrawal_violation_pos_cost: Option<f64>,
+    /// Override for under-withdrawal violation cost [$/m³/s]. `None` = use symmetric.
+    pub water_withdrawal_violation_neg_cost: Option<f64>,
+    /// Override for over-evaporation violation cost [$/mm]. `None` = use symmetric.
+    pub evaporation_violation_pos_cost: Option<f64>,
+    /// Override for under-evaporation violation cost [$/mm]. `None` = use symmetric.
+    pub evaporation_violation_neg_cost: Option<f64>,
 }
 
 /// Resolve a bus's deficit segments: use entity override if present, else global default.
@@ -92,6 +100,8 @@ pub struct HydroPenaltyOverrides {
 ///         turbined_violation_below_cost: 3.0, outflow_violation_below_cost: 4.0,
 ///         outflow_violation_above_cost: 5.0, generation_violation_below_cost: 6.0,
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
+///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
+///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -129,6 +139,8 @@ pub fn resolve_bus_deficit_segments(
 ///         turbined_violation_below_cost: 3.0, outflow_violation_below_cost: 4.0,
 ///         outflow_violation_above_cost: 5.0, generation_violation_below_cost: 6.0,
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
+///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
+///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -162,6 +174,8 @@ pub fn resolve_bus_excess_cost(
 ///         turbined_violation_below_cost: 3.0, outflow_violation_below_cost: 4.0,
 ///         outflow_violation_above_cost: 5.0, generation_violation_below_cost: 6.0,
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
+///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
+///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -198,6 +212,8 @@ pub fn resolve_line_exchange_cost(
 ///     turbined_violation_below_cost: 3.0, outflow_violation_below_cost: 4.0,
 ///     outflow_violation_above_cost: 5.0, generation_violation_below_cost: 6.0,
 ///     evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
+///     water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
+///     evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
 /// };
 /// let global = GlobalPenaltyDefaults {
 ///     bus_deficit_segments: vec![],
@@ -228,35 +244,53 @@ pub fn resolve_hydro_penalties(
     let g = &global.hydro;
     match entity_overrides {
         None => *g,
-        Some(ov) => HydroPenalties {
-            spillage_cost: ov.spillage_cost.unwrap_or(g.spillage_cost),
-            diversion_cost: ov.diversion_cost.unwrap_or(g.diversion_cost),
-            fpha_turbined_cost: ov.fpha_turbined_cost.unwrap_or(g.fpha_turbined_cost),
-            storage_violation_below_cost: ov
-                .storage_violation_below_cost
-                .unwrap_or(g.storage_violation_below_cost),
-            filling_target_violation_cost: ov
-                .filling_target_violation_cost
-                .unwrap_or(g.filling_target_violation_cost),
-            turbined_violation_below_cost: ov
-                .turbined_violation_below_cost
-                .unwrap_or(g.turbined_violation_below_cost),
-            outflow_violation_below_cost: ov
-                .outflow_violation_below_cost
-                .unwrap_or(g.outflow_violation_below_cost),
-            outflow_violation_above_cost: ov
-                .outflow_violation_above_cost
-                .unwrap_or(g.outflow_violation_above_cost),
-            generation_violation_below_cost: ov
-                .generation_violation_below_cost
-                .unwrap_or(g.generation_violation_below_cost),
-            evaporation_violation_cost: ov
+        Some(ov) => {
+            // Resolve symmetric costs first — directional costs default to these.
+            let evap_cost = ov
                 .evaporation_violation_cost
-                .unwrap_or(g.evaporation_violation_cost),
-            water_withdrawal_violation_cost: ov
+                .unwrap_or(g.evaporation_violation_cost);
+            let withdrawal_cost = ov
                 .water_withdrawal_violation_cost
-                .unwrap_or(g.water_withdrawal_violation_cost),
-        },
+                .unwrap_or(g.water_withdrawal_violation_cost);
+            HydroPenalties {
+                spillage_cost: ov.spillage_cost.unwrap_or(g.spillage_cost),
+                diversion_cost: ov.diversion_cost.unwrap_or(g.diversion_cost),
+                fpha_turbined_cost: ov.fpha_turbined_cost.unwrap_or(g.fpha_turbined_cost),
+                storage_violation_below_cost: ov
+                    .storage_violation_below_cost
+                    .unwrap_or(g.storage_violation_below_cost),
+                filling_target_violation_cost: ov
+                    .filling_target_violation_cost
+                    .unwrap_or(g.filling_target_violation_cost),
+                turbined_violation_below_cost: ov
+                    .turbined_violation_below_cost
+                    .unwrap_or(g.turbined_violation_below_cost),
+                outflow_violation_below_cost: ov
+                    .outflow_violation_below_cost
+                    .unwrap_or(g.outflow_violation_below_cost),
+                outflow_violation_above_cost: ov
+                    .outflow_violation_above_cost
+                    .unwrap_or(g.outflow_violation_above_cost),
+                generation_violation_below_cost: ov
+                    .generation_violation_below_cost
+                    .unwrap_or(g.generation_violation_below_cost),
+                evaporation_violation_cost: evap_cost,
+                water_withdrawal_violation_cost: withdrawal_cost,
+                // Directional costs: entity override > global directional > symmetric
+                water_withdrawal_violation_pos_cost: ov
+                    .water_withdrawal_violation_pos_cost
+                    .unwrap_or(g.water_withdrawal_violation_pos_cost),
+                water_withdrawal_violation_neg_cost: ov
+                    .water_withdrawal_violation_neg_cost
+                    .unwrap_or(g.water_withdrawal_violation_neg_cost),
+                evaporation_violation_pos_cost: ov
+                    .evaporation_violation_pos_cost
+                    .unwrap_or(g.evaporation_violation_pos_cost),
+                evaporation_violation_neg_cost: ov
+                    .evaporation_violation_neg_cost
+                    .unwrap_or(g.evaporation_violation_neg_cost),
+            }
+        }
     }
 }
 
@@ -279,6 +313,8 @@ pub fn resolve_hydro_penalties(
 ///         turbined_violation_below_cost: 3.0, outflow_violation_below_cost: 4.0,
 ///         outflow_violation_above_cost: 5.0, generation_violation_below_cost: 6.0,
 ///         evaporation_violation_cost: 7.0, water_withdrawal_violation_cost: 8.0,
+///         water_withdrawal_violation_pos_cost: 8.0, water_withdrawal_violation_neg_cost: 8.0,
+///         evaporation_violation_pos_cost: 7.0, evaporation_violation_neg_cost: 7.0,
 ///     },
 ///     ncs_curtailment_cost: 50.0,
 /// };
@@ -324,6 +360,10 @@ mod tests {
                 generation_violation_below_cost: 6.0,
                 evaporation_violation_cost: 7.0,
                 water_withdrawal_violation_cost: 8.0,
+                water_withdrawal_violation_pos_cost: 8.0,
+                water_withdrawal_violation_neg_cost: 8.0,
+                evaporation_violation_pos_cost: 7.0,
+                evaporation_violation_neg_cost: 7.0,
             },
             ncs_curtailment_cost: 50.0,
         }
@@ -406,6 +446,11 @@ mod tests {
         assert!((result.generation_violation_below_cost - 6.0).abs() < f64::EPSILON);
         assert!((result.evaporation_violation_cost - 7.0).abs() < f64::EPSILON);
         assert!((result.water_withdrawal_violation_cost - 8.0).abs() < f64::EPSILON);
+        // Directional costs default to global directional (which equals symmetric)
+        assert!((result.water_withdrawal_violation_pos_cost - 8.0).abs() < f64::EPSILON);
+        assert!((result.water_withdrawal_violation_neg_cost - 8.0).abs() < f64::EPSILON);
+        assert!((result.evaporation_violation_pos_cost - 7.0).abs() < f64::EPSILON);
+        assert!((result.evaporation_violation_neg_cost - 7.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -423,6 +468,10 @@ mod tests {
             generation_violation_below_cost: Some(90.0),
             evaporation_violation_cost: Some(100.0),
             water_withdrawal_violation_cost: Some(110.0),
+            water_withdrawal_violation_pos_cost: Some(110.0),
+            water_withdrawal_violation_neg_cost: Some(110.0),
+            evaporation_violation_pos_cost: Some(100.0),
+            evaporation_violation_neg_cost: Some(100.0),
         };
         let result = resolve_hydro_penalties(&Some(overrides), &global);
 
@@ -437,6 +486,10 @@ mod tests {
         assert!((result.generation_violation_below_cost - 90.0).abs() < f64::EPSILON);
         assert!((result.evaporation_violation_cost - 100.0).abs() < f64::EPSILON);
         assert!((result.water_withdrawal_violation_cost - 110.0).abs() < f64::EPSILON);
+        assert!((result.water_withdrawal_violation_pos_cost - 110.0).abs() < f64::EPSILON);
+        assert!((result.water_withdrawal_violation_neg_cost - 110.0).abs() < f64::EPSILON);
+        assert!((result.evaporation_violation_pos_cost - 100.0).abs() < f64::EPSILON);
+        assert!((result.evaporation_violation_neg_cost - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -458,5 +511,62 @@ mod tests {
         let global = make_global();
         let result = resolve_ncs_curtailment_cost(Some(75.0), &global);
         assert!((result - 75.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_resolve_hydro_directional_override_pos_only() {
+        let global = make_global();
+        let overrides = HydroPenaltyOverrides {
+            water_withdrawal_violation_pos_cost: Some(9999.0),
+            ..Default::default()
+        };
+        let result = resolve_hydro_penalties(&Some(overrides), &global);
+        // Pos overridden, neg falls back to global directional (== symmetric)
+        assert!((result.water_withdrawal_violation_pos_cost - 9999.0).abs() < f64::EPSILON);
+        assert!(
+            (result.water_withdrawal_violation_neg_cost - 8.0).abs() < f64::EPSILON,
+            "neg should fall back to global directional"
+        );
+        // Symmetric unchanged
+        assert!((result.water_withdrawal_violation_cost - 8.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_resolve_hydro_directional_evaporation_asymmetric() {
+        let global = make_global();
+        let overrides = HydroPenaltyOverrides {
+            evaporation_violation_pos_cost: Some(111.0),
+            evaporation_violation_neg_cost: Some(222.0),
+            ..Default::default()
+        };
+        let result = resolve_hydro_penalties(&Some(overrides), &global);
+        assert!((result.evaporation_violation_pos_cost - 111.0).abs() < f64::EPSILON);
+        assert!((result.evaporation_violation_neg_cost - 222.0).abs() < f64::EPSILON);
+        // Symmetric unchanged
+        assert!((result.evaporation_violation_cost - 7.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_resolve_hydro_no_overrides_directional_equals_symmetric() {
+        let global = make_global();
+        let result = resolve_hydro_penalties(&None, &global);
+        assert!(
+            (result.water_withdrawal_violation_pos_cost - result.water_withdrawal_violation_cost)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (result.water_withdrawal_violation_neg_cost - result.water_withdrawal_violation_cost)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (result.evaporation_violation_pos_cost - result.evaporation_violation_cost).abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (result.evaporation_violation_neg_cost - result.evaporation_violation_cost).abs()
+                < f64::EPSILON
+        );
     }
 }

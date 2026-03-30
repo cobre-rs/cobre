@@ -116,12 +116,18 @@ pub(crate) struct StageLayout {
     /// 3 stage-level columns per evaporation hydro (`Q_ev`, `f_evap_plus`, `f_evap_minus`).
     /// Layout: `col_evap_start + local_evap_idx * 3 + {0, 1, 2}`.
     pub(crate) col_evap_start: usize,
-    /// Start of withdrawal slack columns (after evaporation columns).
+    /// Start of under-withdrawal slack columns (after evaporation columns).
     ///
-    /// One stage-level column per operating hydro (`sigma^r_h`).
-    /// Layout: `col_withdrawal_slack_start + h`.
+    /// One stage-level column per operating hydro.
+    /// Layout: `col_withdrawal_neg_start + h`.
     /// Zero when `n_h == 0`.
-    pub(crate) col_withdrawal_slack_start: usize,
+    pub(crate) col_withdrawal_neg_start: usize,
+    /// Start of over-withdrawal slack columns (after under-withdrawal slacks).
+    ///
+    /// One stage-level column per operating hydro.
+    /// Layout: `col_withdrawal_pos_start + h`.
+    /// Zero when `n_h == 0`.
+    pub(crate) col_withdrawal_pos_start: usize,
     /// Start of outflow-below-minimum slack columns (one per hydro per block).
     ///
     /// Inserted after withdrawal slack columns.
@@ -264,9 +270,11 @@ impl StageLayout {
         let col_evap_start = col_generation_end;
         let n_evap_cols = n_evap_hydros * 3;
 
-        // Withdrawal slack columns: one per operating hydro, placed after evaporation columns.
-        let col_withdrawal_slack_start = col_evap_start + n_evap_cols;
-        let withdrawal_slack_end = col_withdrawal_slack_start + ctx.n_hydros;
+        // Withdrawal slack columns: two ranges of one per operating hydro (neg then pos),
+        // placed after evaporation columns.
+        let col_withdrawal_neg_start = col_evap_start + n_evap_cols;
+        let col_withdrawal_pos_start = col_withdrawal_neg_start + ctx.n_hydros;
+        let withdrawal_slack_end = col_withdrawal_pos_start + ctx.n_hydros;
 
         // Operational violation slack columns: 4 families * (n_hydros * n_blks), placed after withdrawal slack.
         let n_op_slack = ctx.n_hydros * n_blks;
@@ -440,7 +448,8 @@ impl StageLayout {
             col_inflow_slack_start,
             col_generation_start,
             col_evap_start,
-            col_withdrawal_slack_start,
+            col_withdrawal_neg_start,
+            col_withdrawal_pos_start,
             col_outflow_below_start,
             col_outflow_above_start,
             col_turbine_below_start,

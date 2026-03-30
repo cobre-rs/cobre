@@ -255,7 +255,7 @@ fn extract_hydro_no_turbine(
         0.0
     };
     let withdrawal_violation = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack.start + h]
+        view.primal[indexer.withdrawal_slack_neg.start + h]
     } else {
         0.0
     };
@@ -368,7 +368,7 @@ fn extract_hydro_per_block<'a>(
         0.0
     };
     let withdrawal_violation = if indexer.has_withdrawal {
-        view.primal[indexer.withdrawal_slack.start + h]
+        view.primal[indexer.withdrawal_slack_neg.start + h]
     } else {
         0.0
     };
@@ -865,10 +865,10 @@ fn compute_cost_result(
         * COST_SCALE_FACTOR;
 
     // Water withdrawal violation slacks.
-    let withdrawal_violation_cost = if indexer.withdrawal_slack.is_empty() {
+    let withdrawal_violation_cost = if indexer.withdrawal_slack_neg.is_empty() {
         0.0
     } else {
-        range_sum(indexer.withdrawal_slack.clone()) * COST_SCALE_FACTOR
+        range_sum(indexer.withdrawal_slack_neg.clone()) * COST_SCALE_FACTOR
     };
 
     // Operational violation slacks: 4 separate constraint types.
@@ -2948,16 +2948,18 @@ mod tests {
     fn hydro_violation_cost_decomposition() {
         let indexer = make_indexer_2h_1fpha_1blk();
         // Layout (see make_indexer_2h_1fpha_1blk):
-        //   withdrawal_slack:       14..16
-        //   outflow_below_slack:    16..18
-        //   outflow_above_slack:    18..20
-        //   turbine_below_slack:    20..22
-        //   generation_below_slack: 22..24
-        assert_eq!(indexer.withdrawal_slack, 14..16);
-        assert_eq!(indexer.outflow_below_slack, 16..18);
-        assert_eq!(indexer.outflow_above_slack, 18..20);
-        assert_eq!(indexer.turbine_below_slack, 20..22);
-        assert_eq!(indexer.generation_below_slack, 22..24);
+        //   withdrawal_slack_neg:   14..16
+        //   withdrawal_slack_pos:   16..18
+        //   outflow_below_slack:    18..20
+        //   outflow_above_slack:    20..22
+        //   turbine_below_slack:    22..24
+        //   generation_below_slack: 24..26
+        assert_eq!(indexer.withdrawal_slack_neg, 14..16);
+        assert_eq!(indexer.withdrawal_slack_pos, 16..18);
+        assert_eq!(indexer.outflow_below_slack, 18..20);
+        assert_eq!(indexer.outflow_above_slack, 20..22);
+        assert_eq!(indexer.turbine_below_slack, 22..24);
+        assert_eq!(indexer.generation_below_slack, 24..26);
         assert!(indexer.has_operational_violations);
 
         let n_cols = indexer.generation_below_slack.end;
@@ -2972,24 +2974,24 @@ mod tests {
         // COST_SCALE_FACTOR = 1000.0 is applied inside the extraction.
 
         // outflow_below: h0=2.0 * 10.0, h1=3.0 * 10.0  => (20+30) * 1000 = 50000
-        primal[16] = 2.0;
-        obj[16] = 10.0;
-        primal[17] = 3.0;
-        obj[17] = 10.0;
+        primal[18] = 2.0;
+        obj[18] = 10.0;
+        primal[19] = 3.0;
+        obj[19] = 10.0;
 
         // outflow_above: h0=1.0 * 5.0, h1=0.0  => 5 * 1000 = 5000
-        primal[18] = 1.0;
-        obj[18] = 5.0;
+        primal[20] = 1.0;
+        obj[20] = 5.0;
 
         // turbine_below: h0=4.0 * 8.0, h1=0.0  => 32 * 1000 = 32000
-        primal[20] = 4.0;
-        obj[20] = 8.0;
+        primal[22] = 4.0;
+        obj[22] = 8.0;
 
         // generation_below: h0=0.0, h1=6.0 * 3.0  => 18 * 1000 = 18000
-        primal[23] = 6.0;
-        obj[23] = 3.0;
+        primal[25] = 6.0;
+        obj[25] = 3.0;
 
-        // withdrawal: h0=0.5 * 20.0, h1=0.0  => 10 * 1000 = 10000
+        // withdrawal (neg): h0=0.5 * 20.0, h1=0.0  => 10 * 1000 = 10000
         primal[14] = 0.5;
         obj[14] = 20.0;
 

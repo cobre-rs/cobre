@@ -9,12 +9,18 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
-use cobre_io::output::policy::{PolicyBasisRecord, PolicyCutRecord, StageCutsPayload};
+use cobre_io::output::policy::{
+    PolicyBasisRecord, PolicyCutRecord, StageCutsPayload, StageStatesPayload,
+};
 
 use crate::cut::FutureCostFunction;
 use crate::training::TrainingResult;
 
-/// Build per-stage vectors of active [`PolicyCutRecord`]s from the FCF pools.
+/// Build per-stage vectors of **all** populated [`PolicyCutRecord`]s from the FCF pools.
+///
+/// Both active and inactive cuts are included so the checkpoint preserves
+/// the full training history. Use [`build_active_indices`] to obtain the
+/// subset that is currently active in the LP.
 ///
 /// Each record borrows its `coefficients` slice from the FCF, so the returned
 /// vectors are valid as long as `fcf` is alive.
@@ -24,7 +30,6 @@ pub fn build_stage_cut_records(fcf: &FutureCostFunction) -> Vec<Vec<PolicyCutRec
         .iter()
         .map(|pool| {
             (0..pool.populated_count)
-                .filter(|&i| pool.active[i])
                 .map(|i| {
                     let meta = &pool.metadata[i];
                     PolicyCutRecord {
@@ -35,7 +40,7 @@ pub fn build_stage_cut_records(fcf: &FutureCostFunction) -> Vec<Vec<PolicyCutRec
                         forward_pass_index: meta.forward_pass_index,
                         intercept: pool.intercepts[i],
                         coefficients: &pool.coefficients[i],
-                        is_active: true,
+                        is_active: pool.active[i],
                         domination_count: meta.active_count as u32,
                     }
                 })
@@ -45,11 +50,19 @@ pub fn build_stage_cut_records(fcf: &FutureCostFunction) -> Vec<Vec<PolicyCutRec
 }
 
 /// Build per-stage active cut index lists from the stage cut records.
+///
+/// Returns only the `slot_index` values of records where `is_active` is `true`.
 #[must_use]
 pub fn build_active_indices(stage_records: &[Vec<PolicyCutRecord<'_>>]) -> Vec<Vec<u32>> {
     stage_records
         .iter()
-        .map(|records| records.iter().map(|r| r.slot_index).collect())
+        .map(|records| {
+            records
+                .iter()
+                .filter(|r| r.is_active)
+                .map(|r| r.slot_index)
+                .collect()
+        })
         .collect()
 }
 
@@ -131,6 +144,29 @@ pub fn build_stage_basis_records<'a>(
                     num_cut_rows,
                 }
             })
+        })
+        .collect()
+}
+
+/// Build per-stage [`StageStatesPayload`]s from the visited states archive.
+///
+/// Returns an empty `Vec` if the archive is `None` (non-Dominated strategies).
+#[must_use]
+pub fn build_stage_states_payloads(
+    archive: Option<&crate::visited_states::VisitedStatesArchive>,
+) -> Vec<StageStatesPayload<'_>> {
+    let Some(archive) = archive else {
+        return Vec::new();
+    };
+    (0..archive.num_stages())
+        .map(|t| {
+            let stage = archive.stage(t);
+            StageStatesPayload {
+                stage_id: t as u32,
+                state_dimension: stage.state_dimension() as u32,
+                count: stage.count() as u32,
+                data: stage.states(),
+            }
         })
         .collect()
 }

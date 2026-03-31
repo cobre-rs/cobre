@@ -522,7 +522,7 @@ pub struct ExportsConfig {
     /// Export cut pool (outer approximation).
     pub cuts: bool,
 
-    /// Export visited states.
+    /// Export visited forward-pass trial points to the policy checkpoint.
     pub states: bool,
 
     /// Export inner approximation vertices.
@@ -549,7 +549,7 @@ impl Default for ExportsConfig {
         Self {
             training: true,
             cuts: true,
-            states: true,
+            states: false,
             vertices: true,
             simulation: true,
             forward_detail: false,

@@ -11,7 +11,7 @@ use std::path::Path;
 use cobre_io::output::policy::{PolicyCheckpointMetadata, write_policy_checkpoint};
 use cobre_sddp::policy_export::{
     build_active_indices, build_stage_basis_records, build_stage_cut_records,
-    build_stage_cuts_payloads, convert_basis_cache,
+    build_stage_cuts_payloads, build_stage_states_payloads, convert_basis_cache,
 };
 use cobre_sddp::{FutureCostFunction, TrainingResult};
 
@@ -22,6 +22,9 @@ pub struct CheckpointParams {
     pub max_iterations: u64,
     pub forward_passes: u32,
     pub seed: u64,
+    /// When `false`, skip writing visited states to the checkpoint even if
+    /// the archive is populated. Controlled by `exports.states` in config.
+    pub export_states: bool,
 }
 
 /// Write a policy checkpoint from the trained FCF and basis cache.
@@ -61,10 +64,26 @@ pub fn write_checkpoint(
         forward_passes: params.forward_passes,
         warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
         rng_seed: params.seed,
+        total_visited_states: training_result
+            .visited_archive
+            .as_ref()
+            .map_or(0, |a| (0..a.num_stages()).map(|t| a.count(t) as u64).sum()),
     };
 
-    write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata)
-        .map_err(CliError::from)
+    let stage_states = if params.export_states {
+        build_stage_states_payloads(training_result.visited_archive.as_ref())
+    } else {
+        Vec::new()
+    };
+
+    write_policy_checkpoint(
+        policy_dir,
+        &stage_cuts,
+        &stage_bases,
+        &metadata,
+        &stage_states,
+    )
+    .map_err(CliError::from)
 }
 
 /// Produce a timestamp string from the system clock.

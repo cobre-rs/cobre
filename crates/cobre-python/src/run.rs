@@ -70,13 +70,14 @@ fn write_policy_checkpoint(
     max_iterations: u64,
     forward_passes: u32,
     seed: u64,
+    export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
         write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
-        build_stage_cuts_payloads, convert_basis_cache,
+        build_stage_cuts_payloads, build_stage_states_payloads, convert_basis_cache,
     };
 
     let n_stages = fcf.pools.len();
@@ -109,10 +110,26 @@ fn write_policy_checkpoint(
         forward_passes,
         warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
         rng_seed: seed,
+        total_visited_states: training_result
+            .visited_archive
+            .as_ref()
+            .map_or(0, |a| (0..a.num_stages()).map(|t| a.count(t) as u64).sum()),
     };
 
-    io_write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata)
-        .map_err(|e| e.to_string())
+    let stage_states = if export_states {
+        build_stage_states_payloads(training_result.visited_archive.as_ref())
+    } else {
+        Vec::new()
+    };
+
+    io_write_policy_checkpoint(
+        policy_dir,
+        &stage_cuts,
+        &stage_bases,
+        &metadata,
+        &stage_states,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Write all applicable stochastic preprocessing artifacts to `{output_dir}/stochastic/`.
@@ -293,6 +310,7 @@ fn write_training_artifacts(
         setup.max_iterations(),
         setup.forward_passes(),
         seed,
+        config.exports.states,
     )
     .map_err(|e| format!("policy checkpoint error: {e}"))?;
 
@@ -615,6 +633,7 @@ fn run_inner(
                 reason: "loaded from checkpoint".to_string(),
                 solver_stats_log: Vec::new(),
                 basis_cache,
+                visited_archive: None,
             };
 
             let simulation = Some(run_simulation_phase_py(

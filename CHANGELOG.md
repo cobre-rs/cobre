@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.3.2] - 2026-03-30
+
+### Added
+
+- **Dominated cut selection** -- New `"domination"` method for
+  `training.cut_selection`. Deactivates cuts that are dominated at every
+  visited forward-pass trial point. Most aggressive strategy; configurable
+  via `threshold` (consecutive domination checks before deactivation) and
+  `check_frequency`. Includes current-iteration protection and stage-0
+  exemption.
+- **Visited states archive** -- Forward-pass trial points are now always
+  collected in memory during training, regardless of the cut selection
+  method. Useful for post-hoc analysis and required by dominated cut
+  selection at pruning time.
+- **`exports.states` config flag** -- Controls whether visited states are
+  persisted to the policy checkpoint (`policy/states/stage_NNN.bin`).
+  Defaults to `false` because the archive scales as
+  `iterations × forward_passes × stages × state_dimension × 8 bytes`.
+  Set to `true` to opt in.
+- **`total_visited_states` in policy metadata** -- The `metadata.json`
+  checkpoint file now includes a `total_visited_states` field.
+- **`compute_effective_eta` helper** -- Extracted reusable helper for
+  inflow noise path computation, reducing duplication across forward,
+  backward, and lower-bound evaluation passes.
+
+### Changed
+
+- **Policy checkpoint exports all cuts** -- Both active and inactive cuts
+  are now serialized to the policy checkpoint. The `is_active` flag on
+  each cut record and the `active_cut_indices` vector preserve which cuts
+  are currently in the LP. Previously, only active cuts were exported.
+
+### Fixed
+
+- **Inflow truncation in lower bound evaluation** -- The lower bound
+  evaluation pass (`evaluate_lower_bound`) now applies the same inflow
+  truncation logic as the forward and backward passes. Previously,
+  negative truncated inflows were not applied when evaluating stage-0
+  openings, producing optimistic lower bounds when
+  `inflow_non_negativity.method` was `"truncation"` or
+  `"truncation_with_penalty"`.
+
 ## [0.3.1] - 2026-03-30
 
 ### Added

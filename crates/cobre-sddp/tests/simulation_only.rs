@@ -146,9 +146,10 @@ fn simulation_only_fcf_round_trip() {
         forward_passes: setup.forward_passes(),
         warm_start_cuts: 0,
         rng_seed: 42,
+        total_visited_states: 0,
     };
 
-    write_policy_checkpoint(&policy_dir, &stage_cuts, &stage_bases, &metadata)
+    write_policy_checkpoint(&policy_dir, &stage_cuts, &stage_bases, &metadata, &[])
         .expect("write checkpoint");
 
     // Read policy checkpoint back.

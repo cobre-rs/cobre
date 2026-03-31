@@ -471,6 +471,25 @@ The logical record structure is:
 | `row_status`    | uint8[] | One status code per LP row (constraint). Encoding is HiGHS-specific.                                        |
 | `num_cut_rows`  | uint32  | Number of trailing rows in `row_status` that correspond to cut rows (as opposed to structural constraints). |
 
+### `policy/states/stage_NNN.bin`
+
+FlatBuffers binary file encoding the visited forward-pass trial points for a
+single stage. One file per stage. Present only when `exports.states` is `true`
+(the default). The `states/` directory is omitted entirely when disabled.
+
+Trial points are the state vectors observed at each forward-pass scenario
+during training. They are always collected in memory regardless of the cut
+selection method, but persisted to disk only when this export flag is set.
+Dominated cut selection uses these states at pruning time; for other methods
+they serve as a diagnostic and analysis artifact.
+
+| Field             | Type      | Description                                                                      |
+| ----------------- | --------- | -------------------------------------------------------------------------------- |
+| `stage_id`        | uint32    | Stage index (0-based).                                                           |
+| `state_dimension` | uint32    | Length of each state vector. Must match `state_dictionary.json`.                 |
+| `count`           | uint32    | Number of state vectors stored for this stage.                                   |
+| `data`            | float64[] | Flat array of `count * state_dimension` elements, row-major (one state per row). |
+
 ### `policy/metadata.json`
 
 Small JSON file describing the checkpoint at a high level. Human-readable and
@@ -492,6 +511,7 @@ intended for compatibility checking on study resume.
 | `forward_passes`       | integer | No       | Number of forward passes per iteration configured for the run.                              |
 | `warm_start_cuts`      | integer | No       | Number of cuts loaded from a previous policy at run start. `0` for fresh runs.              |
 | `rng_seed`             | integer | No       | RNG seed used by the scenario sampler. Required for reproducibility.                        |
+| `total_visited_states` | integer | No       | Total number of visited state vectors across all stages. `0` when `exports.states` is off.  |
 
 ---
 

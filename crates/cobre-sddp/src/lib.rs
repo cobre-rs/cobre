@@ -67,6 +67,7 @@ pub mod stopping_rule;
 pub mod training;
 pub mod training_output;
 pub mod trajectory;
+pub mod visited_states;
 pub mod workspace;
 
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
@@ -124,4 +125,5 @@ pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSe
 pub use training::{TrainingOutcome, TrainingResult, train};
 pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
+pub use visited_states::VisitedStatesArchive;
 pub use workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace, WorkspacePool};

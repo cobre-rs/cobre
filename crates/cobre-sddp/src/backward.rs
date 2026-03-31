@@ -224,6 +224,13 @@ pub struct BackwardPassSpec<'a> {
     ///
     /// Passed as a mutable reference (same rationale as `probabilities_buf`).
     pub successor_active_slots_buf: &'a mut Vec<usize>,
+
+    /// Optional visited-states archive for dominated cut selection.
+    ///
+    /// When `Some`, gathered states are archived after each per-stage exchange
+    /// so that the domination test has access to all forward-pass trial points.
+    /// Pass `None` when using `Level1`, `Lml1`, or no cut selection.
+    pub visited_archive: Option<&'a mut crate::visited_states::VisitedStatesArchive>,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -646,6 +653,12 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             }
         }
 
+        // Archive gathered states for dominated cut selection (if active).
+        if let Some(ref mut archive) = spec.visited_archive {
+            let total_fwd = spec.exchange.total_scenarios();
+            archive.archive_gathered_states(t, spec.exchange.gathered_states(), total_fwd);
+        }
+
         let successor = t + 1;
 
         // Snapshot pool stats before this stage's solves.
@@ -1009,6 +1022,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::new(),
+                effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -1335,6 +1349,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1414,6 +1429,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1493,6 +1509,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1568,6 +1585,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1643,6 +1661,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1716,6 +1735,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         );
@@ -1833,6 +1853,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -1928,6 +1949,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2028,6 +2050,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2115,6 +2138,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2211,6 +2235,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2302,6 +2327,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2387,6 +2413,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2479,6 +2506,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         );
@@ -2554,6 +2582,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::new(),
+                effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2597,6 +2626,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2622,6 +2652,7 @@ mod tests {
                     load_rhs_buf: Vec::new(),
                     row_lower_buf: Vec::new(),
                     z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
                 },
@@ -2653,6 +2684,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -2933,6 +2965,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::new(),
+                effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -2984,6 +3017,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -3070,6 +3104,7 @@ mod tests {
                 load_rhs_buf: Vec::new(),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::new(),
+                effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -3115,6 +3150,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -3202,6 +3238,7 @@ mod tests {
                 load_rhs_buf: Vec::with_capacity(1),
                 row_lower_buf: Vec::new(),
                 z_inflow_rhs_buf: Vec::new(),
+                effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
             },
@@ -3251,6 +3288,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )
@@ -3353,6 +3391,7 @@ mod tests {
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
             },
             &comm,
         )

@@ -125,8 +125,8 @@
           "type": "boolean"
         },
         "states": {
-          "default": true,
-          "description": "Export visited states.",
+          "default": false,
+          "description": "Export visited forward-pass trial points to the policy checkpoint.",
           "type": "boolean"
         },
         "stochastic": {
@@ -572,7 +572,7 @@
         "cuts": true,
         "forward_detail": false,
         "simulation": true,
-        "states": true,
+        "states": false,
         "stochastic": false,
         "training": true,
         "vertices": true

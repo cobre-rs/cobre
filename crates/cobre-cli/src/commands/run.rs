@@ -1139,6 +1139,7 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
             max_iterations: args.setup.max_iterations(),
             forward_passes: args.setup.forward_passes(),
             seed: args.setup.seed(),
+            export_states: args.config.exports.states,
         },
     )?;
 

@@ -70,6 +70,7 @@ fn write_policy_checkpoint(
     max_iterations: u64,
     forward_passes: u32,
     seed: u64,
+    export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
         write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
@@ -115,7 +116,11 @@ fn write_policy_checkpoint(
             .map_or(0, |a| (0..a.num_stages()).map(|t| a.count(t) as u64).sum()),
     };
 
-    let stage_states = build_stage_states_payloads(training_result.visited_archive.as_ref());
+    let stage_states = if export_states {
+        build_stage_states_payloads(training_result.visited_archive.as_ref())
+    } else {
+        Vec::new()
+    };
 
     io_write_policy_checkpoint(
         policy_dir,
@@ -305,6 +310,7 @@ fn write_training_artifacts(
         setup.max_iterations(),
         setup.forward_passes(),
         seed,
+        config.exports.states,
     )
     .map_err(|e| format!("policy checkpoint error: {e}"))?;
 

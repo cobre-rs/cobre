@@ -214,7 +214,11 @@ convergence quality.
   convergence guarantee.
 - `"lml1"` -- deactivates cuts that have not been binding within a sliding
   window of `threshold` iterations.
-- `"domination"` -- stub; not yet implemented.
+- `"domination"` -- deactivates cuts that are dominated at every visited
+  forward-pass trial point. Most aggressive; requires the visited-states
+  archive (always collected during training). The `threshold` parameter
+  controls how many consecutive domination checks a cut must fail before
+  deactivation.
 
 Example:
 
@@ -287,17 +291,17 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 
 Controls which outputs are written to the results directory.
 
-| Field             | Type                           | Default | Description                                                                 |
-| ----------------- | ------------------------------ | ------- | --------------------------------------------------------------------------- |
-| `training`        | boolean                        | `true`  | Write training convergence data (Parquet).                                  |
-| `cuts`            | boolean                        | `true`  | Write the cut pool (FlatBuffers).                                           |
-| `states`          | boolean                        | `true`  | Write visited state vectors (Parquet).                                      |
-| `vertices`        | boolean                        | `true`  | Write inner approximation vertices when applicable (Parquet).               |
-| `simulation`      | boolean                        | `true`  | Write per-entity simulation results (Parquet).                              |
-| `forward_detail`  | boolean                        | `false` | Write per-scenario forward-pass detail (large; disabled by default).        |
-| `backward_detail` | boolean                        | `false` | Write per-scenario backward-pass detail (large; disabled by default).       |
-| `compression`     | `"zstd"`, `"lz4"`, or `"none"` | `null`  | Output Parquet compression algorithm. `null` uses the crate default (zstd). |
-| `stochastic`      | boolean                        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.          |
+| Field             | Type                           | Default | Description                                                                     |
+| ----------------- | ------------------------------ | ------- | ------------------------------------------------------------------------------- |
+| `training`        | boolean                        | `true`  | Write training convergence data (Parquet).                                      |
+| `cuts`            | boolean                        | `true`  | Write the cut pool (FlatBuffers).                                               |
+| `states`          | boolean                        | `false` | Write visited forward-pass trial points to the policy checkpoint (FlatBuffers). |
+| `vertices`        | boolean                        | `true`  | Write inner approximation vertices when applicable (Parquet).                   |
+| `simulation`      | boolean                        | `true`  | Write per-entity simulation results (Parquet).                                  |
+| `forward_detail`  | boolean                        | `false` | Write per-scenario forward-pass detail (large; disabled by default).            |
+| `backward_detail` | boolean                        | `false` | Write per-scenario backward-pass detail (large; disabled by default).           |
+| `compression`     | `"zstd"`, `"lz4"`, or `"none"` | `null`  | Output Parquet compression algorithm. `null` uses the crate default (zstd).     |
+| `stochastic`      | boolean                        | `false` | Export stochastic preprocessing artifacts to `output/stochastic/`.              |
 
 ---
 
@@ -339,7 +343,7 @@ Controls which outputs are written to the results directory.
   "exports": {
     "training": true,
     "cuts": true,
-    "states": true,
+    "states": false,
     "simulation": true,
     "compression": "zstd"
   }

@@ -22,6 +22,9 @@ pub struct CheckpointParams {
     pub max_iterations: u64,
     pub forward_passes: u32,
     pub seed: u64,
+    /// When `false`, skip writing visited states to the checkpoint even if
+    /// the archive is populated. Controlled by `exports.states` in config.
+    pub export_states: bool,
 }
 
 /// Write a policy checkpoint from the trained FCF and basis cache.
@@ -67,7 +70,11 @@ pub fn write_checkpoint(
             .map_or(0, |a| (0..a.num_stages()).map(|t| a.count(t) as u64).sum()),
     };
 
-    let stage_states = build_stage_states_payloads(training_result.visited_archive.as_ref());
+    let stage_states = if params.export_states {
+        build_stage_states_payloads(training_result.visited_archive.as_ref())
+    } else {
+        Vec::new()
+    };
 
     write_policy_checkpoint(
         policy_dir,

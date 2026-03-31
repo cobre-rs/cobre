@@ -121,10 +121,10 @@ pub struct TrainingResult {
     /// and the actual stage index for backward per-stage entries (added in T-004).
     pub solver_stats_log: Vec<SolverStatsEntry>,
 
-    /// Visited states archive (only present with Dominated cut selection).
+    /// Visited states archive containing all forward-pass trial points.
     ///
-    /// Moved out of the training loop so the caller can serialize it
-    /// into the policy checkpoint.
+    /// Always populated during training. The caller decides whether to
+    /// persist it to the policy checkpoint based on `exports.states`.
     pub visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
 }
 
@@ -300,23 +300,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut cut_sync_bufs =
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
-    // Visited-states archive for dominated cut selection. Only allocated when
-    // Dominated strategy is active; Level1/LML1/None pay zero overhead.
-    let mut visited_archive = config.cut_selection.as_ref().and_then(|s| {
-        if matches!(
-            s,
-            crate::cut_selection::CutSelectionStrategy::Dominated { .. }
-        ) {
-            Some(crate::visited_states::VisitedStatesArchive::new(
-                num_stages,
-                n_state,
-                config.max_iterations,
-                total_forward_passes,
-            ))
-        } else {
-            None
-        }
-    });
+    // Visited-states archive: always allocated so forward-pass trial points
+    // are recorded for analysis and export regardless of cut selection method.
+    // Dominated cut selection also reads from this archive at pruning time.
+    let mut visited_archive = Some(crate::visited_states::VisitedStatesArchive::new(
+        num_stages,
+        n_state,
+        config.max_iterations,
+        total_forward_passes,
+    ));
 
     let start_time = Instant::now();
 

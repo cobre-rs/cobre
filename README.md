@@ -48,7 +48,7 @@ pip install cobre-python
 
 ## Getting Started
 
-- **Coming from NEWAVE?** -- See the [NEWAVE Migration Guide](https://cobre-rs.github.io/cobre/guide/newave-migration.html)
+- **Coming from other software?** -- See the [cobre-bridge guide](https://docs.cobre-rs.dev/guide/cobre-bridge.html)
 - **New to SDDP?** -- Read [What Cobre Solves](https://cobre-rs.github.io/cobre/tutorial/what-cobre-solves.html)
 - **Python user?** -- Try the [Python Quickstart](https://cobre-rs.github.io/cobre/guide/python-quickstart.html)
 

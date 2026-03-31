@@ -633,6 +633,7 @@ fn run_inner(
                 reason: "loaded from checkpoint".to_string(),
                 solver_stats_log: Vec::new(),
                 basis_cache,
+                visited_archive: None,
             };
 
             let simulation = Some(run_simulation_phase_py(

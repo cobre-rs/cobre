@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, Field, Schema};
 
 /// Schema for `simulation/costs/` — stage and block-level cost breakdown.
@@ -278,7 +280,7 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 16 columns. One row per (iteration, phase, stage) triple.
+/// 17 columns. One row per (iteration, phase, stage) triple.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
@@ -297,18 +299,11 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
-        Field::new("retry_l0", DataType::UInt64, false),
-        Field::new("retry_l1", DataType::UInt64, false),
-        Field::new("retry_l2", DataType::UInt64, false),
-        Field::new("retry_l3", DataType::UInt64, false),
-        Field::new("retry_l4", DataType::UInt64, false),
-        Field::new("retry_l5", DataType::UInt64, false),
-        Field::new("retry_l6", DataType::UInt64, false),
-        Field::new("retry_l7", DataType::UInt64, false),
-        Field::new("retry_l8", DataType::UInt64, false),
-        Field::new("retry_l9", DataType::UInt64, false),
-        Field::new("retry_l10", DataType::UInt64, false),
-        Field::new("retry_l11", DataType::UInt64, false),
+        Field::new(
+            "retry_histogram",
+            DataType::List(Arc::new(Field::new("item", DataType::UInt64, false))),
+            false,
+        ),
     ])
 }
 

@@ -6,7 +6,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int32Array, StringBuilder, UInt32Array, UInt64Array};
+use arrow::array::{Float64Array, Int32Array, ListArray, StringBuilder, UInt32Array, UInt64Array};
+use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
@@ -51,8 +52,9 @@ pub struct SolverStatsRow {
     pub set_bounds_time_ms: f64,
     /// Cumulative time in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
-    /// Per-level retry success counts (12 levels).
-    pub retry_level_histogram: [u64; 12],
+    /// Per-level retry success counts. Length depends on the solver backend
+    /// (e.g. 12 for `HiGHS`).
+    pub retry_level_histogram: Vec<u64>,
 }
 
 /// Write training solver statistics to `training/solver/iterations.parquet`.
@@ -82,15 +84,10 @@ pub fn write_simulation_solver_stats(
     write_solver_stats_to(&output_dir.join("simulation/solver"), rows)
 }
 
-/// Internal: write solver statistics rows to `{dir}/iterations.parquet`.
-fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
-    std::fs::create_dir_all(dir).map_err(|e| OutputError::io(dir, e))?;
-
-    let path = dir.join("iterations.parquet");
-    let tmp_path = path.with_extension("parquet.tmp");
-
-    let schema = Arc::new(solver_iterations_schema());
-
+/// Build Arrow column arrays from solver statistics rows.
+fn build_columns(
+    rows: &[SolverStatsRow],
+) -> Result<Vec<Arc<dyn arrow::array::Array>>, OutputError> {
     let n = rows.len();
     let iteration_arr = UInt32Array::from(rows.iter().map(|r| r.iteration).collect::<Vec<_>>());
     let mut phase_builder = StringBuilder::with_capacity(n, n * 10);
@@ -132,18 +129,31 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
     let basis_set_time_arr =
         Float64Array::from(rows.iter().map(|r| r.basis_set_time_ms).collect::<Vec<_>>());
 
-    // Build 12 per-level retry histogram columns.
-    let retry_level_arrays: Vec<_> = (0..12)
-        .map(|lvl| {
-            Arc::new(UInt64Array::from(
-                rows.iter()
-                    .map(|r| r.retry_level_histogram[lvl])
-                    .collect::<Vec<_>>(),
-            )) as Arc<dyn arrow::array::Array>
-        })
+    // Build a single List<UInt64> column from all rows' histograms.
+    let hist_len = rows.first().map_or(0, |r| r.retry_level_histogram.len());
+    let values: Vec<u64> = rows
+        .iter()
+        .flat_map(|r| r.retry_level_histogram.iter().copied())
         .collect();
+    let values_array = UInt64Array::from(values);
+    let offsets: Vec<i32> = (0..=rows.len())
+        .map(|i| {
+            i32::try_from(i * hist_len).map_err(|_| {
+                OutputError::serialization(
+                    "solver_stats",
+                    "retry histogram offset overflow".to_string(),
+                )
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let offsets_buf = arrow::buffer::OffsetBuffer::new(offsets.into());
+    let list_field = Arc::new(Field::new("item", DataType::UInt64, false));
+    let retry_histogram_array = Arc::new(
+        ListArray::try_new(list_field, offsets_buf, Arc::new(values_array), None)
+            .map_err(|e| OutputError::serialization("solver_stats", format!("ListArray: {e}")))?,
+    ) as Arc<dyn arrow::array::Array>;
 
-    let mut columns: Vec<Arc<dyn arrow::array::Array>> = vec![
+    Ok(vec![
         Arc::new(iteration_arr),
         Arc::new(phase_arr),
         Arc::new(stage_arr),
@@ -160,8 +170,19 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
         Arc::new(add_rows_time_arr),
         Arc::new(set_bounds_time_arr),
         Arc::new(basis_set_time_arr),
-    ];
-    columns.extend(retry_level_arrays);
+        retry_histogram_array,
+    ])
+}
+
+/// Internal: write solver statistics rows to `{dir}/iterations.parquet`.
+fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
+    std::fs::create_dir_all(dir).map_err(|e| OutputError::io(dir, e))?;
+
+    let path = dir.join("iterations.parquet");
+    let tmp_path = path.with_extension("parquet.tmp");
+
+    let schema = Arc::new(solver_iterations_schema());
+    let columns = build_columns(rows)?;
 
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)
         .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
@@ -209,7 +230,7 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                retry_level_histogram: [0; 12],
+                retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
                 iteration: 1,
@@ -228,7 +249,7 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                retry_level_histogram: [0; 12],
+                retry_level_histogram: vec![0; 12],
             },
         ]
     }
@@ -249,7 +270,7 @@ mod tests {
         let batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 28);
+        assert_eq!(batch.num_columns(), 17);
 
         let iteration_col = batch
             .column(0)
@@ -286,6 +307,6 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema();
-        assert_eq!(schema.fields().len(), 28);
+        assert_eq!(schema.fields().len(), 17);
     }
 }

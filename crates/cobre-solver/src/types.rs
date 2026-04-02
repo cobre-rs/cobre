@@ -191,11 +191,11 @@ pub struct SolverStatistics {
     /// `solve()` (without basis) does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
-    /// Per-level retry success histogram (12 levels, indexed 0..11).
-    ///
-    /// `retry_level_histogram[k]` counts how many solves were recovered at
-    /// retry level `k`. The sum equals `success_count - first_try_successes`.
-    pub retry_level_histogram: [u64; 12],
+    /// Per-level retry success histogram. Length depends on the solver backend
+    /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
+    /// were recovered at retry level `k`. The sum equals
+    /// `success_count - first_try_successes`.
+    pub retry_level_histogram: Vec<u64>,
 }
 
 /// Pre-assembled structural LP for one stage, in CSC (column-major) form.
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
         assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
-        assert_eq!(stats.retry_level_histogram, [0u64; 12]);
+        assert!(stats.retry_level_histogram.is_empty());
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

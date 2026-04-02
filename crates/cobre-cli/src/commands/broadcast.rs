@@ -118,6 +118,8 @@ pub(crate) struct BroadcastConfig {
     pub(crate) training_enabled: bool,
     /// Policy initialization mode.
     pub(crate) policy_mode: cobre_io::PolicyMode,
+    /// Whether the visited-states archive should be allocated for export.
+    pub(crate) export_states: bool,
 }
 
 impl BroadcastConfig {
@@ -177,6 +179,7 @@ impl BroadcastConfig {
             cut_activity_tolerance: params.cut_activity_tolerance,
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
+            export_states: config.exports.states,
         })
     }
 }

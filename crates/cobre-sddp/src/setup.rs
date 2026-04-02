@@ -262,6 +262,13 @@ pub struct StudySetup {
     cut_selection: Option<CutSelectionStrategy>,
     cut_activity_tolerance: f64,
     stopping_rule_set: StoppingRuleSet,
+
+    /// Whether the caller wants the visited-states archive for export.
+    ///
+    /// When `true`, the archive is allocated during training regardless of the
+    /// cut selection strategy. Defaults to `false`; set by CLI/Python callers
+    /// based on `exports.states`.
+    export_states: bool,
 }
 
 impl StudySetup {
@@ -663,6 +670,7 @@ impl StudySetup {
             cut_selection,
             cut_activity_tolerance,
             stopping_rule_set,
+            export_states: false,
         })
     }
 
@@ -819,6 +827,15 @@ impl StudySetup {
         self.start_iteration = iteration;
     }
 
+    /// Enable the visited-states archive for state export.
+    ///
+    /// When `true`, the archive is allocated during training regardless of
+    /// whether cut selection requires it. Set this based on the
+    /// `exports.states` configuration flag.
+    pub fn set_export_states(&mut self, export: bool) {
+        self.export_states = export;
+    }
+
     /// Return the number of simulation scenarios (0 if simulation is disabled).
     #[must_use]
     pub fn n_scenarios(&self) -> u32 {
@@ -931,6 +948,7 @@ impl StudySetup {
             cut_selection: self.cut_selection.clone(),
             shutdown_flag: shutdown_flag.map(Arc::clone),
             start_iteration: self.start_iteration,
+            export_states: self.export_states,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).

@@ -541,6 +541,7 @@ fn run_one_deterministic_pass(
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -582,6 +583,7 @@ fn train_converges_with_mock_solver() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let stage_ctx = StageContext {
@@ -671,6 +673,7 @@ fn train_lb_monotonically_nondecreasing() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let stage_ctx = StageContext {
@@ -747,6 +750,7 @@ fn train_emits_correct_event_sequence() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let stage_ctx = StageContext {
@@ -842,6 +846,7 @@ fn train_stops_at_iteration_limit() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -910,6 +915,7 @@ fn train_stops_on_graceful_shutdown() {
             cut_selection: None,
             shutdown_flag: Some(Arc::clone(&shutdown_flag)),
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -968,6 +974,7 @@ fn train_propagates_infeasible_error() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -1036,6 +1043,7 @@ fn d17_level1_cut_selection_convergence() {
         }),
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let stage_ctx = StageContext {
@@ -1179,6 +1187,7 @@ fn d18_lml1_cut_selection_convergence() {
         }),
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let stage_ctx = StageContext {

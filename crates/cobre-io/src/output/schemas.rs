@@ -324,6 +324,7 @@ pub(crate) fn cut_selection_schema() -> Schema {
         Field::new("cuts_active_before", DataType::Int32, false),
         Field::new("cuts_deactivated", DataType::Int32, false),
         Field::new("cuts_active_after", DataType::Int32, false),
+        Field::new("selection_time_ms", DataType::Float64, false),
     ])
 }
 
@@ -746,11 +747,15 @@ mod tests {
     #[test]
     fn cut_selection_schema_field_count_and_types() {
         let schema = cut_selection_schema();
-        assert_eq!(schema.fields().len(), 6);
-        for field in schema.fields() {
+        assert_eq!(schema.fields().len(), 7);
+        // First 6 fields are Int32, last is Float64 (selection_time_ms).
+        for field in &schema.fields()[..6] {
             assert_eq!(field.data_type(), &DataType::Int32);
             assert!(!field.is_nullable());
         }
+        assert_eq!(schema.fields()[6].name(), "selection_time_ms");
+        assert_eq!(schema.fields()[6].data_type(), &DataType::Float64);
+        assert!(!schema.fields()[6].is_nullable());
     }
 
     #[test]
@@ -798,7 +803,7 @@ mod tests {
             ("convergence", 13),
             ("iteration_timing", 13),
             ("rank_timing", 8),
-            ("cut_selection", 6),
+            ("cut_selection", 7),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {
             assert_eq!(

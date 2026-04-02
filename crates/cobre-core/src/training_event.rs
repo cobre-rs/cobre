@@ -70,6 +70,8 @@ pub struct StageSelectionRecord {
     pub cuts_deactivated: u32,
     /// Active cuts after selection.
     pub cuts_active_after: u32,
+    /// Wall-clock time for selection at this stage, in milliseconds.
+    pub selection_time_ms: f64,
 }
 
 /// Typed events emitted by an iterative optimization training loop and

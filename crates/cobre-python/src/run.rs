@@ -440,6 +440,7 @@ fn run_inner(
 
     let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
         .map_err(|e| e.to_string())?;
+    setup.set_export_states(config.exports.states);
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(

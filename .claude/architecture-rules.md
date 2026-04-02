@@ -46,7 +46,7 @@ Available context structs:
 | `run_forward_pass`         | 8        | 8       | `forward.rs`             | at budget |
 | `run_backward_pass`        | 8        | 8       | `backward.rs`            | at budget |
 | `simulate`                 | 8        | 8       | `simulation/pipeline.rs` | at budget |
-| `train`                    | 12       | 12      | `training.rs`            | at budget |
+| `train`                    | 10       | 10      | `training.rs`            | at target |
 | `evaluate_lower_bound`     | 9        | 9       | `lower_bound.rs`         | at budget |
 | `build_row_lower_unscaled` | 8        | 8       | `simulation/pipeline.rs` | at budget |
 

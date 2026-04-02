@@ -329,6 +329,7 @@ pub fn build_training_output(
                     cuts_active_before: rec.cuts_active_before,
                     cuts_deactivated: rec.cuts_deactivated,
                     cuts_active_after: rec.cuts_active_after,
+                    selection_time_ms: rec.selection_time_ms,
                 }))
             } else {
                 None
@@ -848,6 +849,7 @@ mod tests {
                         cuts_active_before: 5,
                         cuts_deactivated: 0,
                         cuts_active_after: 5,
+                        selection_time_ms: 0.0,
                     },
                     StageSelectionRecord {
                         stage: 1,
@@ -855,6 +857,7 @@ mod tests {
                         cuts_active_before: 8,
                         cuts_deactivated: 3,
                         cuts_active_after: 5,
+                        selection_time_ms: 2.5,
                     },
                 ],
             },

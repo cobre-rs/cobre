@@ -554,6 +554,7 @@ fn run_training(
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts

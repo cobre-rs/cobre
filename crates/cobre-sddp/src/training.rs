@@ -300,15 +300,23 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut cut_sync_bufs =
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
-    // Visited-states archive: always allocated so forward-pass trial points
-    // are recorded for analysis and export regardless of cut selection method.
-    // Dominated cut selection also reads from this archive at pruning time.
-    let mut visited_archive = Some(crate::visited_states::VisitedStatesArchive::new(
-        num_stages,
-        n_state,
-        config.max_iterations,
-        total_forward_passes,
-    ));
+    // Visited-states archive: allocated only when needed for dominated cut
+    // selection (which reads visited states at pruning time) or when the caller
+    // requests state export to the policy checkpoint.
+    let needs_archive = matches!(
+        config.cut_selection,
+        Some(crate::cut_selection::CutSelectionStrategy::Dominated { .. })
+    ) || config.export_states;
+    let mut visited_archive = if needs_archive {
+        Some(crate::visited_states::VisitedStatesArchive::new(
+            num_stages,
+            n_state,
+            config.max_iterations,
+            total_forward_passes,
+        ))
+    } else {
+        None
+    };
 
     let start_time = Instant::now();
 
@@ -611,6 +619,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         cuts_active_before: active_0,
                         cuts_deactivated: 0,
                         cuts_active_after: active_0,
+                        selection_time_ms: 0.0,
                     });
                 }
 
@@ -620,20 +629,22 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 // requires &mut, so it stays sequential.
                 let archive_ref = visited_archive.as_ref();
                 #[allow(clippy::cast_possible_truncation)]
-                let deactivations: Vec<(usize, DeactivationSet)> = (1..num_sel_stages)
+                let deactivations: Vec<(usize, DeactivationSet, f64)> = (1..num_sel_stages)
                     .into_par_iter()
                     .map(|stage| {
                         let pool = &fcf.pools[stage];
                         let states =
                             archive_ref.map_or(&[] as &[f64], |a| a.states_for_stage(stage));
+                        let start = Instant::now();
                         let deact =
                             strategy.select_for_stage(pool, states, iteration, stage as u32);
-                        (stage, deact)
+                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        (stage, deact, elapsed_ms)
                     })
                     .collect();
 
                 #[allow(clippy::cast_possible_truncation)]
-                for (stage, deact) in deactivations {
+                for (stage, deact, stage_sel_time_ms) in deactivations {
                     let pool = &fcf.pools[stage];
                     let populated = pool.populated_count as u32;
                     let active_before = pool.active_count() as u32;
@@ -649,6 +660,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         cuts_active_before: active_before,
                         cuts_deactivated: n_deact,
                         cuts_active_after: active_after,
+                        selection_time_ms: stage_sel_time_ms,
                     });
                 }
 
@@ -1285,6 +1297,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1361,6 +1374,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1455,6 +1469,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1583,6 +1598,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1657,6 +1673,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1728,6 +1745,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1807,6 +1825,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1896,6 +1915,7 @@ mod tests {
             }),
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1995,6 +2015,7 @@ mod tests {
             }),
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2105,6 +2126,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2185,6 +2207,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2282,6 +2305,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 3,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2356,6 +2380,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 5,
+            export_states: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);

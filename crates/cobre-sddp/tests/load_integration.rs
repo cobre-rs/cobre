@@ -461,6 +461,7 @@ fn test_stochastic_load_training_completes() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -589,6 +590,7 @@ fn test_deterministic_load_training_matches_baseline() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -653,6 +655,7 @@ fn test_stochastic_load_seed_determinism() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];

@@ -631,7 +631,7 @@ fn build_study_setup(
         BroadcastCutSelection::Disabled,
     )
     .into_strategy();
-    StudySetup::from_broadcast_params(
+    let mut setup = StudySetup::from_broadcast_params(
         system,
         stochastic,
         bcast_config.seed,
@@ -645,7 +645,9 @@ fn build_study_setup(
         bcast_config.cut_activity_tolerance,
         hydro_models,
     )
-    .map_err(CliError::from)
+    .map_err(CliError::from)?;
+    setup.set_export_states(bcast_config.export_states);
+    Ok(setup)
 }
 
 /// Print summaries, export stochastic artifacts, and write the scaling report.

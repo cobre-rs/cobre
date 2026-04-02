@@ -73,6 +73,8 @@ jobs:
         run: python3 scripts/check_suppressions.py --max 10
       - name: Check CLAUDE.md version
         run: python3 scripts/check_claudemd_version.py
+      - name: Check book version references
+        run: python3 scripts/check_book_version.py
 
   docs:
     name: Documentation

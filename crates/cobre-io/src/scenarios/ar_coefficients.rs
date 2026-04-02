@@ -38,8 +38,8 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::Path;
 
-use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 use crate::LoadError;
+use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 
 /// A single row from `scenarios/inflow_ar_coefficients.parquet`.
 ///

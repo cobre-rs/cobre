@@ -90,10 +90,10 @@ pub fn resolve_ncs_factors(
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
+    use cobre_core::EntityId;
     use cobre_core::temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
     };
-    use cobre_core::EntityId;
 
     use crate::scenarios::BlockFactor;
 

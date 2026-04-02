@@ -29,11 +29,11 @@ pub mod fpha_hyperplanes;
 pub mod hydro_geometry;
 pub mod production_models;
 
-pub use fpha_hyperplanes::{FphaHyperplaneRow, parse_fpha_hyperplanes};
-pub use hydro_geometry::{HydroGeometryRow, parse_hydro_geometry};
+pub use fpha_hyperplanes::{parse_fpha_hyperplanes, FphaHyperplaneRow};
+pub use hydro_geometry::{parse_hydro_geometry, HydroGeometryRow};
 pub use production_models::{
-    FittingWindow, FphaConfig, ProductionModelConfig, SeasonConfig, SelectionMode, StageRange,
-    parse_production_models,
+    parse_production_models, FittingWindow, FphaColumnLayout, ProductionModelConfig, SeasonConfig,
+    SelectionMode, StageRange,
 };
 
 use crate::LoadError;

@@ -12,7 +12,7 @@
 //!   and its derivative `dh_fore/dv` from VHA curve data.
 //!
 use cobre_core::{EfficiencyModel, HydraulicLossesModel, Hydro, TailraceModel};
-use cobre_io::extensions::{FphaConfig, HydroGeometryRow};
+use cobre_io::extensions::{FphaColumnLayout, HydroGeometryRow};
 
 use crate::hydro_models::FphaPlane;
 
@@ -228,7 +228,7 @@ impl std::error::Error for FphaFittingError {}
 
 /// Resolved volume range and discretization counts for the FPHA fitting grid.
 ///
-/// Produced by [`resolve_fitting_bounds`] from an [`FphaConfig`] and the hydro
+/// Produced by [`resolve_fitting_bounds`] from an [`FphaColumnLayout`] and the hydro
 /// plant entity. Consumed by the grid construction step in Epic 02.
 #[derive(Debug)]
 pub(crate) struct FittingBounds {
@@ -248,7 +248,7 @@ pub(crate) struct FittingBounds {
 
 /// Resolve the fitting volume range and discretization counts from configuration.
 ///
-/// Combines the [`FphaConfig`] fitting window (if any), the hydro entity's
+/// Combines the [`FphaColumnLayout`] fitting window (if any), the hydro entity's
 /// operating limits, and the forebay table's interpolation range to produce
 /// a concrete [`FittingBounds`] for grid construction.
 ///
@@ -275,7 +275,7 @@ pub(crate) struct FittingBounds {
 /// | Resolved `v_min >= v_max` | [`FphaFittingError::EmptyFittingWindow`] |
 /// | Any discretization count < 2, or `max_planes_per_hydro` < 1 | [`FphaFittingError::InsufficientDiscretization`] |
 pub(crate) fn resolve_fitting_bounds(
-    config: &FphaConfig,
+    config: &FphaColumnLayout,
     hydro: &Hydro,
     forebay: &ForebayTable,
 ) -> Result<FittingBounds, FphaFittingError> {
@@ -1325,13 +1325,13 @@ pub(crate) fn select_planes(
 
         for remove_idx in 0..n {
             scratch.clear();
-            scratch.extend(
-                current.iter().enumerate().filter_map(
-                    |(i, &p)| {
-                        if i == remove_idx { None } else { Some(p) }
-                    },
-                ),
-            );
+            scratch.extend(current.iter().enumerate().filter_map(|(i, &p)| {
+                if i == remove_idx {
+                    None
+                } else {
+                    Some(p)
+                }
+            }));
 
             let errors = compute_grid_errors(&scratch, pf, bounds);
             let min_err = errors.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1426,7 +1426,11 @@ pub(crate) fn compute_kappa(
         }
     }
 
-    if found_valid { min_ratio } else { 1.0 }
+    if found_valid {
+        min_ratio
+    } else {
+        1.0
+    }
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -1585,7 +1589,7 @@ pub(crate) struct FphaFitResult {
 pub(crate) fn fit_fpha_planes(
     forebay_rows: &[HydroGeometryRow],
     hydro: &Hydro,
-    config: &FphaConfig,
+    config: &FphaColumnLayout,
 ) -> Result<FphaFitResult, FphaFittingError> {
     let forebay = ForebayTable::new(forebay_rows, &hydro.name)?;
 
@@ -1640,13 +1644,13 @@ mod tests {
         EfficiencyModel, EntityId, HydraulicLossesModel, Hydro, HydroGenerationModel,
         HydroPenalties, TailraceModel, TailracePoint,
     };
-    use cobre_io::extensions::{FittingWindow, FphaConfig, HydroGeometryRow};
+    use cobre_io::extensions::{FittingWindow, FphaColumnLayout, HydroGeometryRow};
 
     use super::{
-        FittingBounds, ForebayTable, FphaFittingError, ProductionFunction, RawHyperplane,
         compute_kappa, compute_tangent_plane, eliminate_redundant, evaluate_losses,
         evaluate_losses_factor, evaluate_tailrace, evaluate_tailrace_derivative, fit_fpha_planes,
-        resolve_fitting_bounds, sample_tangent_planes, validate_fitted_planes,
+        resolve_fitting_bounds, sample_tangent_planes, validate_fitted_planes, FittingBounds,
+        ForebayTable, FphaFittingError, ProductionFunction, RawHyperplane,
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -2766,9 +2770,9 @@ mod tests {
         ForebayTable::new(&small_rows, "SmallHydro").unwrap()
     }
 
-    /// Build a default `FphaConfig` (all fields `None` / defaults).
-    fn default_config() -> FphaConfig {
-        FphaConfig {
+    /// Build a default `FphaColumnLayout` (all fields `None` / defaults).
+    fn default_config() -> FphaColumnLayout {
+        FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,
@@ -2805,7 +2809,7 @@ mod tests {
     /// resolve_fitting_bounds returns those bounds unchanged (within forebay range).
     #[test]
     fn absolute_bounds_both_set() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(1_000.0),
                 volume_max_hm3: Some(30_000.0),
@@ -2828,7 +2832,7 @@ mod tests {
     /// Given only volume_min_hm3, v_max falls back to forebay.v_max().
     #[test]
     fn absolute_bounds_only_min() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(5_000.0),
                 volume_max_hm3: None,
@@ -2851,7 +2855,7 @@ mod tests {
     /// Given only volume_max_hm3, v_min falls back to forebay.v_min().
     #[test]
     fn absolute_bounds_only_max() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: None,
                 volume_max_hm3: Some(20_000.0),
@@ -2875,7 +2879,7 @@ mod tests {
     /// v_min = 100 + 0.1 * 1900 = 290, v_max = 100 + 0.9 * 1900 = 1810.
     #[test]
     fn percentile_bounds_both_set() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: None,
                 volume_max_hm3: None,
@@ -2900,7 +2904,7 @@ mod tests {
     /// Absolute min bound + percentile max bound is accepted (different dimensions).
     #[test]
     fn mixed_absolute_min_percentile_max() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(200.0),
                 volume_max_hm3: None,
@@ -2924,7 +2928,7 @@ mod tests {
     /// volume_min_hm3 and volume_min_percentile both set -> ConflictingFittingWindow.
     #[test]
     fn conflicting_min_bound_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(500.0),
                 volume_max_hm3: None,
@@ -2948,7 +2952,7 @@ mod tests {
     /// volume_max_hm3 and volume_max_percentile both set -> ConflictingFittingWindow.
     #[test]
     fn conflicting_max_bound_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: None,
                 volume_max_hm3: Some(1_800.0),
@@ -2972,7 +2976,7 @@ mod tests {
     /// Absolute bounds with v_min > v_max -> EmptyFittingWindow.
     #[test]
     fn inverted_absolute_bounds_returns_empty_window_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(1_500.0),
                 volume_max_hm3: Some(1_000.0),
@@ -2994,7 +2998,7 @@ mod tests {
     /// Equal absolute bounds (v_min == v_max) -> EmptyFittingWindow.
     #[test]
     fn equal_absolute_bounds_returns_empty_window_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(1_000.0),
                 volume_max_hm3: Some(1_000.0),
@@ -3018,7 +3022,7 @@ mod tests {
     /// Absolute v_min below forebay.v_min() gets clamped to forebay.v_min().
     #[test]
     fn absolute_min_below_forebay_gets_clamped() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(-500.0),
                 volume_max_hm3: Some(20_000.0),
@@ -3040,7 +3044,7 @@ mod tests {
     /// Absolute v_max above forebay.v_max() gets clamped to forebay.v_max().
     #[test]
     fn absolute_max_above_forebay_gets_clamped() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             fitting_window: Some(FittingWindow {
                 volume_min_hm3: Some(1_000.0),
                 volume_max_hm3: Some(50_000.0),
@@ -3078,7 +3082,7 @@ mod tests {
     /// Explicit discretization values are passed through unchanged.
     #[test]
     fn discretization_explicit_values_passed_through() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             volume_discretization_points: Some(8),
             turbine_discretization_points: Some(6),
             spillage_discretization_points: Some(10),
@@ -3101,7 +3105,7 @@ mod tests {
     /// volume_discretization_points = 1 -> InsufficientDiscretization { dimension: "volume", value: 1 }.
     #[test]
     fn volume_discretization_one_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             volume_discretization_points: Some(1),
             ..default_config()
         };
@@ -3123,7 +3127,7 @@ mod tests {
     /// volume_discretization_points = 0 -> InsufficientDiscretization.
     #[test]
     fn volume_discretization_zero_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             volume_discretization_points: Some(0),
             ..default_config()
         };
@@ -3144,7 +3148,7 @@ mod tests {
     /// turbine_discretization_points = 1 -> InsufficientDiscretization { dimension: "turbine", value: 1 }.
     #[test]
     fn turbine_discretization_one_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             turbine_discretization_points: Some(1),
             ..default_config()
         };
@@ -3165,7 +3169,7 @@ mod tests {
     /// spillage_discretization_points = 1 -> InsufficientDiscretization { dimension: "spillage", value: 1 }.
     #[test]
     fn spillage_discretization_one_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             spillage_discretization_points: Some(1),
             ..default_config()
         };
@@ -3200,7 +3204,7 @@ mod tests {
     /// max_planes_per_hydro = Some(5) -> 5.
     #[test]
     fn max_planes_per_hydro_explicit_value() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             max_planes_per_hydro: Some(5),
             ..default_config()
         };
@@ -3215,7 +3219,7 @@ mod tests {
     /// max_planes_per_hydro = Some(0) -> InsufficientDiscretization.
     #[test]
     fn max_planes_per_hydro_zero_returns_error() {
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             max_planes_per_hydro: Some(0),
             ..default_config()
         };
@@ -3745,8 +3749,8 @@ mod tests {
     /// The returned `bounds` has `n_volume_points=7`, `n_flow_points=5`,
     /// `n_spillage_points=5`, and `max_planes_per_hydro=10`, forcing the greedy
     /// step to reduce the set to 10.
-    fn non_redundant_planes_for_selection()
-    -> (Vec<RawHyperplane>, ProductionFunction, FittingBounds) {
+    fn non_redundant_planes_for_selection(
+    ) -> (Vec<RawHyperplane>, ProductionFunction, FittingBounds) {
         let pf = sampling_production_function();
         let bounds = FittingBounds {
             v_min: 0.0,
@@ -4377,13 +4381,13 @@ mod tests {
         }
     }
 
-    /// AC: fit_fpha_planes with Sobradinho-style geometry and default FphaConfig
+    /// AC: fit_fpha_planes with Sobradinho-style geometry and default FphaColumnLayout
     /// returns Ok with between 3 and 10 planes, all with valid coefficient signs.
     #[test]
     fn fit_fpha_planes_sobradinho_style_end_to_end() {
         let rows = sobradinho_rows();
         let hydro = make_sobradinho_hydro();
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,
@@ -4431,7 +4435,7 @@ mod tests {
     fn fit_fpha_planes_intercepts_are_kappa_scaled() {
         let rows = sobradinho_rows();
         let hydro = make_sobradinho_hydro();
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,
@@ -4515,7 +4519,7 @@ mod tests {
             filling: None,
             penalties: zero_penalties,
         };
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,
@@ -4545,7 +4549,7 @@ mod tests {
             area_km2: 0.0,
         }];
         let hydro = make_sobradinho_hydro();
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,
@@ -4607,7 +4611,7 @@ mod tests {
     fn fit_fpha_planes_result_kappa_in_range_and_intercept_consistent() {
         let rows = sobradinho_rows();
         let hydro = make_sobradinho_hydro();
-        let config = FphaConfig {
+        let config = FphaColumnLayout {
             source: "computed".to_owned(),
             volume_discretization_points: None,
             turbine_discretization_points: None,

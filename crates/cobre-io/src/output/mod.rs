@@ -22,28 +22,29 @@ pub mod solver_stats_writer;
 pub mod stochastic;
 pub mod training_writer;
 
-pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
+pub use convergence_reader::{read_convergence_summary, ConvergenceSummary};
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
-    ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
-    ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,
-    MetadataPerformanceSummary, MetadataProblemDimensions, MetadataRunInfo, SimulationManifest,
-    TrainingManifest, TrainingMetadata, read_simulation_manifest, read_training_manifest,
-    write_metadata, write_simulation_manifest, write_training_manifest,
+    read_simulation_manifest, read_training_manifest, write_metadata, write_simulation_manifest,
+    write_training_manifest, ManifestChecksum, ManifestConvergence, ManifestCuts,
+    ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
+    MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
+    MetadataProblemDimensions, MetadataRunInfo, SimulationManifest, TrainingManifest,
+    TrainingMetadata,
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use results_writer::{write_results, write_simulation_results, write_training_results};
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;
-pub use solver_stats_writer::{SolverStatsRow, write_simulation_solver_stats, write_solver_stats};
+pub use solver_stats_writer::{write_simulation_solver_stats, write_solver_stats, SolverStatsRow};
 pub use stochastic::{
-    FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
-    write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
-    write_load_seasonal_stats, write_noise_openings,
+    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
+    FittingReductionEntry, FittingReport, HydroFittingEntry,
 };
-pub use training_writer::{TrainingParquetWriter, write_cut_selection_records};
+pub use training_writer::{write_cut_selection_records, TrainingParquetWriter};
 
 /// One row of convergence data corresponding to a single training iteration.
 ///

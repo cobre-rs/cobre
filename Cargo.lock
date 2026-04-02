@@ -502,10 +502,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobre-mcp"
-version = "0.3.2"
-
-[[package]]
 name = "cobre-sddp"
 version = "0.3.2"
 dependencies = [
@@ -546,10 +542,6 @@ dependencies = [
  "siphasher",
  "thiserror",
 ]
-
-[[package]]
-name = "cobre-tui"
-version = "0.3.2"
 
 [[package]]
 name = "cobs"

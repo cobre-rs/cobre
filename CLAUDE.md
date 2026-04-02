@@ -7,7 +7,7 @@ vertical is SDDP-based hydrothermal dispatch.
 
 - **Language**: Rust 2024 edition, MSRV 1.86
 - **License**: Apache-2.0
-- **Workspace**: 11 crates (10 workspace + 1 external `ferrompi`)
+- **Workspace**: 11 crates (8 workspace + 2 excluded stubs + 1 external `ferrompi`)
 - **Build**: `cargo build --workspace`
 - **Test**: `cargo test --workspace --all-features`
 - **Format**: `cargo fmt --all` (CI enforces `--check`)

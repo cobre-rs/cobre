@@ -63,7 +63,6 @@ jobs:
           publish cobre-stochastic || exit 1
           publish cobre-solver || exit 1
           publish cobre-comm || exit 1
-          publish cobre-tui || exit 1
           sleep 30
 
           # Layer 2b: depends on cobre-core + cobre-stochastic
@@ -76,7 +75,6 @@ jobs:
 
           # Layer 4: application crates (depend on cobre-sddp)
           publish cobre-cli || exit 1
-          publish cobre-mcp || exit 1
           sleep 30
 
           # Layer 5: umbrella crate (depends on all of the above)

@@ -41,26 +41,27 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use cobre_comm::Communicator;
-use cobre_core::{EntityId, System, TrainingEvent, entities::hydro::HydroGenerationModel};
+use cobre_core::{entities::hydro::HydroGenerationModel, EntityId, System, TrainingEvent};
 use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::{StochasticContext, context::OpeningTree};
+use cobre_stochastic::{context::OpeningTree, StochasticContext};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
-    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
-    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
-    WorkspacePool, build_stage_templates,
-    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    build_stage_templates,
+    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
     simulation::{EntityCounts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
+    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
+    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
+    WorkspacePool,
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -351,8 +352,8 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
-            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
-            summarize_scale_factors,
+            build_scaling_report, compute_coefficient_range, summarize_scale_factors, LpDimensions,
+            StageScalingReport,
         };
 
         // ── Stage templates ───────────────────────────────────────────────────
@@ -1467,17 +1468,10 @@ pub fn prepare_stochastic(
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
-    use crate::StageIndexer;
     use crate::hydro_models::PrepareHydroModelsResult;
+    use crate::StageIndexer;
 
     use cobre_core::{
-        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
-        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
-    };
-    use cobre_core::{
-        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -1488,6 +1482,13 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId, SystemBuilder,
+    };
+    use cobre_core::{
+        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -2256,7 +2257,7 @@ mod tests {
     /// default values for all fields.
     #[test]
     fn study_params_from_config_defaults() {
-        use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
+        use super::{StudyParams, DEFAULT_FORWARD_PASSES, DEFAULT_SEED};
         use crate::stopping_rule::StoppingMode;
         use cobre_io::config::{
             Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,

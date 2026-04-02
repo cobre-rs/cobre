@@ -198,7 +198,7 @@ fn accumulate_batch(batch: &RecordBatch, totals: &mut BatchTotals) -> Result<(),
 mod tests {
     use super::*;
     use crate::output::{
-        CutStatistics, IterationRecord, SimulationOutput, TrainingOutput, write_results,
+        write_results, CutStatistics, IterationRecord, SimulationOutput, TrainingOutput,
     };
 
     fn make_iteration_record(iteration: u32, lp_solves: u32) -> IterationRecord {

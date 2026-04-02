@@ -22,7 +22,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 // Relax strict production lints for test builds. These lints (unwrap_used,
 // expect_used, etc.) guard library code but are normal in tests.
@@ -64,9 +64,9 @@ pub use generic_constraint::{
 };
 pub use initial_conditions::{HydroPastInflows, HydroStorage, InitialConditions};
 pub use penalty::{
-    GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
-    resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
-    resolve_ncs_curtailment_cost,
+    resolve_bus_deficit_segments, resolve_bus_excess_cost, resolve_hydro_penalties,
+    resolve_line_exchange_cost, resolve_ncs_curtailment_cost, GlobalPenaltyDefaults,
+    HydroPenaltyOverrides,
 };
 pub use resolved::{
     BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,

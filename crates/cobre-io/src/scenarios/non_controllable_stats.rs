@@ -30,14 +30,14 @@
 //! - `ncs_id` existence in the NCS registry — Layer 3 referential validation.
 //! - `stage_id` existence in the stages registry — Layer 3 referential validation.
 
-use cobre_core::EntityId;
 use cobre_core::scenario::NcsModel;
+use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::Path;
 
-use crate::LoadError;
 use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
+use crate::LoadError;
 
 /// Parse `scenarios/non_controllable_stats.parquet` and return a sorted `Vec<NcsModel>`.
 ///

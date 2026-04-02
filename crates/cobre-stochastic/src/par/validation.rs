@@ -193,9 +193,9 @@ pub fn validate_par_parameters(
 
 #[cfg(test)]
 mod tests {
-    use cobre_core::{EntityId, scenario::InflowModel};
+    use cobre_core::{scenario::InflowModel, EntityId};
 
-    use super::{ParWarning, validate_par_parameters};
+    use super::{validate_par_parameters, ParWarning};
     use crate::StochasticError;
 
     fn make_model(

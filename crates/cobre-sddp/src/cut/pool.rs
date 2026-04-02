@@ -652,11 +652,10 @@ mod tests {
         assert_eq!(pool.active_count(), 0);
         assert!(pool.active.iter().all(|&a| !a));
         assert_eq!(pool.coefficients.len(), 100);
-        assert!(
-            pool.coefficients
-                .iter()
-                .all(|c| c.iter().all(|&v| v == 0.0))
-        );
+        assert!(pool
+            .coefficients
+            .iter()
+            .all(|c| c.iter().all(|&v| v == 0.0)));
         assert!(pool.intercepts.iter().all(|&v| v == 0.0));
     }
 

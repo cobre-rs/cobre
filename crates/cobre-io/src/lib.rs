@@ -32,7 +32,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -55,11 +55,8 @@ pub mod system;
 pub mod validation;
 
 pub use broadcast::{deserialize_system, serialize_system};
-pub use config::{Config, EstimationConfig, OrderSelectionMethod, PolicyMode, parse_config};
+pub use config::{parse_config, Config, EstimationConfig, OrderSelectionMethod, PolicyMode};
 pub use constraints::{
-    BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry,
-    GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow,
-    LinePenaltyOverrideRow, NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow,
     load_contract_bounds, load_exchange_factors, load_generic_constraint_bounds,
     load_generic_constraints, load_hydro_bounds, load_line_bounds, load_penalty_overrides_bus,
     load_penalty_overrides_hydro, load_penalty_overrides_line, load_penalty_overrides_ncs,
@@ -67,54 +64,58 @@ pub use constraints::{
     parse_generic_constraint_bounds, parse_generic_constraints, parse_hydro_bounds,
     parse_line_bounds, parse_penalty_overrides_bus, parse_penalty_overrides_hydro,
     parse_penalty_overrides_line, parse_penalty_overrides_ncs, parse_pumping_bounds,
-    parse_thermal_bounds,
+    parse_thermal_bounds, BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow,
+    ExchangeFactorEntry, GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow,
+    LineBoundsRow, LinePenaltyOverrideRow, NcsPenaltyOverrideRow, PumpingBoundsRow,
+    ThermalBoundsRow,
 };
 pub use error::LoadError;
 pub use extensions::{
-    FittingWindow, FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
-    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_hydro_geometry,
-    load_production_models, parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
+    load_fpha_hyperplanes, load_hydro_geometry, load_production_models, parse_fpha_hyperplanes,
+    parse_hydro_geometry, parse_production_models, FittingWindow, FphaColumnLayout,
+    FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig, SelectionMode,
+    StageRange,
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use output::policy::{
-    OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord, PolicyCheckpoint,
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, StageCutsReadResult,
-    StageStatesPayload, StageStatesReadResult, deserialize_stage_basis, deserialize_stage_cuts,
-    deserialize_stage_states, read_policy_checkpoint, serialize_stage_basis, serialize_stage_cuts,
-    serialize_stage_states, write_policy_checkpoint,
+    deserialize_stage_basis, deserialize_stage_cuts, deserialize_stage_states,
+    read_policy_checkpoint, serialize_stage_basis, serialize_stage_cuts, serialize_stage_states,
+    write_policy_checkpoint, OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord,
+    PolicyCheckpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    StageCutsReadResult, StageStatesPayload, StageStatesReadResult,
 };
 pub use output::{
-    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, ManifestChecksum,
-    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
-    MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
-    MetadataProblemDimensions, MetadataRunInfo, OutputError, ParquetWriterConfig,
-    SimulationManifest, SimulationOutput, SolverStatsRow, TrainingManifest, TrainingMetadata,
-    TrainingOutput, TrainingParquetWriter, read_convergence_summary, read_simulation_manifest,
-    read_training_manifest, write_cut_selection_records, write_dictionaries,
-    write_fpha_hyperplanes, write_metadata, write_results, write_scaling_report,
-    write_simulation_manifest, write_simulation_results, write_simulation_solver_stats,
-    write_solver_stats, write_training_manifest, write_training_results,
+    read_convergence_summary, read_simulation_manifest, read_training_manifest,
+    write_cut_selection_records, write_dictionaries, write_fpha_hyperplanes, write_metadata,
+    write_results, write_scaling_report, write_simulation_manifest, write_simulation_results,
+    write_simulation_solver_stats, write_solver_stats, write_training_manifest,
+    write_training_results, ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord,
+    ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
+    ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,
+    MetadataPerformanceSummary, MetadataProblemDimensions, MetadataRunInfo, OutputError,
+    ParquetWriterConfig, SimulationManifest, SimulationOutput, SolverStatsRow, TrainingManifest,
+    TrainingMetadata, TrainingOutput, TrainingParquetWriter,
 };
 pub use penalties::parse_penalties;
-pub use report::{ReportEntry, ValidationReport, generate_report};
+pub use report::{generate_report, ReportEntry, ValidationReport};
 pub use resolution::{resolve_bounds, resolve_penalties};
 pub use scenarios::{
-    BlockFactor, ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow,
-    InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow, NoiseOpeningRow, ScenarioData,
     assemble_inflow_models, assemble_load_models, load_correlation, load_external_scenarios,
     load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
     load_load_factors, load_load_seasonal_stats, load_noise_openings, load_scenarios,
     parse_correlation, parse_external_scenarios, parse_inflow_ar_coefficients,
     parse_inflow_history, parse_inflow_seasonal_stats, parse_load_factors,
-    parse_load_seasonal_stats,
+    parse_load_seasonal_stats, BlockFactor, ExternalScenarioRow, InflowArCoefficientRow,
+    InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
+    NoiseOpeningRow, ScenarioData,
 };
-pub use stages::{StagesData, build_season_stage_map, parse_stages};
+pub use stages::{build_season_stage_map, parse_stages, StagesData};
 pub use system::{
     load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
     parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,
     parse_pumping_stations, parse_thermals,
 };
-pub use validation::structural::{FileManifest, validate_structure};
+pub use validation::structural::{validate_structure, FileManifest};
 pub use validation::{ErrorKind, Severity, ValidationContext, ValidationEntry};
 
 use cobre_core::System;

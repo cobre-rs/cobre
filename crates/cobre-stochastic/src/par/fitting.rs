@@ -40,9 +40,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -2106,11 +2106,11 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -2714,7 +2714,7 @@ mod tests {
             let val = (i + 1) as f64;
             observations.push(obs(1, year, 1, val)); // Jan
             observations.push(obs(1, year, 2, val + 0.5)); // Feb ≈ Jan
-            // Other months: enough data to avoid InsufficientData.
+                                                           // Other months: enough data to avoid InsufficientData.
             for month in 3u32..=12 {
                 observations.push(obs(1, year, month, month as f64 * 5.0 + i as f64));
             }
@@ -2790,7 +2790,7 @@ mod tests {
     // estimate_correlation tests
     // -----------------------------------------------------------------------
 
-    use super::{ArCoefficientEstimate, SeasonalStats, estimate_correlation};
+    use super::{estimate_correlation, ArCoefficientEstimate, SeasonalStats};
 
     /// Helper: build a single-season study over `n_years` monthly stages.
     /// Season 0 covers month `month` of each year.
@@ -3519,8 +3519,8 @@ mod tests {
         // from M[1,2] (rho(1,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }

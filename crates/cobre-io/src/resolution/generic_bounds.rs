@@ -103,8 +103,8 @@ pub fn resolve_generic_constraint_bounds(
 )]
 mod tests {
     use super::*;
-    use cobre_core::EntityId;
     use cobre_core::generic_constraint::{ConstraintExpression, ConstraintSense};
+    use cobre_core::EntityId;
 
     fn make_constraint(id: i32) -> GenericConstraint {
         use cobre_core::generic_constraint::SlackConfig;

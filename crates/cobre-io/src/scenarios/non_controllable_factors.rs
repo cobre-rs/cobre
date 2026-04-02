@@ -38,8 +38,8 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::LoadError;
 use crate::scenarios::BlockFactor;
+use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 

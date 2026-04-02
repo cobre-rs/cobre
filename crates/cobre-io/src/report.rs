@@ -24,8 +24,8 @@
 
 use serde::Serialize;
 
-use crate::LoadError;
 use crate::validation::ValidationContext;
+use crate::LoadError;
 
 // ── ReportEntry ───────────────────────────────────────────────────────────────
 

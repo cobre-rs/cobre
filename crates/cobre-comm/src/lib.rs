@@ -27,7 +27,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 // Allow unwrap/expect in tests — these lints guard library code but are normal in test contexts.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
@@ -40,7 +40,7 @@ mod types;
 #[cfg(feature = "mpi")]
 mod ferrompi;
 
-pub use factory::{BackendKind, available_backends, create_communicator};
+pub use factory::{available_backends, create_communicator, BackendKind};
 pub use local::{HeapRegion, LocalBackend};
 pub use traits::{CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion};
 pub use types::{BackendError, CommError, ReduceOp};

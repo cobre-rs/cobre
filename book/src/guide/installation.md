@@ -46,7 +46,7 @@ cobre version
 Expected output (exact versions and arch will vary):
 
 ```
-cobre   v0.3.1
+cobre   v0.3.2
 solver: HiGHS
 comm:   local
 zstd:   enabled
@@ -113,5 +113,4 @@ cargo test --workspace --all-features
 
 - [Quickstart](../tutorial/quickstart.md) — run a complete study end to end using the built-in `1dtoy` template
 - [Running Studies](./running-studies.md) — validate, run, and inspect results for any case directory
-- [Case Directory Format](../reference/case-format.md) — how to structure input data
 - [CLI Reference](./cli-reference.md) — complete flag and subcommand reference

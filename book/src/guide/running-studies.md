@@ -109,6 +109,21 @@ To run training without simulation, set `simulation.enabled` to `false` in
 { "simulation": { "enabled": false } }
 ```
 
+### Simulation Against a Saved Policy
+
+To evaluate a previously trained policy without re-training:
+
+```json
+{
+  "training": { "enabled": false },
+  "policy": { "mode": "warm_start", "path": "./policy" }
+}
+```
+
+Cobre loads the policy cuts, skips training entirely, and runs simulation.
+See [Policy Management](./policy-management.md) for details on warm-start
+and resume modes.
+
 ### Quiet Mode for Scripts
 
 ```bash

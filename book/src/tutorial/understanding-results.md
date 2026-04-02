@@ -295,11 +295,8 @@ see [Output Format Reference](../reference/output-format.md).
 
 ---
 
-## What's Next
+## See Also
 
-You have now seen how to run a study and interpret its output. The next page
-collects pointers to everything you need to go further:
-
-- [Next Steps](./next-steps.md) — further reading, guides, and community links
+- [Convergence & Diagnostics](../guide/interpreting-results.md) — advanced analysis patterns and convergence assessment
 - [CLI Reference](../guide/cli-reference.md) — all flags, subcommands, and exit codes
 - [Configuration](../guide/configuration.md) — every `config.json` field documented

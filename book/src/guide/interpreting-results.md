@@ -1,10 +1,10 @@
-# Interpreting Results
+# Convergence & Diagnostics
 
-The [Understanding Results](../tutorial/understanding-results.md) tutorial
-explains what each output file contains and how to read it. This page goes
-one level deeper: it provides practical analysis patterns for answering
-domain questions from the data. It assumes you have already completed the
-tutorial and are comfortable loading Parquet files in your preferred tool.
+[Understanding Results](../tutorial/understanding-results.md) explains what
+each output file contains and how to read it. This page goes one level deeper:
+it provides practical analysis patterns for answering domain questions from the
+data. It assumes you are comfortable loading Parquet files in your preferred
+tool.
 
 The focus is on convergence diagnostics and simulation analysis. By the end
 of this page you will know how to assess whether a run converged, how to

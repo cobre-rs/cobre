@@ -5,7 +5,7 @@ built-in `1dtoy` template. The template models a single-bus hydrothermal system 
 one hydro plant and two thermal units over a 4-stage finite planning horizon — small
 enough to run in seconds, complete enough to demonstrate every stage of the workflow.
 
-If you have not installed Cobre yet, start with [Installation](./installation.md).
+If you have not installed Cobre yet, start with [Installation](../guide/installation.md).
 
 ![Quick Start Demo](../images/quickstart.gif)
 

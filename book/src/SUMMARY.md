@@ -4,33 +4,31 @@
 
 ---
 
-# Tutorial
+# Getting Started
 
 - [What Cobre Solves](./tutorial/what-cobre-solves.md)
-- [Installation](./tutorial/installation.md)
+- [Installation](./guide/installation.md)
 - [Quickstart](./tutorial/quickstart.md)
-- [Anatomy of a Case](./tutorial/anatomy-of-a-case.md)
-- [Building a System](./tutorial/building-a-system.md)
-- [Understanding Results](./tutorial/understanding-results.md)
-- [Next Steps](./tutorial/next-steps.md)
+- [Python Quickstart](./guide/python-quickstart.md)
 
 ---
 
-# User Guide
+# Guide
 
-- [Getting Started](./guide/getting-started.md)
-  - [Installation](./guide/installation.md)
+- [Anatomy of a Case](./tutorial/anatomy-of-a-case.md)
+- [Building a Case](./tutorial/building-a-system.md)
 - [System Modeling](./guide/system-modeling.md)
   - [Hydro Plants](./guide/hydro-plants.md)
   - [Thermal Units](./guide/thermal-units.md)
   - [Network Topology](./guide/network-topology.md)
   - [Stochastic Modeling](./guide/stochastic-modeling.md)
+- [Configuration](./guide/configuration.md)
 - [Running Studies](./guide/running-studies.md)
-  - [Configuration](./guide/configuration.md)
-  - [CLI Reference](./guide/cli-reference.md)
-  - [Interpreting Results](./guide/interpreting-results.md)
+- [Policy Management](./guide/policy-management.md)
 - [Case Conversion (cobre-bridge)](./guide/cobre-bridge.md)
-- [Python Quickstart](./guide/python-quickstart.md)
+- [Understanding Results](./tutorial/understanding-results.md)
+- [Convergence & Diagnostics](./guide/interpreting-results.md)
+- [CLI Reference](./guide/cli-reference.md)
 
 ---
 
@@ -42,9 +40,18 @@
 
 ---
 
-# Crate Documentation
+# Reference
 
-- [Overview](./crates/overview.md)
+- [Case Directory Format](./reference/case-format.md)
+- [Output Format](./reference/output-format.md)
+- [Error Codes](./reference/error-codes.md)
+- [Schemas](./reference/schemas.md)
+
+---
+
+# For Developers
+
+- [Crate Overview](./crates/overview.md)
 - [cobre-core](./crates/core.md)
 - [cobre-io](./crates/io.md)
 - [cobre-stochastic](./crates/stochastic.md)
@@ -53,17 +60,4 @@
 - [cobre-sddp](./crates/sddp.md)
 - [cobre-cli](./crates/cli.md)
 - [ferrompi](./crates/ferrompi.md)
-
----
-
-# Reference
-
-- [Case Directory Format](./reference/case-format.md)
-- [Output Format](./reference/output-format.md)
-- [Error Codes](./reference/error-codes.md)
-- [Roadmap](./reference/roadmap.md)
-- [Schemas](./reference/schemas.md)
-
----
-
-[Contributing](./contributing.md)
+- [Contributing](./contributing.md)

@@ -22,6 +22,10 @@ workflows.
 > If you want to run studies from Jupyter or a Python script, see the
 > [Python Quickstart](./guide/python-quickstart.md).
 
+> **Ready to run?**
+> Jump straight to [Installation](./guide/installation.md) and
+> [Quickstart](./tutorial/quickstart.md).
+
 ## What Cobre Does
 
 - **Solve long-term hydrothermal dispatch** via Stochastic Dual Dynamic

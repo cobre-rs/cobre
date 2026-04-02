@@ -3,8 +3,6 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use arrow::datatypes::{DataType, Field, Schema};
 
 /// Schema for `simulation/costs/` — stage and block-level cost breakdown.
@@ -280,7 +278,7 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 17 columns. One row per (iteration, phase, stage) triple.
+/// 16 columns. One row per (iteration, phase, stage) triple.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
@@ -299,11 +297,21 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
-        Field::new(
-            "retry_histogram",
-            DataType::List(Arc::new(Field::new("item", DataType::UInt64, false))),
-            false,
-        ),
+    ])
+}
+
+/// Schema for `training/solver/retry_histogram.parquet` -- per-level retry
+/// success counts, normalized from the solver iterations table.
+///
+/// 5 columns. One row per (iteration, phase, stage, `retry_level`) tuple where
+/// `count > 0` (sparse encoding).
+pub(crate) fn retry_histogram_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("iteration", DataType::UInt32, false),
+        Field::new("phase", DataType::Utf8, false),
+        Field::new("stage", DataType::Int32, false),
+        Field::new("retry_level", DataType::UInt32, false),
+        Field::new("count", DataType::UInt64, false),
     ])
 }
 
@@ -772,6 +780,8 @@ mod tests {
             (iteration_timing_schema(), "iteration_timing"),
             (rank_timing_schema(), "rank_timing"),
             (cut_selection_schema(), "cut_selection"),
+            (solver_iterations_schema(), "solver_iterations"),
+            (retry_histogram_schema(), "retry_histogram"),
         ];
         for (schema, name) in &schemas {
             assert!(
@@ -799,6 +809,8 @@ mod tests {
             ("iteration_timing", 13),
             ("rank_timing", 8),
             ("cut_selection", 7),
+            ("solver_iterations", 16),
+            ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {
             assert_eq!(

@@ -63,6 +63,13 @@ pub struct SolverStatsDelta {
     pub retry_level_histogram: Vec<u64>,
 }
 
+/// Resize histogram on first use to match the source histogram length.
+fn ensure_histogram_capacity(result: &mut Vec<u64>, source: &[u64]) {
+    if result.is_empty() && !source.is_empty() {
+        result.resize(source.len(), 0);
+    }
+}
+
 impl SolverStatsDelta {
     /// Compute the delta between two monotonic [`SolverStatistics`] snapshots.
     ///
@@ -126,11 +133,7 @@ impl SolverStatsDelta {
             result.add_rows_time_ms += d.add_rows_time_ms;
             result.set_bounds_time_ms += d.set_bounds_time_ms;
             result.basis_set_time_ms += d.basis_set_time_ms;
-            if result.retry_level_histogram.is_empty() && !d.retry_level_histogram.is_empty() {
-                result
-                    .retry_level_histogram
-                    .resize(d.retry_level_histogram.len(), 0);
-            }
+            ensure_histogram_capacity(&mut result.retry_level_histogram, &d.retry_level_histogram);
             for (dst, src) in result
                 .retry_level_histogram
                 .iter_mut()
@@ -167,11 +170,7 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
         result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
         result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
         result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
-        if result.retry_level_histogram.is_empty() && !s.retry_level_histogram.is_empty() {
-            result
-                .retry_level_histogram
-                .resize(s.retry_level_histogram.len(), 0);
-        }
+        ensure_histogram_capacity(&mut result.retry_level_histogram, &s.retry_level_histogram);
         for (dst, src) in result
             .retry_level_histogram
             .iter_mut()

@@ -218,6 +218,13 @@ pub fn scrambled_sobol_point(spec: &SobolPointSpec, output: &mut [f64]) {
         output.len(),
     );
 
+    debug_assert!(
+        spec.scenario < spec.total_scenarios,
+        "scenario {} out of range 0..{}",
+        spec.scenario,
+        spec.total_scenarios,
+    );
+
     if spec.dim == 0 {
         return;
     }

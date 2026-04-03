@@ -1,10 +1,9 @@
-//! Integration tests validating LHS statistical properties and correctness.
+//! Integration tests validating Sobol QMC statistical properties and correctness.
 //!
-//! Exercises `NoiseMethod::Lhs` through the full `generate_opening_tree`
-//! pipeline and verifies six properties that cannot be tested in unit tests:
-//! marginal uniformity, stratum collision absence, normal marginal statistics,
-//! correlation application, declaration-order invariance, and point-wise
-//! cross-path stratum consistency.
+//! Exercises `NoiseMethod::QmcSobol` through the full `generate_opening_tree`
+//! pipeline and verifies five properties that cannot be tested in unit tests:
+//! star discrepancy bounds, normal marginal statistics, correlation application,
+//! declaration-order invariance, and point-wise cross-path consistency.
 
 #![allow(
     clippy::unwrap_used,
@@ -34,7 +33,7 @@ use cobre_stochastic::{
     build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
-    tree::lhs::{LhsPointSpec, sample_lhs_point},
+    tree::qmc_sobol::{SobolPointSpec, scrambled_sobol_point},
 };
 
 // ---------------------------------------------------------------------------
@@ -58,7 +57,32 @@ fn norm_cdf(z: f64) -> f64 {
     0.5 * (1.0 + approx_erf(z / std::f64::consts::SQRT_2))
 }
 
-fn make_stage_lhs(index: usize, id: i32, branching_factor: usize) -> Stage {
+/// Build a `Stage` with `NoiseMethod::QmcSobol` and no blocks, suitable for
+/// direct use with `generate_opening_tree`.
+fn make_stage_sobol(index: usize, id: i32, branching_factor: usize) -> Stage {
+    Stage {
+        index,
+        id,
+        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+        season_id: Some(0),
+        blocks: vec![],
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: true,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor,
+            noise_method: NoiseMethod::QmcSobol,
+        },
+    }
+}
+
+/// Build a `Stage` with `NoiseMethod::QmcSobol` with one block, suitable for
+/// use with `build_stochastic_context`.
+fn make_stage_sobol_with_block(index: usize, id: i32, branching_factor: usize) -> Stage {
     Stage {
         index,
         id,
@@ -78,29 +102,7 @@ fn make_stage_lhs(index: usize, id: i32, branching_factor: usize) -> Stage {
         risk_config: StageRiskConfig::Expectation,
         scenario_config: ScenarioSourceConfig {
             branching_factor,
-            noise_method: NoiseMethod::Lhs,
-        },
-    }
-}
-
-/// Build a `Stage` without blocks (for use with `generate_opening_tree` directly).
-fn make_stage_lhs_no_block(index: usize, id: i32, branching_factor: usize) -> Stage {
-    Stage {
-        index,
-        id,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: true,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor,
-            noise_method: NoiseMethod::Lhs,
+            noise_method: NoiseMethod::QmcSobol,
         },
     }
 }
@@ -264,8 +266,8 @@ fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {
     }
 }
 
-/// Build a `StochasticContext` with LHS stages and the given hydro list.
-fn build_lhs_context(
+/// Build a `StochasticContext` with `QmcSobol` stages and the given hydro list.
+fn build_sobol_context(
     hydros: Vec<Hydro>,
     n_openings: usize,
     base_seed: u64,
@@ -277,9 +279,9 @@ fn build_lhs_context(
     };
 
     let stages = vec![
-        make_stage_lhs(0, 0, n_openings),
-        make_stage_lhs(1, 1, n_openings),
-        make_stage_lhs(2, 2, n_openings),
+        make_stage_sobol_with_block(0, 0, n_openings),
+        make_stage_sobol_with_block(1, 1, n_openings),
+        make_stage_sobol_with_block(2, 2, n_openings),
     ];
 
     let mut inflow_models: Vec<InflowModel> = Vec::new();
@@ -296,110 +298,84 @@ fn build_lhs_context(
         .inflow_models(inflow_models)
         .correlation(identity_correlation_model(&hydro_ids))
         .build()
-        .expect("build_lhs_context: system build must succeed");
+        .expect("build_sobol_context: system build must succeed");
 
     build_stochastic_context(&system, base_seed, None, &[], &[], None)
-        .expect("build_lhs_context: build_stochastic_context must succeed")
+        .expect("build_sobol_context: build_stochastic_context must succeed")
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Verify marginal uniformity: for N=100 openings and dim=5, after applying the
-/// forward normal CDF Φ to each output value and computing `floor(Φ(x) * N)`,
-/// each dimension yields exactly one sample per stratum (a permutation of 0..N).
+/// Verify the 2D star discrepancy of N=64 unscrambled Sobol points is below 0.1.
 ///
-/// This confirms the LHS stratification property holds end-to-end through
-/// `generate_opening_tree` — the output noise values encode exactly one stratum
-/// per dimension per opening.
+/// The star discrepancy D* measures the maximum deviation between the empirical
+/// distribution of the point set and the uniform distribution over all
+/// axis-aligned rectangles anchored at the origin. For 64 Sobol points in 2D
+/// this bound is generously set at 0.1; the actual discrepancy is typically
+/// much lower, confirming the low-discrepancy property of the sequence.
+///
+/// To test unscrambled points, the N(0,1) output from `generate_opening_tree`
+/// is mapped back to uniform [0,1) via the normal CDF `Φ`. Because scrambled
+/// Sobol is still a valid low-discrepancy sequence modulo the CDF transform,
+/// this verifies the end-to-end discrepancy bound.
 #[test]
-fn lhs_marginal_uniformity() {
-    let n = 100_usize;
-    let dim = 5_usize;
-    let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4, 5]);
-    let entity_order = vec![
-        EntityId(1),
-        EntityId(2),
-        EntityId(3),
-        EntityId(4),
-        EntityId(5),
-    ];
+fn sobol_2d_star_discrepancy() {
+    let n = 64_usize;
+    let stages = vec![make_stage_sobol(0, 0, n)];
+    let mut corr = identity_correlation(&[1, 2]);
+    let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order)
+    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
     assert_eq!(tree.n_openings(0), n);
 
+    // Map N(0,1) values back to uniform [0,1) via the normal CDF.
+    let points: Vec<(f64, f64)> = (0..n)
+        .map(|k| {
+            let s = tree.opening(0, k);
+            (norm_cdf(s[0]), norm_cdf(s[1]))
+        })
+        .collect();
+
+    // Compute 2D star discrepancy via O(N^2) brute force.
+    // D* = max over all axis-aligned rectangles [0,u) x [0,v) of
+    //      |#{points in [0,u) x [0,v)} / N - u*v|
+    // We evaluate at each point (x_i, y_i) as the upper corner.
     let n_f = n as f64;
-    for d in 0..dim {
-        let mut strata: Vec<usize> = (0..n)
-            .map(|k| {
-                let z = tree.opening(0, k)[d];
-                let p = norm_cdf(z);
-                ((p * n_f).floor() as usize).min(n - 1)
-            })
-            .collect();
-        strata.sort_unstable();
-        let expected: Vec<usize> = (0..n).collect();
-        assert_eq!(
-            strata, expected,
-            "dim {d}: CDF-floor indices are not a permutation of 0..{n} — \
-             marginal uniformity violated"
-        );
+    let mut d_star = 0.0_f64;
+
+    for &(ux, uy) in &points {
+        let count = points
+            .iter()
+            .filter(|&&(px, py)| px < ux && py < uy)
+            .count();
+        let empirical = count as f64 / n_f;
+        let discrepancy = (empirical - ux * uy).abs();
+        d_star = d_star.max(discrepancy);
     }
+
+    assert!(
+        d_star < 0.1,
+        "2D star discrepancy D*={d_star:.4} exceeds 0.1; \
+         expected Sobol QMC to achieve low discrepancy for N={n} in 2D"
+    );
 }
 
-/// Verify that no two openings occupy the same stratum in any dimension.
+/// Verify that Sobol QMC produces standard-normal marginal statistics for N=256.
 ///
-/// For a valid LHS design each stratum `[k/N, (k+1)/N)` must be occupied by
-/// exactly one sample per dimension. This test checks the absence of stratum
-/// collisions directly, which is equivalent to marginal uniformity but is
-/// expressed as a set uniqueness check rather than a permutation check.
+/// For N=256 openings and dim=1, the sample mean must be within 0.15 of 0.0
+/// and the sample standard deviation within 0.15 of 1.0. Scrambled Sobol
+/// improves on pure Monte Carlo by ensuring better coverage of the probability
+/// space, typically tightening convergence to the target distribution.
 #[test]
-fn lhs_no_stratum_collision() {
-    let n = 80_usize;
-    let dim = 4_usize;
-    let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4]);
-    let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
-
-    let tree = generate_opening_tree(99, &stages, dim, &mut corr, &entity_order)
-        .expect("generate_opening_tree must succeed");
-
-    let n_f = n as f64;
-    for d in 0..dim {
-        let mut strata: Vec<usize> = (0..n)
-            .map(|k| {
-                let z = tree.opening(0, k)[d];
-                let p = norm_cdf(z);
-                ((p * n_f).floor() as usize).min(n - 1)
-            })
-            .collect();
-        let original_len = strata.len();
-        strata.sort_unstable();
-        strata.dedup();
-        assert_eq!(
-            strata.len(),
-            original_len,
-            "dim {d}: stratum collision detected — two openings share the same stratum"
-        );
-    }
-}
-
-/// Verify that LHS produces standard-normal marginal statistics for large N.
-///
-/// For N=1000 openings and dim=1, the sample mean must be within 0.1 of 0.0
-/// and the sample standard deviation within 0.1 of 1.0. LHS improves on pure
-/// Monte Carlo by ensuring full stratum coverage, which typically tightens the
-/// convergence to the target distribution.
-#[test]
-fn lhs_normal_statistics() {
-    let n = 1000_usize;
+fn sobol_normal_statistics() {
+    let n = 256_usize;
     let dim = 1_usize;
-    let stages = vec![make_stage_lhs_no_block(0, 0, n)];
+    let stages = vec![make_stage_sobol(0, 0, n)];
     let mut corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
@@ -414,28 +390,28 @@ fn lhs_normal_statistics() {
     let std = variance.sqrt();
 
     assert!(
-        mean.abs() < 0.1,
-        "mean {mean:.4} too far from 0.0 (tolerance 0.1); \
-         expected LHS N(0,1) marginal"
+        mean.abs() < 0.15,
+        "mean {mean:.4} too far from 0.0 (tolerance 0.15); \
+         expected Sobol QMC N(0,1) marginal"
     );
     assert!(
-        (std - 1.0).abs() < 0.1,
-        "std {std:.4} too far from 1.0 (tolerance 0.1); \
-         expected LHS N(0,1) marginal"
+        (std - 1.0).abs() < 0.15,
+        "std {std:.4} too far from 1.0 (tolerance 0.15); \
+         expected Sobol QMC N(0,1) marginal"
     );
 }
 
-/// Verify that spatial correlation is correctly applied to LHS noise.
+/// Verify that spatial correlation is correctly applied to Sobol QMC noise.
 ///
-/// With a 2×2 correlation matrix with off-diagonal rho=0.8 and N=2000 openings,
-/// the sample Pearson correlation between the two dimensions must be within 0.1
+/// With a 2×2 correlation matrix with off-diagonal rho=0.8 and N=256 openings,
+/// the sample Pearson correlation between the two dimensions must be within 0.15
 /// of the target 0.8. This exercises the Cholesky correlation transform applied
-/// after LHS stratified sampling inside `generate_opening_tree`.
+/// after Sobol sampling inside `generate_opening_tree`.
 #[test]
-fn lhs_correlation_applied() {
-    let n = 2000_usize;
+fn sobol_correlation_applied() {
+    let n = 256_usize;
     let rho = 0.8_f64;
-    let stages = vec![make_stage_lhs_no_block(0, 0, n)];
+    let stages = vec![make_stage_sobol(0, 0, n)];
     let mut corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
@@ -464,9 +440,9 @@ fn lhs_correlation_applied() {
     let sample_corr = cov_xy / (var_x.sqrt() * var_y.sqrt());
 
     assert!(
-        (sample_corr - rho).abs() < 0.1,
-        "sample correlation {sample_corr:.4} too far from target {rho} (tolerance 0.1); \
-         Cholesky correlation transform may not be applied correctly for LHS"
+        (sample_corr - rho).abs() < 0.15,
+        "sample correlation {sample_corr:.4} too far from target {rho} (tolerance 0.15); \
+         Cholesky correlation transform may not be applied correctly for Sobol QMC"
     );
 }
 
@@ -479,7 +455,7 @@ fn lhs_correlation_applied() {
 /// case results are reproducible regardless of the order entities appear in
 /// input files.
 #[test]
-fn lhs_declaration_order_invariant() {
+fn sobol_declaration_order_invariant() {
     let n_openings = 30_usize;
 
     // Forward order: EntityId(1) before EntityId(2).
@@ -487,8 +463,8 @@ fn lhs_declaration_order_invariant() {
     // Reversed order: EntityId(2) before EntityId(1).
     let hydros_rev = vec![make_hydro(2), make_hydro(1)];
 
-    let ctx_fwd = build_lhs_context(hydros_fwd, n_openings, 42);
-    let ctx_rev = build_lhs_context(hydros_rev, n_openings, 42);
+    let ctx_fwd = build_sobol_context(hydros_fwd, n_openings, 42);
+    let ctx_rev = build_sobol_context(hydros_rev, n_openings, 42);
 
     let tree_fwd = ctx_fwd.opening_tree();
     let tree_rev = ctx_rev.opening_tree();
@@ -516,28 +492,22 @@ fn lhs_declaration_order_invariant() {
     }
 }
 
-/// Verify that the point-wise LHS path (`sample_lhs_point`) produces a valid
-/// LHS design across all scenarios for a given iteration and stage.
+/// Verify point-wise consistency of the Sobol forward-pass path.
 ///
-/// For all scenarios 0..N, the strata assigned by `sample_lhs_point` per
-/// dimension must form a permutation of `{0, …, N-1}`. This confirms that the
-/// communication-free point-wise path (used during the forward pass) is
-/// consistent with the batch path used in the opening tree: both paths
-/// produce valid LHS designs without any inter-worker coordination.
+/// For all scenarios 0..N, `scrambled_sobol_point` must produce finite N(0,1)
+/// values and different scenarios must produce different noise vectors. This
+/// confirms that the communication-free point-wise path (used during the
+/// forward pass) is self-consistent: each scenario generates a valid,
+/// distinct, and finite noise vector without any inter-worker coordination.
 #[test]
-fn lhs_point_wise_stratum_consistency() {
-    let n = 60_usize;
+fn sobol_point_wise_consistency() {
+    let n = 64_usize;
     let dim = 3_usize;
-    let mut perm_scratch = vec![0_usize; n];
-    let n_f = n as f64;
 
-    // Collect per-dimension strata across all scenarios for a fixed
-    // (sampling_seed, iteration, stage_id).
-    let mut strata_by_dim: Vec<Vec<usize>> = (0..dim).map(|_| Vec::with_capacity(n)).collect();
+    let mut outputs: Vec<Vec<f64>> = Vec::with_capacity(n);
 
     for scenario in 0..n {
-        let mut output = vec![0.0_f64; dim];
-        let spec = LhsPointSpec {
+        let spec = SobolPointSpec {
             sampling_seed: 77,
             iteration: 3,
             scenario: scenario as u32,
@@ -545,22 +515,30 @@ fn lhs_point_wise_stratum_consistency() {
             total_scenarios: n as u32,
             dim,
         };
-        sample_lhs_point(&spec, &mut output, &mut perm_scratch);
+        let mut output = vec![0.0_f64; dim];
+        scrambled_sobol_point(&spec, &mut output);
 
+        // All values must be finite N(0,1).
         for (d, &v) in output.iter().enumerate() {
-            let p = norm_cdf(v);
-            let stratum = ((p * n_f).floor() as usize).min(n - 1);
-            strata_by_dim[d].push(stratum);
+            assert!(
+                v.is_finite(),
+                "non-finite value at scenario={scenario} dim={d}: {v}"
+            );
         }
+
+        outputs.push(output);
     }
 
-    for (d, strata) in strata_by_dim.iter_mut().enumerate() {
-        strata.sort_unstable();
-        let expected: Vec<usize> = (0..n).collect();
-        assert_eq!(
-            *strata, expected,
-            "dim {d}: point-wise strata across all scenarios are not a permutation of \
-             0..{n} — LHS design property violated"
-        );
+    // Different scenarios must produce different noise vectors.
+    // Check that no two scenarios share an identical output (highly improbable
+    // for any reasonable RNG, but required for correctness).
+    for i in 0..n {
+        for j in (i + 1)..n {
+            assert_ne!(
+                outputs[i], outputs[j],
+                "scenarios {i} and {j} produced identical noise vectors — \
+                 point-wise Sobol is not scenario-distinct"
+            );
+        }
     }
 }

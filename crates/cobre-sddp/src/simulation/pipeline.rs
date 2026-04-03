@@ -51,6 +51,7 @@ use cobre_stochastic::sample_forward;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -60,14 +61,13 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
-            StageExtractionSpec,
+            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
+            extract_stage_result,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
-    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`sample_forward`].
@@ -906,12 +906,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{simulate, SimulationOutputSpec};
+    use super::{SimulationOutputSpec, simulate};
     use crate::{
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{ScratchBuffers, SolverWorkspace},
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1253,7 +1253,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1291,6 +1291,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         }]
     }
@@ -1989,6 +1991,8 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
             })
             .collect();
@@ -2804,7 +2808,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// When a simulation has 1 stochastic load bus (mean=300, std=30),
@@ -2875,6 +2879,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         }];
 
@@ -3149,6 +3155,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         }];
 
@@ -3354,7 +3362,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
@@ -3413,6 +3421,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         }]
     }

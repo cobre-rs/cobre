@@ -68,6 +68,9 @@ pub enum SamplingScheme {
     /// Forward pass uses the same opening tree generated for the backward pass.
     /// This is the default for the minimal viable solver.
     InSample,
+    /// Forward pass generates fresh noise on-the-fly from the same distribution
+    /// as the opening tree, using an independent seed.
+    OutOfSample,
     /// Forward pass draws from an externally supplied scenario file.
     External,
     /// Forward pass replays historical inflow realisations in sequence or at random.
@@ -662,6 +665,10 @@ mod tests {
         let copied = original;
         assert_eq!(original, copied);
 
+        let original_oos = SamplingScheme::OutOfSample;
+        let copied_oos = original_oos;
+        assert_eq!(original_oos, copied_oos);
+
         let original_ext = SamplingScheme::External;
         let copied_ext = original_ext;
         assert_eq!(original_ext, copied_ext);
@@ -683,6 +690,16 @@ mod tests {
         let json = serde_json::to_string(&source).unwrap();
         let deserialized: ScenarioSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, deserialized);
+
+        // OutOfSample with seed
+        let source_oos = ScenarioSource {
+            sampling_scheme: SamplingScheme::OutOfSample,
+            seed: Some(7),
+            selection_mode: None,
+        };
+        let json_oos = serde_json::to_string(&source_oos).unwrap();
+        let deserialized_oos: ScenarioSource = serde_json::from_str(&json_oos).unwrap();
+        assert_eq!(source_oos, deserialized_oos);
 
         // External with selection mode
         let source_ext = ScenarioSource {

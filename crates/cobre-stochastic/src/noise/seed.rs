@@ -1,48 +1,19 @@
 //! Deterministic seed derivation via SipHash-1-3.
 //!
-//! Derives unique `u64` seeds from a global base seed combined with a context
-//! tuple using SipHash-1-3. The derivation is fully deterministic and requires
-//! no inter-process communication, enabling each compute node to independently
-//! generate its assigned subset of scenarios without inter-process coordination.
-//!
-//! [`derive_forward_seed`] uses a 20-byte wire format (base seed + iteration +
-//! scenario + stage), while [`derive_opening_seed`] uses 16 bytes (base seed +
-//! opening index + stage). The different lengths prevent hash domain collisions.
+//! Derives unique `u64` seeds from a global base seed and context tuple
+//! using SipHash-1-3. The three variants use different wire format lengths
+//! to prevent hash domain collisions:
+//! - [`derive_forward_seed`]: 20 bytes (base seed + iteration + scenario + stage)
+//! - [`derive_opening_seed`]: 16 bytes (base seed + opening index + stage)
+//! - [`derive_stage_seed`]: 12 bytes (base seed + stage)
 
 use siphasher::sip::SipHasher13;
 use std::hash::Hasher;
 
-/// Derive a deterministic 64-bit seed for forward pass noise generation.
+/// Derive a deterministic seed for forward-pass noise generation.
 ///
-/// The derived seed is identical for the same `(base_seed, iteration,
-/// scenario, stage)` tuple regardless of MPI rank, thread ID, or
-/// process restart. Uses SipHash-1-3 for deterministic, communication-free seed derivation.
-///
-/// # Wire format
-///
-/// The hash input is a 20-byte little-endian concatenation:
-/// ```text
-/// base_seed (u64, 8 bytes) ++ iteration (u32, 4 bytes)
-///   ++ scenario (u32, 4 bytes) ++ stage (u32, 4 bytes)
-/// ```
-///
-/// # Examples
-///
-/// ```
-/// use cobre_stochastic::noise::seed::derive_forward_seed;
-///
-/// // Same inputs always produce the same output.
-/// assert_eq!(
-///     derive_forward_seed(42, 0, 0, 0),
-///     derive_forward_seed(42, 0, 0, 0),
-/// );
-///
-/// // Different stage produces a different seed.
-/// assert_ne!(
-///     derive_forward_seed(42, 0, 0, 0),
-///     derive_forward_seed(42, 0, 0, 1),
-/// );
-/// ```
+/// Returns the same output for identical `(base_seed, iteration, scenario, stage)`
+/// tuples regardless of MPI rank, thread ID, or process restart.
 #[must_use]
 pub fn derive_forward_seed(base_seed: u64, iteration: u32, scenario: u32, stage: u32) -> u64 {
     let mut hasher = SipHasher13::new();
@@ -53,36 +24,23 @@ pub fn derive_forward_seed(base_seed: u64, iteration: u32, scenario: u32, stage:
     hasher.finish()
 }
 
-/// Derive a deterministic 64-bit seed for opening tree generation.
+/// Derive a deterministic seed for stage-level batch generation.
 ///
-/// The derived seed is identical for the same `(base_seed,
-/// opening_index, stage)` tuple. Uses SipHash-1-3 for deterministic, communication-free seed derivation.
+/// Returns the same output for identical `(base_seed, stage_id)` tuples
+/// regardless of MPI rank or thread ID. Intended for batch noise methods
+/// (LHS, QMC) that require all openings at a stage simultaneously.
+#[must_use]
+pub fn derive_stage_seed(base_seed: u64, stage_id: u32) -> u64 {
+    let mut hasher = SipHasher13::new();
+    hasher.write(&base_seed.to_le_bytes());
+    hasher.write(&stage_id.to_le_bytes());
+    hasher.finish()
+}
+
+/// Derive a deterministic seed for opening tree generation.
 ///
-/// # Wire format
-///
-/// The hash input is a 16-byte little-endian concatenation:
-/// ```text
-/// base_seed (u64, 8 bytes) ++ opening_index (u32, 4 bytes)
-///   ++ stage (u32, 4 bytes)
-/// ```
-///
-/// # Examples
-///
-/// ```
-/// use cobre_stochastic::noise::seed::derive_opening_seed;
-///
-/// // Same inputs always produce the same output.
-/// assert_eq!(
-///     derive_opening_seed(42, 0, 0),
-///     derive_opening_seed(42, 0, 0),
-/// );
-///
-/// // Different stage produces a different seed.
-/// assert_ne!(
-///     derive_opening_seed(42, 0, 0),
-///     derive_opening_seed(42, 0, 1),
-/// );
-/// ```
+/// Returns the same output for identical `(base_seed, opening_index, stage)`
+/// tuples regardless of MPI rank or thread ID.
 #[must_use]
 pub fn derive_opening_seed(base_seed: u64, opening_index: u32, stage: u32) -> u64 {
     let mut hasher = SipHasher13::new();
@@ -94,7 +52,7 @@ pub fn derive_opening_seed(base_seed: u64, opening_index: u32, stage: u32) -> u6
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_forward_seed, derive_opening_seed};
+    use super::{derive_forward_seed, derive_opening_seed, derive_stage_seed};
 
     // -------------------------------------------------------------------------
     // derive_forward_seed: determinism
@@ -198,5 +156,64 @@ mod tests {
         let seed = derive_forward_seed(42, 0, 0, 0);
         // Golden value recorded from siphasher 1.0.2 with zero key.
         assert_eq!(seed, 4_418_977_803_187_233_897_u64);
+    }
+
+    // -------------------------------------------------------------------------
+    // derive_stage_seed: determinism
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn stage_seed_is_deterministic() {
+        assert_eq!(derive_stage_seed(42, 0), derive_stage_seed(42, 0));
+    }
+
+    #[test]
+    fn stage_seed_varies_with_stage() {
+        assert_ne!(derive_stage_seed(42, 0), derive_stage_seed(42, 1));
+    }
+
+    #[test]
+    fn stage_seed_varies_with_base_seed() {
+        assert_ne!(derive_stage_seed(42, 0), derive_stage_seed(43, 0));
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-function differentiation: 12-byte vs 16-byte and 20-byte wire formats
+    // -------------------------------------------------------------------------
+
+    /// `derive_stage_seed(base, 0)` feeds 12 bytes;
+    /// `derive_opening_seed(base, 0, 0)` feeds 16 bytes.
+    /// SipHash-1-3 incorporates message length into its state, so the two
+    /// outputs must differ even when the numeric arguments overlap.
+    #[test]
+    fn stage_seed_differs_from_opening_seed() {
+        assert_ne!(derive_stage_seed(42, 0), derive_opening_seed(42, 0, 0));
+    }
+
+    /// `derive_stage_seed(base, 0)` feeds 12 bytes;
+    /// `derive_forward_seed(base, 0, 0, 0)` feeds 20 bytes.
+    /// SipHash-1-3 incorporates message length into its state, so the two
+    /// outputs must differ even when the numeric arguments overlap.
+    #[test]
+    fn stage_seed_differs_from_forward_seed() {
+        assert_ne!(derive_stage_seed(42, 0), derive_forward_seed(42, 0, 0, 0));
+    }
+
+    // -------------------------------------------------------------------------
+    // Golden value regression: pin derive_stage_seed output
+    // -------------------------------------------------------------------------
+
+    /// This value was computed by running the implementation and recording the
+    /// output. If this test fails, the SipHash-1-3 wire format or the
+    /// `siphasher` crate version has changed in a breaking way.
+    ///
+    /// Input bytes (little-endian):
+    ///   42u64  = [2a 00 00 00 00 00 00 00]
+    ///   0u32   = [00 00 00 00]  (stage_id)
+    #[test]
+    fn stage_seed_golden_value() {
+        let seed = derive_stage_seed(42, 0);
+        // Golden value recorded from siphasher 1.0.2 with zero key.
+        assert_eq!(seed, 983_776_962_555_776_753_u64);
     }
 }

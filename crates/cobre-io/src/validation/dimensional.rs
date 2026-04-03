@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::entities::HydroGenerationModel;
 
-use super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
 use crate::extensions::{ProductionModelConfig, SelectionMode};
 
 // ── validate_dimensional_consistency ─────────────────────────────────────────
@@ -299,6 +299,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
+        EntityId,
         entities::{Bus, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
@@ -308,7 +309,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, PolicyGraph, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use crate::{
@@ -505,7 +505,7 @@ mod tests {
             modeling: ModelingConfig::default(),
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: Some(10),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 100 }]),
                 stopping_mode: "any".to_string(),

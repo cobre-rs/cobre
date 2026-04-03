@@ -61,8 +61,8 @@ fn test_minimal_config_all_defaults() {
         "training.stopping_mode should default to 'any'"
     );
     assert!(
-        cfg.training.seed.is_none(),
-        "training.seed should default to None when absent"
+        cfg.training.tree_seed.is_none(),
+        "training.tree_seed should default to None when absent"
     );
 
     // simulation defaults
@@ -97,7 +97,7 @@ fn test_minimal_config_all_defaults() {
     );
 }
 
-/// Given a `config.json` with `training.seed: 99`, `parse_config` must
+/// Given a `config.json` with `training.tree_seed: 99`, `parse_config` must
 /// preserve the seed as `Some(99)`.
 #[test]
 fn test_config_explicit_seed_preserved() {
@@ -113,14 +113,14 @@ fn test_config_explicit_seed_preserved() {
     let cfg = parse_config(f.path()).unwrap();
 
     assert_eq!(
-        cfg.training.seed,
+        cfg.training.tree_seed,
         Some(99),
-        "training.seed should be Some(99) when explicitly set"
+        "training.tree_seed should be Some(99) when explicitly set"
     );
 }
 
-/// Given a `config.json` without `training.seed`, `parse_config` must return
-/// `training.seed == None`.
+/// Given a `config.json` without `training.tree_seed`, `parse_config` must return
+/// `training.tree_seed == None`.
 #[test]
 fn test_config_absent_seed_is_none() {
     let f = write_json(
@@ -134,8 +134,8 @@ fn test_config_absent_seed_is_none() {
     let cfg = parse_config(f.path()).unwrap();
 
     assert!(
-        cfg.training.seed.is_none(),
-        "training.seed must be None when not present in JSON"
+        cfg.training.tree_seed.is_none(),
+        "training.tree_seed must be None when not present in JSON"
     );
 }
 
@@ -190,7 +190,7 @@ fn test_config_all_sections_explicit_no_defaults_applied() {
 
     // training: non-default values preserved
     assert!(!cfg.training.enabled, "enabled: false should be preserved");
-    assert_eq!(cfg.training.seed, Some(7));
+    assert_eq!(cfg.training.tree_seed, Some(7));
     assert_eq!(cfg.training.forward_passes, Some(192));
     assert_eq!(cfg.training.stopping_mode, "all");
 

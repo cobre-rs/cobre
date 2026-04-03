@@ -192,7 +192,7 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
 }
 
 #[allow(clippy::cast_possible_wrap)]
@@ -319,7 +319,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 fn minimal_template() -> StageTemplate {
@@ -415,7 +415,7 @@ fn make_config() -> Config {
         },
         training: IoTrainingConfig {
             enabled: true,
-            seed: None,
+            tree_seed: None,
             forward_passes: Some(1),
             stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]),
             stopping_mode: "any".to_string(),

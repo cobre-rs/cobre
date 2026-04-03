@@ -69,11 +69,11 @@ use rayon::iter::{
 };
 
 use crate::{
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -1018,20 +1018,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
-        ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
-        context::{StageContext, TrainingContext},
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        context::{StageContext, TrainingContext},
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1367,7 +1367,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1496,6 +1496,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         }
     }
@@ -2585,7 +2587,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2972,7 +2974,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -3116,6 +3118,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         };
 
@@ -3222,6 +3226,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
         };
 

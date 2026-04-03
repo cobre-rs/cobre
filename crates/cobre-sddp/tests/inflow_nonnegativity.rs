@@ -361,7 +361,7 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
@@ -422,7 +422,7 @@ fn build_opening_tree() -> OpeningTree {
     })
     .unwrap();
 
-    generate_opening_tree(42, &[stage], 2, &mut decomposed, &[id_h1, id_h2])
+    generate_opening_tree(42, &[stage], 2, &mut decomposed, &[id_h1, id_h2]).unwrap()
 }
 
 // ===========================================================================

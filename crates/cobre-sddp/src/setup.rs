@@ -31,7 +31,7 @@
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
-//! let stochastic = build_stochastic_context(system, 42, &[], &[], None)?;
+//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None)?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
@@ -125,7 +125,10 @@ impl StudyParams {
     pub fn from_config(config: &cobre_io::Config) -> Result<Self, SddpError> {
         use cobre_io::config::StoppingRuleConfig;
 
-        let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
+        let seed = config
+            .training
+            .tree_seed
+            .map_or(DEFAULT_SEED, i64::unsigned_abs);
 
         let forward_passes = config
             .training
@@ -1446,9 +1449,11 @@ pub fn prepare_stochastic(
         .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
         .collect();
 
+    let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
     let stochastic = cobre_stochastic::build_stochastic_context(
         &system,
         seed,
+        forward_seed,
         &entity_factor_entries,
         &ncs_entity_factor_entries,
         user_opening_tree,
@@ -1748,7 +1753,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: Some(42),
+                tree_seed: Some(42),
                 forward_passes: Some(forward_passes),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit {
                     limit: max_iterations,
@@ -1776,8 +1781,8 @@ mod tests {
     fn new_minimal_valid_system_returns_ok() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1796,8 +1801,8 @@ mod tests {
     fn new_zero_stages_returns_validation_error() {
         let system = minimal_system(0);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1820,8 +1825,8 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 50);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1865,8 +1870,8 @@ mod tests {
     fn fcf_mut_allows_cut_insertion() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1889,8 +1894,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1912,8 +1917,8 @@ mod tests {
     fn cut_selection_none_when_disabled() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1934,8 +1939,8 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1978,8 +1983,8 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2017,8 +2022,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2055,8 +2060,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2096,8 +2101,8 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2122,8 +2127,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2152,8 +2157,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 2);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2206,8 +2211,8 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2275,7 +2280,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: None,
                 stopping_rules: None,
                 stopping_mode: "any".to_string(),
@@ -2351,7 +2356,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: Some(1234),
+                tree_seed: Some(1234),
                 forward_passes: Some(5),
                 stopping_rules: Some(vec![
                     StoppingRuleConfig::IterationLimit { limit: 50 },
@@ -2447,7 +2452,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: None,
                 stopping_rules: None,
                 stopping_mode: "any".to_string(),
@@ -2616,8 +2621,8 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 5);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
         let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
 
         let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
@@ -2991,8 +2996,8 @@ mod tests {
         let system =
             minimal_system_2_hydros_with_past_inflows(3, vec![600.0, 500.0], vec![200.0, 100.0]);
         let config = minimal_config(1, 10);
-        let stochastic =
-            build_stochastic_context(&system, 42, &[], &[], None).expect("stochastic context");
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
+            .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,

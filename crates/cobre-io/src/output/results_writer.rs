@@ -16,10 +16,10 @@ use cobre_core::System;
 use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
-    write_metadata, write_simulation_manifest, write_training_manifest, ManifestConvergence,
-    ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios, MetadataConfigSnapshot,
-    MetadataEnvironment, MetadataProblemDimensions, MetadataRunInfo, SimulationManifest,
-    TrainingManifest, TrainingMetadata,
+    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
+    MetadataConfigSnapshot, MetadataEnvironment, MetadataProblemDimensions, MetadataRunInfo,
+    SimulationManifest, TrainingManifest, TrainingMetadata, write_metadata,
+    write_simulation_manifest, write_training_manifest,
 };
 use super::parquet_config::ParquetWriterConfig;
 use super::training_writer::TrainingParquetWriter;
@@ -104,7 +104,7 @@ pub fn write_training_results(
             user: None,
         },
         configuration_snapshot: MetadataConfigSnapshot {
-            seed: config.training.seed,
+            seed: config.training.tree_seed,
             forward_passes: config.training.forward_passes,
             stopping_mode: config.training.stopping_mode.clone(),
             policy_mode: config.policy.mode.to_string(),
@@ -279,7 +279,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: Some(4),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 10 }]),
                 stopping_mode: "any".to_string(),

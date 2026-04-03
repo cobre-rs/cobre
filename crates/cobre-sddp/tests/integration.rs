@@ -290,7 +290,7 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
 }
 
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
@@ -419,7 +419,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.

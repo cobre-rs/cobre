@@ -23,12 +23,12 @@
 use cobre_core::{EntityId, LoadModel, System};
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
     tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
-    StochasticError,
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -155,11 +155,12 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     .build()
 ///     .unwrap();
 ///
-/// let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+/// let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 /// assert_eq!(ctx.dim(), 2);
 /// assert_eq!(ctx.n_stages(), 3);
 /// assert_eq!(ctx.base_seed(), 42);
 /// assert_eq!(ctx.n_load_buses(), 0);
+/// assert_eq!(ctx.forward_seed(), None);
 /// ```
 #[derive(Debug)]
 pub struct StochasticContext {
@@ -169,7 +170,13 @@ pub struct StochasticContext {
     normal_lp: PrecomputedNormal,
     ncs_normal: PrecomputedNormal,
     ncs_entity_ids: Vec<EntityId>,
+    entity_order: Box<[EntityId]>,
     base_seed: u64,
+    /// Seed for `OutOfSample` forward-pass noise generation, independent from
+    /// the tree seed (`base_seed`). `None` means the field was not configured
+    /// in `stages.json`; the `ForwardSampler` factory validates presence when
+    /// constructing an `OutOfSample` sampler.
+    forward_seed: Option<u64>,
     dim: usize,
     n_load_buses: usize,
     n_stochastic_ncs: usize,
@@ -200,7 +207,7 @@ impl StochasticContext {
         &self.opening_tree
     }
 
-    /// Returns a read-only borrowed view over the opening scenario tree.
+    /// Returns a borrowed view over the opening scenario tree.
     #[must_use]
     pub fn tree_view(&self) -> OpeningTreeView<'_> {
         self.opening_tree.view()
@@ -212,60 +219,49 @@ impl StochasticContext {
         self.base_seed
     }
 
+    /// Returns the seed for `OutOfSample` forward-pass noise generation, independent
+    /// from the tree seed. `None` when not specified in `stages.json`.
+    #[must_use]
+    pub fn forward_seed(&self) -> Option<u64> {
+        self.forward_seed
+    }
+
     /// Returns the noise dimension (`n_hydros + n_load_buses`).
-    ///
-    /// Opening tree noise vectors have this length. PAR model noise occupies
-    /// indices `[0, n_hydros)` and load noise occupies `[n_hydros, dim)`.
-    /// Use `par_lp().n_hydros()` to find the boundary.
     #[must_use]
     pub fn dim(&self) -> usize {
         self.dim
     }
 
-    /// Returns the number of stochastic load buses included in the noise dimension.
-    ///
-    /// Load noise occupies indices `[n_hydros, n_hydros + n_load_buses)` in each
-    /// opening tree noise vector. Returns `0` when there are no buses with `std_mw > 0`.
+    /// Returns the number of stochastic load buses in the noise dimension.
     #[must_use]
     pub fn n_load_buses(&self) -> usize {
         self.n_load_buses
     }
 
-    /// Returns a reference to the precomputed normal noise LP parameter cache.
-    ///
-    /// Contains stage-major mean, standard deviation, and block factor arrays
-    /// for all stochastic load buses (those with `std_mw > 0`). The entity
-    /// order matches the load bus IDs appended to `entity_order` during context
-    /// construction, sorted by `EntityId`.
+    /// Returns the precomputed normal noise LP parameters for stochastic load buses.
     pub fn normal(&self) -> &PrecomputedNormal {
         &self.normal_lp
     }
 
     /// Returns the precomputed normal noise LP parameters for NCS entities.
-    ///
-    /// Contains stage-major mean, standard deviation, and block factor arrays
-    /// for all NCS entities that have at least one `NcsModel` entry in
-    /// `non_controllable_stats.parquet`. Entities with `std = 0` produce
-    /// deterministic availability at `mean * max_gen`.
-    /// Returns `PrecomputedNormal::default()` (zero entities) when no NCS
-    /// models are present.
     pub fn ncs_normal(&self) -> &PrecomputedNormal {
         &self.ncs_normal
     }
 
     /// Returns the sorted entity IDs of NCS entities in the stochastic pipeline.
-    ///
-    /// These are the NCS entities that have at least one `NcsModel` entry in
-    /// `non_controllable_stats.parquet`. Empty when no NCS models are present.
     #[must_use]
     pub fn ncs_entity_ids(&self) -> &[EntityId] {
         &self.ncs_entity_ids
     }
 
+    /// Returns the canonical entity ID ordering for the noise dimension
+    /// (`hydro_ids ++ load_bus_ids ++ ncs_entity_ids`).
+    #[must_use]
+    pub fn entity_order(&self) -> &[EntityId] {
+        &self.entity_order
+    }
+
     /// Returns the number of stochastic NCS entities in the noise dimension.
-    ///
-    /// NCS noise occupies indices `[n_hydros + n_load_buses, dim)` in each
-    /// opening tree noise vector. Returns `0` when no NCS models are present.
     #[must_use]
     pub fn n_stochastic_ncs(&self) -> usize {
         self.n_stochastic_ncs
@@ -278,10 +274,6 @@ impl StochasticContext {
     }
 
     /// Returns provenance metadata recording how each component was obtained.
-    ///
-    /// Callers can use this to determine whether the opening tree was user-supplied
-    /// or generated from the base seed, whether correlation was decomposed from
-    /// system data, and whether inflow PAR models are present.
     #[must_use]
     pub fn provenance(&self) -> &StochasticProvenance {
         &self.provenance
@@ -333,6 +325,7 @@ impl StochasticContext {
 pub fn build_stochastic_context(
     system: &System,
     base_seed: u64,
+    forward_seed: Option<u64>,
     load_factors: &[EntityFactorEntry<'_>],
     ncs_factors: &[EntityFactorEntry<'_>],
     user_opening_tree: Option<OpeningTree>,
@@ -411,23 +404,23 @@ pub fn build_stochastic_context(
         DecomposedCorrelation::build(system.correlation())?
     };
 
+    let entity_order: Vec<EntityId> = hydro_ids
+        .iter()
+        .copied()
+        .chain(load_bus_ids.iter().copied())
+        .chain(ncs_entity_ids.iter().copied())
+        .collect();
+
     let opening_tree = if let Some(tree) = user_opening_tree {
         tree
     } else {
-        let entity_order: Vec<EntityId> = hydro_ids
-            .iter()
-            .copied()
-            .chain(load_bus_ids.iter().copied())
-            .chain(ncs_entity_ids.iter().copied())
-            .collect();
-
         generate_opening_tree(
             base_seed,
             &study_stages,
             dim,
             &mut correlation,
             &entity_order,
-        )
+        )?
     };
 
     let max_blocks = study_stages
@@ -477,7 +470,9 @@ pub fn build_stochastic_context(
         normal_lp,
         ncs_normal,
         ncs_entity_ids,
+        entity_order: entity_order.into_boxed_slice(),
         base_seed,
+        forward_seed,
         dim,
         n_load_buses,
         n_stochastic_ncs,
@@ -491,6 +486,7 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -500,7 +496,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use super::build_stochastic_context;
@@ -663,7 +658,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 2);
         assert_eq!(ctx.n_stages(), 3);
@@ -697,7 +692,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.par().n_hydros(), 2);
         assert_eq!(ctx.par().n_stages(), 3);
@@ -730,7 +725,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.opening_tree().n_stages(), 3);
         assert_eq!(ctx.opening_tree().dim(), 2);
@@ -757,7 +752,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
         let view = ctx.tree_view();
 
         assert_eq!(view.n_stages(), ctx.opening_tree().n_stages());
@@ -783,7 +778,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, &[], &[], None);
+        let result = build_stochastic_context(&system, 42, None, &[], &[], None);
 
         assert!(
             matches!(result, Err(StochasticError::InvalidParParameters { .. })),
@@ -842,7 +837,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, &[], &[], None);
+        let result = build_stochastic_context(&system, 42, None, &[], &[], None);
 
         assert!(
             matches!(
@@ -878,7 +873,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 1);
         assert_eq!(ctx.n_stages(), 2);
@@ -909,7 +904,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 0, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
 
         // The opening tree must contain only the 2 study stages.
         assert_eq!(
@@ -961,7 +956,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.dim(),
@@ -998,7 +993,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 2, "dim must equal n_hydros when no load buses");
         assert_eq!(
@@ -1033,7 +1028,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(
             ctx.n_load_buses(),
@@ -1073,7 +1068,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.dim(), 3, "expanded dim must be 2 hydros + 1 load bus");
         // Each opening noise vector must have length = dim.
@@ -1116,7 +1111,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         assert_eq!(ctx.n_load_buses(), 1);
         let nlp = ctx.normal();
@@ -1171,7 +1166,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
 
         // Dimensions must match expectations for a 2-hydro, 3-stage, BF=3 system.
         assert_eq!(ctx.dim(), 2, "dim should be 2 (2 hydros, no load buses)");
@@ -1229,7 +1224,7 @@ mod tests {
         let openings_per_stage = vec![n_openings; n_stages];
         let user_tree = OpeningTree::from_parts(data, openings_per_stage, dim);
 
-        let ctx = build_stochastic_context(&system, 42, &[], &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
 
         // Tree dimensions must match the user-supplied tree, not the system's
         // branching factors.
@@ -1262,5 +1257,168 @@ mod tests {
             "par_lp must still reflect system study stages"
         );
         assert_eq!(ctx.n_load_buses(), 0, "no load buses in this system");
+    }
+
+    /// AC: entity_order() returns the canonical hydro_ids ++ load_bus_ids order.
+    #[test]
+    fn test_entity_order_accessor() {
+        let hydros = vec![make_hydro(1), make_hydro(2)];
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+        ];
+        let inflow_models = vec![
+            make_inflow_model(1, 0, 30.0, vec![]),
+            make_inflow_model(1, 1, 30.0, vec![]),
+            make_inflow_model(1, 2, 30.0, vec![]),
+            make_inflow_model(2, 0, 20.0, vec![]),
+            make_inflow_model(2, 1, 20.0, vec![]),
+            make_inflow_model(2, 2, 20.0, vec![]),
+        ];
+        let load_models = vec![
+            make_load_model(5, 0, 100.0, 10.0),
+            make_load_model(5, 1, 105.0, 10.0),
+            make_load_model(5, 2, 110.0, 10.0),
+        ];
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0), make_bus(5)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .correlation(identity_correlation(&[1, 2]))
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+
+        assert_eq!(
+            ctx.entity_order(),
+            &[EntityId(1), EntityId(2), EntityId(5)],
+            "entity_order must be hydro_ids ++ load_bus_ids"
+        );
+    }
+
+    /// AC: entity_order() is populated even when a user-supplied tree is given.
+    #[test]
+    fn test_entity_order_with_user_tree() {
+        use crate::context::OpeningTree;
+
+        let hydros = vec![make_hydro(1), make_hydro(2)];
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+        ];
+        let inflow_models = vec![
+            make_inflow_model(1, 0, 30.0, vec![]),
+            make_inflow_model(1, 1, 30.0, vec![]),
+            make_inflow_model(1, 2, 30.0, vec![]),
+            make_inflow_model(2, 0, 20.0, vec![]),
+            make_inflow_model(2, 1, 20.0, vec![]),
+            make_inflow_model(2, 2, 20.0, vec![]),
+        ];
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[1, 2]))
+            .build()
+            .unwrap();
+
+        let n_stages = 2usize;
+        let n_openings = 4usize;
+        let dim = 2usize;
+        let data = vec![99.0_f64; n_stages * n_openings * dim];
+        let openings_per_stage = vec![n_openings; n_stages];
+        let user_tree = OpeningTree::from_parts(data, openings_per_stage, dim);
+
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
+
+        assert_eq!(
+            ctx.entity_order(),
+            &[EntityId(1), EntityId(2)],
+            "entity_order must be populated even with user-supplied tree"
+        );
+        assert!(
+            !ctx.entity_order().is_empty(),
+            "entity_order must not be empty"
+        );
+    }
+
+    /// AC: forward_seed() returns Some(seed) when scenario_source.seed is supplied.
+    #[test]
+    fn test_forward_seed_from_config() {
+        let hydros = vec![make_hydro(1), make_hydro(2)];
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+        ];
+        let inflow_models = vec![
+            make_inflow_model(1, 0, 30.0, vec![]),
+            make_inflow_model(1, 1, 30.0, vec![]),
+            make_inflow_model(1, 2, 30.0, vec![]),
+            make_inflow_model(2, 0, 20.0, vec![]),
+            make_inflow_model(2, 1, 20.0, vec![]),
+            make_inflow_model(2, 2, 20.0, vec![]),
+        ];
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[1, 2]))
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(&system, 42, Some(123), &[], &[], None).unwrap();
+
+        assert_eq!(
+            ctx.forward_seed(),
+            Some(123),
+            "forward_seed() must return Some(123) when supplied as Some(123)"
+        );
+    }
+
+    /// AC: forward_seed() returns None when scenario_source.seed is absent.
+    #[test]
+    fn test_forward_seed_none_when_absent() {
+        let hydros = vec![make_hydro(1), make_hydro(2)];
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+        ];
+        let inflow_models = vec![
+            make_inflow_model(1, 0, 30.0, vec![]),
+            make_inflow_model(1, 1, 30.0, vec![]),
+            make_inflow_model(1, 2, 30.0, vec![]),
+            make_inflow_model(2, 0, 20.0, vec![]),
+            make_inflow_model(2, 1, 20.0, vec![]),
+            make_inflow_model(2, 2, 20.0, vec![]),
+        ];
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[1, 2]))
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+
+        assert_eq!(
+            ctx.forward_seed(),
+            None,
+            "forward_seed() must return None when not supplied"
+        );
     }
 }

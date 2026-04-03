@@ -39,23 +39,23 @@ use cobre_stochastic::OpeningTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::fcf::FutureCostFunction,
     cut::CutRowMap,
+    cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
-    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
+    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool},
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -845,26 +845,26 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
+        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
+        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
     };
 
     use super::train;
     use crate::{
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
         HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
         StoppingRule, StoppingRuleSet, TrainingConfig,
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1048,12 +1048,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
+            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -1111,6 +1111,7 @@ mod tests {
             &mut decomposed,
             &entity_order,
         )
+        .unwrap()
     }
 
     /// Build a minimal `StochasticContext` with `n_stages` stages and a single
@@ -1244,7 +1245,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     fn make_fcf(

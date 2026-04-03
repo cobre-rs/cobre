@@ -10,17 +10,37 @@
 //! assigned subset of openings without synchronisation (deterministic SipHash-1-3
 //! seeds for communication-free parallel noise generation).
 
-use cobre_core::{EntityId, Stage};
+use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     tree::opening_tree::OpeningTree,
 };
 
+/// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
+fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, output: &mut [f64]) {
+    for opening_idx in 0..n_openings {
+        let start = opening_idx * dim;
+        let noise_slice = &mut output[start..start + dim];
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
+        let mut rng = rng_from_seed(seed);
+        for sample in noise_slice.iter_mut() {
+            *sample = rng.sample(StandardNormal);
+        }
+    }
+}
+
 /// Generate a fixed opening tree with correlated noise realisations.
+///
+/// For each stage, all openings are generated together using the noise method
+/// configured for that stage. Currently SAA (pure Monte Carlo) is fully
+/// implemented. LHS, QMC-Sobol, and QMC-Halton fall back to SAA and emit a
+/// warning. The `Selective` method returns an error.
 ///
 /// For each `(opening_index, stage)` pair:
 /// 1. Derive a deterministic seed via SipHash-1-3.
@@ -28,9 +48,9 @@ use crate::{
 /// 3. Draw `dim` independent N(0,1) samples.
 /// 4. Apply the Cholesky correlation transform for the active profile.
 ///
-/// The generation order is opening-major (outer loop: openings, inner
-/// loop: stages) to align with the parallel generation model where each
-/// rank generates a contiguous block of openings.
+/// The generation order is stage-major (outer loop: stages, inner loop:
+/// openings) to support batch noise methods (LHS, QMC) that require all
+/// openings for a stage simultaneously.
 ///
 /// # Arguments
 ///
@@ -42,7 +62,14 @@ use crate::{
 ///
 /// # Returns
 ///
-/// An [`OpeningTree`] with all noise values populated.
+/// `Ok(`[`OpeningTree`]`)` with all noise values populated.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage is
+/// configured with [`NoiseMethod::Selective`]. Selective sampling requires
+/// a pre-built tree supplied by the caller via the `user_opening_tree`
+/// parameter in [`build_stochastic_context`](crate::build_stochastic_context).
 ///
 /// # Panics
 ///
@@ -98,35 +125,25 @@ use crate::{
 /// let mut correlation = DecomposedCorrelation::build(&model).unwrap();
 /// let entity_order = vec![EntityId(1), EntityId(2)];
 ///
-/// let tree = generate_opening_tree(42, &stages, 2, &mut correlation, &entity_order);
+/// let tree = generate_opening_tree(42, &stages, 2, &mut correlation, &entity_order).unwrap();
 /// assert_eq!(tree.n_stages(), 2);
 /// assert_eq!(tree.n_openings(0), 3);
 /// ```
-#[must_use]
 pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
     dim: usize,
     correlation: &mut DecomposedCorrelation,
     entity_order: &[EntityId],
-) -> OpeningTree {
+) -> Result<OpeningTree, StochasticError> {
     let n_stages = stages.len();
-
-    // Pre-compute entity position indices once, eliminating per-call O(n)
-    // linear scans and Vec allocations inside apply_correlation.
     correlation.resolve_positions(entity_order);
 
-    // Extract per-stage branching factors.
     let openings_per_stage: Vec<usize> = stages
         .iter()
         .map(|s| s.scenario_config.branching_factor)
         .collect();
 
-    // Maximum number of openings across all stages (needed for the outer loop).
-    let max_openings = openings_per_stage.iter().copied().max().unwrap_or(0);
-
-    // Compute per-stage offsets into the flat data array (stage-major layout).
-    // stage_offsets[t] is the index of the first element of stage t.
     let mut stage_offsets = Vec::with_capacity(n_stages);
     let mut running_offset = 0usize;
     for &n_openings in &openings_per_stage {
@@ -135,37 +152,58 @@ pub fn generate_opening_tree(
     }
     let total_len = running_offset;
 
-    // Allocate the backing array in one shot.
     let mut data = vec![0.0f64; total_len];
 
-    // Generate noise: opening-major order (outer: openings, inner: stages).
-    // This matches the parallel model where each rank owns a contiguous block
-    // of opening indices and iterates stages in the inner loop.
-    for opening_idx in 0..max_openings {
-        for (stage_idx, stage) in stages.iter().enumerate() {
-            // Variable branching: skip openings beyond this stage's branching factor.
-            if opening_idx >= openings_per_stage[stage_idx] {
-                continue;
+    for (stage_idx, stage) in stages.iter().enumerate() {
+        let n_openings = openings_per_stage[stage_idx];
+        let offset = stage_offsets[stage_idx];
+        let stage_slice = &mut data[offset..offset + n_openings * dim];
+
+        match stage.scenario_config.noise_method {
+            NoiseMethod::Saa => {
+                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
             }
-
-            let offset = stage_offsets[stage_idx] + opening_idx * dim;
-            let noise_slice = &mut data[offset..offset + dim];
-
-            // Derive seed using stage.id (stable identifier, not array position).
-            // u32 casts: opening_idx is << 2^32; stage.id is reinterpreted as domain ID by SipHash-1-3.
-            // Pre-study stages (negative id) are excluded by the caller.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
-
-            let mut rng = rng_from_seed(seed);
-            for sample in noise_slice.iter_mut() {
-                *sample = rng.sample(StandardNormal);
+            NoiseMethod::Lhs => {
+                tracing::warn!(
+                    stage_id = stage.id,
+                    method = "lhs",
+                    "noise method not yet implemented, falling back to SAA"
+                );
+                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
             }
-            correlation.apply_correlation(stage.id, noise_slice, entity_order);
+            NoiseMethod::QmcSobol => {
+                tracing::warn!(
+                    stage_id = stage.id,
+                    method = "qmc_sobol",
+                    "noise method not yet implemented, falling back to SAA"
+                );
+                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
+            }
+            NoiseMethod::QmcHalton => {
+                tracing::warn!(
+                    stage_id = stage.id,
+                    method = "qmc_halton",
+                    "noise method not yet implemented, falling back to SAA"
+                );
+                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
+            }
+            NoiseMethod::Selective => {
+                return Err(StochasticError::UnsupportedNoiseMethod {
+                    method: "selective".to_string(),
+                    stage_id: stage.id,
+                    reason: "selective/representative sampling is not supported by the opening tree generator; provide a pre-built tree instead".to_string(),
+                });
+            }
+        }
+
+        for opening_idx in 0..n_openings {
+            let start = opening_idx * dim;
+            let noise = &mut stage_slice[start..start + dim];
+            correlation.apply_correlation(stage.id, noise, entity_order);
         }
     }
 
-    OpeningTree::from_parts(data, openings_per_stage, dim)
+    Ok(OpeningTree::from_parts(data, openings_per_stage, dim))
 }
 
 #[cfg(test)]
@@ -174,14 +212,14 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
-        EntityId, Stage,
     };
 
-    use crate::correlation::resolve::DecomposedCorrelation;
+    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
 
     use super::generate_opening_tree;
 
@@ -190,6 +228,15 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
+        make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
+    }
+
+    fn make_stage_with_method(
+        index: usize,
+        id: i32,
+        branching_factor: usize,
+        noise_method: NoiseMethod,
+    ) -> Stage {
         Stage {
             index,
             id,
@@ -205,7 +252,7 @@ mod tests {
             risk_config: StageRiskConfig::Expectation,
             scenario_config: ScenarioSourceConfig {
                 branching_factor,
-                noise_method: NoiseMethod::Saa,
+                noise_method,
             },
         }
     }
@@ -282,8 +329,8 @@ mod tests {
         let mut corr2 = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree1 = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
-        let tree2 = generate_opening_tree(42, &stages, 2, &mut corr2, &entity_order);
+        let tree1 = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree2 = generate_opening_tree(42, &stages, 2, &mut corr2, &entity_order).unwrap();
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -304,7 +351,7 @@ mod tests {
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -321,8 +368,8 @@ mod tests {
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree_a = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
-        let tree_b = generate_opening_tree(99, &stages, 2, &mut corr, &entity_order);
+        let tree_a = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree_b = generate_opening_tree(99, &stages, 2, &mut corr, &entity_order).unwrap();
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -344,7 +391,7 @@ mod tests {
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -367,7 +414,7 @@ mod tests {
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
 
-        let tree = generate_opening_tree(7, &stages, 3, &mut corr, &entity_order);
+        let tree = generate_opening_tree(7, &stages, 3, &mut corr, &entity_order).unwrap();
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -384,7 +431,7 @@ mod tests {
         let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
 
-        let tree = generate_opening_tree(12345, &stages, 1, &mut corr, &entity_order);
+        let tree = generate_opening_tree(12345, &stages, 1, &mut corr, &entity_order).unwrap();
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -417,7 +464,7 @@ mod tests {
         let mut corr = identity_correlation(&[1, 2, 3, 4]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
-        let tree = generate_opening_tree(99, &stages, 4, &mut corr, &entity_order);
+        let tree = generate_opening_tree(99, &stages, 4, &mut corr, &entity_order).unwrap();
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -440,7 +487,7 @@ mod tests {
         let mut corr = correlated_correlation(&[1, 2], 0.8);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order);
+        let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order).unwrap();
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -471,7 +518,7 @@ mod tests {
         );
     }
 
-    /// Generation order is opening-major: verify that stage 0 opening 0 and
+    /// Generation order is stage-major: verify that stage 0 opening 0 and
     /// stage 1 opening 0 use different seeds (different `stage.id`), while
     /// stage 0 opening 0 and stage 0 opening 1 also differ (different `opening_idx`).
     #[test]
@@ -481,7 +528,7 @@ mod tests {
         let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
 
-        let tree = generate_opening_tree(0, &stages, 1, &mut corr, &entity_order);
+        let tree = generate_opening_tree(0, &stages, 1, &mut corr, &entity_order).unwrap();
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];
@@ -492,5 +539,110 @@ mod tests {
             s0_o0, s1_o0,
             "same opening index, different stages should differ"
         );
+    }
+
+    /// SAA bitwise compatibility: the stage-major refactor must produce
+    /// bit-for-bit identical output for SAA stages.
+    ///
+    /// Golden values captured from the pre-refactor opening-major implementation
+    /// with seed=42, 3 stages (Saa, bf=3), dim=2, identity correlation on [1, 2].
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn saa_bitwise_compatible_with_pre_refactor_golden_values() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+        ];
+        let mut corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+
+        // Golden values from pre-refactor opening-major implementation.
+        assert_eq!(
+            tree.opening(0, 0)[0],
+            4.009_893_649_649_564_6e-1,
+            "stage=0 opening=0 dim=0"
+        );
+        assert_eq!(
+            tree.opening(0, 0)[1],
+            2.279_255_881_585_980_4e-1,
+            "stage=0 opening=0 dim=1"
+        );
+        assert_eq!(
+            tree.opening(0, 1)[0],
+            -1.395_412_177_608_524_4,
+            "stage=0 opening=1 dim=0"
+        );
+        assert_eq!(
+            tree.opening(0, 1)[1],
+            -2.693_936_692_173_674_6e-1,
+            "stage=0 opening=1 dim=1"
+        );
+        assert_eq!(
+            tree.opening(0, 2)[0],
+            8.337_031_709_056_368_4e-1,
+            "stage=0 opening=2 dim=0"
+        );
+        assert_eq!(
+            tree.opening(0, 2)[1],
+            -1.619_991_803_182_488_7,
+            "stage=0 opening=2 dim=1"
+        );
+    }
+
+    /// `NoiseMethod::Selective` returns `Err(StochasticError::UnsupportedNoiseMethod)`
+    /// with `method == "selective"` and the correct `stage_id`.
+    #[test]
+    fn selective_returns_error() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage_with_method(1, 7, 3, NoiseMethod::Selective),
+        ];
+        let mut corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+
+        let result = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+
+        match result {
+            Err(StochasticError::UnsupportedNoiseMethod {
+                method,
+                stage_id,
+                reason: _,
+            }) => {
+                assert_eq!(method, "selective");
+                assert_eq!(stage_id, 7);
+            }
+            Ok(_) => panic!("expected Err but got Ok"),
+            Err(other) => panic!("expected UnsupportedNoiseMethod, got {other:?}"),
+        }
+    }
+
+    /// `NoiseMethod::Lhs` placeholder produces bitwise-identical output to `Saa`.
+    ///
+    /// Until the real LHS batch generator is wired in (Epic 2), the Lhs arm
+    /// falls back to SAA. This test verifies that the fallback is exact.
+    #[test]
+    fn lhs_placeholder_produces_saa() {
+        let stages_saa = vec![make_stage(0, 5, 4)];
+        let stages_lhs = vec![make_stage_with_method(0, 5, 4, NoiseMethod::Lhs)];
+        let mut corr_saa = identity_correlation(&[1, 2]);
+        let mut corr_lhs = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+
+        let tree_saa =
+            generate_opening_tree(42, &stages_saa, 2, &mut corr_saa, &entity_order).unwrap();
+        let tree_lhs =
+            generate_opening_tree(42, &stages_lhs, 2, &mut corr_lhs, &entity_order).unwrap();
+
+        assert_eq!(tree_saa.n_openings(0), tree_lhs.n_openings(0));
+        for o in 0..tree_saa.n_openings(0) {
+            assert_eq!(
+                tree_saa.opening(0, o),
+                tree_lhs.opening(0, o),
+                "Lhs placeholder differs from Saa at opening={o}"
+            );
+        }
     }
 }

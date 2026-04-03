@@ -541,6 +541,7 @@ dependencies = [
  "rand_pcg",
  "siphasher",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

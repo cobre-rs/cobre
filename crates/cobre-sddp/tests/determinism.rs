@@ -240,7 +240,7 @@ fn make_opening_tree_3h(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![id_h1, id_h2, id_h3];
 
-    generate_opening_tree(42, &[stage], 3, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 3, &mut decomposed, &entity_order).unwrap()
 }
 
 /// Build a `StochasticContext` for a 3-hydro, 5-stage system with seed 42.
@@ -398,7 +398,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.

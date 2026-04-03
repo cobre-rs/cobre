@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, SystemBuilder,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -27,13 +28,12 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, SystemBuilder,
 };
 use cobre_stochastic::{
     build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
-    tree::qmc_halton::{scrambled_halton_point, HaltonPointSpec},
+    tree::qmc_halton::{HaltonPointSpec, scrambled_halton_point},
 };
 
 // ---------------------------------------------------------------------------

@@ -190,7 +190,135 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
 /// - `delta`: the solver counter delta for this entry.
 pub type SolverStatsEntry = (u64, String, i32, SolverStatsDelta);
 
+/// Number of scalar fields in [`SolverStatsDelta`] (excludes the histogram `Vec`).
+///
+/// This constant defines the size of the fixed-size buffer used for MPI allreduce
+/// and allgatherv operations. The 15 fields are packed in declaration order:
+/// 10 `u64` fields (cast to `f64`) followed by 5 native `f64` fields.
+pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 15;
+
+/// Number of `f64` values packed per scenario in [`pack_scenario_stats`].
+///
+/// Each scenario occupies `scenario_id_as_f64` + the 15 scalar fields = 16 values.
+pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
+
+/// Pack the 15 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
+///
+/// The packing order matches the declaration order of [`SolverStatsDelta`]:
+/// - Indices 0–9: the ten `u64` fields cast to `f64` (exact for values ≤ 2^53).
+/// - Indices 10–14: the five native `f64` fields.
+///
+/// The `retry_level_histogram` (`Vec<u64>`) is excluded: it is not part of the
+/// summary allreduce and is not included in the per-scenario Parquet schema.
+///
+/// # Precision note
+///
+/// All `u64` fields represent event counts (LP solve counts, iteration counts).
+/// At realistic workloads (≤ 10^6 scenarios × 10^3 stages), these counts fit
+/// comfortably within the 53-bit mantissa of `f64`, so no precision is lost.
+/// All `u64` fields represent event counts. At realistic workloads
+/// (≤ 10^6 scenarios × 10^3 stages), counts stay well below 2^53, so the
+/// cast is exact.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] {
+    [
+        delta.lp_solves as f64,
+        delta.lp_successes as f64,
+        delta.first_try_successes as f64,
+        delta.lp_failures as f64,
+        delta.retry_attempts as f64,
+        delta.basis_offered as f64,
+        delta.basis_rejections as f64,
+        delta.simplex_iterations as f64,
+        delta.load_model_count as f64,
+        delta.add_rows_count as f64,
+        delta.solve_time_ms,
+        delta.load_model_time_ms,
+        delta.add_rows_time_ms,
+        delta.set_bounds_time_ms,
+        delta.basis_set_time_ms,
+    ]
+}
+
+/// Unpack a fixed-size `f64` array (produced by [`pack_delta_scalars`]) back into
+/// a [`SolverStatsDelta`].
+///
+/// The `retry_level_histogram` field is set to an empty `Vec` because the histogram
+/// is excluded from both the allreduce summary and the per-scenario Parquet gather.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> SolverStatsDelta {
+    SolverStatsDelta {
+        lp_solves: buf[0] as u64,
+        lp_successes: buf[1] as u64,
+        first_try_successes: buf[2] as u64,
+        lp_failures: buf[3] as u64,
+        retry_attempts: buf[4] as u64,
+        basis_offered: buf[5] as u64,
+        basis_rejections: buf[6] as u64,
+        simplex_iterations: buf[7] as u64,
+        load_model_count: buf[8] as u64,
+        add_rows_count: buf[9] as u64,
+        solve_time_ms: buf[10],
+        load_model_time_ms: buf[11],
+        add_rows_time_ms: buf[12],
+        set_bounds_time_ms: buf[13],
+        basis_set_time_ms: buf[14],
+        retry_level_histogram: Vec::new(),
+    }
+}
+
+/// Pack a slice of per-scenario `(scenario_id, delta)` pairs into a flat `f64`
+/// buffer for use with `allgatherv`.
+///
+/// Each scenario contributes [`SCENARIO_STATS_STRIDE`] values:
+/// `[scenario_id as f64, lp_solves as f64, ..., basis_set_time_ms]`.
+/// The histogram is excluded.
+#[must_use]
+pub fn pack_scenario_stats(stats: &[(u32, SolverStatsDelta)]) -> Vec<f64> {
+    let mut buf = Vec::with_capacity(stats.len() * SCENARIO_STATS_STRIDE);
+    for (scenario_id, delta) in stats {
+        buf.push(f64::from(*scenario_id));
+        buf.extend_from_slice(&pack_delta_scalars(delta));
+    }
+    buf
+}
+
+/// Unpack a flat `f64` buffer (produced by [`pack_scenario_stats`]) back into a
+/// `Vec<(u32, SolverStatsDelta)>`.
+///
+/// The buffer length must be a multiple of [`SCENARIO_STATS_STRIDE`].
+/// Returns an empty `Vec` for an empty buffer.
+///
+/// # Panics
+///
+/// Panics in debug builds if `buf.len()` is not a multiple of `SCENARIO_STATS_STRIDE`.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
+    debug_assert_eq!(
+        buf.len() % SCENARIO_STATS_STRIDE,
+        0,
+        "buffer length must be a multiple of SCENARIO_STATS_STRIDE"
+    );
+    buf.chunks_exact(SCENARIO_STATS_STRIDE)
+        .map(|chunk| {
+            let scenario_id = chunk[0] as u32;
+            // `chunks_exact(SCENARIO_STATS_STRIDE)` guarantees chunk.len() ==
+            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 16.
+            // Index 1..=15 therefore covers exactly the 15 scalar field slots.
+            let arr = [
+                chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7], chunk[8],
+                chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14], chunk[15],
+            ];
+            (scenario_id, unpack_delta_scalars(&arr))
+        })
+        .collect()
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -409,5 +537,99 @@ mod tests {
         assert_eq!(agg.retry_level_histogram[0], 1);
         assert_eq!(agg.retry_level_histogram[1], 2);
         assert_eq!(agg.retry_level_histogram[2], 0);
+    }
+
+    fn make_delta(lp_solves: u64) -> SolverStatsDelta {
+        SolverStatsDelta {
+            lp_solves,
+            lp_successes: lp_solves,
+            first_try_successes: lp_solves / 2,
+            lp_failures: 0,
+            retry_attempts: 1,
+            basis_offered: lp_solves,
+            basis_rejections: 2,
+            simplex_iterations: lp_solves * 10,
+            solve_time_ms: lp_solves as f64 * 0.5,
+            load_model_count: 3,
+            add_rows_count: 4,
+            load_model_time_ms: 1.5,
+            add_rows_time_ms: 2.5,
+            set_bounds_time_ms: 0.25,
+            basis_set_time_ms: 0.125,
+            retry_level_histogram: vec![0; 12],
+        }
+    }
+
+    #[test]
+    fn test_pack_unpack_delta_scalars_round_trip() {
+        let delta = make_delta(600);
+        let packed = pack_delta_scalars(&delta);
+        assert_eq!(packed.len(), SOLVER_STATS_DELTA_SCALAR_FIELDS);
+        let unpacked = unpack_delta_scalars(&packed);
+
+        assert_eq!(unpacked.lp_solves, delta.lp_solves);
+        assert_eq!(unpacked.lp_successes, delta.lp_successes);
+        assert_eq!(unpacked.first_try_successes, delta.first_try_successes);
+        assert_eq!(unpacked.lp_failures, delta.lp_failures);
+        assert_eq!(unpacked.retry_attempts, delta.retry_attempts);
+        assert_eq!(unpacked.basis_offered, delta.basis_offered);
+        assert_eq!(unpacked.basis_rejections, delta.basis_rejections);
+        assert_eq!(unpacked.simplex_iterations, delta.simplex_iterations);
+        assert_eq!(unpacked.load_model_count, delta.load_model_count);
+        assert_eq!(unpacked.add_rows_count, delta.add_rows_count);
+        assert!((unpacked.solve_time_ms - delta.solve_time_ms).abs() < 1e-10);
+        assert!((unpacked.load_model_time_ms - delta.load_model_time_ms).abs() < 1e-10);
+        assert!((unpacked.add_rows_time_ms - delta.add_rows_time_ms).abs() < 1e-10);
+        assert!((unpacked.set_bounds_time_ms - delta.set_bounds_time_ms).abs() < 1e-10);
+        assert!((unpacked.basis_set_time_ms - delta.basis_set_time_ms).abs() < 1e-10);
+        // histogram is excluded from pack/unpack
+        assert!(unpacked.retry_level_histogram.is_empty());
+    }
+
+    #[test]
+    fn test_pack_unpack_delta_scalars_identity_for_lp_solves_600() {
+        // Acceptance criterion: identity property for allreduce with LocalBackend.
+        let delta = make_delta(600);
+        let packed = pack_delta_scalars(&delta);
+        let unpacked = unpack_delta_scalars(&packed);
+        assert_eq!(unpacked.lp_solves, 600);
+    }
+
+    #[test]
+    fn test_pack_unpack_scenario_stats_round_trip_three_entries() {
+        // Acceptance criterion: pack/unpack round-trip for Vec<(u32, SolverStatsDelta)>
+        // with scenario IDs 7, 12, 25.
+        let stats = vec![
+            (7u32, make_delta(100)),
+            (12u32, make_delta(200)),
+            (25u32, make_delta(300)),
+        ];
+        let buf = pack_scenario_stats(&stats);
+        assert_eq!(buf.len(), 3 * SCENARIO_STATS_STRIDE);
+
+        let unpacked = unpack_scenario_stats(&buf);
+        assert_eq!(unpacked.len(), 3);
+
+        // Verify scenario IDs
+        assert_eq!(unpacked[0].0, 7);
+        assert_eq!(unpacked[1].0, 12);
+        assert_eq!(unpacked[2].0, 25);
+
+        // Verify field values for each scenario
+        assert_eq!(unpacked[0].1.lp_solves, 100);
+        assert_eq!(unpacked[1].1.lp_solves, 200);
+        assert_eq!(unpacked[2].1.lp_solves, 300);
+
+        assert!((unpacked[0].1.solve_time_ms - 50.0).abs() < 1e-10);
+        assert!((unpacked[1].1.solve_time_ms - 100.0).abs() < 1e-10);
+        assert!((unpacked[2].1.solve_time_ms - 150.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pack_scenario_stats_empty_round_trip() {
+        let buf = pack_scenario_stats(&[]);
+        assert!(buf.is_empty());
+        let unpacked = unpack_scenario_stats(&buf);
+        assert!(unpacked.is_empty());
     }
 }

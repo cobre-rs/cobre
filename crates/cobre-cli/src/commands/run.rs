@@ -934,22 +934,19 @@ fn run_simulation_phase(
         message: format!("post-simulation barrier error: {e}"),
     })?;
 
+    // Aggregate simulation solver stats across all MPI ranks.
+    let (global_agg, global_scenario_stats) =
+        aggregate_simulation_solver_stats(&ctx.comm, &sim_run_result.solver_stats)?;
+
     if !ctx.quiet && ctx.is_root {
-        let agg = cobre_sddp::SolverStatsDelta::aggregate(
-            &sim_run_result
-                .solver_stats
-                .iter()
-                .map(|(_, delta)| delta.clone())
-                .collect::<Vec<_>>(),
-        );
-        print_sim_summary(&ctx.stderr, n_scenarios, sim_time_ms, &agg);
+        print_sim_summary(&ctx.stderr, n_scenarios, sim_time_ms, &global_agg);
     }
 
     if ctx.is_root {
         write_simulation_outputs(&WriteSimulationArgs {
             output_dir: &ctx.output_dir,
             sim_output: &merged_sim_output,
-            sim_solver_stats: &sim_run_result.solver_stats,
+            sim_solver_stats: &global_scenario_stats,
             quiet: ctx.quiet,
             stderr: &ctx.stderr,
         })?;
@@ -1073,6 +1070,97 @@ fn merge_simulation_metadata<C: Communicator>(
         total_time_ms: merged_time[0],
         partitions_written: all_partitions,
     })
+}
+
+/// Aggregate simulation solver statistics across all MPI ranks.
+///
+/// Returns:
+/// - The global [`cobre_sddp::SolverStatsDelta`] aggregate (sum of all ranks' local
+///   aggregates), used for the simulation summary printed on root.
+/// - A [`Vec<(u32, cobre_sddp::SolverStatsDelta)>`] containing one entry per global
+///   scenario (gathered from all ranks), sorted by scenario ID, used for Parquet output.
+///
+/// ## Protocol
+///
+/// **Summary (F1-002)**: Each rank first computes its local aggregate via
+/// [`cobre_sddp::SolverStatsDelta::aggregate`], packs the 15 scalar fields into a
+/// `[f64; 15]` buffer, and calls `allreduce(Sum)`. Root reconstructs the global
+/// aggregate from the received buffer.
+///
+/// **Per-scenario gather (F1-003)**: Each rank packs its per-scenario stats into a
+/// flat `f64` buffer (16 values per scenario: `scenario_id` + 15 scalar fields).
+/// An `allgatherv` collects all scenarios on all ranks. Root sorts the result by
+/// scenario ID. All ranks participate but only root uses the gathered data.
+///
+/// ## Single-rank behaviour
+///
+/// With `LocalBackend` (single rank), both operations are identity pass-throughs:
+/// the allreduce returns the local values unchanged, and the allgatherv returns
+/// the local buffer unchanged. The result is identical to calling
+/// `SolverStatsDelta::aggregate` directly.
+#[allow(clippy::cast_possible_truncation)]
+fn aggregate_simulation_solver_stats<C: Communicator>(
+    comm: &C,
+    local_stats: &[(u32, cobre_sddp::SolverStatsDelta)],
+) -> Result<
+    (
+        cobre_sddp::SolverStatsDelta,
+        Vec<(u32, cobre_sddp::SolverStatsDelta)>,
+    ),
+    CliError,
+> {
+    // ── Part A: summary allreduce (F1-002) ────────────────────────────────────
+    let local_agg = cobre_sddp::SolverStatsDelta::aggregate(
+        &local_stats
+            .iter()
+            .map(|(_, d)| d.clone())
+            .collect::<Vec<_>>(),
+    );
+    let send_scalars = cobre_sddp::pack_delta_scalars(&local_agg);
+    let mut recv_scalars = [0.0_f64; cobre_sddp::SOLVER_STATS_DELTA_SCALAR_FIELDS];
+    comm.allreduce(&send_scalars, &mut recv_scalars, ReduceOp::Sum)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation solver stats allreduce error: {e}"),
+        })?;
+    let global_agg = cobre_sddp::unpack_delta_scalars(&recv_scalars);
+
+    // ── Part B: per-scenario allgatherv (F1-003) ──────────────────────────────
+    let n_ranks = comm.size();
+    let local_buf = cobre_sddp::pack_scenario_stats(local_stats);
+    let local_count = local_buf.len();
+
+    // Step 1: exchange per-rank buffer lengths.
+    let send_len = [local_count as u64];
+    let mut all_lens = vec![0u64; n_ranks];
+    let len_counts: Vec<usize> = vec![1; n_ranks];
+    let len_displs: Vec<usize> = (0..n_ranks).collect();
+    comm.allgatherv(&send_len, &mut all_lens, &len_counts, &len_displs)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation solver stats length exchange error: {e}"),
+        })?;
+
+    // Step 2: gather all per-scenario buffers.
+    let recv_counts: Vec<usize> = all_lens.iter().map(|&l| l as usize).collect();
+    let recv_displs: Vec<usize> = recv_counts
+        .iter()
+        .scan(0usize, |acc, &c| {
+            let d = *acc;
+            *acc += c;
+            Some(d)
+        })
+        .collect();
+    let total_floats: usize = recv_counts.iter().sum();
+    let mut all_buf = vec![0.0_f64; total_floats];
+    comm.allgatherv(&local_buf, &mut all_buf, &recv_counts, &recv_displs)
+        .map_err(|e| CliError::Internal {
+            message: format!("simulation solver stats gather error: {e}"),
+        })?;
+
+    // Step 3: unpack and sort by scenario ID.
+    let mut global_scenario_stats = cobre_sddp::unpack_scenario_stats(&all_buf);
+    global_scenario_stats.sort_by_key(|(id, _)| *id);
+
+    Ok((global_agg, global_scenario_stats))
 }
 
 /// Write training checkpoint and results to the output directory.

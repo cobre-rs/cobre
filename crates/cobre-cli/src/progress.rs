@@ -31,7 +31,7 @@
 use std::sync::mpsc;
 use std::thread;
 
-use cobre_core::{TrainingEvent, WelfordAccumulator};
+use cobre_core::TrainingEvent;
 use console::Term;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 
@@ -149,34 +149,10 @@ pub fn run_progress_thread(
     max_iterations: u64,
     term_width: u16,
 ) -> ProgressHandle {
-    run_progress_thread_inner(receiver, max_iterations, term_width, 1)
-}
-
-/// Like [`run_progress_thread`] but accepts `num_ranks` to control
-/// simulation cost display. When `num_ranks > 1`, the progress bar does
-/// not show cost stats (mean/std/CI95) because only local scenarios are
-/// visible — the authoritative values are in the summary block printed
-/// after MPI aggregation.
-pub fn run_progress_thread_mpi(
-    receiver: mpsc::Receiver<TrainingEvent>,
-    max_iterations: u64,
-    term_width: u16,
-    num_ranks: usize,
-) -> ProgressHandle {
-    run_progress_thread_inner(receiver, max_iterations, term_width, num_ranks)
-}
-
-fn run_progress_thread_inner(
-    receiver: mpsc::Receiver<TrainingEvent>,
-    max_iterations: u64,
-    term_width: u16,
-    num_ranks: usize,
-) -> ProgressHandle {
     let handle = thread::spawn(move || {
         let mut events: Vec<TrainingEvent> = Vec::new();
         let mut training_bar: Option<ProgressBar> = None;
         let mut simulation_bar: Option<ProgressBar> = None;
-        let mut sim_acc: Option<WelfordAccumulator> = None;
         let mut sim_solve_time_ms: f64 = 0.0;
         let mut sim_lp_count: u64 = 0;
         loop {
@@ -232,7 +208,6 @@ fn run_progress_thread_inner(
                     TrainingEvent::SimulationProgress {
                         scenarios_complete,
                         scenarios_total,
-                        scenario_cost,
                         solve_time_ms,
                         lp_solves,
                         ..
@@ -241,25 +216,13 @@ fn run_progress_thread_inner(
                             create_simulation_bar(u64::from(scenarios_total), term_width)
                         });
                         bar.set_position(u64::from(scenarios_complete));
-                        let acc = sim_acc.get_or_insert_with(WelfordAccumulator::new);
-                        acc.update(scenario_cost);
                         sim_solve_time_ms += solve_time_ms;
                         sim_lp_count += lp_solves;
                         #[allow(clippy::cast_precision_loss)]
-                        let avg_lp = if sim_lp_count > 0 {
-                            format!("LP: {:.1}ms", sim_solve_time_ms / sim_lp_count as f64)
+                        let msg = if sim_lp_count > 0 {
+                            format!("LP: {:.1}ms avg", sim_solve_time_ms / sim_lp_count as f64)
                         } else {
-                            "LP: --".to_string()
-                        };
-                        let msg = if acc.count() >= 2 {
-                            format!(
-                                "mean: {}  std: {}  CI95: +/-{}  {avg_lp}",
-                                fmt_sci(acc.mean()),
-                                fmt_sci(acc.std_dev()),
-                                fmt_sci(acc.ci_95_half_width())
-                            )
-                        } else {
-                            format!("mean: {}  {avg_lp}", fmt_sci(acc.mean()))
+                            String::new()
                         };
                         bar.set_message(msg);
                     }
@@ -267,28 +230,7 @@ fn run_progress_thread_inner(
                     TrainingEvent::SimulationFinished { scenarios, .. } => {
                         if let Some(bar) = simulation_bar.take() {
                             bar.set_position(u64::from(scenarios));
-                            // When running with multiple MPI ranks, the
-                            // accumulator only has local scenarios. Show
-                            // "done" and let the summary block (printed
-                            // after MPI aggregation) display the correct
-                            // global cost statistics.
-                            let final_msg = if num_ranks > 1 {
-                                "done".to_string()
-                            } else if let Some(ref acc) = sim_acc {
-                                if scenarios >= 2 {
-                                    format!(
-                                        "mean: {}  std: {}  CI95: +/-{}",
-                                        fmt_sci(acc.mean()),
-                                        fmt_sci(acc.std_dev()),
-                                        fmt_sci(acc.ci_95_half_width())
-                                    )
-                                } else {
-                                    format!("mean: {}", fmt_sci(acc.mean()))
-                                }
-                            } else {
-                                "done".to_string()
-                            };
-                            bar.finish_with_message(final_msg);
+                            bar.finish_with_message("done");
                             let _ = Term::stderr().write_line("");
                         }
                     }
@@ -359,7 +301,7 @@ fn create_simulation_bar(scenarios_total: u64, term_width: u16) -> ProgressBar {
 mod tests {
     use std::sync::mpsc;
 
-    use cobre_core::TrainingEvent;
+    use cobre_core::{TrainingEvent, WelfordAccumulator};
 
     use super::run_progress_thread;
 

@@ -13,48 +13,31 @@ use crate::tree::opening_tree::OpeningTreeView;
 
 /// Select a scenario opening from the tree for a given `(stage, iteration, scenario)` context.
 ///
-/// Deterministically chooses an opening index `j` in `{0, ..., n_openings(stage_idx) - 1}`
-/// by deriving a seed from `(base_seed, iteration, scenario, stage)` via SipHash-1-3 and
-/// sampling a `Pcg64` RNG. Returns both the selected index and the corresponding noise
-/// slice so the caller can log which opening was chosen.
-///
-/// The `stage` parameter is the domain identifier (`stage.id`) used for seed derivation
-/// (deterministic SipHash-1-3 seeds for communication-free parallel noise). The `stage_idx`
-/// parameter is the array-position index used to address
-/// the opening tree.
+/// Deterministically chooses an opening index by deriving a seed from
+/// `(base_seed, iteration, scenario, stage)` and sampling the RNG.
+/// Returns both the selected index and the corresponding noise slice.
 ///
 /// # Panics
 ///
-/// Panics if `stage_idx >= tree.n_stages()` or if the tree has zero openings at that
-/// stage (delegated to [`OpeningTreeView::opening`] and [`OpeningTreeView::n_openings`]).
-///
-/// # Examples
-///
-/// ```no_run
-/// use cobre_stochastic::tree::opening_tree::OpeningTree;
-/// use cobre_stochastic::sampling::insample::sample_forward;
-///
-/// // Obtain an OpeningTree via generate_opening_tree (public API).
-/// // Given a view over a tree with 5 openings per stage and dim=2:
-/// // let view = tree.view();
-/// // let (idx, slice) = sample_forward(&view, 42, 0, 0, 0, 0);
-/// // assert!(idx < 5);
-/// // assert_eq!(slice.len(), 2);
-/// ```
+/// Panics if `stage_idx >= tree.n_stages()` or if the tree has zero openings
+/// at that stage.
 #[must_use]
-pub fn sample_forward<'a>(
-    tree: &'a OpeningTreeView<'a>,
+pub fn sample_forward<'tree, 'data>(
+    tree: &'tree OpeningTreeView<'data>,
     base_seed: u64,
     iteration: u32,
     scenario: u32,
     stage: u32,
     stage_idx: usize,
-) -> (usize, &'a [f64]) {
+) -> (usize, &'data [f64])
+where
+    'data: 'tree,
+{
     let seed = derive_forward_seed(base_seed, iteration, scenario, stage);
     let mut rng = rng_from_seed(seed);
     let n = tree.n_openings(stage_idx);
     let j = rng.random_range(0..n);
-    (j, tree.opening(stage_idx, j))
+    (j, tree.opening_data(stage_idx, j))
 }
 
 #[cfg(test)]
@@ -63,8 +46,6 @@ mod tests {
     use super::sample_forward;
     use crate::tree::opening_tree::OpeningTree;
 
-    /// Build a tree with uniform branching: `n_stages` stages, each with
-    /// `openings` openings of dimension `dim`. Values are `0.0, 1.0, 2.0, ...`.
     fn uniform_tree(n_stages: usize, openings: usize, dim: usize) -> OpeningTree {
         let total = n_stages * openings * dim;
         let data: Vec<f64> = (0_u32..u32::try_from(total).unwrap())
@@ -73,7 +54,6 @@ mod tests {
         OpeningTree::from_parts(data, vec![openings; n_stages], dim)
     }
 
-    /// Same inputs return bitwise-identical `(index, slice)`.
     #[test]
     fn determinism_same_inputs_same_output() {
         let tree = uniform_tree(3, 5, 2);
@@ -86,9 +66,6 @@ mod tests {
         assert_eq!(slice_a, slice_b);
     }
 
-    /// Varying `scenario` produces different indices across many calls.
-    /// Verify that among 20 consecutive scenario pairs `(s, s+1)`, at least
-    /// half differ.
     #[test]
     fn different_scenarios_different_indices() {
         let tree = uniform_tree(1, 5, 2);
@@ -108,7 +85,6 @@ mod tests {
         );
     }
 
-    /// 1000 calls with varying `scenario` all return indices in bounds.
     #[test]
     fn all_indices_in_bounds() {
         let tree = uniform_tree(1, 10, 2);
@@ -123,7 +99,6 @@ mod tests {
         }
     }
 
-    /// Returned slice equals `tree.opening(stage_idx, index)`.
     #[test]
     fn returned_slice_matches_tree_opening() {
         let tree = uniform_tree(3, 5, 2);
@@ -133,7 +108,6 @@ mod tests {
         assert_eq!(slice, tree.opening(0, idx));
     }
 
-    /// Varying `iteration` changes the selected index.
     #[test]
     fn different_iterations_different_indices() {
         let tree = uniform_tree(1, 5, 2);
@@ -148,8 +122,6 @@ mod tests {
         );
     }
 
-    /// `stage` (domain id) is used in seed derivation, not `stage_idx`.
-    /// Changing `stage` while keeping `stage_idx` fixed must change the index.
     #[test]
     fn stage_domain_id_affects_seed() {
         // Two stages with the same number of openings so both are valid.
@@ -167,7 +139,6 @@ mod tests {
         );
     }
 
-    /// A tree with only one opening always returns index 0.
     #[test]
     fn single_opening_always_index_zero() {
         let tree = uniform_tree(1, 1, 3);
@@ -179,7 +150,6 @@ mod tests {
         }
     }
 
-    /// The noise slice has `dim` elements.
     #[test]
     fn slice_length_equals_dim() {
         let dim = 7;
@@ -190,10 +160,6 @@ mod tests {
         assert_eq!(slice.len(), dim);
     }
 
-    /// Resume invariant: noise at iteration K is derived from
-    /// `(base_seed, K, scenario, stage)`, not from accumulated RNG state.
-    /// A "resumed" call with the same arguments produces identical output
-    /// regardless of how many prior iterations were sampled.
     #[test]
     fn resume_invariant_noise_depends_only_on_iteration_seed() {
         let tree = uniform_tree(2, 10, 3);

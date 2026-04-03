@@ -901,10 +901,11 @@ fn run_simulation_phase(
         drop(sim_event_rx);
         None
     } else {
-        Some(crate::progress::run_progress_thread(
+        Some(crate::progress::run_progress_thread_mpi(
             sim_event_rx,
             u64::from(n_scenarios),
             ctx.term_width,
+            ctx.comm.size(),
         ))
     };
 

@@ -149,6 +149,29 @@ pub fn run_progress_thread(
     max_iterations: u64,
     term_width: u16,
 ) -> ProgressHandle {
+    run_progress_thread_inner(receiver, max_iterations, term_width, 1)
+}
+
+/// Like [`run_progress_thread`] but accepts `num_ranks` to control
+/// simulation cost display. When `num_ranks > 1`, the progress bar does
+/// not show cost stats (mean/std/CI95) because only local scenarios are
+/// visible — the authoritative values are in the summary block printed
+/// after MPI aggregation.
+pub fn run_progress_thread_mpi(
+    receiver: mpsc::Receiver<TrainingEvent>,
+    max_iterations: u64,
+    term_width: u16,
+    num_ranks: usize,
+) -> ProgressHandle {
+    run_progress_thread_inner(receiver, max_iterations, term_width, num_ranks)
+}
+
+fn run_progress_thread_inner(
+    receiver: mpsc::Receiver<TrainingEvent>,
+    max_iterations: u64,
+    term_width: u16,
+    num_ranks: usize,
+) -> ProgressHandle {
     let handle = thread::spawn(move || {
         let mut events: Vec<TrainingEvent> = Vec::new();
         let mut training_bar: Option<ProgressBar> = None;
@@ -244,7 +267,14 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationFinished { scenarios, .. } => {
                         if let Some(bar) = simulation_bar.take() {
                             bar.set_position(u64::from(scenarios));
-                            let final_msg = if let Some(ref acc) = sim_acc {
+                            // When running with multiple MPI ranks, the
+                            // accumulator only has local scenarios. Show
+                            // "done" and let the summary block (printed
+                            // after MPI aggregation) display the correct
+                            // global cost statistics.
+                            let final_msg = if num_ranks > 1 {
+                                "done".to_string()
+                            } else if let Some(ref acc) = sim_acc {
                                 if scenarios >= 2 {
                                     format!(
                                         "mean: {}  std: {}  CI95: +/-{}",
@@ -256,7 +286,7 @@ pub fn run_progress_thread(
                                     format!("mean: {}", fmt_sci(acc.mean()))
                                 }
                             } else {
-                                "complete".to_string()
+                                "done".to_string()
                             };
                             bar.finish_with_message(final_msg);
                             let _ = Term::stderr().write_line("");

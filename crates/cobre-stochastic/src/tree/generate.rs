@@ -1,24 +1,16 @@
-//! Opening scenario tree generation.
-//!
-//! Constructs the opening scenario tree from pre-decomposed Cholesky
-//! correlation factors and deterministic per-opening seeds. Each
-//! `(opening_index, stage)` pair receives an independent noise vector
-//! whose spatial correlation is applied in-place via the Cholesky transform.
-//!
-//! Deterministic seeds are derived via SipHash-1-3, enabling communication-free
-//! parallel generation where each compute node independently generates its
-//! assigned subset of openings without synchronisation (deterministic SipHash-1-3
-//! seeds for communication-free parallel noise generation).
+//! Opening scenario tree generation from pre-decomposed Cholesky factors
+//! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
+//! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
+use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
-    tree::opening_tree::OpeningTree,
+    tree::{lhs::generate_lhs, opening_tree::OpeningTree},
+    StochasticError,
 };
 
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
@@ -37,98 +29,17 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 
 /// Generate a fixed opening tree with correlated noise realisations.
 ///
-/// For each stage, all openings are generated together using the noise method
-/// configured for that stage. Currently SAA (pure Monte Carlo) is fully
-/// implemented. LHS, QMC-Sobol, and QMC-Halton fall back to SAA and emit a
-/// warning. The `Selective` method returns an error.
+/// For each stage, all openings are generated together using the configured noise method.
+/// SAA and LHS are fully implemented; QMC-Sobol and QMC-Halton fall back to SAA with a warning.
+/// The `Selective` method returns an error.
 ///
-/// For each `(opening_index, stage)` pair:
-/// 1. Derive a deterministic seed via SipHash-1-3.
-/// 2. Initialise a `Pcg64` RNG from the derived seed.
-/// 3. Draw `dim` independent N(0,1) samples.
-/// 4. Apply the Cholesky correlation transform for the active profile.
-///
-/// The generation order is stage-major (outer loop: stages, inner loop:
-/// openings) to support batch noise methods (LHS, QMC) that require all
-/// openings for a stage simultaneously.
-///
-/// # Arguments
-///
-/// * `base_seed` — Base seed from scenario source configuration.
-/// * `stages` — Study stages (provides branching factors and stage IDs).
-/// * `dim` — Number of entities (random variables per noise vector).
-/// * `correlation` — Pre-decomposed correlation data (Cholesky factors).
-/// * `entity_order` — Canonical entity IDs for correlation mapping.
-///
-/// # Returns
-///
-/// `Ok(`[`OpeningTree`]`)` with all noise values populated.
+/// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
+/// like LHS that require all openings for a stage simultaneously. Cholesky correlation
+/// is applied in-place after noise generation.
 ///
 /// # Errors
 ///
-/// Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage is
-/// configured with [`NoiseMethod::Selective`]. Selective sampling requires
-/// a pre-built tree supplied by the caller via the `user_opening_tree`
-/// parameter in [`build_stochastic_context`](crate::build_stochastic_context).
-///
-/// # Panics
-///
-/// Panics if `stages` is empty or if `dim` is zero.
-///
-/// # Examples
-///
-/// ```
-/// use std::collections::BTreeMap;
-/// use cobre_core::{EntityId, Stage, scenario::{
-///     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-/// }};
-/// use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
-/// use cobre_stochastic::tree::generate::generate_opening_tree;
-///
-/// # fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
-/// #     use chrono::NaiveDate;
-/// #     use cobre_core::temporal::{
-/// #         BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
-/// #     };
-/// #     Stage {
-/// #         index,
-/// #         id,
-/// #         start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-/// #         end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-/// #         season_id: Some(0),
-/// #         blocks: vec![],
-/// #         block_mode: BlockMode::Parallel,
-/// #         state_config: StageStateConfig { storage: true, inflow_lags: false },
-/// #         risk_config: StageRiskConfig::Expectation,
-/// #         scenario_config: ScenarioSourceConfig {
-/// #             branching_factor,
-/// #             noise_method: NoiseMethod::Saa,
-/// #         },
-/// #     }
-/// # }
-/// let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
-///
-/// let mut profiles = BTreeMap::new();
-/// profiles.insert("default".to_string(), CorrelationProfile {
-///     groups: vec![CorrelationGroup {
-///         name: "g1".to_string(),
-///         entities: vec![
-///             CorrelationEntity { entity_type: "inflow".to_string(), id: EntityId(1) },
-///             CorrelationEntity { entity_type: "inflow".to_string(), id: EntityId(2) },
-///         ],
-///         matrix: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-///     }],
-/// });
-/// let model = CorrelationModel {
-///     method: "cholesky".to_string(), profiles, schedule: vec![],
-/// };
-/// let mut correlation = DecomposedCorrelation::build(&model).unwrap();
-/// let entity_order = vec![EntityId(1), EntityId(2)];
-///
-/// let tree = generate_opening_tree(42, &stages, 2, &mut correlation, &entity_order).unwrap();
-/// assert_eq!(tree.n_stages(), 2);
-/// assert_eq!(tree.n_openings(0), 3);
-/// ```
+/// Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses [`NoiseMethod::Selective`].
 pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
@@ -164,12 +75,8 @@ pub fn generate_opening_tree(
                 generate_saa(base_seed, stage, n_openings, dim, stage_slice);
             }
             NoiseMethod::Lhs => {
-                tracing::warn!(
-                    stage_id = stage.id,
-                    method = "lhs",
-                    "noise method not yet implemented, falling back to SAA"
-                );
-                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                generate_lhs(base_seed, stage.id as u32, n_openings, dim, stage_slice);
             }
             NoiseMethod::QmcSobol => {
                 tracing::warn!(
@@ -212,20 +119,16 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
 
     use super::generate_opening_tree;
-
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -317,10 +220,6 @@ mod tests {
         DecomposedCorrelation::build(&model).unwrap()
     }
 
-    // -----------------------------------------------------------------------
-    // Acceptance criteria tests
-    // -----------------------------------------------------------------------
-
     /// AC1: determinism — same inputs produce bit-for-bit identical output.
     #[test]
     fn determinism_same_inputs_produce_identical_trees() {
@@ -398,10 +297,6 @@ mod tests {
         assert_eq!(tree.n_openings(2), 1, "stage 2");
         assert_eq!(tree.len(), 12, "total elements");
     }
-
-    // -----------------------------------------------------------------------
-    // Additional unit tests
-    // -----------------------------------------------------------------------
 
     /// Verify `n_stages`, dim, and len for a uniform branching tree.
     #[test]
@@ -619,29 +514,93 @@ mod tests {
         }
     }
 
-    /// `NoiseMethod::Lhs` placeholder produces bitwise-identical output to `Saa`.
+    /// A stage with `NoiseMethod::Lhs` produces a valid opening tree.
     ///
-    /// Until the real LHS batch generator is wired in (Epic 2), the Lhs arm
-    /// falls back to SAA. This test verifies that the fallback is exact.
+    /// Verifies that `generate_opening_tree` returns `Ok`, the tree has the
+    /// correct number of stages and openings, and all noise values are finite.
     #[test]
-    fn lhs_placeholder_produces_saa() {
-        let stages_saa = vec![make_stage(0, 5, 4)];
-        let stages_lhs = vec![make_stage_with_method(0, 5, 4, NoiseMethod::Lhs)];
-        let mut corr_saa = identity_correlation(&[1, 2]);
-        let mut corr_lhs = identity_correlation(&[1, 2]);
-        let entity_order = vec![EntityId(1), EntityId(2)];
+    fn test_lhs_stage_produces_tree() {
+        let n_openings = 50;
+        let dim = 3;
+        let stages = vec![make_stage_with_method(0, 0, n_openings, NoiseMethod::Lhs)];
+        let mut corr = identity_correlation(&[1, 2, 3]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
 
-        let tree_saa =
-            generate_opening_tree(42, &stages_saa, 2, &mut corr_saa, &entity_order).unwrap();
-        let tree_lhs =
-            generate_opening_tree(42, &stages_lhs, 2, &mut corr_lhs, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
 
-        assert_eq!(tree_saa.n_openings(0), tree_lhs.n_openings(0));
-        for o in 0..tree_saa.n_openings(0) {
+        assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.len(), n_openings * dim, "total element count");
+        for o in 0..n_openings {
+            for &v in tree.opening(0, o) {
+                assert!(v.is_finite(), "non-finite value at opening={o}");
+            }
+        }
+    }
+
+    /// A mixed system (stage 0 = Lhs, stage 1 = Saa) produces valid noise for
+    /// both stages.
+    ///
+    /// Also verifies the LHS marginal-uniformity property for stage 0: for each
+    /// dimension, `floor(Φ(x_k) * N)` is a permutation of `{0..N-1}`.
+    #[test]
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss
+    )]
+    fn test_per_stage_method_mixing() {
+        let n_openings = 50;
+        let dim = 3;
+        let stages = vec![
+            make_stage_with_method(0, 0, n_openings, NoiseMethod::Lhs),
+            make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
+        ];
+        let mut corr = identity_correlation(&[1, 2, 3]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+
+        assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.n_openings(1), n_openings, "stage 1 opening count");
+
+        // All values for both stages must be finite.
+        for s in 0..2 {
+            for o in 0..n_openings {
+                for &v in tree.opening(s, o) {
+                    assert!(v.is_finite(), "non-finite at stage={s} opening={o}");
+                }
+            }
+        }
+
+        // Marginal-uniformity property for the LHS stage (stage 0).
+        // Approximate Φ(z) via the Abramowitz & Stegun rational approximation.
+        let approx_erf = |x: f64| -> f64 {
+            let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
+            let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+            let poly = t
+                * (0.254_829_592
+                    + t * (-0.284_496_736
+                        + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+            sign * (1.0 - poly * (-x * x).exp())
+        };
+        let approx_cdf = |z: f64| -> f64 { 0.5 * (1.0 + approx_erf(z / std::f64::consts::SQRT_2)) };
+        let n_f = n_openings as f64;
+
+        for d in 0..dim {
+            let mut strata: Vec<usize> = (0..n_openings)
+                .map(|k| {
+                    let z = tree.opening(0, k)[d];
+                    let p = approx_cdf(z);
+                    ((p * n_f).floor() as usize).min(n_openings - 1)
+                })
+                .collect();
+            strata.sort_unstable();
+            let expected: Vec<usize> = (0..n_openings).collect();
             assert_eq!(
-                tree_saa.opening(0, o),
-                tree_lhs.opening(0, o),
-                "Lhs placeholder differs from Saa at opening={o}"
+                strata, expected,
+                "stage 0 dim {d}: CDF-floor indices not a permutation of 0..{n_openings}"
             );
         }
     }

@@ -9,7 +9,11 @@ use rand_distr::StandardNormal;
 use crate::{
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
-    tree::{lhs::generate_lhs, opening_tree::OpeningTree},
+    tree::{
+        lhs::generate_lhs,
+        opening_tree::OpeningTree,
+        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
+    },
     StochasticError,
 };
 
@@ -30,7 +34,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// Generate a fixed opening tree with correlated noise realisations.
 ///
 /// For each stage, all openings are generated together using the configured noise method.
-/// SAA and LHS are fully implemented; QMC-Sobol and QMC-Halton fall back to SAA with a warning.
+/// SAA, LHS, and QMC-Sobol are fully implemented; QMC-Halton falls back to SAA with a warning.
 /// The `Selective` method returns an error.
 ///
 /// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
@@ -79,12 +83,15 @@ pub fn generate_opening_tree(
                 generate_lhs(base_seed, stage.id as u32, n_openings, dim, stage_slice);
             }
             NoiseMethod::QmcSobol => {
-                tracing::warn!(
-                    stage_id = stage.id,
-                    method = "qmc_sobol",
-                    "noise method not yet implemented, falling back to SAA"
-                );
-                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
+                if dim > MAX_SOBOL_DIM {
+                    return Err(StochasticError::DimensionExceedsCapacity {
+                        dim,
+                        max_dim: MAX_SOBOL_DIM,
+                        method: "sobol".to_string(),
+                    });
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                generate_qmc_sobol(base_seed, stage.id as u32, n_openings, dim, stage_slice);
             }
             NoiseMethod::QmcHalton => {
                 tracing::warn!(
@@ -162,7 +169,7 @@ mod tests {
 
     fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         let n = entity_ids.len();
-        let matrix: Vec<Vec<f64>> = (0..n)
+        let matrix = (0..n)
             .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
             .collect();
         let mut profiles = BTreeMap::new();
@@ -182,17 +189,17 @@ mod tests {
                 }],
             },
         );
-        let model = CorrelationModel {
+        DecomposedCorrelation::build(&CorrelationModel {
             method: "cholesky".to_string(),
             profiles,
             schedule: vec![],
-        };
-        DecomposedCorrelation::build(&model).unwrap()
+        })
+        .unwrap()
     }
 
     fn correlated_correlation(entity_ids: &[i32], rho: f64) -> DecomposedCorrelation {
         let n = entity_ids.len();
-        let matrix: Vec<Vec<f64>> = (0..n)
+        let matrix = (0..n)
             .map(|i| (0..n).map(|j| if i == j { 1.0 } else { rho }).collect())
             .collect();
         let mut profiles = BTreeMap::new();
@@ -212,15 +219,14 @@ mod tests {
                 }],
             },
         );
-        let model = CorrelationModel {
+        DecomposedCorrelation::build(&CorrelationModel {
             method: "cholesky".to_string(),
             profiles,
             schedule: vec![],
-        };
-        DecomposedCorrelation::build(&model).unwrap()
+        })
+        .unwrap()
     }
 
-    /// AC1: determinism — same inputs produce bit-for-bit identical output.
     #[test]
     fn determinism_same_inputs_produce_identical_trees() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
@@ -243,7 +249,6 @@ mod tests {
         }
     }
 
-    /// AC2: the returned slice for opening(0, 0) has length 2 and finite values.
     #[test]
     fn opening_0_0_has_correct_length_and_finite_values() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
@@ -260,7 +265,6 @@ mod tests {
         );
     }
 
-    /// AC3: different base seeds produce different trees.
     #[test]
     fn seed_sensitivity_different_seeds_produce_different_trees() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
@@ -277,7 +281,6 @@ mod tests {
         assert!(any_differ, "trees with different seeds should differ");
     }
 
-    /// AC4: variable branching — correct `n_openings` per stage and total len.
     #[test]
     fn variable_branching_factors_correct_dimensions() {
         // branching_factors = [2, 3, 1], dim = 2
@@ -602,6 +605,91 @@ mod tests {
                 strata, expected,
                 "stage 0 dim {d}: CDF-floor indices not a permutation of 0..{n_openings}"
             );
+        }
+    }
+
+    /// A stage with `NoiseMethod::QmcSobol` produces a valid opening tree.
+    ///
+    /// Verifies that `generate_opening_tree` returns `Ok`, the tree has the
+    /// correct number of openings and dimensions, and all noise values are finite.
+    #[test]
+    fn test_sobol_stage_produces_tree() {
+        let n_openings = 64;
+        let dim = 3;
+        let stages = vec![make_stage_with_method(
+            0,
+            0,
+            n_openings,
+            NoiseMethod::QmcSobol,
+        )];
+        let mut corr = identity_correlation(&[1, 2, 3]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+
+        assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.len(), n_openings * dim, "total element count");
+        for o in 0..n_openings {
+            for &v in tree.opening(0, o) {
+                assert!(v.is_finite(), "non-finite value at opening={o}");
+            }
+        }
+    }
+
+    /// A stage with `NoiseMethod::QmcSobol` and `dim > MAX_SOBOL_DIM` returns
+    /// `Err(StochasticError::DimensionExceedsCapacity)` with the correct fields.
+    #[test]
+    fn test_sobol_dimension_exceeds_capacity() {
+        let dim_over = 21_202; // one above MAX_SOBOL_DIM = 21_201
+        let stages = vec![make_stage_with_method(0, 0, 4, NoiseMethod::QmcSobol)];
+        // Build a minimal identity correlation with a single entity; `dim` is passed
+        // separately to `generate_opening_tree`.
+        let mut corr = identity_correlation(&[1]);
+        let entity_order = vec![EntityId(1)];
+
+        let result = generate_opening_tree(42, &stages, dim_over, &mut corr, &entity_order);
+
+        match result {
+            Err(StochasticError::DimensionExceedsCapacity {
+                dim,
+                max_dim,
+                method,
+            }) => {
+                assert_eq!(dim, 21_202, "dim field");
+                assert_eq!(max_dim, 21_201, "max_dim field");
+                assert_eq!(method, "sobol", "method field");
+            }
+            Ok(_) => panic!("expected Err but got Ok"),
+            Err(other) => panic!("expected DimensionExceedsCapacity, got {other:?}"),
+        }
+    }
+
+    /// A mixed system (stage 0 = QmcSobol, stage 1 = Saa) produces valid noise
+    /// for both stages with the correct dimensions.
+    #[test]
+    fn test_sobol_saa_mixing() {
+        let n_openings = 32;
+        let dim = 2;
+        let stages = vec![
+            make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcSobol),
+            make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
+        ];
+        let mut corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+
+        assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.n_openings(1), n_openings, "stage 1 opening count");
+
+        for s in 0..2 {
+            for o in 0..n_openings {
+                for &v in tree.opening(s, o) {
+                    assert!(v.is_finite(), "non-finite at stage={s} opening={o}");
+                }
+            }
         }
     }
 }

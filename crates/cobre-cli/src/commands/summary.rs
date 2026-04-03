@@ -21,14 +21,14 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    ConvergenceSummary, OutputError, SimulationManifest, TrainingManifest,
-    read_convergence_summary, read_simulation_manifest, read_training_manifest,
+    read_convergence_summary, read_simulation_manifest, read_training_manifest, ConvergenceSummary,
+    OutputError, SimulationManifest, TrainingManifest,
 };
 
 use crate::{
     error::CliError,
     summary::{
-        SimulationSummary, TrainingSummary, print_simulation_summary, print_training_summary,
+        print_simulation_summary, print_training_summary, SimulationSummary, TrainingSummary,
     },
 };
 
@@ -158,6 +158,8 @@ fn build_simulation_summary(manifest: &SimulationManifest) -> SimulationSummary 
         completed: manifest.scenarios.completed,
         failed: manifest.scenarios.failed,
         total_time_ms: 0,
+        mean_cost: None,
+        std_cost: None,
         // Solver stats are not stored in the manifest; zero-filled for `cobre summary`.
         total_lp_solves: 0,
         total_first_try: 0,
@@ -201,7 +203,7 @@ mod tests {
         TrainingManifest,
     };
 
-    use super::{SummaryArgs, build_training_summary, convergence_fallback};
+    use super::{build_training_summary, convergence_fallback, SummaryArgs};
 
     fn make_training_manifest() -> TrainingManifest {
         TrainingManifest {

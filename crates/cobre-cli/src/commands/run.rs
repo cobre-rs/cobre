@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
@@ -28,10 +28,10 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
     inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
-    prepare_stochastic,
+    prepare_stochastic, EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult,
+    StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -42,8 +42,8 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -765,7 +765,34 @@ fn run_training_phase(
         message: format!("post-training barrier error: {e}"),
     })?;
 
-    // Aggregate solver stats from the stats log for the summary display.
+    // Aggregate solver stats from the stats log and allreduce across ranks.
+    let (
+        local_first_try,
+        local_retried,
+        local_failed,
+        local_solve_time_s,
+        local_basis_offered,
+        local_basis_rejections,
+        local_simplex_iter,
+    ) = aggregate_solver_stats(&training_result.solver_stats_log);
+
+    #[allow(clippy::cast_precision_loss)]
+    let send_stats = [
+        local_first_try as f64,
+        local_retried as f64,
+        local_failed as f64,
+        local_solve_time_s,
+        local_basis_offered as f64,
+        local_basis_rejections as f64,
+        local_simplex_iter as f64,
+    ];
+    let mut recv_stats = [0.0_f64; 7];
+    ctx.comm
+        .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
+        .map_err(|e| CliError::Internal {
+            message: format!("training solver stats allreduce error: {e}"),
+        })?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (
         total_first_try,
         total_retried,
@@ -774,7 +801,15 @@ fn run_training_phase(
         total_basis_offered,
         total_basis_rejections,
         total_simplex_iter,
-    ) = aggregate_solver_stats(&training_result.solver_stats_log);
+    ) = (
+        recv_stats[0] as u64,
+        recv_stats[1] as u64,
+        recv_stats[2] as u64,
+        recv_stats[3],
+        recv_stats[4] as u64,
+        recv_stats[5] as u64,
+        recv_stats[6] as u64,
+    );
 
     // Print training summary on rank 0.
     let training_summary = TrainingSummary {
@@ -938,8 +973,23 @@ fn run_simulation_phase(
     let (global_agg, global_scenario_stats) =
         aggregate_simulation_solver_stats(&ctx.comm, &sim_run_result.solver_stats)?;
 
+    // Aggregate simulation cost statistics across all MPI ranks so that
+    // the printed mean/std/CI95 reflect ALL scenarios, not just rank 0's.
+    let cost_summary =
+        cobre_sddp::aggregate_simulation(&sim_run_result.costs, &sim_config, &ctx.comm).map_err(
+            |e| CliError::Internal {
+                message: format!("simulation cost aggregation error: {e}"),
+            },
+        )?;
+
     if !ctx.quiet && ctx.is_root {
-        print_sim_summary(&ctx.stderr, n_scenarios, sim_time_ms, &global_agg);
+        print_sim_summary(
+            &ctx.stderr,
+            n_scenarios,
+            sim_time_ms,
+            &global_agg,
+            &cost_summary,
+        );
     }
 
     if ctx.is_root {
@@ -955,12 +1005,13 @@ fn run_simulation_phase(
     Ok(())
 }
 
-/// Print the simulation summary from aggregated solver stats.
+/// Print the simulation summary from aggregated solver stats and cost statistics.
 fn print_sim_summary(
     stderr: &Term,
     n_scenarios: u32,
     sim_time_ms: u64,
     agg: &cobre_sddp::SolverStatsDelta,
+    cost_summary: &cobre_sddp::SimulationSummary,
 ) {
     crate::summary::print_simulation_summary(
         stderr,
@@ -969,6 +1020,8 @@ fn print_sim_summary(
             completed: n_scenarios,
             failed: 0,
             total_time_ms: sim_time_ms,
+            mean_cost: Some(cost_summary.mean_cost),
+            std_cost: Some(cost_summary.std_cost),
             total_lp_solves: agg.lp_solves,
             total_first_try: agg.first_try_successes,
             total_retried: agg.lp_successes.saturating_sub(agg.first_try_successes),

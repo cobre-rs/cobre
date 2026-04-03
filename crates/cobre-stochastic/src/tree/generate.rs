@@ -2,19 +2,20 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
+use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     tree::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
-        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
+        qmc_halton::generate_qmc_halton,
+        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
     },
-    StochasticError,
 };
 
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
@@ -34,7 +35,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// Generate a fixed opening tree with correlated noise realisations.
 ///
 /// For each stage, all openings are generated together using the configured noise method.
-/// SAA, LHS, and QMC-Sobol are fully implemented; QMC-Halton falls back to SAA with a warning.
+/// SAA, LHS, QMC-Sobol, and QMC-Halton are fully implemented.
 /// The `Selective` method returns an error.
 ///
 /// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
@@ -94,12 +95,8 @@ pub fn generate_opening_tree(
                 generate_qmc_sobol(base_seed, stage.id as u32, n_openings, dim, stage_slice);
             }
             NoiseMethod::QmcHalton => {
-                tracing::warn!(
-                    stage_id = stage.id,
-                    method = "qmc_halton",
-                    "noise method not yet implemented, falling back to SAA"
-                );
-                generate_saa(base_seed, stage, n_openings, dim, stage_slice);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                generate_qmc_halton(base_seed, stage.id as u32, n_openings, dim, stage_slice);
             }
             NoiseMethod::Selective => {
                 return Err(StochasticError::UnsupportedNoiseMethod {
@@ -126,14 +123,14 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
-        EntityId, Stage,
     };
 
-    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
+    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
 
     use super::generate_opening_tree;
 
@@ -673,6 +670,63 @@ mod tests {
         let dim = 2;
         let stages = vec![
             make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcSobol),
+            make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
+        ];
+        let mut corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+
+        assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.n_openings(1), n_openings, "stage 1 opening count");
+
+        for s in 0..2 {
+            for o in 0..n_openings {
+                for &v in tree.opening(s, o) {
+                    assert!(v.is_finite(), "non-finite at stage={s} opening={o}");
+                }
+            }
+        }
+    }
+
+    /// A stage with `NoiseMethod::QmcHalton` produces a valid opening tree.
+    ///
+    /// Verifies that `generate_opening_tree` returns `Ok`, the tree has the
+    /// correct number of stages and openings, and all noise values are finite.
+    #[test]
+    fn test_halton_stage_produces_tree() {
+        let n_openings = 64;
+        let dim = 3;
+        let stages = vec![make_stage_with_method(
+            0,
+            0,
+            n_openings,
+            NoiseMethod::QmcHalton,
+        )];
+        let mut corr = identity_correlation(&[1, 2, 3]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+
+        assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
+        assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
+        assert_eq!(tree.len(), n_openings * dim, "total element count");
+        for o in 0..n_openings {
+            for &v in tree.opening(0, o) {
+                assert!(v.is_finite(), "non-finite value at opening={o}");
+            }
+        }
+    }
+
+    /// A mixed system (stage 0 = QmcHalton, stage 1 = Saa) produces valid noise
+    /// for both stages with the correct dimensions.
+    #[test]
+    fn test_halton_saa_mixing() {
+        let n_openings = 32;
+        let dim = 2;
+        let stages = vec![
+            make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcHalton),
             make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
         ];
         let mut corr = identity_correlation(&[1, 2]);

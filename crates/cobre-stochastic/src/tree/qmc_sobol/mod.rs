@@ -263,8 +263,8 @@ pub fn scrambled_sobol_point(spec: &SobolPointSpec, output: &mut [f64]) {
 )]
 mod tests {
     use super::{
-        build_direction_matrix, generate_qmc_sobol, scrambled_sobol_point, SobolPointSpec,
-        INV_2_32, MAX_SOBOL_DIM,
+        INV_2_32, MAX_SOBOL_DIM, SobolPointSpec, build_direction_matrix, generate_qmc_sobol,
+        scrambled_sobol_point,
     };
 
     /// Generate unscrambled Gray-code Sobol points in `[0,1)` for regression testing.

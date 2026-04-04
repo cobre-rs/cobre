@@ -510,6 +510,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
 }
 
 /// Load the case on rank 0, broadcast system/config/tree, and build `StudySetup` on all ranks.
+#[allow(clippy::too_many_lines)]
 fn broadcast_and_build_setup(
     ctx: &RunContext<impl Communicator>,
     args: &RunArgs,
@@ -737,6 +738,7 @@ fn run_pre_training(
 }
 
 /// Run training and collect results, events, and summary stats.
+#[allow(clippy::too_many_lines)]
 fn run_training_phase(
     ctx: &RunContext<impl Communicator>,
     setup: &mut StudySetup,

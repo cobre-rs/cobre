@@ -1,11 +1,11 @@
 //! Integration tests for `ForwardSampler` dispatch added in Epic 06.
 //!
 //! Covers three scenarios:
-//! 1. InSample bitwise equivalence: the refactored path produces identical
+//! 1. `InSample` bitwise equivalence: the refactored path produces identical
 //!    lower bounds and iteration counts to the pre-refactor D01 baseline.
-//! 2. OutOfSample convergence: training with fresh noise converges to a lower
-//!    bound within 5% of the InSample lower bound.
-//! 3. Declaration-order invariance for OutOfSample: entity ordering does not
+//! 2. `OutOfSample` convergence: training with fresh noise converges to a lower
+//!    bound within 5% of the `InSample` lower bound.
+//! 3. Declaration-order invariance for `OutOfSample`: entity ordering does not
 //!    affect the lower bound (bitwise identical results for both orderings).
 //!
 //! All tests use `StubComm` (single-rank) and `HighsSolver`.
@@ -17,6 +17,9 @@
     clippy::float_cmp,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::needless_range_loop,
+    clippy::trivially_copy_pass_by_ref,
     clippy::too_many_lines
 )]
 
@@ -540,7 +543,7 @@ fn insample_equivalence_d01() {
 ///
 /// Both systems are identical except for the sampling scheme. The system has
 /// 1 bus, 1 hydro (constant productivity, mean=100 m³/s, std=30 m³/s),
-/// 3 stages with branching_factor=5 and SAA noise. With 20 forward passes
+/// 3 stages with `branching_factor=5` and SAA noise. With 20 forward passes
 /// and 50 iterations both schemes reach comparable lower bounds.
 #[test]
 fn out_of_sample_convergence() {

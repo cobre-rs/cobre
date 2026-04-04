@@ -111,15 +111,15 @@ mod tests {
 
     fn assert_all_variants_debug(err: &StochasticError) {
         match err {
-            StochasticError::InvalidParParameters { .. } => {}
-            StochasticError::CholeskyDecompositionFailed { .. } => {}
-            StochasticError::InvalidCorrelation { .. } => {}
-            StochasticError::InsufficientData { .. } => {}
-            StochasticError::SeedDerivationError { .. } => {}
-            StochasticError::UnsupportedNoiseMethod { .. } => {}
-            StochasticError::DimensionExceedsCapacity { .. } => {}
-            StochasticError::UnsupportedSamplingScheme { .. } => {}
-            StochasticError::MissingScenarioSource { .. } => {}
+            StochasticError::InvalidParParameters { .. }
+            | StochasticError::CholeskyDecompositionFailed { .. }
+            | StochasticError::InvalidCorrelation { .. }
+            | StochasticError::InsufficientData { .. }
+            | StochasticError::SeedDerivationError { .. }
+            | StochasticError::UnsupportedNoiseMethod { .. }
+            | StochasticError::DimensionExceedsCapacity { .. }
+            | StochasticError::UnsupportedSamplingScheme { .. }
+            | StochasticError::MissingScenarioSource { .. } => {}
         }
         let _ = format!("{err:?}");
     }

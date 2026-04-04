@@ -1,7 +1,7 @@
 //! Integration tests for the [`ForwardSampler`] abstraction.
 //!
-//! Covers dispatch correctness, InSample copy equivalence, OutOfSample
-//! determinism, OutOfSample correlation correctness, factory error paths,
+//! Covers dispatch correctness, `InSample` copy equivalence, `OutOfSample`
+//! determinism, `OutOfSample` correlation correctness, factory error paths,
 //! and resume invariance.
 //!
 //! This is the quality-gate test suite for Epic 05.
@@ -11,7 +11,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::float_cmp,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
 )]
 
 use std::collections::BTreeMap;
@@ -264,7 +265,9 @@ fn insample_dispatch_returns_tree_slice_of_correct_dim() {
                 dim
             );
         }
-        other => panic!("expected ForwardNoise::TreeSlice, got: {other:?}"),
+        other @ ForwardNoise::FreshNoise(_) => {
+            panic!("expected ForwardNoise::TreeSlice, got: {other:?}")
+        }
     }
 }
 
@@ -340,7 +343,9 @@ fn out_of_sample_dispatch_returns_fresh_noise_of_correct_dim() {
                 dim
             );
         }
-        other => panic!("expected ForwardNoise::FreshNoise, got: {other:?}"),
+        other @ ForwardNoise::TreeSlice(_) => {
+            panic!("expected ForwardNoise::FreshNoise, got: {other:?}")
+        }
     }
 }
 

@@ -4439,6 +4439,7 @@ mod tests {
     /// yields `scheme_type == "out_of_sample"` (serde roundtrip for the
     /// `config.json` path).
     #[test]
+    #[allow(clippy::expect_used)]
     fn test_simulation_sampling_config_serde_roundtrip() {
         use crate::config::SimulationSamplingConfig;
 

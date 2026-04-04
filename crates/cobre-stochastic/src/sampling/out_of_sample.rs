@@ -42,7 +42,7 @@ pub(crate) struct FreshNoiseSpec {
 ///
 /// # Errors
 ///
-/// Returns [`StochasticError::DimensionExceedsCapacity`] when QmcSobol
+/// Returns [`StochasticError::DimensionExceedsCapacity`] when `QmcSobol`
 /// and `spec.dim > MAX_SOBOL_DIM`.
 ///
 /// # Panics

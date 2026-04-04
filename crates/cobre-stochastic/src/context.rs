@@ -1259,7 +1259,7 @@ mod tests {
         assert_eq!(ctx.n_load_buses(), 0, "no load buses in this system");
     }
 
-    /// AC: entity_order() returns the canonical hydro_ids ++ load_bus_ids order.
+    /// AC: `entity_order()` returns the canonical `hydro_ids` ++ `load_bus_ids` order.
     #[test]
     fn test_entity_order_accessor() {
         let hydros = vec![make_hydro(1), make_hydro(2)];
@@ -1301,7 +1301,7 @@ mod tests {
         );
     }
 
-    /// AC: entity_order() is populated even when a user-supplied tree is given.
+    /// AC: `entity_order()` is populated even when a user-supplied tree is given.
     #[test]
     fn test_entity_order_with_user_tree() {
         use crate::context::OpeningTree;
@@ -1350,7 +1350,7 @@ mod tests {
         );
     }
 
-    /// AC: forward_seed() returns Some(seed) when scenario_source.seed is supplied.
+    /// AC: `forward_seed()` returns Some(seed) when `scenario_source.seed` is supplied.
     #[test]
     fn test_forward_seed_from_config() {
         let hydros = vec![make_hydro(1), make_hydro(2)];
@@ -1386,7 +1386,7 @@ mod tests {
         );
     }
 
-    /// AC: forward_seed() returns None when scenario_source.seed is absent.
+    /// AC: `forward_seed()` returns None when `scenario_source.seed` is absent.
     #[test]
     fn test_forward_seed_none_when_absent() {
         let hydros = vec![make_hydro(1), make_hydro(2)];

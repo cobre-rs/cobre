@@ -209,7 +209,7 @@ mod tests {
     ///
     /// Input bytes (little-endian):
     ///   42u64  = [2a 00 00 00 00 00 00 00]
-    ///   0u32   = [00 00 00 00]  (stage_id)
+    ///   0u32   = [00 00 00 00]  (`stage_id`)
     #[test]
     fn stage_seed_golden_value() {
         let seed = derive_stage_seed(42, 0);

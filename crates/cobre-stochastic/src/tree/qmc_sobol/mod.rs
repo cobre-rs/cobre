@@ -1,18 +1,18 @@
 //! Sobol quasi-Monte Carlo sequence generation with Joe-Kuo direction tables.
 //!
 //! This module embeds the Joe-Kuo 2010 direction number dataset for up to
-//! [`MAX_SOBOL_DIM`] dimensions. The data is stored as a statically-typed
+//! `MAX_SOBOL_DIM` dimensions. The data is stored as a statically-typed
 //! Rust static array that requires no runtime allocation or deserialization.
 //!
 //! ## Dimension numbering
 //!
 //! - Dimension 1 uses the van der Corput sequence (no direction table needed).
-//! - Dimensions 2–21201 each have an entry in [`SOBOL_DIRECTIONS`].
+//! - Dimensions 2–21201 each have an entry in `SOBOL_DIRECTIONS`.
 //! - Array index 0 corresponds to dimension 2.
 //!
 //! ## Direction number convention
 //!
-//! [`SobolDirEntry::initial_dirs`] stores raw `m_i` values exactly as listed in
+//! `SobolDirEntry::initial_dirs` stores raw `m_i` values exactly as listed in
 //! the Joe-Kuo file. The sequence generator applies the left-shift
 //! `v[j] = m_j << (32 - j)` when constructing the direction vectors for the
 //! standard Gray-code Sobol formulation.

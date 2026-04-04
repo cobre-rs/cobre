@@ -653,6 +653,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::erasing_op, clippy::identity_op)]
     fn pack_real_states_into_excludes_padding() {
         // AC: max_local_count=3, num_ranks=2, actual_per_rank=[3,2], n_state=2.
         // Rank 0 has 3 real states, rank 1 has 2 real states + 1 zero-padded slot.

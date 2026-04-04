@@ -966,7 +966,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     clippy::float_cmp,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::too_many_lines
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::doc_markdown,
+    clippy::needless_range_loop
 )]
 mod tests {
     use std::collections::BTreeMap;

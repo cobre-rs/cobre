@@ -162,12 +162,14 @@ mod tests {
     ];
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn quantile_0_5_is_zero() {
         // The median of the standard normal is exactly 0.
         assert_eq!(norm_quantile(0.5), 0.0);
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn quantile_symmetry() {
         // norm_quantile(p) + norm_quantile(1-p) must be 0.0 to within 1e-12.
         let n = 1000_usize;
@@ -194,6 +196,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn quantile_monotonicity() {
         // Strictly increasing over 10_000 equispaced points in (0.001, 0.999).
         let n = 10_000_usize;
@@ -210,13 +213,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "norm_quantile requires p in (0, 1)")]
     fn quantile_panics_at_0() {
         let _ = norm_quantile(0.0);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "norm_quantile requires p in (0, 1)")]
     fn quantile_panics_at_1() {
         let _ = norm_quantile(1.0);
     }

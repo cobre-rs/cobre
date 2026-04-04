@@ -1,7 +1,7 @@
 //! # cobre-stochastic
 //!
 //! Stochastic process models for power systems: PAR(p) processes, correlated
-//! sampling, scenario trees, deterministic forward sampling via SipHash seed
+//! sampling, scenario trees, deterministic forward sampling via `SipHash` seed
 //! derivation, multiple noise generation methods (SAA, LHS, QMC-Sobol,
 //! QMC-Halton), and a unified forward-pass sampling abstraction
 //! (`ForwardSampler`) supporting in-sample and out-of-sample noise generation.

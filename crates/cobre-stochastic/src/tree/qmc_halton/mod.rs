@@ -13,9 +13,9 @@
 //!
 //! ## Entry points
 //!
-//! - [`sieve_primes`]: compute the first `count` primes at generator
+//! - `sieve_primes`: compute the first `count` primes at generator
 //!   initialisation time using the sieve of Eratosthenes.
-//! - [`radical_inverse`]: compute the base-`b` radical inverse of integer
+//! - `radical_inverse`: compute the base-`b` radical inverse of integer
 //!   `n` (pure digit-reflection, no scrambling).
 //! - [`generate_qmc_halton`]: batch generation for all openings of a stage,
 //!   with Owen-style random digit scrambling for decorrelation.
@@ -592,6 +592,7 @@ mod tests {
                 #[allow(clippy::cast_possible_truncation)]
                 scenario: scenario as u32,
                 stage_id: 1,
+                #[allow(clippy::cast_possible_truncation)]
                 total_scenarios: n as u32,
                 dim,
             };

@@ -21,7 +21,7 @@
 //! `local_forward_passes` parameter. The global scenario index for local
 //! scenario `m` is `fwd_offset + m`, where `fwd_offset` is the pre-computed
 //! global index of this rank's first forward pass. This deterministic mapping
-//! drives the communication-free seed derivation used by [`ForwardSampler::sample`].
+//! drives the communication-free seed derivation used by `ForwardSampler::sample`.
 //!
 //! ## Thread-level parallelism
 //!
@@ -871,7 +871,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
 /// - `initial_state.len() != indexer.n_state`
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,

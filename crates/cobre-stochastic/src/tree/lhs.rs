@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(single, vec![7]);
     }
 
-    /// Same (base_seed, stage_id) must produce bitwise identical output.
+    /// Same (`base_seed`, `stage_id`) must produce bitwise identical output.
     #[test]
     #[allow(clippy::float_cmp)]
     fn lhs_determinism() {
@@ -251,7 +251,7 @@ mod tests {
         assert_ne!(out_a, out_b, "different seeds produced identical output");
     }
 
-    /// Output length must equal n_openings * dim.
+    /// Output length must equal `n_openings` * dim.
     #[test]
     fn lhs_correct_length() {
         let n_openings = 10;
@@ -350,7 +350,7 @@ mod tests {
         );
     }
 
-    /// n_openings=0 must not panic and must leave output unchanged.
+    /// `n_openings=0` must not panic and must leave output unchanged.
     #[test]
     #[allow(clippy::float_cmp)]
     fn lhs_zero_openings_does_not_panic() {
@@ -370,7 +370,7 @@ mod tests {
     /// (Abramowitz & Stegun 7.1.26, max error 1.5e-7).
     fn libm_erf(x: f64) -> f64 {
         let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
-        let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+        let t = 1.0 / (1.0 + 0.327_591_1 * x.abs());
         let poly = t
             * (0.254_829_592
                 + t * (-0.284_496_736
@@ -380,7 +380,7 @@ mod tests {
 
     /// Same inputs must produce bitwise identical output (determinism).
     #[test]
-    #[allow(clippy::float_cmp)]
+    #[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
     fn lhs_point_determinism() {
         let n = 50_usize;
         let dim = 3_usize;
@@ -407,6 +407,7 @@ mod tests {
 
     /// Different `sampling_seed` values must produce different outputs.
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn lhs_point_different_seeds_differ() {
         let n = 50_usize;
         let dim = 3_usize;
@@ -447,6 +448,7 @@ mod tests {
 
     /// All output values across all scenarios must be finite.
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn lhs_point_all_finite() {
         let n = 50_usize;
         let dim = 3_usize;
@@ -493,7 +495,7 @@ mod tests {
         let approx_cdf = |z: f64| -> f64 { 0.5 * (1.0 + libm_erf(z / std::f64::consts::SQRT_2)) };
 
         // Collect per-dimension stratum indices across all scenarios.
-        let mut strata_by_dim = vec![Vec::with_capacity(n); dim];
+        let mut strata_by_dim: Vec<Vec<usize>> = (0..dim).map(|_| Vec::with_capacity(n)).collect();
         for scenario in 0..n {
             let mut output = vec![0.0_f64; dim];
             sample_lhs_point(

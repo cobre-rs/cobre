@@ -157,7 +157,7 @@ impl<'a> ForwardSampler<'a> {
     /// # Errors
     ///
     /// - [`StochasticError::DimensionExceedsCapacity`] — when `OutOfSample`
-    ///   uses QmcSobol and `dim > MAX_SOBOL_DIM`.
+    ///   uses `QmcSobol` and `dim > MAX_SOBOL_DIM`.
     /// - [`StochasticError::UnsupportedSamplingScheme`] — for unimplemented
     ///   `Historical` and `External` schemes.
     /// - [`StochasticError::InsufficientData`] — when `stage_idx` is out of
@@ -461,8 +461,7 @@ mod tests {
         let result = build_forward_sampler(SamplingScheme::InSample, &ctx, &stages);
         assert!(
             result.is_ok(),
-            "expected Ok for InSample but got: {:?}",
-            result
+            "expected Ok for InSample but got: {result:?}"
         );
         assert!(matches!(result.unwrap(), ForwardSampler::InSample { .. }));
     }
@@ -488,8 +487,7 @@ mod tests {
         let result = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages);
         assert!(
             result.is_ok(),
-            "expected Ok for OutOfSample with seed but got: {:?}",
-            result
+            "expected Ok for OutOfSample with seed but got: {result:?}"
         );
         assert!(matches!(
             result.unwrap(),

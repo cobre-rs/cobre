@@ -45,7 +45,7 @@ const GOLDEN_S0_O1_D0: f64 = -1.395_412_177_608_524_4;
 /// Stage 0, opening 1, entity 1.
 const GOLDEN_S0_O1_D1: f64 = -2.693_936_692_173_674_6e-1;
 /// Stage 0, opening 2, entity 0.
-const GOLDEN_S0_O2_D0: f64 = 8.337_031_709_056_368_4e-1;
+const GOLDEN_S0_O2_D0: f64 = 8.337_031_709_056_368e-1;
 /// Stage 0, opening 2, entity 1.
 const GOLDEN_S0_O2_D1: f64 = -1.619_991_803_182_488_7;
 

@@ -477,7 +477,7 @@ mod tests {
         );
         assert_eq!(
             tree.opening(0, 2)[0],
-            8.337_031_709_056_368_4e-1,
+            8.337_031_709_056_368e-1,
             "stage=0 opening=2 dim=0"
         );
         assert_eq!(
@@ -578,7 +578,7 @@ mod tests {
         // Approximate Φ(z) via the Abramowitz & Stegun rational approximation.
         let approx_erf = |x: f64| -> f64 {
             let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
-            let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+            let t = 1.0 / (1.0 + 0.327_591_1 * x.abs());
             let poly = t
                 * (0.254_829_592
                     + t * (-0.284_496_736
@@ -662,7 +662,7 @@ mod tests {
         }
     }
 
-    /// A mixed system (stage 0 = QmcSobol, stage 1 = Saa) produces valid noise
+    /// A mixed system (stage 0 = `QmcSobol`, stage 1 = Saa) produces valid noise
     /// for both stages with the correct dimensions.
     #[test]
     fn test_sobol_saa_mixing() {
@@ -719,7 +719,7 @@ mod tests {
         }
     }
 
-    /// A mixed system (stage 0 = QmcHalton, stage 1 = Saa) produces valid noise
+    /// A mixed system (stage 0 = `QmcHalton`, stage 1 = Saa) produces valid noise
     /// for both stages with the correct dimensions.
     #[test]
     fn test_halton_saa_mixing() {

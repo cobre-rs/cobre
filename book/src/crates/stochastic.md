@@ -17,18 +17,25 @@ for deterministic noise generation.
 
 ## Module overview
 
-| Module          | Purpose                                                                                                                                   |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `par`           | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedPar` cache                                    |
-| `par::evaluate` | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                               |
-| `par::fitting`  | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, PACF/AIC order selection |
-| `noise`         | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                                 |
-| `normal`        | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                                   |
-| `correlation`   | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                         |
-| `tree`          | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                           |
-| `sampling`      | InSample scenario selection: `sample_forward` for picking an opening for a given iteration/scenario/stage                                 |
-| `context`       | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                                  |
-| `error`         | `StochasticError` with five variants covering all failure domains of the stochastic layer                                                 |
+| Module                    | Purpose                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `par`                     | PAR(p) coefficient preprocessing: validation, original-unit conversion, and the `PrecomputedPar` cache                                                                              |
+| `par::evaluate`           | PAR model forward evaluation (`evaluate_par`) and inverse noise solving (`solve_par_noise`)                                                                                         |
+| `par::fitting`            | PAR model estimation: Levinson-Durbin recursion, seasonal statistics, AR coefficient and correlation estimation, PACF/AIC order selection                                           |
+| `noise`                   | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                                                                           |
+| `noise::quantile`         | Beasley-Springer-Moro inverse normal CDF (`norm_quantile`)                                                                                                                          |
+| `normal`                  | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                                                                             |
+| `correlation`             | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                                                                   |
+| `tree`                    | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                                                                     |
+| `tree::lhs`               | Latin Hypercube Sampling: batch `generate_lhs` and point-wise `sample_lhs_point`                                                                                                    |
+| `tree::qmc_sobol`         | Sobol QMC sequence generation with Joe-Kuo direction tables and Matousek scrambling                                                                                                 |
+| `tree::qmc_halton`        | Halton QMC sequence generation with Owen-style digit scrambling and prime sieve                                                                                                     |
+| `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
+| `sampling::out_of_sample` | Out-of-sample fresh noise generation dispatching over `NoiseMethod`                                                                                                                 |
+| `sampling::historical`    | Historical replay stub (not yet implemented)                                                                                                                                        |
+| `sampling::external`      | External scenario file stub (not yet implemented)                                                                                                                                   |
+| `context`                 | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                                                                            |
+| `error`                   | `StochasticError` with nine variants covering six failure domains of the stochastic layer                                                                                           |
 
 ## Architecture
 
@@ -143,6 +150,205 @@ consistently in `PrecomputedPar`, `OpeningTree`, and throughout
 
 Pre-study stages (those with negative `stage.id`) are excluded from the
 opening tree but remain in `inflow_models` for PAR lag initialization.
+
+### Noise generation algorithms
+
+The opening tree and the out-of-sample forward pass both use these algorithms
+to produce standard-normal noise vectors. The algorithm used at each stage is
+selected by the `NoiseMethod` field on the stage's `ScenarioSourceConfig`.
+
+#### LHS (Latin Hypercube Sampling)
+
+LHS stratifies the unit interval `[0, 1)` for each dimension into `N`
+equal-probability strata `[k/N, (k+1)/N)` and ensures exactly one sample per
+stratum, guaranteeing better marginal coverage than plain Monte Carlo.
+
+**Batch** (`generate_lhs`): for each dimension, generate stratified samples
+`u[k] = (k + U_k) / N` where `U_k ~ U(0,1)`, apply a Fisher-Yates shuffle
+to a permutation of `0..N`, write `output[perm[k] * dim + d] = norm_quantile(u[k])`.
+Output layout is opening-major: `output[opening * dim + entity]`.
+
+**Point-wise** (`sample_lhs_point`): for a single scenario within an
+`OutOfSample` forward pass, derive per-dimension permutations identically on
+all workers from `(sampling_seed, iteration, stage_id)` via
+`derive_opening_seed`. Each worker independently looks up its stratum from the
+shared permutation and samples a within-stratum offset from an independent
+`derive_forward_seed`-based RNG. No inter-worker communication is required.
+The `N` scenarios across all workers form a valid LHS design.
+
+Both paths apply `norm_quantile` to convert uniform stratified samples to
+standard-normal values.
+
+#### Sobol (QMC)
+
+The Sobol sequence is a low-discrepancy sequence that fills the `d`-dimensional
+unit hypercube more uniformly than pseudo-random samples, reducing the
+effective variance of Monte Carlo estimates.
+
+**Direction numbers**: dimension 1 uses the van der Corput sequence. Dimensions
+2–21,201 use the Joe-Kuo 2010 direction number dataset (21,200 entries) stored
+as a static Rust array — no runtime allocation or deserialization. The maximum
+supported dimension is `MAX_SOBOL_DIM = 21201`.
+
+**Batch** (`generate_qmc_sobol`): builds the full 32-bit direction matrix once
+per stage, then generates all `n_openings` points using the Gray-code
+recurrence for O(1) updates per point.
+
+**Point-wise** (`scrambled_sobol_point`): generates a single scenario's noise
+vector via direct binary decomposition of the scenario index. Used by the
+out-of-sample forward pass.
+
+**Scrambling**: both paths apply Matousek linear scrambling
+`x' = a*x + b (mod 2^32)` with parameters derived from the stage seed. This
+breaks the low-dimensional correlation artifacts of the plain Sobol sequence.
+After scrambling, each coordinate is divided by `2^32` and transformed to
+N(0,1) via `norm_quantile`.
+
+#### Halton (QMC)
+
+The Halton sequence assigns each dimension a distinct prime base. Dimension
+`d` (1-indexed) uses the `d`-th prime: 2, 3, 5, 7, 11, … The coordinate of
+point `n` in dimension `d` is `radical_inverse(n, p_d)` — the base-`p_d`
+representation of `n` reflected about the decimal point.
+
+**Prime sieve** (`sieve_primes`): computed once at generator initialization
+using the sieve of Eratosthenes. There is no dimension limit.
+
+**Scrambling**: the plain Halton sequence suffers from correlation artifacts in
+high dimensions. Owen-style random digit scrambling applies a seed-derived
+permutation `pi[d][j]` of size `p_d` to each digit position `j` of each
+dimension `d`. The permutation tables are deterministic from the stage seed.
+
+**Batch** (`generate_qmc_halton`) and **point-wise** (`scrambled_halton_point`)
+follow the same structure as the Sobol variants. After scrambling and
+`radical_inverse`, each coordinate is transformed to N(0,1) via `norm_quantile`.
+
+#### BSM inverse normal CDF (`norm_quantile`)
+
+All three noise algorithms (LHS, Sobol, Halton) use `norm_quantile` to convert
+uniform values in `(0, 1)` to standard-normal values. The implementation uses
+the Beasley-Springer-Moro (BSM) piecewise approximation:
+
+- **Central region** (`|p - 0.5| < 0.42`): rational approximation in
+  `y = p - 0.5` with `r = y^2`.
+- **Intermediate tails** (`1e-20 < p <= 0.08` or `0.92 <= p < 1 - 1e-20`):
+  degree-8 polynomial in `r = ln(-ln(min(p, 1-p)))`.
+- **Extreme tails** (`p <= 1e-20`): clamped to ±8.21.
+
+Absolute error is better than 3e-9 over the entire open interval (0, 1). No
+external numerical library is required.
+
+### Forward sampler architecture
+
+The `ForwardSampler` enum provides a unified dispatch point for all supported
+forward-pass sampling strategies. This avoids `Box<dyn Trait>` (prohibited by
+project convention for closed variant sets) while allowing the optimizer's
+forward pass to call a single `sampler.sample(req)` regardless of which
+strategy is active.
+
+#### `ForwardSampler<'a>` enum
+
+Four variants:
+
+- **`InSample`**: forward pass selects noise from the pre-generated opening
+  tree. Stores `tree: OpeningTreeView<'a>` (a zero-copy borrowed view) and
+  `base_seed: u64`. Delegates to `sampling::insample::sample_forward`.
+- **`OutOfSample`**: forward pass generates fresh noise on-the-fly. Stores
+  `forward_seed`, `dim`, `noise_methods: Box<[NoiseMethod]>` (one per stage),
+  `entity_order: &'a [EntityId]`, and `correlation: &'a DecomposedCorrelation`.
+- **`Historical`**: stub, not yet implemented. Returns
+  `StochasticError::UnsupportedSamplingScheme`.
+- **`External`**: stub, not yet implemented. Returns
+  `StochasticError::UnsupportedSamplingScheme`.
+
+The lifetime `'a` refers to the `StochasticContext` that owns the opening
+tree, entity order, and correlation data. The sampler is constructed once and
+reused across all `(iteration, scenario, stage)` calls.
+
+#### `build_forward_sampler` factory
+
+```rust,no_run
+pub fn build_forward_sampler<'a>(
+    scheme: SamplingScheme,
+    ctx: &'a StochasticContext,
+    stages: &'a [Stage],
+) -> Result<ForwardSampler<'a>, StochasticError>
+```
+
+Constructs the appropriate `ForwardSampler` variant from a `SamplingScheme`:
+
+- `InSample` — always succeeds; borrows `ctx.tree_view()` and `ctx.base_seed()`.
+- `OutOfSample` — requires `ctx.forward_seed()` to be `Some`; collects
+  per-stage `NoiseMethod` values from `stages` into a `Box<[NoiseMethod]>`.
+  Returns `StochasticError::MissingScenarioSource` if no forward seed is
+  configured.
+- `Historical` / `External` — return `StochasticError::MissingScenarioSource`
+  (not yet implemented).
+
+#### `ForwardNoise<'a, 'b>` dual-lifetime return type
+
+```rust,no_run
+pub enum ForwardNoise<'a, 'b> {
+    TreeSlice(&'a [f64]),
+    FreshNoise(&'b [f64]),
+}
+```
+
+The two lifetime parameters allow the two variants to borrow from different
+allocations:
+
+- `'a` — lifetime of the `StochasticContext` (opening tree data). Used by
+  `InSample`: the returned slice is a sub-slice of the pre-generated tree.
+- `'b` — lifetime of the caller-supplied `noise_buf`. Used by `OutOfSample`:
+  the sampler writes into the buffer and returns a slice borrowing from it.
+
+`ForwardNoise::as_slice()` extracts the underlying `&[f64]` regardless of
+which variant is active, allowing callers to consume the noise uniformly.
+
+#### `SampleRequest<'b>` argument bundle
+
+```rust,no_run
+pub struct SampleRequest<'b> {
+    pub iteration: u32,
+    pub scenario: u32,
+    pub stage: u32,
+    pub stage_idx: usize,
+    pub noise_buf: &'b mut [f64],
+    pub perm_scratch: &'b mut [usize],
+    pub total_scenarios: u32,
+}
+```
+
+Bundles seven per-call arguments to keep `ForwardSampler::sample()` within the
+project's argument-budget convention. `noise_buf` must be at least `dim`
+elements long; `perm_scratch` must be at least `total_scenarios` elements long.
+Both are caller-owned, pre-allocated working buffers — no allocation inside
+`sample()`.
+
+#### `FreshNoiseSpec` internal bundle
+
+`FreshNoiseSpec` (in `sampling::out_of_sample`) bundles seed, dimension, and
+method parameters for `sample_fresh`. It is `pub(crate)` and not part of the
+public API.
+
+#### OutOfSample dispatch path
+
+When `ForwardSampler::OutOfSample` is active, `sample()` performs the
+following steps:
+
+1. Look up `noise_methods[stage_idx]` to determine the `NoiseMethod` for the
+   current stage. Returns `StochasticError::InsufficientData` if `stage_idx`
+   is out of bounds.
+2. Build a `FreshNoiseSpec` bundling the forward seed, iteration, scenario,
+   stage ID, dim, and total scenario count.
+3. Call `out_of_sample::sample_fresh(spec, noise_buf, perm_scratch, correlation,
+entity_order)`, which:
+   a. Dispatches on `NoiseMethod`: calls `fill_saa` (SAA), `sample_lhs_point`
+   (LHS), `scrambled_sobol_point` (QmcSobol), or `scrambled_halton_point`
+   (QmcHalton). `Selective` falls back to SAA with a `tracing::warn!`.
+   b. Applies `correlation.apply_correlation(stage_id, &mut noise_buf[..dim],
+   entity_order)` in-place, transforming independent noise to correlated noise.
+4. Return `ForwardNoise::FreshNoise(&noise_buf[..dim])`.
 
 ### `StochasticContext` as the integration entry point
 
@@ -365,17 +571,72 @@ A zero-copy borrowed view over an `OpeningTree`, with the same accessor API:
 `opening(stage_idx, opening_idx)`, `n_stages()`, `n_openings(stage_idx)`,
 `dim()`. Passed to `sample_forward` to avoid cloning the tree data.
 
+### `ForwardSampler<'a>`
+
+Unified forward-pass sampler enum. Constructed once per run via
+`build_forward_sampler` and reused across all `(iteration, scenario, stage)`
+calls without per-call allocation. Four variants:
+
+| Variant       | Description                                                      |
+| ------------- | ---------------------------------------------------------------- |
+| `InSample`    | Selects noise from the pre-generated opening tree                |
+| `OutOfSample` | Generates fresh noise on-the-fly using the stage's `NoiseMethod` |
+| `Historical`  | Stub — not yet implemented                                       |
+| `External`    | Stub — not yet implemented                                       |
+
+The lifetime `'a` borrows from the `StochasticContext` that owns the tree,
+entity order, and correlation data. See "Forward sampler architecture" above.
+
+### `ForwardNoise<'a, 'b>`
+
+Noise payload returned by `ForwardSampler::sample`. Two variants:
+
+| Variant      | Source                      | Lifetime |
+| ------------ | --------------------------- | -------- |
+| `TreeSlice`  | Sub-slice of opening tree   | `'a`     |
+| `FreshNoise` | Caller-supplied `noise_buf` | `'b`     |
+
+`as_slice() -> &[f64]` extracts the underlying slice regardless of variant.
+
+### `SampleRequest<'b>`
+
+Per-call argument bundle for `ForwardSampler::sample`. Fields: `iteration`,
+`scenario`, `stage` (domain ID as `u32`), `stage_idx` (array position as
+`usize`), `noise_buf: &'b mut [f64]` (at least `dim` elements),
+`perm_scratch: &'b mut [usize]` (at least `total_scenarios` elements),
+`total_scenarios: u32`.
+
+### `build_forward_sampler`
+
+Factory function:
+
+```rust,no_run
+pub fn build_forward_sampler<'a>(
+    scheme: SamplingScheme,
+    ctx: &'a StochasticContext,
+    stages: &'a [Stage],
+) -> Result<ForwardSampler<'a>, StochasticError>
+```
+
+Returns `StochasticError::MissingScenarioSource` for `OutOfSample` without a
+configured `forward_seed`, and for `Historical` / `External` (not yet
+implemented).
+
 ### `StochasticError`
 
-Returned by all fallible APIs. Five variants:
+Returned by all fallible APIs. Nine variants covering six failure domains:
 
 | Variant                       | When it occurs                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------- |
 | `InvalidParParameters`        | AR order > 0 with zero standard deviation, or ill-conditioned coefficients        |
 | `CholeskyDecompositionFailed` | Correlation matrix is not positive-definite                                       |
 | `InvalidCorrelation`          | Missing default profile, ambiguous profile set, or out-of-range correlation entry |
-| `InsufficientData`            | Fewer historical records than the PAR order requires                              |
+| `InsufficientData`            | Fewer historical records than the PAR order requires, or index out of bounds      |
 | `SeedDerivationError`         | Hash computation produces an invalid result during seed derivation                |
+| `UnsupportedNoiseMethod`      | `NoiseMethod` variant not supported at the requested stage                        |
+| `DimensionExceedsCapacity`    | Noise dimension exceeds the method's maximum (e.g., `dim > MAX_SOBOL_DIM`)        |
+| `UnsupportedSamplingScheme`   | Sampling scheme variant not implemented for the requested operation               |
+| `MissingScenarioSource`       | Required configuration absent for the requested sampling scheme                   |
 
 Implements `std::error::Error`, `Send`, and `Sync`.
 
@@ -436,10 +697,12 @@ packed row-major form. Element `(i, j)` with `j <= i` is at index
 `i*(i+1)/2 + j`. Constructed via `CholeskyFactor::decompose(&matrix)` and
 applied via `transform(&input, &mut output)`.
 
-## Usage example
+## Usage examples
+
+### InSample forward pass (opening tree)
 
 The following shows how to construct a stochastic context from a loaded system
-and use it to sample a forward-pass scenario.
+and use it to sample a forward-pass scenario using the InSample strategy.
 
 ```rust,no_run
 use cobre_stochastic::{
@@ -480,6 +743,52 @@ for (stage_idx, stage) in study_stages.iter().enumerate() {
     // `noise_slice` has length `ctx.dim()` (one value per hydro plant).
     // Pass to LP RHS patching together with `ctx.par()`.
     let _ = (opening_idx, noise_slice);
+}
+# Ok::<(), cobre_stochastic::StochasticError>(())
+```
+
+### OutOfSample forward pass (fresh noise)
+
+The following shows how to use `ForwardSampler` with the `OutOfSample` strategy
+to generate fresh noise on each forward-pass call, using whatever `NoiseMethod`
+is configured per stage (LHS, Sobol, Halton, or SAA).
+
+```rust,no_run
+use cobre_core::scenario::SamplingScheme;
+use cobre_stochastic::{
+    build_stochastic_context,
+    sampling::{SampleRequest, build_forward_sampler},
+};
+
+// Build the stochastic context. `forward_seed` must be Some(_) for OutOfSample.
+let ctx = build_stochastic_context(&system, base_seed)?;
+
+// Construct the sampler once; reuse across all iterations and scenarios.
+let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &study_stages)?;
+
+// Pre-allocate per-call working buffers outside the loop.
+let dim = ctx.dim();
+let total_scenarios: u32 = 200;
+let mut noise_buf = vec![0.0f64; dim];
+let mut perm_scratch = vec![0usize; total_scenarios as usize];
+
+let iteration: u32 = 0;
+let scenario: u32 = 0;
+
+for (stage_idx, stage) in study_stages.iter().enumerate() {
+    let noise = sampler.sample(SampleRequest {
+        iteration,
+        scenario,
+        stage: stage.id as u32,
+        stage_idx,
+        noise_buf: &mut noise_buf,
+        perm_scratch: &mut perm_scratch,
+        total_scenarios,
+    })?;
+
+    // `noise.as_slice()` has length `dim` (one value per hydro plant).
+    // For OutOfSample this is a FreshNoise variant borrowing from noise_buf.
+    let _ = noise.as_slice();
 }
 # Ok::<(), cobre_stochastic::StochasticError>(())
 ```

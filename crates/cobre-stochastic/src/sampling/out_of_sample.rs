@@ -6,19 +6,19 @@
 //!
 //! Supported methods: SAA, LHS, QMC (Sobol/Halton), Selective (falls back to SAA).
 
-use cobre_core::{temporal::NoiseMethod, EntityId};
+use cobre_core::{EntityId, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_forward_seed},
     tree::{
-        lhs::{sample_lhs_point, LhsPointSpec},
-        qmc_halton::{scrambled_halton_point, HaltonPointSpec},
-        qmc_sobol::{scrambled_sobol_point, SobolPointSpec, MAX_SOBOL_DIM},
+        lhs::{LhsPointSpec, sample_lhs_point},
+        qmc_halton::{HaltonPointSpec, scrambled_halton_point},
+        qmc_sobol::{MAX_SOBOL_DIM, SobolPointSpec, scrambled_sobol_point},
     },
-    StochasticError,
 };
 
 /// Parameters for a single out-of-sample noise draw.
@@ -145,14 +145,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
+        EntityId,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::NoiseMethod,
-        EntityId,
     };
 
-    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
+    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
 
-    use super::{sample_fresh, FreshNoiseSpec};
+    use super::{FreshNoiseSpec, sample_fresh};
 
     fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         let n = entity_ids.len();

@@ -25,11 +25,11 @@ pub(crate) mod historical;
 pub mod insample;
 pub(crate) mod out_of_sample;
 
-use cobre_core::{scenario::SamplingScheme, temporal::NoiseMethod, EntityId, Stage};
+use cobre_core::{EntityId, Stage, scenario::SamplingScheme, temporal::NoiseMethod};
 
 use crate::{
-    context::StochasticContext, correlation::resolve::DecomposedCorrelation,
-    tree::opening_tree::OpeningTreeView, StochasticError,
+    StochasticError, context::StochasticContext, correlation::resolve::DecomposedCorrelation,
+    tree::opening_tree::OpeningTreeView,
 };
 
 // ---------------------------------------------------------------------------
@@ -298,6 +298,7 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -307,11 +308,10 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
-    use super::{build_forward_sampler, ForwardNoise, ForwardSampler, SampleRequest};
-    use crate::{context::build_stochastic_context, StochasticError};
+    use super::{ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
+    use crate::{StochasticError, context::build_stochastic_context};
 
     fn make_bus(id: i32) -> Bus {
         Bus {

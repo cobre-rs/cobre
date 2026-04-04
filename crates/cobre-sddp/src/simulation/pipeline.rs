@@ -47,11 +47,10 @@ use std::time::Instant;
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{ForwardSampler, SampleRequest, build_forward_sampler};
+use cobre_stochastic::{build_forward_sampler, ForwardSampler, SampleRequest};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -61,13 +60,14 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
+            StageExtractionSpec,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
+    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`ForwardSampler::sample`].
@@ -925,21 +925,17 @@ mod tests {
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::scenario::SamplingScheme;
-    use cobre_core::temporal::{
-        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig,
-    };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::{simulate, SimulationOutputSpec};
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{ScratchBuffers, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1292,35 +1288,6 @@ mod tests {
     /// matching `entity_counts_1_hydro().hydro_productivities`.
     fn hydro_productivities_1hydro(n_stages: usize) -> Vec<Vec<f64>> {
         vec![vec![1.0]; n_stages]
-    }
-
-    /// Build `n_stages` minimal [`Stage`] values (id = index) for [`TrainingContext`].
-    fn make_stages(n_stages: usize) -> Vec<Stage> {
-        use chrono::NaiveDate;
-        (0..n_stages)
-            .map(|i| Stage {
-                index: i,
-                id: i32::try_from(i).unwrap(),
-                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-                season_id: Some(0),
-                blocks: vec![Block {
-                    index: 0,
-                    name: "S".to_string(),
-                    duration_hours: 744.0,
-                }],
-                block_mode: BlockMode::Parallel,
-                state_config: StageStateConfig {
-                    storage: true,
-                    inflow_lags: false,
-                },
-                risk_config: StageRiskConfig::Expectation,
-                scenario_config: ScenarioSourceConfig {
-                    branching_factor: 3,
-                    noise_method: NoiseMethod::Saa,
-                },
-            })
-            .collect()
     }
 
     /// Wrap a `MockSolver` in a single-workspace slice for `simulate()` calls.

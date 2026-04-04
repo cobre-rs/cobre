@@ -301,7 +301,7 @@ fn create_simulation_bar(scenarios_total: u64, term_width: u16) -> ProgressBar {
 mod tests {
     use std::sync::mpsc;
 
-    use cobre_core::{TrainingEvent, WelfordAccumulator};
+    use cobre_core::TrainingEvent;
 
     use super::run_progress_thread;
 

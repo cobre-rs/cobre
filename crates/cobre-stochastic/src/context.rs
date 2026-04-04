@@ -23,12 +23,15 @@
 use cobre_core::{EntityId, LoadModel, System};
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
-    tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
+    tree::{
+        generate::{generate_opening_tree, ClassDimensions},
+        opening_tree::OpeningTreeView,
+    },
+    StochasticError,
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -226,7 +229,7 @@ impl StochasticContext {
         self.forward_seed
     }
 
-    /// Returns the noise dimension (`n_hydros + n_load_buses`).
+    /// Returns the noise dimension (`n_hydros + n_load_buses + n_stochastic_ncs`).
     #[must_use]
     pub fn dim(&self) -> usize {
         self.dim
@@ -293,7 +296,8 @@ impl StochasticContext {
 /// 5. Build [`PrecomputedPar`] from PAR model parameters and study stages.
 /// 6. Build [`DecomposedCorrelation`] from the system correlation model.
 /// 7. Generate the opening scenario tree from the expanded entity order
-///    (`hydro_ids` followed by `load_bus_ids`) with `dim = n_hydros + n_load_buses`.
+///    (`hydro_ids` followed by `load_bus_ids` followed by `ncs_ids`) with
+///    `dim = n_hydros + n_load_buses + n_stochastic_ncs`.
 /// 8. Build [`PrecomputedNormal`] for the stochastic load buses.
 ///
 /// The `base_seed` parameter must be supplied explicitly by the caller.
@@ -423,6 +427,11 @@ pub fn build_stochastic_context(
             dim,
             &mut correlation,
             &entity_order,
+            ClassDimensions {
+                n_hydros: hydro_ids.len(),
+                n_load_buses,
+                n_ncs: n_stochastic_ncs,
+            },
         )?
     };
 
@@ -489,7 +498,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -499,6 +507,7 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use super::build_stochastic_context;
@@ -964,7 +973,7 @@ mod tests {
         assert_eq!(
             ctx.dim(),
             3,
-            "dim must equal n_hydros + n_load_buses = 2 + 1"
+            "dim must equal n_hydros + n_load_buses + n_ncs = 2 + 1 + 0"
         );
         assert_eq!(ctx.n_load_buses(), 1, "one load bus with std_mw > 0");
     }

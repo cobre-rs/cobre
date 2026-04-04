@@ -1,9 +1,10 @@
 //! Resolution of correlation profiles from case input data.
 //!
 //! Maps correlation profile specifications from the loaded case into
-//! dense matrices indexed by the internal hydro plant registry order.
-//! Validates that all referenced hydro plants exist in the registry and
-//! that correlation entries are in the valid range `[-1.0, 1.0]`.
+//! dense Cholesky factors indexed by entity ID. Supports inflow, load,
+//! and NCS entity classes. Validates same-type group homogeneity,
+//! matrix symmetry, positive-definiteness, and correlation range
+//! `[-1.0, 1.0]`.
 //!
 //! Returns [`StochasticError::InvalidCorrelation`] when validation fails.
 //!
@@ -13,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{CorrelationModel, EntityId};
 
-use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
+use crate::{correlation::cholesky::CholeskyFactor, StochasticError};
 
 /// Maximum group dimension for stack-allocated buffers in `apply_correlation`.
 /// Groups with more entities than this threshold use heap-allocated buffers.
@@ -26,6 +27,10 @@ pub struct GroupFactor {
     pub factor: CholeskyFactor,
     /// Entity IDs in this group, in the order matching the factor rows/columns.
     pub entity_ids: Vec<EntityId>,
+    /// Entity type shared by all entities in this group (e.g., `"inflow"`, `"load"`,
+    /// `"ncs"`). All entities in a group are guaranteed to be the same type after
+    /// ticket-008 validation in [`DecomposedCorrelation::build`].
+    pub entity_type: String,
     /// Pre-computed positions of this group's entities within the canonical
     /// entity order. Filled by [`DecomposedCorrelation::resolve_positions`].
     /// When `Some`, `apply_correlation` skips the per-call linear scan.
@@ -138,6 +143,26 @@ impl DecomposedCorrelation {
         // Decompose each profile.
         let mut factors: BTreeMap<String, Vec<GroupFactor>> = BTreeMap::new();
         for (profile_name, profile) in &model.profiles {
+            // Validate same-type constraint: all entities in a group must share one entity_type.
+            for group in &profile.groups {
+                if group.entities.len() > 1 {
+                    let first_type = &group.entities[0].entity_type;
+                    if let Some(mixed) =
+                        group.entities.iter().find(|e| e.entity_type != *first_type)
+                    {
+                        return Err(StochasticError::InvalidCorrelation {
+                            profile_name: profile_name.clone(),
+                            reason: format!(
+                                "correlation group '{}' contains mixed entity types: \
+                                 found '{}' and '{}'; \
+                                 all entities in a group must share the same entity_type",
+                                group.name, first_type, mixed.entity_type,
+                            ),
+                        });
+                    }
+                }
+            }
+
             let mut group_factors: Vec<GroupFactor> = Vec::with_capacity(profile.groups.len());
             for group in &profile.groups {
                 let factor = CholeskyFactor::decompose(&group.matrix).map_err(|e| match e {
@@ -157,10 +182,20 @@ impl DecomposedCorrelation {
                 })?;
 
                 let entity_ids: Vec<EntityId> = group.entities.iter().map(|e| e.id).collect();
+                let entity_type = group
+                    .entities
+                    .first()
+                    .ok_or_else(|| StochasticError::InvalidCorrelation {
+                        profile_name: profile_name.clone(),
+                        reason: format!("correlation group '{}' has no entities", group.name),
+                    })?
+                    .entity_type
+                    .clone();
 
                 group_factors.push(GroupFactor {
                     factor,
                     entity_ids,
+                    entity_type,
                     positions: None,
                 });
             }
@@ -259,6 +294,50 @@ impl DecomposedCorrelation {
         }
     }
 
+    /// Applies spatial correlation to a single entity-class noise segment.
+    ///
+    /// This is the per-class counterpart to [`apply_correlation`]. It applies the
+    /// Cholesky transform only for groups whose `entity_type` matches the given
+    /// `entity_type` argument.
+    ///
+    /// The `class_noise` and `class_entity_order` slices contain only the
+    /// entities belonging to that class — positions are relative to the class
+    /// segment (index 0 = first entity of that class), NOT to the full noise
+    /// vector.
+    ///
+    /// # Behaviour
+    ///
+    /// - Groups whose `entity_type` does not match `entity_type` are skipped.
+    /// - If no groups match, `class_noise` is unchanged.
+    /// - Profile lookup falls back to the default profile (same as
+    ///   [`apply_correlation`]).
+    ///
+    /// This method always uses the scan path against `class_entity_order`
+    /// because the precomputed positions in [`GroupFactor::positions`] are
+    /// relative to the full entity order and are not reusable here.
+    ///
+    /// [`apply_correlation`]: Self::apply_correlation
+    pub fn apply_correlation_for_class(
+        &self,
+        stage_id: i32,
+        class_noise: &mut [f64],
+        class_entity_order: &[EntityId],
+        entity_type: &str,
+    ) {
+        let profile_name = self.profile_for_stage(stage_id);
+        let Some(group_factors) = self.factors.get(profile_name) else {
+            // Profile not found — leave noise unchanged (defensive).
+            return;
+        };
+
+        for gf in group_factors {
+            if gf.entity_type != entity_type {
+                continue;
+            }
+            Self::apply_group_scan(&gf.factor, &gf.entity_ids, class_noise, class_entity_order);
+        }
+    }
+
     /// Fast path: positions are pre-computed. Uses stack buffers for groups ≤ 64.
     fn apply_group_precomputed(factor: &CholeskyFactor, positions: &[usize], noise: &mut [f64]) {
         let n = positions.len();
@@ -317,11 +396,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
-        EntityId,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             CorrelationScheduleEntry,
         },
+        EntityId,
     };
 
     use super::*;
@@ -333,6 +412,13 @@ mod tests {
     fn make_entity(id: i32) -> CorrelationEntity {
         CorrelationEntity {
             entity_type: "inflow".to_string(),
+            id: EntityId(id),
+        }
+    }
+
+    fn make_entity_of_type(id: i32, entity_type: &str) -> CorrelationEntity {
+        CorrelationEntity {
+            entity_type: entity_type.to_string(),
             id: EntityId(id),
         }
     }
@@ -357,6 +443,27 @@ mod tests {
         CorrelationGroup {
             name: name.to_string(),
             entities: entity_ids.iter().copied().map(make_entity).collect(),
+            matrix,
+        }
+    }
+
+    fn make_group_with_type(
+        name: &str,
+        entity_ids: &[i32],
+        rho: f64,
+        entity_type: &str,
+    ) -> CorrelationGroup {
+        let n = entity_ids.len();
+        let matrix: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| if i == j { 1.0 } else { rho }).collect())
+            .collect();
+        CorrelationGroup {
+            name: name.to_string(),
+            entities: entity_ids
+                .iter()
+                .copied()
+                .map(|id| make_entity_of_type(id, entity_type))
+                .collect(),
             matrix,
         }
     }
@@ -604,6 +711,186 @@ mod tests {
             (noise1[1] - 0.0).abs() < 1e-12,
             "stage1 noise1[1]={}",
             noise1[1]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-type entity validation tests (ticket-008)
+    // -----------------------------------------------------------------------
+
+    fn mixed_type_group(name: &str) -> CorrelationGroup {
+        // One "inflow" entity and one "load" entity — intentionally invalid.
+        CorrelationGroup {
+            name: name.to_string(),
+            entities: vec![
+                CorrelationEntity {
+                    entity_type: "inflow".to_string(),
+                    id: EntityId(1),
+                },
+                CorrelationEntity {
+                    entity_type: "load".to_string(),
+                    id: EntityId(2),
+                },
+            ],
+            matrix: vec![vec![1.0, 0.5], vec![0.5, 1.0]],
+        }
+    }
+
+    #[test]
+    fn test_build_rejects_mixed_entity_types() {
+        let model = single_profile_model("default", vec![mixed_type_group("mixed_group")]);
+        let result = DecomposedCorrelation::build(&model);
+        match result {
+            Err(StochasticError::InvalidCorrelation { reason, .. }) => {
+                assert!(
+                    reason.contains("mixed entity types"),
+                    "expected 'mixed entity types' in reason, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidCorrelation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_accepts_same_type_entities() {
+        // All "inflow" — must succeed without error.
+        let model = single_profile_model("default", vec![identity_group("g1", &[1, 2, 3])]);
+        assert!(
+            DecomposedCorrelation::build(&model).is_ok(),
+            "same-type group should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_build_accepts_single_entity_group() {
+        // A single-entity group is trivially homogeneous.
+        let model = single_profile_model("default", vec![identity_group("g1", &[1])]);
+        assert!(
+            DecomposedCorrelation::build(&model).is_ok(),
+            "single-entity group should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_build_mixed_type_error_includes_group_name() {
+        let model = single_profile_model("default", vec![mixed_type_group("mixed_group")]);
+        let result = DecomposedCorrelation::build(&model);
+        match result {
+            Err(StochasticError::InvalidCorrelation {
+                profile_name,
+                reason,
+            }) => {
+                assert_eq!(
+                    profile_name, "default",
+                    "expected profile_name 'default', got: {profile_name}"
+                );
+                assert!(
+                    reason.contains("mixed_group"),
+                    "expected group name 'mixed_group' in reason, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidCorrelation, got: {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_correlation_for_class tests (ticket-009)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_apply_correlation_for_class_inflow_only() {
+        // Inflow group [EntityId(1), EntityId(2)] with rho=0.8 and a single-entity
+        // load group [EntityId(3)].
+        // Cholesky of [[1,0.8],[0.8,1]]: L = [[1,0],[0.8,0.6]].
+        // z=[1.0, 0.0] => eta=[1.0, 0.8].
+        let inflow_group = make_group_with_type("inflow_g", &[1, 2], 0.8, "inflow");
+        let load_group = make_group_with_type("load_g", &[3], 0.0, "load");
+        let model = single_profile_model("default", vec![inflow_group, load_group]);
+        let dc = DecomposedCorrelation::build(&model).unwrap();
+
+        let class_order = [EntityId(1), EntityId(2)];
+        let mut inflow_noise = [1.0_f64, 0.0];
+        dc.apply_correlation_for_class(0, &mut inflow_noise, &class_order, "inflow");
+
+        assert!(
+            (inflow_noise[0] - 1.0).abs() < 1e-12,
+            "inflow_noise[0]={} (expected 1.0)",
+            inflow_noise[0]
+        );
+        assert!(
+            (inflow_noise[1] - 0.8).abs() < 1e-12,
+            "inflow_noise[1]={} (expected 0.8)",
+            inflow_noise[1]
+        );
+    }
+
+    #[test]
+    fn test_apply_correlation_for_class_skips_other_types() {
+        // Same setup as above: inflow group [1,2] with rho=0.8, load group [3].
+        // Calling with entity_type="load" and load_noise=[5.0] should leave noise
+        // unchanged (the single-entity identity group is a no-op AND this also
+        // verifies that the inflow group is skipped entirely).
+        let inflow_group = make_group_with_type("inflow_g", &[1, 2], 0.8, "inflow");
+        let load_group = make_group_with_type("load_g", &[3], 0.0, "load");
+        let model = single_profile_model("default", vec![inflow_group, load_group]);
+        let dc = DecomposedCorrelation::build(&model).unwrap();
+
+        let class_order = [EntityId(3)];
+        let mut load_noise = [5.0_f64];
+        dc.apply_correlation_for_class(0, &mut load_noise, &class_order, "load");
+
+        // Identity group on a single entity leaves noise unchanged.
+        assert!(
+            (load_noise[0] - 5.0).abs() < 1e-12,
+            "load_noise[0]={} (expected 5.0)",
+            load_noise[0]
+        );
+    }
+
+    #[test]
+    fn test_apply_correlation_for_class_no_matching_groups() {
+        // Only inflow groups exist; calling with entity_type="ncs" must be a no-op.
+        let inflow_group = make_group_with_type("inflow_g", &[1, 2], 0.8, "inflow");
+
+        let model = single_profile_model("default", vec![inflow_group]);
+        let dc = DecomposedCorrelation::build(&model).unwrap();
+
+        let class_order: [EntityId; 0] = [];
+        let mut noise: [f64; 0] = [];
+        dc.apply_correlation_for_class(0, &mut noise, &class_order, "ncs");
+        // No panic, no modification — test passes if we reach here.
+    }
+
+    #[test]
+    fn test_group_factor_stores_entity_type() {
+        // Verify that each GroupFactor carries the correct entity_type string from
+        // the input CorrelationGroup.
+        let inflow_group = make_group_with_type("g_inflow", &[1, 2], 0.0, "inflow");
+        let load_group = make_group_with_type("g_load", &[3], 0.0, "load");
+        let ncs_group = make_group_with_type("g_ncs", &[4], 0.0, "ncs");
+        let model = single_profile_model("default", vec![inflow_group, load_group, ncs_group]);
+        let dc = DecomposedCorrelation::build(&model).unwrap();
+
+        let group_factors = dc.factors.get("default").unwrap();
+        assert_eq!(group_factors.len(), 3);
+
+        // BTreeMap preserves insertion order of the profile vec — the groups
+        // appear in the order they were pushed during build().
+        let types: Vec<&str> = group_factors
+            .iter()
+            .map(|gf| gf.entity_type.as_str())
+            .collect();
+        assert!(
+            types.contains(&"inflow"),
+            "expected 'inflow' group factor, got: {types:?}"
+        );
+        assert!(
+            types.contains(&"load"),
+            "expected 'load' group factor, got: {types:?}"
+        );
+        assert!(
+            types.contains(&"ncs"),
+            "expected 'ncs' group factor, got: {types:?}"
         );
     }
 }

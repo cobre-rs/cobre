@@ -29,7 +29,9 @@ use cobre_core::{
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig},
 };
-use cobre_stochastic::{correlation::resolve::DecomposedCorrelation, generate_opening_tree};
+use cobre_stochastic::{
+    ClassDimensions, correlation::resolve::DecomposedCorrelation, generate_opening_tree,
+};
 
 // ---------------------------------------------------------------------------
 // Golden values — stage 0, openings 0-2, dimensions 0-1
@@ -124,7 +126,12 @@ fn saa_golden_value_regression() {
     let mut corr = identity_correlation(&[1, 2]);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+    let dims = ClassDimensions {
+        n_hydros: 2,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
     assert_eq!(
         tree.opening(0, 0)[0],

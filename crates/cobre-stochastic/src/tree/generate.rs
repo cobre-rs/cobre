@@ -2,21 +2,41 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
+use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     tree::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
+        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
     },
+    StochasticError,
 };
+
+/// Per-class entity counts for the noise dimension.
+///
+/// The canonical noise vector layout is `[hydros | load buses | NCS entities]`.
+/// These counts split the flat noise vector into per-class segments for independent
+/// Cholesky correlation application within each entity class.
+///
+/// # Invariant
+///
+/// `n_hydros + n_load_buses + n_ncs` must equal the `dim` argument passed to
+/// `generate_opening_tree`.
+#[derive(Debug, Clone, Copy)]
+pub struct ClassDimensions {
+    /// Number of hydro entities (inflow class) in the noise vector.
+    pub n_hydros: usize,
+    /// Number of stochastic load bus entities (load class) in the noise vector.
+    pub n_load_buses: usize,
+    /// Number of stochastic NCS entities (ncs class) in the noise vector.
+    pub n_ncs: usize,
+}
 
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
 fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, output: &mut [f64]) {
@@ -40,7 +60,10 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 ///
 /// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
 /// like LHS that require all openings for a stage simultaneously. Cholesky correlation
-/// is applied in-place after noise generation.
+/// is applied per class (inflow, load, ncs) in-place after noise generation.
+///
+/// The `entity_order` slice must have layout `[hydros | load buses | NCS entities]` and
+/// `dims.n_hydros + dims.n_load_buses + dims.n_ncs` must equal `dim`.
 ///
 /// # Errors
 ///
@@ -51,9 +74,13 @@ pub fn generate_opening_tree(
     dim: usize,
     correlation: &mut DecomposedCorrelation,
     entity_order: &[EntityId],
+    dims: ClassDimensions,
 ) -> Result<OpeningTree, StochasticError> {
     let n_stages = stages.len();
-    correlation.resolve_positions(entity_order);
+
+    let inflow_order = &entity_order[..dims.n_hydros];
+    let load_order = &entity_order[dims.n_hydros..dims.n_hydros + dims.n_load_buses];
+    let ncs_order = &entity_order[dims.n_hydros + dims.n_load_buses..];
 
     let openings_per_stage: Vec<usize> = stages
         .iter()
@@ -110,7 +137,11 @@ pub fn generate_opening_tree(
         for opening_idx in 0..n_openings {
             let start = opening_idx * dim;
             let noise = &mut stage_slice[start..start + dim];
-            correlation.apply_correlation(stage.id, noise, entity_order);
+            let (inflow_noise, rest) = noise.split_at_mut(dims.n_hydros);
+            let (load_noise, ncs_noise) = rest.split_at_mut(dims.n_load_buses);
+            correlation.apply_correlation_for_class(stage.id, inflow_noise, inflow_order, "inflow");
+            correlation.apply_correlation_for_class(stage.id, load_noise, load_order, "load");
+            correlation.apply_correlation_for_class(stage.id, ncs_noise, ncs_order, "ncs");
         }
     }
 
@@ -123,16 +154,16 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
 
-    use super::generate_opening_tree;
+    use super::{generate_opening_tree, ClassDimensions};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -231,8 +262,13 @@ mod tests {
         let mut corr2 = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
 
-        let tree1 = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
-        let tree2 = generate_opening_tree(42, &stages, 2, &mut corr2, &entity_order).unwrap();
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        let tree1 = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
+        let tree2 = generate_opening_tree(42, &stages, 2, &mut corr2, &entity_order, dims).unwrap();
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -251,8 +287,13 @@ mod tests {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -267,9 +308,14 @@ mod tests {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree_a = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
-        let tree_b = generate_opening_tree(99, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree_a = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
+        let tree_b = generate_opening_tree(99, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -289,8 +335,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -308,8 +359,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(7, &stages, 3, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(7, &stages, 3, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -325,8 +381,14 @@ mod tests {
         let stages = vec![make_stage(0, 0, n_openings)];
         let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(12345, &stages, 1, &mut corr, &entity_order).unwrap();
+        let tree =
+            generate_opening_tree(12345, &stages, 1, &mut corr, &entity_order, dims).unwrap();
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -358,8 +420,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2, 3, 4]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
+        let dims = ClassDimensions {
+            n_hydros: 4,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(99, &stages, 4, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(99, &stages, 4, &mut corr, &entity_order, dims).unwrap();
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -381,8 +448,14 @@ mod tests {
         let stages = vec![make_stage(0, 0, n_openings)];
         let mut corr = correlated_correlation(&[1, 2], 0.8);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree =
+            generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -422,8 +495,13 @@ mod tests {
         let stages = vec![make_stage(0, 0, 4), make_stage(1, 1, 4)];
         let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(0, &stages, 1, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(0, &stages, 1, &mut corr, &entity_order, dims).unwrap();
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];
@@ -451,8 +529,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
 
         // Golden values from pre-refactor opening-major implementation.
         assert_eq!(
@@ -497,8 +580,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let result = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order);
+        let result = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -525,8 +613,13 @@ mod tests {
         let stages = vec![make_stage_with_method(0, 0, n_openings, NoiseMethod::Lhs)];
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -558,8 +651,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -621,8 +719,13 @@ mod tests {
         )];
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -644,8 +747,13 @@ mod tests {
         // separately to `generate_opening_tree`.
         let mut corr = identity_correlation(&[1]);
         let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let result = generate_opening_tree(42, &stages, dim_over, &mut corr, &entity_order);
+        let result = generate_opening_tree(42, &stages, dim_over, &mut corr, &entity_order, dims);
 
         match result {
             Err(StochasticError::DimensionExceedsCapacity {
@@ -674,8 +782,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -706,8 +819,13 @@ mod tests {
         )];
         let mut corr = identity_correlation(&[1, 2, 3]);
         let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -731,8 +849,13 @@ mod tests {
         ];
         let mut corr = identity_correlation(&[1, 2]);
         let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
 
-        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -743,6 +866,232 @@ mod tests {
                 for &v in tree.opening(s, o) {
                     assert!(v.is_finite(), "non-finite at stage={s} opening={o}");
                 }
+            }
+        }
+    }
+
+    /// Per-class Cholesky application produces bit-identical results to full-vector
+    /// Cholesky when the correlation groups are all same-type (block-diagonal L).
+    ///
+    /// Generates a tree with 2 hydros (rho=0.8 inflow group) and 0 load/NCS
+    /// using the new per-class path, then verifies the output against expected
+    /// values that were confirmed identical to the old full-vector path.
+    ///
+    /// Acceptance criterion: both produce the same correlated noise because L is
+    /// block-diagonal under same-type groups (ticket-010).
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_per_class_tree_matches_full_vector_tree() {
+        use cobre_core::scenario::{
+            CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        };
+        use std::collections::BTreeMap;
+
+        let rho = 0.8_f64;
+        let entity_ids = [EntityId(1), EntityId(2)];
+        let n = entity_ids.len();
+        let matrix: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| if i == j { 1.0 } else { rho }).collect())
+            .collect();
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "hydro_group".to_string(),
+                    entities: entity_ids
+                        .iter()
+                        .map(|&id| CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id,
+                        })
+                        .collect(),
+                    matrix,
+                }],
+            },
+        );
+        let corr_model = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        let stages = vec![make_stage(0, 0, 5), make_stage(1, 1, 5)];
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        // All entities are inflow: n_hydros=2, n_load_buses=0, n_ncs=0.
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        // Build two independent DecomposedCorrelation instances from the same model.
+        let mut corr_per_class = DecomposedCorrelation::build(&corr_model).unwrap();
+        let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
+
+        // Generate tree via the new per-class path (the only path in generate_opening_tree).
+        let tree_per_class =
+            generate_opening_tree(77, &stages, 2, &mut corr_per_class, &entity_order, dims)
+                .unwrap();
+
+        // Reproduce the old full-vector path manually: generate noise then call
+        // apply_correlation on the full vector (not per-class).
+        use crate::noise::{rng::rng_from_seed, seed::derive_opening_seed};
+        use rand::RngExt;
+        use rand_distr::StandardNormal;
+
+        corr_full.resolve_positions(&entity_order);
+
+        let n_stages = stages.len();
+        let dim = 2_usize;
+        let base_seed = 77_u64;
+        let openings_per_stage: Vec<usize> = stages
+            .iter()
+            .map(|s| s.scenario_config.branching_factor)
+            .collect();
+        let mut stage_offsets = Vec::with_capacity(n_stages);
+        let mut running_offset = 0usize;
+        for &n_openings in &openings_per_stage {
+            stage_offsets.push(running_offset);
+            running_offset += n_openings * dim;
+        }
+        let mut data_full = vec![0.0f64; running_offset];
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let n_openings = openings_per_stage[stage_idx];
+            let offset = stage_offsets[stage_idx];
+            let stage_slice = &mut data_full[offset..offset + n_openings * dim];
+            for opening_idx in 0..n_openings {
+                let start = opening_idx * dim;
+                let noise = &mut stage_slice[start..start + dim];
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
+                let mut rng = rng_from_seed(seed);
+                for sample in noise.iter_mut() {
+                    *sample = rng.sample(StandardNormal);
+                }
+                corr_full.apply_correlation(stage.id, noise, &entity_order);
+            }
+        }
+
+        // Compare every value: per-class and full-vector must be bit-identical.
+        for stage_idx in 0..n_stages {
+            let n_openings = openings_per_stage[stage_idx];
+            for opening_idx in 0..n_openings {
+                let per_class = tree_per_class.opening(stage_idx, opening_idx);
+                let offset = stage_offsets[stage_idx] + opening_idx * dim;
+                let full = &data_full[offset..offset + dim];
+                assert_eq!(
+                    per_class, full,
+                    "stage={stage_idx} opening={opening_idx}: per-class differs from full-vector"
+                );
+            }
+        }
+    }
+
+    /// Same as [`test_per_class_tree_matches_full_vector_tree`] but with a
+    /// multi-class layout: 2 hydros (correlated at rho=0.8) and 1 load bus
+    /// (identity group). Verifies that the per-class Cholesky path produces
+    /// bit-identical results to the full-vector path for mixed-class scenarios.
+    #[test]
+    fn test_per_class_tree_matches_full_vector_multi_class() {
+        let rho = 0.8_f64;
+        let cholesky = vec![vec![1.0, rho], vec![rho, 1.0]];
+        let inflow_group = CorrelationGroup {
+            name: "hydro_inflow".to_string(),
+            entities: vec![
+                CorrelationEntity {
+                    id: EntityId(1),
+                    entity_type: "inflow".to_string(),
+                },
+                CorrelationEntity {
+                    id: EntityId(2),
+                    entity_type: "inflow".to_string(),
+                },
+            ],
+            matrix: cholesky,
+        };
+        let load_group = CorrelationGroup {
+            name: "load_bus".to_string(),
+            entities: vec![CorrelationEntity {
+                id: EntityId(3),
+                entity_type: "load".to_string(),
+            }],
+            matrix: vec![vec![1.0]],
+        };
+        let profiles = BTreeMap::from([(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![inflow_group, load_group],
+            },
+        )]);
+        let corr_model = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        let stages = vec![make_stage(0, 0, 5), make_stage(1, 1, 5)];
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 1,
+            n_ncs: 0,
+        };
+
+        let mut corr_per_class = DecomposedCorrelation::build(&corr_model).unwrap();
+        let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
+
+        let tree_per_class =
+            generate_opening_tree(77, &stages, 3, &mut corr_per_class, &entity_order, dims)
+                .unwrap();
+
+        use crate::noise::{rng::rng_from_seed, seed::derive_opening_seed};
+        use rand::RngExt;
+        use rand_distr::StandardNormal;
+
+        corr_full.resolve_positions(&entity_order);
+
+        let n_stages = stages.len();
+        let dim = 3_usize;
+        let base_seed = 77_u64;
+        let openings_per_stage: Vec<usize> = stages
+            .iter()
+            .map(|s| s.scenario_config.branching_factor)
+            .collect();
+        let mut stage_offsets = Vec::with_capacity(n_stages);
+        let mut running_offset = 0usize;
+        for &n_openings in &openings_per_stage {
+            stage_offsets.push(running_offset);
+            running_offset += n_openings * dim;
+        }
+        let mut data_full = vec![0.0f64; running_offset];
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let n_openings = openings_per_stage[stage_idx];
+            let offset = stage_offsets[stage_idx];
+            let stage_slice = &mut data_full[offset..offset + n_openings * dim];
+            for opening_idx in 0..n_openings {
+                let start = opening_idx * dim;
+                let noise = &mut stage_slice[start..start + dim];
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
+                let mut rng = rng_from_seed(seed);
+                for sample in noise.iter_mut() {
+                    *sample = rng.sample(StandardNormal);
+                }
+                corr_full.apply_correlation(stage.id, noise, &entity_order);
+            }
+        }
+
+        for stage_idx in 0..n_stages {
+            let n_openings = openings_per_stage[stage_idx];
+            for opening_idx in 0..n_openings {
+                let per_class = tree_per_class.opening(stage_idx, opening_idx);
+                let offset = stage_offsets[stage_idx] + opening_idx * dim;
+                let full = &data_full[offset..offset + dim];
+                assert_eq!(
+                    per_class, full,
+                    "stage={stage_idx} opening={opening_idx}: per-class differs from full-vector (multi-class)"
+                );
             }
         }
     }

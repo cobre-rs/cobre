@@ -43,7 +43,7 @@ use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
+    ClassDimensions, OpeningTree, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -292,7 +292,19 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
+    generate_opening_tree(
+        42,
+        &[stage],
+        1,
+        &mut decomposed,
+        &entity_order,
+        ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        },
+    )
+    .unwrap()
 }
 
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.

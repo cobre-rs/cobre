@@ -58,7 +58,7 @@ use cobre_sddp::{
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTree, PrecomputedPar, StochasticContext, build_stochastic_context,
+    ClassDimensions, OpeningTree, PrecomputedPar, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -424,7 +424,19 @@ fn build_opening_tree() -> OpeningTree {
     })
     .unwrap();
 
-    generate_opening_tree(42, &[stage], 2, &mut decomposed, &[id_h1, id_h2]).unwrap()
+    generate_opening_tree(
+        42,
+        &[stage],
+        2,
+        &mut decomposed,
+        &[id_h1, id_h2],
+        ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        },
+    )
+    .unwrap()
 }
 
 // ===========================================================================

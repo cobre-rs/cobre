@@ -39,7 +39,7 @@ pub use par::{
 pub use provenance::{ComponentProvenance, StochasticProvenance};
 pub use sampling::insample::sample_forward;
 pub use sampling::{ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
-pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
+pub use tree::{ClassDimensions, OpeningTree, OpeningTreeView, generate_opening_tree};
 
 #[cfg(test)]
 #[allow(unused_imports)]

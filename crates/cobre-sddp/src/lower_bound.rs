@@ -482,6 +482,11 @@ mod tests {
             1, // dim = 1 hydro
             &mut decomposed,
             &entity_order,
+            cobre_stochastic::ClassDimensions {
+                n_hydros: 1,
+                n_load_buses: 0,
+                n_ncs: 0,
+            },
         )
         .unwrap()
     }

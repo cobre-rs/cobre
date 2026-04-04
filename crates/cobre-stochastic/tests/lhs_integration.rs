@@ -31,7 +31,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    build_stochastic_context,
+    ClassDimensions, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
     tree::lhs::{LhsPointSpec, sample_lhs_point},
@@ -327,7 +327,12 @@ fn lhs_marginal_uniformity() {
         EntityId(5),
     ];
 
-    let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -366,7 +371,12 @@ fn lhs_no_stratum_collision() {
     let mut corr = identity_correlation(&[1, 2, 3, 4]);
     let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
-    let tree = generate_opening_tree(99, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(99, &stages, dim, &mut corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let n_f = n as f64;
@@ -403,7 +413,12 @@ fn lhs_normal_statistics() {
     let mut corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
-    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -439,7 +454,12 @@ fn lhs_correlation_applied() {
     let mut corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: 2,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)

@@ -42,9 +42,6 @@ pub struct OpeningTree {
 impl OpeningTree {
     /// Construct an `OpeningTree` from its raw parts.
     ///
-    /// `stage_offsets` is computed internally from `openings_per_stage` and
-    /// `dim`. The sentinel entry `stage_offsets[n_stages]` is set to `data.len()`.
-    ///
     /// # Panics
     ///
     /// Panics if `data.len()` does not equal
@@ -77,7 +74,7 @@ impl OpeningTree {
         }
     }
 
-    /// Return a read-only borrowed view over this tree.
+    /// Return a read-only borrowed view.
     #[must_use]
     pub fn view(&self) -> OpeningTreeView<'_> {
         OpeningTreeView {
@@ -96,15 +93,10 @@ impl OpeningTree {
     /// Panics if `stage >= n_stages` or `opening_idx >= n_openings(stage)`.
     #[must_use]
     pub fn opening(&self, stage: usize, opening_idx: usize) -> &[f64] {
-        assert!(
-            stage < self.n_stages,
-            "OpeningTree::opening: stage {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        assert!(stage < self.n_stages, "stage {stage} out of bounds");
         assert!(
             opening_idx < self.openings_per_stage[stage],
-            "OpeningTree::opening: opening_idx {opening_idx} out of bounds for stage {stage} (n_openings = {})",
-            self.openings_per_stage[stage]
+            "opening_idx {opening_idx} out of bounds for stage {stage}"
         );
         let start = self.stage_offsets[stage] + opening_idx * self.dim;
         &self.data[start..start + self.dim]
@@ -117,11 +109,7 @@ impl OpeningTree {
     /// Panics if `stage >= n_stages`.
     #[must_use]
     pub fn n_openings(&self, stage: usize) -> usize {
-        assert!(
-            stage < self.n_stages,
-            "OpeningTree::n_openings: stage {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        assert!(stage < self.n_stages, "stage {stage} out of bounds");
         self.openings_per_stage[stage]
     }
 
@@ -158,9 +146,6 @@ impl OpeningTree {
     }
 
     /// Return a reference to the flat contiguous backing array.
-    ///
-    /// The layout is stage-major: all openings for stage 0, then stage 1, etc.
-    /// Within each stage, openings are contiguous blocks of `dim` f64 values.
     #[must_use]
     pub fn data(&self) -> &[f64] {
         &self.data
@@ -174,10 +159,6 @@ impl OpeningTree {
 }
 
 /// Borrowed read-only view over opening tree data.
-///
-/// Provides the same access API as [`OpeningTree`] but borrows
-/// the underlying storage. Used by downstream crates that consume
-/// the tree without owning it.
 pub struct OpeningTreeView<'a> {
     data: &'a [f64],
     stage_offsets: &'a [usize],
@@ -186,7 +167,7 @@ pub struct OpeningTreeView<'a> {
     dim: usize,
 }
 
-impl OpeningTreeView<'_> {
+impl<'a> OpeningTreeView<'a> {
     /// Return the noise slice for a specific `(stage, opening_idx)` pair.
     ///
     /// # Panics
@@ -194,15 +175,29 @@ impl OpeningTreeView<'_> {
     /// Panics if `stage >= n_stages` or `opening_idx >= n_openings(stage)`.
     #[must_use]
     pub fn opening(&self, stage: usize, opening_idx: usize) -> &[f64] {
-        assert!(
-            stage < self.n_stages,
-            "OpeningTreeView::opening: stage {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        assert!(stage < self.n_stages, "stage {stage} out of bounds");
         assert!(
             opening_idx < self.openings_per_stage[stage],
-            "OpeningTreeView::opening: opening_idx {opening_idx} out of bounds for stage {stage} (n_openings = {})",
-            self.openings_per_stage[stage]
+            "opening_idx {opening_idx} out of bounds for stage {stage}"
+        );
+        let start = self.stage_offsets[stage] + opening_idx * self.dim;
+        &self.data[start..start + self.dim]
+    }
+
+    /// Return the noise slice for a specific `(stage, opening_idx)` pair,
+    /// with lifetime tied to the backing data (`'a`).
+    ///
+    /// Use this when the returned slice must outlive the view reference.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stage >= n_stages` or `opening_idx >= n_openings(stage)`.
+    #[must_use]
+    pub fn opening_data(&self, stage: usize, opening_idx: usize) -> &'a [f64] {
+        assert!(stage < self.n_stages, "stage {stage} out of bounds");
+        assert!(
+            opening_idx < self.openings_per_stage[stage],
+            "opening_idx {opening_idx} out of bounds for stage {stage}"
         );
         let start = self.stage_offsets[stage] + opening_idx * self.dim;
         &self.data[start..start + self.dim]
@@ -215,11 +210,7 @@ impl OpeningTreeView<'_> {
     /// Panics if `stage >= n_stages`.
     #[must_use]
     pub fn n_openings(&self, stage: usize) -> usize {
-        assert!(
-            stage < self.n_stages,
-            "OpeningTreeView::n_openings: stage {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        assert!(stage < self.n_stages, "stage {stage} out of bounds");
         self.openings_per_stage[stage]
     }
 
@@ -275,12 +266,8 @@ impl OpeningTreeView<'_> {
 mod tests {
     use super::*;
 
-    /// Build a tree with uniform branching: `n_stages` stages, each with
-    /// `openings` openings, each opening of dimension `dim`.
-    /// Values are `0.0, 1.0, 2.0, ...` in row-major order.
     fn uniform_tree(n_stages: usize, openings: usize, dim: usize) -> OpeningTree {
         let total = n_stages * openings * dim;
-        // Use u32 range to avoid cast_precision_loss on usize->f64 conversion.
         let data: Vec<f64> = (0_u32..u32::try_from(total).expect("total fits in u32"))
             .map(f64::from)
             .collect();
@@ -290,8 +277,6 @@ mod tests {
 
     #[test]
     fn opening_stage0_opening0_returns_first_dim_elements() {
-        // AC1: from_parts([1,2,3, 4,5,6, 7,8,9], [1,2], 3)
-        //      opening(0,0) == [1,2,3]
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let tree = OpeningTree::from_parts(data, vec![1, 2], 3);
         assert_eq!(tree.opening(0, 0), &[1.0, 2.0, 3.0]);
@@ -299,7 +284,6 @@ mod tests {
 
     #[test]
     fn opening_stage1_returns_correct_slices() {
-        // AC2: opening(1,0) == [4,5,6], opening(1,1) == [7,8,9]
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let tree = OpeningTree::from_parts(data, vec![1, 2], 3);
         assert_eq!(tree.opening(1, 0), &[4.0, 5.0, 6.0]);
@@ -308,7 +292,6 @@ mod tests {
 
     #[test]
     fn n_openings_matches_branching_factors() {
-        // AC3: n_openings(0) == 1, n_openings(1) == 2
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let tree = OpeningTree::from_parts(data, vec![1, 2], 3);
         assert_eq!(tree.n_openings(0), 1);
@@ -317,7 +300,6 @@ mod tests {
 
     #[test]
     fn view_returns_identical_data_to_owned() {
-        // AC4: view().opening(0,0) == tree.opening(0,0)
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let tree = OpeningTree::from_parts(data, vec![1, 2], 3);
         let view = tree.view();
@@ -328,15 +310,10 @@ mod tests {
 
     #[test]
     fn len_and_size_bytes_uniform_branching() {
-        // AC5: from_parts([1.0; 30], [5,5,5], 2): len==30, size_bytes==240
         let tree = OpeningTree::from_parts(vec![1.0; 30], vec![5, 5, 5], 2);
         assert_eq!(tree.len(), 30);
         assert_eq!(tree.size_bytes(), 240);
     }
-
-    // -----------------------------------------------------------------------
-    // Additional unit tests
-    // -----------------------------------------------------------------------
 
     #[test]
     fn uniform_branching_3_stages_5_openings_2_entities() {

@@ -426,7 +426,10 @@ fn run_inner(
     let config = cobre_io::parse_config(&case_dir.join("config.json"))
         .map_err(|e| format!("config parse error: {e}"))?;
 
-    let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
+    let seed = config
+        .training
+        .tree_seed
+        .map_or(DEFAULT_SEED, i64::unsigned_abs);
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 

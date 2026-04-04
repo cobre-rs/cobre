@@ -822,13 +822,14 @@ fn convert_noise_method(s: &str, field: &str, path: &Path) -> Result<NoiseMethod
 fn convert_sampling_scheme(s: &str, path: &Path) -> Result<SamplingScheme, LoadError> {
     match s {
         "in_sample" => Ok(SamplingScheme::InSample),
+        "out_of_sample" => Ok(SamplingScheme::OutOfSample),
         "external" => Ok(SamplingScheme::External),
         "historical" => Ok(SamplingScheme::Historical),
         other => Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: "scenario_source.sampling_scheme".to_string(),
             message: format!(
-                "unknown sampling_scheme '{other}', expected one of: in_sample, external, historical"
+                "unknown sampling_scheme '{other}', expected one of: in_sample, out_of_sample, external, historical"
             ),
         }),
     }
@@ -1121,6 +1122,32 @@ mod tests {
             data.scenario_source.selection_mode,
             Some(ExternalSelectionMode::Sequential)
         );
+    }
+
+    // ── AC: scenario_source out_of_sample ────────────────────────────────────
+
+    /// Given `scenario_source: {"sampling_scheme": "out_of_sample", "seed": 42}`,
+    /// `result.scenario_source.sampling_scheme == OutOfSample` and `seed == Some(42)`.
+    #[test]
+    fn test_parse_out_of_sample_scheme() {
+        let json = r#"{
+          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
+          "scenario_source": { "sampling_scheme": "out_of_sample", "seed": 42 },
+          "stages": [{
+            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
+            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
+            "num_scenarios": 50
+          }]
+        }"#;
+        let f = write_json(json);
+        let data = parse_stages(f.path()).unwrap();
+
+        assert_eq!(
+            data.scenario_source.sampling_scheme,
+            SamplingScheme::OutOfSample
+        );
+        assert_eq!(data.scenario_source.seed, Some(42));
+        assert!(data.scenario_source.selection_mode.is_none());
     }
 
     // ── AC: season_definitions with 12 monthly seasons ────────────────────────

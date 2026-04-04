@@ -360,6 +360,12 @@ pub struct SimulationSummary {
     /// Total elapsed wall-clock time for the simulation phase (milliseconds).
     pub total_time_ms: u64,
 
+    /// Global mean cost across all scenarios (aggregated across MPI ranks).
+    pub mean_cost: Option<f64>,
+
+    /// Global standard deviation of cost across all scenarios.
+    pub std_cost: Option<f64>,
+
     /// Total LP solves across all scenarios.
     pub total_lp_solves: u64,
 
@@ -564,6 +570,17 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
         "  Completed: {}  Failed: {}",
         sim.completed, sim.failed
     ));
+    if let (Some(mean), Some(std)) = (sim.mean_cost, sim.std_cost) {
+        #[allow(clippy::cast_precision_loss)]
+        let ci95 = if sim.n_scenarios >= 2 {
+            1.96 * std / (f64::from(sim.n_scenarios)).sqrt()
+        } else {
+            0.0
+        };
+        let _ = stderr.write_line(&format!(
+            "  Expected cost: {mean:.5e} +/- {ci95:.5e} (std: {std:.5e})"
+        ));
+    }
     let _ = stderr.write_line(&format!(
         "  LP solves:    {} ({} first-try, {} retried, {} failed)",
         sim.total_lp_solves, sim.total_first_try, sim.total_retried, sim.total_failed_solves
@@ -717,6 +734,8 @@ mod tests {
             completed: 198,
             failed: 2,
             total_time_ms: 10_000,
+            mean_cost: None,
+            std_cost: None,
             total_lp_solves: 0,
             total_first_try: 0,
             total_retried: 0,
@@ -880,6 +899,8 @@ mod tests {
             completed: 100,
             failed: 0,
             total_time_ms: 5_000,
+            mean_cost: None,
+            std_cost: None,
             total_lp_solves: 0,
             total_first_try: 0,
             total_retried: 0,

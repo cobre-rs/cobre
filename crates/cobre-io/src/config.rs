@@ -112,9 +112,13 @@ pub struct TrainingConfig {
     #[serde(default = "TrainingConfig::default_enabled")]
     pub enabled: bool,
 
-    /// Random seed for reproducible scenario generation.
-    #[serde(default)]
-    pub seed: Option<i64>,
+    /// Random seed for the opening scenario tree (reproducible training).
+    ///
+    /// The JSON key `"tree_seed"` is canonical; `"seed"` is accepted as a
+    /// deprecated alias for backward compatibility with existing `config.json`
+    /// files.
+    #[serde(default, alias = "seed")]
+    pub tree_seed: Option<i64>,
 
     /// Number of forward-pass scenario trajectories $M$ per iteration.
     ///
@@ -671,15 +675,15 @@ mod tests {
     #[test]
     fn test_parse_minimal_config() {
         let f = write_config(
-            r#"{"training": {"seed": 42, "forward_passes": 192, "stopping_rules": [{"type": "iteration_limit", "limit": 50}]}}"#,
+            r#"{"training": {"tree_seed": 42, "forward_passes": 192, "stopping_rules": [{"type": "iteration_limit", "limit": 50}]}}"#,
         );
         let cfg = parse_config(f.path()).unwrap();
 
         // Mandatory field present and correct
         assert_eq!(cfg.training.forward_passes, Some(192));
 
-        // Seed is optional
-        assert_eq!(cfg.training.seed, Some(42));
+        // tree_seed is optional
+        assert_eq!(cfg.training.tree_seed, Some(42));
 
         // Defaults applied to optional sections
         assert_eq!(cfg.training.stopping_mode, "any");
@@ -696,6 +700,16 @@ mod tests {
         assert!(cfg.policy.validate_compatibility);
         assert!(cfg.exports.training);
         assert!(cfg.exports.cuts);
+    }
+
+    /// AC: deprecated `"seed"` alias parses into `tree_seed` for backward compatibility.
+    #[test]
+    fn test_seed_deprecated_alias() {
+        let f = write_config(
+            r#"{"training": {"seed": 99, "forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.training.tree_seed, Some(99));
     }
 
     /// AC-2: missing `training.forward_passes` → SchemaError with field name.

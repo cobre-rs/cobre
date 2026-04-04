@@ -19,10 +19,9 @@
 //! The user's total forward passes are split across MPI ranks by the caller
 //! (`train()`), which passes each rank's local share as the
 //! `local_forward_passes` parameter. The global scenario index for local
-//! scenario `m` is
-//! `fwd_offset + m`, where `fwd_offset` is the pre-computed global index of
-//! this rank's first forward pass. This deterministic mapping drives the
-//! communication-free seed derivation used by [`sample_forward`].
+//! scenario `m` is `fwd_offset + m`, where `fwd_offset` is the pre-computed
+//! global index of this rank's first forward pass. This deterministic mapping
+//! drives the communication-free seed derivation used by [`ForwardSampler::sample`].
 //!
 //! ## Thread-level parallelism
 //!
@@ -63,17 +62,17 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::sample_forward;
+use cobre_stochastic::{SampleRequest, build_forward_sampler};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -904,8 +903,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
         build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
     }
-    let tree_view = stochastic.tree_view();
-    let base_seed = stochastic.base_seed();
+    let sampler = build_forward_sampler(
+        training_ctx.sampling_scheme,
+        stochastic,
+        training_ctx.stages,
+    )?;
     let n_workers = workspaces.len().max(1);
 
     let mut remaining: &mut [TrajectoryRecord] = records;
@@ -918,6 +920,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     }
     let basis_slices: Vec<BasisStoreSliceMut<'_>> = basis_store.split_workers_mut(n_workers);
 
+    // Noise dimension for worker-local sampling buffers (OutOfSample path).
+    let noise_dim = stochastic.dim();
+
     // Each worker collects per-scenario costs in local scenario index order.
     let worker_results: Vec<Result<(Vec<f64>, u64), SddpError>> = workspaces
         .par_iter_mut()
@@ -929,6 +934,13 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let n_local = end_m - start_m;
             let mut trajectory_costs = vec![0.0_f64; n_local];
             let local_solve_count_before = ws.solver.statistics().solve_count;
+            // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
+            // when run_forward_stage borrows ws while raw_noise is still live.
+            let mut raw_noise_buf = vec![0.0_f64; noise_dim];
+            #[allow(clippy::cast_possible_truncation)]
+            let mut perm_scratch = vec![0_usize; forward_passes.max(1)];
+            #[allow(clippy::cast_possible_truncation)]
+            let total_scenarios_u32 = forward_passes as u32;
 
             for t in 0..num_stages {
                 ws.solver.load_model(&ctx.templates[t]);
@@ -954,7 +966,16 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
                     let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
-                    let (_, raw_noise) = sample_forward(&tree_view, base_seed, i32, s32, t32, t);
+                    let noise = sampler.sample(SampleRequest {
+                        iteration: i32,
+                        scenario: s32,
+                        stage: t32,
+                        stage_idx: t,
+                        noise_buf: &mut raw_noise_buf,
+                        perm_scratch: &mut perm_scratch,
+                        total_scenarios: total_scenarios_u32,
+                    })?;
+                    let raw_noise = noise.as_slice();
                     let key = StageKey {
                         t,
                         m,
@@ -1008,7 +1029,7 @@ mod tests {
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
-        LoadModel,
+        LoadModel, SamplingScheme,
     };
     use cobre_core::temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -1018,20 +1039,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::build_stochastic_context;
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::build_stochastic_context;
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
-        ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
-        context::{StageContext, TrainingContext},
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        context::{StageContext, TrainingContext},
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1367,7 +1388,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1500,6 +1521,36 @@ mod tests {
         }
     }
 
+    /// Build 3 minimal [`Stage`] values matching `make_stochastic_context_1_hydro_3_stages`.
+    ///
+    /// Provides the `stages` slice required by [`TrainingContext`] so that
+    /// [`cobre_stochastic::build_forward_sampler`] can read per-stage noise methods.
+    fn make_stages_3() -> Vec<Stage> {
+        let make_stage = |idx: usize, id: i32| Stage {
+            index: idx,
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        vec![make_stage(0, 0), make_stage(1, 1), make_stage(2, 2)]
+    }
+
     // ── Acceptance criteria integration tests ───────────────────────────────
 
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
@@ -1537,6 +1588,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
@@ -1565,6 +1617,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1629,6 +1683,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
@@ -1657,6 +1712,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1727,6 +1784,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
@@ -1755,6 +1813,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2110,6 +2170,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
 
         let ctx = StageContext {
             templates: &templates,
@@ -2136,6 +2197,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2246,6 +2309,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let templates = vec![
@@ -2287,6 +2351,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2315,6 +2381,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2361,6 +2429,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let num_stages = 3usize;
@@ -2405,6 +2474,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2585,7 +2656,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2656,6 +2727,28 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
         };
+        let stages = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
         let _ = run_forward_pass(
             std::slice::from_mut(&mut ws),
             &mut basis_store,
@@ -2668,6 +2761,8 @@ mod tests {
                 inflow_method,
                 stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -2801,6 +2896,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(2 * 3);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
         let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
 
@@ -2829,6 +2925,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2972,7 +3070,7 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -2989,6 +3087,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let num_stages = 3usize;
@@ -3044,6 +3143,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3155,6 +3256,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3261,6 +3364,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3302,6 +3407,7 @@ mod tests {
     fn forward_pass_no_load_buses_unchanged() {
         // Use the existing 1-hydro-3-stage context that has no load buses.
         let stochastic = make_stochastic_context_1_hydro_3_stages();
+        let stages = make_stages_3();
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let mut ws = single_workspace(MockSolver::always_ok(solution), &indexer);
@@ -3343,6 +3449,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,

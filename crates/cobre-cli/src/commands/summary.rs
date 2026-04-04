@@ -158,6 +158,8 @@ fn build_simulation_summary(manifest: &SimulationManifest) -> SimulationSummary 
         completed: manifest.scenarios.completed,
         failed: manifest.scenarios.failed,
         total_time_ms: 0,
+        mean_cost: None,
+        std_cost: None,
         // Solver stats are not stored in the manifest; zero-filled for `cobre summary`.
         total_lp_solves: 0,
         total_first_try: 0,

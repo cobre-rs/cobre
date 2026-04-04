@@ -39,23 +39,23 @@ use cobre_stochastic::OpeningTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::fcf::FutureCostFunction,
     cut::CutRowMap,
+    cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
-    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
+    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool},
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -151,6 +151,116 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
     let phantom = total - active;
     // Rebuild when phantom rows exceed 20% of total, or every 50 iterations.
     (total > 0 && phantom * 5 > total) || iterations_since_rebuild >= 50
+}
+
+/// Build a `basis_cache` from the canonical global scenario 0, broadcasting
+/// rank 0's bases to all other ranks so that every rank has an identical
+/// warm-start basis for the simulation phase.
+///
+/// ## Why global scenario 0?
+///
+/// `basis_store` is indexed by **local** scenario index. Local scenario 0 on
+/// rank 0 is always global scenario 0 (rank 0's `my_fwd_offset` is 0). On
+/// rank *r > 0*, local scenario 0 maps to a different global scenario. Using
+/// the last local scenario (`my_actual_fwd - 1`) therefore produces different
+/// bases on different ranks, because each rank follows a distinct noise
+/// realisation. Broadcasting rank 0's scenario 0 ensures all ranks start
+/// simulation from the identical LP vertex.
+///
+/// ## Serialization format
+///
+/// For each stage *t* in `0..num_stages`, the flat `i32` buffer contains:
+/// - `0_i32` sentinel when `basis_store.get(0, t)` is `None`
+/// - `1_i32` sentinel + `col_len: i32` + `row_len: i32` + `col_status[..]`
+///   + `row_status[..]` when `Some(basis)`
+///
+/// This avoids adding `serde` to `cobre-solver` and uses only `i32`
+/// broadcast, which `CommData` supports for all backends.
+///
+/// ## Single-rank optimization
+///
+/// When `comm.size() == 1` the broadcast is skipped; only the extraction
+/// from local scenario 0 runs.
+///
+/// # Errors
+///
+/// Returns `SddpError::Communication` if the `comm.broadcast` call fails.
+// Basis lengths are bounded by LP column/row counts, which fit comfortably
+// in i32 in all realistic cases. The i32<->usize casts here are deliberate:
+// MPI broadcast requires CommData (which requires Copy), ruling out usize.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+fn broadcast_basis_cache<C: Communicator>(
+    basis_store: &crate::workspace::BasisStore,
+    num_stages: usize,
+    comm: &C,
+) -> Result<Vec<Option<Basis>>, SddpError> {
+    // Single-rank fast path: no communication needed.
+    if comm.size() == 1 {
+        let cache = (0..num_stages)
+            .map(|t| basis_store.get(0, t).cloned())
+            .collect();
+        return Ok(cache);
+    }
+
+    // Pack rank 0's scenario-0 bases into a flat i32 buffer that can be
+    // broadcast over the comm layer.
+    //
+    // Buffer layout per stage:
+    //   [sentinel(0 or 1), <if sentinel==1: col_len, row_len, col_status..., row_status...>]
+    let mut buf: Vec<i32> = Vec::new();
+    if comm.rank() == 0 {
+        for t in 0..num_stages {
+            match basis_store.get(0, t) {
+                None => buf.push(0_i32),
+                Some(basis) => {
+                    buf.push(1_i32);
+                    buf.push(basis.col_status.len() as i32);
+                    buf.push(basis.row_status.len() as i32);
+                    buf.extend_from_slice(&basis.col_status);
+                    buf.extend_from_slice(&basis.row_status);
+                }
+            }
+        }
+    }
+
+    // Step 1: broadcast the buffer length so all ranks can allocate.
+    let mut len_buf = [buf.len() as i32];
+    comm.broadcast(&mut len_buf, 0).map_err(SddpError::from)?;
+    let total_len = len_buf[0] as usize;
+
+    // Step 2: resize non-root buffers and broadcast the payload.
+    buf.resize(total_len, 0_i32);
+    comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
+
+    // Step 3: deserialize back into Vec<Option<Basis>>.
+    let mut cache: Vec<Option<Basis>> = Vec::with_capacity(num_stages);
+    let mut pos = 0_usize;
+    for _ in 0..num_stages {
+        let sentinel = buf[pos];
+        pos += 1;
+        if sentinel == 0 {
+            cache.push(None);
+        } else {
+            let col_len = buf[pos] as usize;
+            pos += 1;
+            let row_len = buf[pos] as usize;
+            pos += 1;
+            let col_status = buf[pos..pos + col_len].to_vec();
+            pos += col_len;
+            let row_status = buf[pos..pos + row_len].to_vec();
+            pos += row_len;
+            cache.push(Some(Basis {
+                col_status,
+                row_status,
+            }));
+        }
+    }
+
+    Ok(cache)
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +406,14 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // pool's per-thread solvers and patch buffers instead.
     let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
     let mut convergence_monitor = ConvergenceMonitor::new(stopping_rules);
-    let mut exchange_bufs = ExchangeBuffers::new(n_state, max_local_fwd, num_ranks);
+    // Compute the actual per-rank forward pass count for the padded-but-tracked
+    // ExchangeBuffers. First `remainder_fwd` ranks get `base_fwd + 1`, the rest
+    // get `base_fwd`. This mirrors the distribution used in the forward pass.
+    let actual_per_rank: Vec<usize> = (0..num_ranks)
+        .map(|r| base_fwd + usize::from(r < remainder_fwd))
+        .collect();
+    let mut exchange_bufs =
+        ExchangeBuffers::with_actual_counts(n_state, max_local_fwd, num_ranks, &actual_per_rank);
     let mut cut_sync_bufs =
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
@@ -402,12 +519,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     total_cuts: fcf.total_active_cuts() as u64,
                 },
             );
-            let last_scenario = my_actual_fwd.saturating_sub(1);
+            // Extract the canonical basis cache from rank 0's global scenario 0
+            // and broadcast to all ranks. This ensures simulation warm-starts
+            // from the same LP vertex regardless of the number of MPI ranks.
+            let basis_cache = match broadcast_basis_cache(&basis_store, num_stages, comm) {
+                Ok(cache) => cache,
+                Err(comm_err) => return Err(comm_err),
+            };
             #[allow(clippy::cast_possible_truncation)]
             let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
-            let basis_cache = (0..num_stages)
-                .map(|t| basis_store.get(last_scenario, t).cloned())
-                .collect();
             return Ok(TrainingOutcome {
                 result: TrainingResult {
                     final_lb,
@@ -430,6 +550,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // per-iteration allocation. Declared outside the loop so capacity persists.
     let mut bwd_probabilities_buf: Vec<f64> = Vec::new();
     let mut bwd_successor_active_slots_buf: Vec<usize> = Vec::new();
+    // Pre-allocated buffer for cut binding metadata allreduce. Sized per
+    // stage to the successor pool's metadata length after sync_packed_cuts.
+    let mut bwd_metadata_sync_buf: Vec<u64> = Vec::new();
+    // Pre-allocated buffer for packing real (non-padded) gathered state vectors
+    // when archiving visited states for dominated cut selection (ticket-003).
+    // Pre-sized to the true total forward passes to avoid first-iteration
+    // reallocation; capacity is preserved across iterations.
+    let mut bwd_real_states_buf: Vec<f64> =
+        Vec::with_capacity(exchange_bufs.real_total_scenarios() * n_state);
 
     for iteration in (start_iteration + 1)..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
@@ -530,6 +659,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             probabilities_buf: &mut bwd_probabilities_buf,
             successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
             visited_archive: visited_archive.as_mut(),
+            metadata_sync_buf: &mut bwd_metadata_sync_buf,
+            real_states_buf: &mut bwd_real_states_buf,
         };
 
         let backward_result = match run_backward_pass(
@@ -802,14 +933,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         },
     );
 
-    // The TrainingResult basis_cache field (used for policy checkpoint) is
-    // populated from the last scenario's entries in the basis store. These
-    // are the bases left by the final forward pass — the most recently solved
-    // LP at each stage.
-    let last_scenario = my_actual_fwd.saturating_sub(1);
-    let basis_cache = (0..num_stages)
-        .map(|t| basis_store.get(last_scenario, t).cloned())
-        .collect();
+    // Extract the canonical basis cache from rank 0's global scenario 0 and
+    // broadcast to all ranks. Using local scenario 0 on rank 0 (which is
+    // always global scenario 0, since rank 0's my_fwd_offset == 0) guarantees
+    // that all ranks receive an identical basis for simulation warm-start.
+    // Previously this used the last local scenario (my_actual_fwd - 1), which
+    // varied by rank count and caused simulation divergence across MPI configs.
+    let basis_cache = broadcast_basis_cache(&basis_store, num_stages, comm)?;
 
     Ok(TrainingOutcome {
         result: TrainingResult {
@@ -845,26 +975,29 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+        Bus, EntityId, SystemBuilder, TrainingEvent,
+        scenario::{
+            CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+            SamplingScheme,
+        },
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, tree::opening_tree::OpeningTree, StochasticContext,
+        StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
     };
 
     use super::train;
     use crate::{
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
         HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
         StoppingRule, StoppingRuleSet, TrainingConfig,
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1048,12 +1181,12 @@ mod tests {
     fn make_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
+            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;
@@ -1111,6 +1244,7 @@ mod tests {
             &mut decomposed,
             &entity_order,
         )
+        .unwrap()
     }
 
     /// Build a minimal `StochasticContext` with `n_stages` stages and a single
@@ -1244,7 +1378,38 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    }
+
+    /// Build `n_stages` minimal [`Stage`] values with sequential `id`s (0..n_stages).
+    ///
+    /// Used to populate [`TrainingContext::stages`] so that
+    /// [`cobre_stochastic::build_forward_sampler`] can read per-stage noise methods.
+    fn make_stages(n_stages: usize) -> Vec<Stage> {
+        (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: Some(0),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: cobre_core::temporal::StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: cobre_core::temporal::StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect()
     }
 
     fn make_fcf(
@@ -1279,6 +1444,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1327,6 +1493,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1356,6 +1524,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1404,6 +1573,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1449,6 +1620,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1499,6 +1671,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1580,6 +1754,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1628,6 +1803,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1655,6 +1832,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1703,6 +1881,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1727,6 +1907,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1775,6 +1956,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1805,6 +1988,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1855,6 +2039,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1892,6 +2078,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1945,6 +2132,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1992,6 +2181,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2045,6 +2235,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2108,6 +2300,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2156,6 +2349,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2187,6 +2382,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2241,6 +2437,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2287,6 +2485,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2335,6 +2534,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2362,6 +2563,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2410,6 +2612,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2427,5 +2631,83 @@ mod tests {
             outcome.result.reason, "iteration_limit",
             "reason should be iteration_limit when loop range is empty"
         );
+    }
+
+    // ── broadcast_basis_cache unit tests ─────────────────────────────────────
+
+    /// AC: `broadcast_basis_cache` returns scenario 0's bases, not scenario N-1's.
+    ///
+    /// Constructs a `BasisStore` with 2 scenarios and 3 stages. Scenario 0 is
+    /// populated with known distinct values; scenario 1 is populated with
+    /// different values. The helper must return scenario 0's bases on
+    /// `LocalBackend` (single-rank, no broadcast).
+    #[test]
+    fn ac_broadcast_basis_cache_uses_scenario_0_not_last() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::BasisStore;
+
+        let num_scenarios = 4; // simulates total_forward_passes=4, num_ranks=1
+        let num_stages = 3;
+        let mut store = BasisStore::new(num_scenarios, num_stages);
+
+        // Populate scenario 0 with col_status=[10,20], row_status=[30].
+        for t in 0..num_stages {
+            *store.get_mut(0, t) = Some(Basis {
+                col_status: vec![10_i32 + t as i32, 20_i32 + t as i32],
+                row_status: vec![30_i32 + t as i32],
+            });
+        }
+
+        // Populate scenario 3 (last) with completely different values.
+        for t in 0..num_stages {
+            *store.get_mut(3, t) = Some(Basis {
+                col_status: vec![99_i32, 88_i32],
+                row_status: vec![77_i32],
+            });
+        }
+
+        let comm = StubComm; // single-rank, no broadcast
+        let cache = broadcast_basis_cache(&store, num_stages, &comm).unwrap();
+
+        assert_eq!(cache.len(), num_stages);
+        for (t, entry) in cache.iter().enumerate() {
+            let basis = entry.as_ref().expect("stage {t} must have a basis");
+            assert_eq!(
+                basis.col_status,
+                vec![10_i32 + t as i32, 20_i32 + t as i32],
+                "stage {t} col_status must come from scenario 0, not scenario 3"
+            );
+            assert_eq!(
+                basis.row_status,
+                vec![30_i32 + t as i32],
+                "stage {t} row_status must come from scenario 0, not scenario 3"
+            );
+        }
+    }
+
+    /// AC: `broadcast_basis_cache` handles `None` slots correctly.
+    ///
+    /// When scenario 0 has no basis stored for some stages (e.g. training
+    /// stopped before any forward pass completed), those stages must be `None`
+    /// in the returned cache.
+    #[test]
+    fn ac_broadcast_basis_cache_none_slots_preserved() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::BasisStore;
+
+        let num_stages = 2;
+        // Scenario 0 is left unpopulated (all None).
+        let store = BasisStore::new(1, num_stages);
+
+        let comm = StubComm;
+        let cache = broadcast_basis_cache(&store, num_stages, &comm).unwrap();
+
+        assert_eq!(cache.len(), num_stages);
+        for t in 0..num_stages {
+            assert!(
+                cache[t].is_none(),
+                "stage {t} must be None when basis store has no entry for scenario 0"
+            );
+        }
     }
 }

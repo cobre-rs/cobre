@@ -198,7 +198,7 @@ fn accumulate_batch(batch: &RecordBatch, totals: &mut BatchTotals) -> Result<(),
 mod tests {
     use super::*;
     use crate::output::{
-        write_results, CutStatistics, IterationRecord, SimulationOutput, TrainingOutput,
+        CutStatistics, IterationRecord, SimulationOutput, TrainingOutput, write_results,
     };
 
     fn make_iteration_record(iteration: u32, lp_solves: u32) -> IterationRecord {
@@ -272,7 +272,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: Some(4),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 10 }]),
                 stopping_mode: "any".to_string(),

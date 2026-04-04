@@ -31,7 +31,7 @@
 use std::sync::mpsc;
 use std::thread;
 
-use cobre_core::{TrainingEvent, WelfordAccumulator};
+use cobre_core::TrainingEvent;
 use console::Term;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 
@@ -153,7 +153,6 @@ pub fn run_progress_thread(
         let mut events: Vec<TrainingEvent> = Vec::new();
         let mut training_bar: Option<ProgressBar> = None;
         let mut simulation_bar: Option<ProgressBar> = None;
-        let mut sim_acc: Option<WelfordAccumulator> = None;
         let mut sim_solve_time_ms: f64 = 0.0;
         let mut sim_lp_count: u64 = 0;
         loop {
@@ -209,7 +208,6 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationProgress {
                         scenarios_complete,
                         scenarios_total,
-                        scenario_cost,
                         solve_time_ms,
                         lp_solves,
                         ..
@@ -218,25 +216,13 @@ pub fn run_progress_thread(
                             create_simulation_bar(u64::from(scenarios_total), term_width)
                         });
                         bar.set_position(u64::from(scenarios_complete));
-                        let acc = sim_acc.get_or_insert_with(WelfordAccumulator::new);
-                        acc.update(scenario_cost);
                         sim_solve_time_ms += solve_time_ms;
                         sim_lp_count += lp_solves;
                         #[allow(clippy::cast_precision_loss)]
-                        let avg_lp = if sim_lp_count > 0 {
-                            format!("LP: {:.1}ms", sim_solve_time_ms / sim_lp_count as f64)
+                        let msg = if sim_lp_count > 0 {
+                            format!("LP: {:.1}ms avg", sim_solve_time_ms / sim_lp_count as f64)
                         } else {
-                            "LP: --".to_string()
-                        };
-                        let msg = if acc.count() >= 2 {
-                            format!(
-                                "mean: {}  std: {}  CI95: +/-{}  {avg_lp}",
-                                fmt_sci(acc.mean()),
-                                fmt_sci(acc.std_dev()),
-                                fmt_sci(acc.ci_95_half_width())
-                            )
-                        } else {
-                            format!("mean: {}  {avg_lp}", fmt_sci(acc.mean()))
+                            String::new()
                         };
                         bar.set_message(msg);
                     }
@@ -244,21 +230,7 @@ pub fn run_progress_thread(
                     TrainingEvent::SimulationFinished { scenarios, .. } => {
                         if let Some(bar) = simulation_bar.take() {
                             bar.set_position(u64::from(scenarios));
-                            let final_msg = if let Some(ref acc) = sim_acc {
-                                if scenarios >= 2 {
-                                    format!(
-                                        "mean: {}  std: {}  CI95: +/-{}",
-                                        fmt_sci(acc.mean()),
-                                        fmt_sci(acc.std_dev()),
-                                        fmt_sci(acc.ci_95_half_width())
-                                    )
-                                } else {
-                                    format!("mean: {}", fmt_sci(acc.mean()))
-                                }
-                            } else {
-                                "complete".to_string()
-                            };
-                            bar.finish_with_message(final_msg);
+                            bar.finish_with_message("done");
                             let _ = Term::stderr().write_line("");
                         }
                     }
@@ -329,7 +301,7 @@ fn create_simulation_bar(scenarios_total: u64, term_width: u16) -> ProgressBar {
 mod tests {
     use std::sync::mpsc;
 
-    use cobre_core::TrainingEvent;
+    use cobre_core::{TrainingEvent, WelfordAccumulator};
 
     use super::run_progress_thread;
 

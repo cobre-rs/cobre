@@ -1,13 +1,15 @@
 //! Error types for the `cobre-stochastic` crate.
 //!
 //! All public APIs that can fail return [`StochasticError`] or a `Result`
-//! wrapping it. The error variants cover the four failure domains of the
+//! wrapping it. The error variants cover the six failure domains of the
 //! stochastic layer:
 //!
 //! - PAR model parameter validation
 //! - Cholesky decomposition of correlation matrices
 //! - Correlation profile validation
 //! - Seed derivation for deterministic noise generation
+//! - Noise method dispatch (tree generation)
+//! - Sampling scheme dispatch (forward sampler factory)
 
 /// Errors that can occur during stochastic model construction or scenario generation.
 ///
@@ -16,64 +18,87 @@
 /// is both `Send` and `Sync`, making it safe to propagate across threads.
 #[derive(Debug, thiserror::Error)]
 pub enum StochasticError {
-    /// A PAR model's parameters did not pass validation for a given hydro plant
-    /// and stage combination.
-    ///
-    /// For example, the autoregressive order may exceed the number of available
-    /// historical observations, or a coefficient matrix may be ill-conditioned.
+    /// PAR model parameters did not pass validation (e.g., AR order exceeds
+    /// available observations or coefficient matrix is ill-conditioned).
     #[error("invalid PAR parameters for hydro {hydro_id} at stage {stage_id}: {reason}")]
     InvalidParParameters {
-        /// Identifier of the hydro plant whose PAR parameters failed validation.
+        /// Identifier of the hydro plant.
         hydro_id: i32,
-        /// Stage index (1-based) at which the validation failure occurred.
+        /// Stage index where validation failed.
         stage_id: i32,
-        /// Human-readable description of why the parameters are invalid.
+        /// Error description.
         reason: String,
     },
 
-    /// The Cholesky decomposition of a correlation matrix failed.
-    ///
-    /// This typically indicates that the matrix is not positive-definite, which
-    /// can result from numerical near-singularity or an invalid correlation profile.
+    /// Cholesky decomposition of a correlation matrix failed (not positive-definite).
     #[error("Cholesky decomposition failed for profile '{profile_name}': {reason}")]
     CholeskyDecompositionFailed {
-        /// Name of the correlation profile whose matrix could not be decomposed.
+        /// Name of the correlation profile.
         profile_name: String,
-        /// Human-readable description of the decomposition failure.
+        /// Error description.
         reason: String,
     },
 
-    /// A correlation profile specification is invalid.
-    ///
-    /// For example, the profile may reference hydro plants that do not exist,
-    /// contain entries outside `[-1.0, 1.0]`, or lack a unit diagonal.
+    /// Correlation profile specification is invalid (e.g., entries outside [-1.0, 1.0]).
     #[error("invalid correlation profile '{profile_name}': {reason}")]
     InvalidCorrelation {
-        /// Name of the correlation profile that failed validation.
+        /// Name of the correlation profile.
         profile_name: String,
-        /// Human-readable description of why the profile is invalid.
+        /// Error description.
         reason: String,
     },
 
-    /// Required input data is missing or has insufficient observations.
-    ///
-    /// This error is raised when a computation cannot proceed because the
-    /// data necessary to fit or apply a stochastic model is absent or too
-    /// sparse (e.g., fewer historical inflow records than the PAR order).
+    /// Required input data is missing or insufficient.
     #[error("insufficient data: {context}")]
     InsufficientData {
-        /// Description of what data is missing and where it was expected.
+        /// Description of missing data.
         context: String,
     },
 
     /// Deterministic seed derivation for noise generation failed.
-    ///
-    /// Seed derivation uses SipHash-1-3 to produce reproducible per-scenario
-    /// seeds from a global base seed, scenario index, and stage index. This
-    /// error is raised if the hash computation produces an invalid result.
     #[error("seed derivation failed: {reason}")]
     SeedDerivationError {
-        /// Human-readable description of why seed derivation failed.
+        /// Error description.
+        reason: String,
+    },
+
+    /// Noise method requested for a given stage is not supported.
+    #[error("unsupported noise method '{method}' at stage {stage_id}: {reason}")]
+    UnsupportedNoiseMethod {
+        /// Name of the noise method.
+        method: String,
+        /// Stage ID where method was requested.
+        stage_id: i32,
+        /// Error description.
+        reason: String,
+    },
+
+    /// Noise dimension exceeds maximum supported by the method (e.g., Sobol limits).
+    #[error("noise dimension {dim} exceeds maximum supported dimension {max_dim} for {method}")]
+    DimensionExceedsCapacity {
+        /// Requested noise dimension.
+        dim: usize,
+        /// Maximum supported dimension.
+        max_dim: usize,
+        /// Name of the noise method.
+        method: String,
+    },
+
+    /// Sampling scheme requested from the forward sampler factory is not supported.
+    #[error("unsupported sampling scheme '{scheme}': {reason}")]
+    UnsupportedSamplingScheme {
+        /// Name of the sampling scheme.
+        scheme: String,
+        /// Error description.
+        reason: String,
+    },
+
+    /// Required scenario source is absent for the requested sampling scheme.
+    #[error("missing scenario source for scheme '{scheme}': {reason}")]
+    MissingScenarioSource {
+        /// Name of the sampling scheme.
+        scheme: String,
+        /// Error description.
         reason: String,
     },
 }
@@ -83,6 +108,21 @@ mod tests {
     use super::StochasticError;
 
     fn assert_std_error<E: std::error::Error + Send + Sync + 'static>(_: &E) {}
+
+    fn assert_all_variants_debug(err: &StochasticError) {
+        match err {
+            StochasticError::InvalidParParameters { .. } => {}
+            StochasticError::CholeskyDecompositionFailed { .. } => {}
+            StochasticError::InvalidCorrelation { .. } => {}
+            StochasticError::InsufficientData { .. } => {}
+            StochasticError::SeedDerivationError { .. } => {}
+            StochasticError::UnsupportedNoiseMethod { .. } => {}
+            StochasticError::DimensionExceedsCapacity { .. } => {}
+            StochasticError::UnsupportedSamplingScheme { .. } => {}
+            StochasticError::MissingScenarioSource { .. } => {}
+        }
+        let _ = format!("{err:?}");
+    }
 
     #[test]
     fn test_invalid_par_parameters_implements_std_error() {
@@ -165,9 +205,75 @@ mod tests {
             StochasticError::SeedDerivationError {
                 reason: String::new(),
             },
+            StochasticError::UnsupportedNoiseMethod {
+                method: String::new(),
+                stage_id: 0,
+                reason: String::new(),
+            },
+            StochasticError::DimensionExceedsCapacity {
+                dim: 0,
+                max_dim: 0,
+                method: String::new(),
+            },
+            StochasticError::UnsupportedSamplingScheme {
+                scheme: String::new(),
+                reason: String::new(),
+            },
+            StochasticError::MissingScenarioSource {
+                scheme: String::new(),
+                reason: String::new(),
+            },
         ];
         for v in &variants {
-            let _ = format!("{v:?}");
+            assert_all_variants_debug(v);
         }
+    }
+
+    #[test]
+    fn test_unsupported_noise_method_display() {
+        let err = StochasticError::UnsupportedNoiseMethod {
+            method: "selective".into(),
+            stage_id: 5,
+            reason: "not implemented".into(),
+        };
+        let display = format!("{err}");
+        assert!(display.contains("selective"));
+        assert!(display.contains('5'));
+        assert!(display.contains("not implemented"));
+    }
+
+    #[test]
+    fn test_dimension_exceeds_capacity_display() {
+        let err = StochasticError::DimensionExceedsCapacity {
+            dim: 25000,
+            max_dim: 21201,
+            method: "sobol".into(),
+        };
+        let display = format!("{err}");
+        assert!(display.contains("25000"));
+        assert!(display.contains("21201"));
+        assert!(display.contains("sobol"));
+    }
+
+    #[test]
+    fn test_unsupported_sampling_scheme_display() {
+        let err = StochasticError::UnsupportedSamplingScheme {
+            scheme: "historical".into(),
+            reason: "not yet implemented".into(),
+        };
+        let display = format!("{err}");
+        assert!(display.contains("historical"));
+        assert!(display.contains("not yet implemented"));
+    }
+
+    #[test]
+    fn test_missing_scenario_source_display() {
+        let err = StochasticError::MissingScenarioSource {
+            scheme: "external".into(),
+            reason: "no library loaded".into(),
+        };
+        let display = format!("{err}");
+        assert!(display.contains("external"));
+        assert!(display.contains("no library loaded"));
     }
 }

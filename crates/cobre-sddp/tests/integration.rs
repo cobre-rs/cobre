@@ -31,7 +31,9 @@ use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId, TrainingEvent,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -290,7 +292,7 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
 }
 
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
@@ -419,7 +421,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -551,6 +553,8 @@ fn run_one_deterministic_pass(
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         opening_tree,
         &fx.risk_measures,
@@ -610,6 +614,8 @@ fn train_converges_with_mock_solver() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -700,6 +706,8 @@ fn train_lb_monotonically_nondecreasing() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -777,6 +785,8 @@ fn train_emits_correct_event_sequence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -856,6 +866,8 @@ fn train_stops_at_iteration_limit() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -925,6 +937,8 @@ fn train_stops_on_graceful_shutdown() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -984,6 +998,8 @@ fn train_propagates_infeasible_error() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -1070,6 +1086,8 @@ fn d17_level1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -1214,6 +1232,8 @@ fn d18_lml1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,

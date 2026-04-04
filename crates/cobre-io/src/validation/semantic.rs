@@ -50,10 +50,12 @@
 //! |22  | `inflow_lags: true` with PAR order > 0 requires non-empty `past_inflows` | `initial_conditions.json`                      | `BusinessRuleViolation`  |
 //! |23  | Each hydro with PAR order `p` must have a `past_inflows` entry with `values_m3s.len() >= p` | `initial_conditions.json` | `BusinessRuleViolation`  |
 //! |24  | All hydro IDs in `past_inflows` must exist in the hydro registry        | `initial_conditions.json`                      | `BusinessRuleViolation`  |
+//! |25  | Sobol stages: `branching_factor` should be a power of 2                 | `stages.json`                                  | `ModelQuality` (warning) |
+//! |26  | `simulation.sampling_scheme.type` must be a known scheme string          | `config.json`                                  | `InvalidValue`           |
 
 use std::collections::{HashMap, HashSet};
 
-use super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
@@ -473,6 +475,8 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     ctx: &mut ValidationContext,
 ) {
     check_stage_structure(data, ctx);
+    check_sobol_power_of_2(data, ctx);
+    check_simulation_sampling_scheme(data, ctx);
     check_penalty_ordering(data, ctx);
     check_fpha_penalty_rule(data, ctx);
     check_scenario_models(data, ctx);
@@ -612,6 +616,76 @@ fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationContext) {
                 );
             }
         }
+    }
+}
+
+// ── Rule 25: Sobol power-of-2 branching factor ───────────────────────────────
+
+/// Warns when a stage uses `QmcSobol` with a non-power-of-2 `branching_factor`.
+///
+/// Sobol sequences achieve optimal low-discrepancy uniformity only when the
+/// number of sample points is a power of 2. A non-power-of-2 value produces
+/// valid noise but loses the stratification guarantee of the Gray-code
+/// recurrence. This emits a `ModelQuality` warning (not an error) because the
+/// configuration is valid but suboptimal.
+fn check_sobol_power_of_2(data: &ParsedData, ctx: &mut ValidationContext) {
+    use cobre_core::temporal::NoiseMethod;
+
+    for stage in &data.stages.stages {
+        if stage.id < 0 {
+            continue; // skip pre-study stages
+        }
+        let bf = stage.scenario_config.branching_factor;
+        if stage.scenario_config.noise_method == NoiseMethod::QmcSobol && !bf.is_power_of_two() {
+            // bf == 0 is unreachable after parsing validation, but guard
+            // defensively to prevent overflow in leading_zeros arithmetic.
+            let suggestion = if bf > 0 {
+                let lower = 1usize << (usize::BITS - bf.leading_zeros() - 1);
+                let upper = lower << 1;
+                format!("consider {lower} or {upper}")
+            } else {
+                "consider a positive power of 2".to_string()
+            };
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "stages.json",
+                Some(format!("Stage {}", stage.id)),
+                format!(
+                    "Stage {}: qmc_sobol with num_scenarios={bf} which is not a \
+                     power of 2; Sobol sequences have optimal uniformity at powers \
+                     of 2 ({suggestion})",
+                    stage.id,
+                ),
+            );
+        }
+    }
+}
+
+// ── Rule 26: Simulation sampling scheme validation ────────────────────────────
+
+/// Known valid values for `simulation.sampling_scheme.type` in `config.json`.
+const KNOWN_SAMPLING_SCHEMES: &[&str] = &["in_sample", "out_of_sample", "external", "historical"];
+
+/// Validates that `simulation.sampling_scheme.type` is a recognised scheme name.
+///
+/// The field is stored as a raw `String` (to preserve the collect-all-errors
+/// design — serde can still parse an unknown value), so this check provides the
+/// validation that serde alone cannot. An unrecognised value would silently fall
+/// back to in-sample behaviour at dispatch time; catching it here gives the user
+/// an actionable error at load time.
+fn check_simulation_sampling_scheme(data: &ParsedData, ctx: &mut ValidationContext) {
+    let scheme = &data.config.simulation.sampling_scheme.scheme_type;
+    if !KNOWN_SAMPLING_SCHEMES.contains(&scheme.as_str()) {
+        ctx.add_error(
+            ErrorKind::InvalidValue,
+            "config.json",
+            None::<&str>,
+            format!(
+                "simulation.sampling_scheme.type '{scheme}' is not a recognised \
+                 sampling scheme; expected one of: {}",
+                KNOWN_SAMPLING_SCHEMES.join(", "),
+            ),
+        );
     }
 }
 
@@ -1150,11 +1224,7 @@ fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext
             let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
             let season_id = if pos > 0 {
                 let (_, end_date, sid) = stage_index[pos - 1];
-                if row.date < end_date {
-                    Some(sid)
-                } else {
-                    None
-                }
+                if row.date < end_date { Some(sid) } else { None }
             } else {
                 None
             };
@@ -1329,6 +1399,7 @@ fn check_past_inflows_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
+        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -1339,14 +1410,13 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{schema::ParsedData, ErrorKind, ValidationContext},
+        validation::{ErrorKind, ValidationContext, schema::ParsedData},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -4090,6 +4160,299 @@ mod tests {
             "unknown hydro 99 in past_inflows should produce a BusinessRuleViolation; \
              got errors: {:?}",
             ctx.errors()
+        );
+    }
+
+    // ── Rule 25: Sobol non-power-of-2 branching factor ───────────────────────
+
+    /// Stage with `QmcSobol` and `branching_factor: 50` (not a power of 2)
+    /// produces exactly 1 `ModelQuality` warning containing the stage ID and
+    /// the actual branching factor value.
+    #[test]
+    fn test_sobol_non_power_of_2_emits_warning() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].scenario_config = ScenarioSourceConfig {
+            branching_factor: 50,
+            noise_method: NoiseMethod::QmcSobol,
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let all_warnings = ctx.warnings();
+        let quality_warnings: Vec<_> = all_warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality && w.message.contains("qmc_sobol"))
+            .collect();
+        assert_eq!(
+            quality_warnings.len(),
+            1,
+            "expected exactly 1 ModelQuality warning, got: {:?}",
+            ctx.warnings()
+        );
+        let msg = &quality_warnings[0].message;
+        assert!(
+            msg.contains("50"),
+            "warning message should contain the branching factor '50', got: {msg}"
+        );
+        assert!(
+            msg.contains("Stage "),
+            "warning message should contain 'Stage ', got: {msg}"
+        );
+    }
+
+    /// Stage with `QmcSobol` and `branching_factor: 64` (a power of 2)
+    /// produces no warnings.
+    #[test]
+    fn test_sobol_power_of_2_no_warning() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].scenario_config = ScenarioSourceConfig {
+            branching_factor: 64,
+            noise_method: NoiseMethod::QmcSobol,
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let all_warnings = ctx.warnings();
+        let quality_warnings: Vec<_> = all_warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality && w.message.contains("qmc_sobol"))
+            .collect();
+        assert!(
+            quality_warnings.is_empty(),
+            "branching_factor=64 (power of 2) should produce no ModelQuality warnings, \
+             got: {quality_warnings:?}"
+        );
+    }
+
+    /// Stage with `Saa` and `branching_factor: 50` (not a power of 2)
+    /// produces no warnings — the check only applies to `QmcSobol`.
+    #[test]
+    fn test_saa_non_power_of_2_no_warning() {
+        let mut stages = make_stages_5b(vec![0]);
+        stages.stages[0].scenario_config = ScenarioSourceConfig {
+            branching_factor: 50,
+            noise_method: NoiseMethod::Saa,
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let all_warnings = ctx.warnings();
+        let quality_warnings: Vec<_> = all_warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality && w.message.contains("qmc_sobol"))
+            .collect();
+        assert!(
+            quality_warnings.is_empty(),
+            "SAA with non-power-of-2 branching factor should produce no ModelQuality warnings, \
+             got: {quality_warnings:?}"
+        );
+    }
+
+    /// Two stages: stage 0 uses `QmcSobol` with `branching_factor: 100` (not a
+    /// power of 2), stage 1 uses `QmcSobol` with `branching_factor: 128` (power
+    /// of 2). Exactly 1 `ModelQuality` warning should be emitted, for stage 0.
+    #[test]
+    fn test_sobol_mixed_stages_only_warns_non_power() {
+        let mut stages = make_stages_5b(vec![0, 1]);
+        stages.stages[0].scenario_config = ScenarioSourceConfig {
+            branching_factor: 100,
+            noise_method: NoiseMethod::QmcSobol,
+        };
+        stages.stages[1].scenario_config = ScenarioSourceConfig {
+            branching_factor: 128,
+            noise_method: NoiseMethod::QmcSobol,
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let all_warnings = ctx.warnings();
+        let quality_warnings: Vec<_> = all_warnings
+            .iter()
+            .filter(|w| w.kind == ErrorKind::ModelQuality && w.message.contains("qmc_sobol"))
+            .collect();
+        assert_eq!(
+            quality_warnings.len(),
+            1,
+            "expected exactly 1 ModelQuality warning (for stage 0 only), got: {:?}",
+            ctx.warnings()
+        );
+        let msg = &quality_warnings[0].message;
+        assert!(
+            msg.contains("Stage 0"),
+            "warning should be for stage 0, got: {msg}"
+        );
+        assert!(
+            msg.contains("100"),
+            "warning should mention branching_factor 100, got: {msg}"
+        );
+    }
+
+    // ── Rule 26: Simulation sampling scheme validation ────────────────────────
+
+    /// `scheme_type: "in_sample"` (the default) produces no `InvalidValue`
+    /// errors with `file == "config.json"`.
+    #[test]
+    fn test_simulation_scheme_in_sample_no_error() {
+        use crate::config::SimulationSamplingConfig;
+
+        let mut data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
+            scheme_type: "in_sample".to_string(),
+        };
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let config_invalid_value_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue
+                    && e.file.to_string_lossy().contains("config.json")
+            })
+            .collect();
+        assert!(
+            config_invalid_value_errors.is_empty(),
+            "\"in_sample\" should produce no config.json InvalidValue errors, \
+             got: {config_invalid_value_errors:?}"
+        );
+    }
+
+    /// `scheme_type: "out_of_sample"` produces no `InvalidValue` errors with
+    /// `file == "config.json"`.
+    #[test]
+    fn test_simulation_scheme_out_of_sample_no_error() {
+        use crate::config::SimulationSamplingConfig;
+
+        let mut data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
+            scheme_type: "out_of_sample".to_string(),
+        };
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let config_invalid_value_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue
+                    && e.file.to_string_lossy().contains("config.json")
+            })
+            .collect();
+        assert!(
+            config_invalid_value_errors.is_empty(),
+            "\"out_of_sample\" should produce no config.json InvalidValue errors, \
+             got: {config_invalid_value_errors:?}"
+        );
+    }
+
+    /// `scheme_type: "bogus_value"` produces exactly 1 `InvalidValue` error
+    /// with `file == "config.json"` and `message` containing the invalid value.
+    #[test]
+    fn test_simulation_scheme_unknown_value_produces_error() {
+        use crate::config::SimulationSamplingConfig;
+
+        let mut data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
+            scheme_type: "bogus_value".to_string(),
+        };
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let config_invalid_value_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue
+                    && e.file.to_string_lossy().contains("config.json")
+            })
+            .collect();
+        assert_eq!(
+            config_invalid_value_errors.len(),
+            1,
+            "expected exactly 1 config.json InvalidValue error for unknown scheme, \
+             got: {config_invalid_value_errors:?}"
+        );
+        assert!(
+            config_invalid_value_errors[0]
+                .message
+                .contains("bogus_value"),
+            "error message should contain the invalid value 'bogus_value', \
+             got: {}",
+            config_invalid_value_errors[0].message
+        );
+    }
+
+    /// Deserializing `{"type": "out_of_sample"}` into `SimulationSamplingConfig`
+    /// yields `scheme_type == "out_of_sample"` (serde roundtrip for the
+    /// `config.json` path).
+    #[test]
+    fn test_simulation_sampling_config_serde_roundtrip() {
+        use crate::config::SimulationSamplingConfig;
+
+        let json = r#"{"type": "out_of_sample"}"#;
+        let cfg: SimulationSamplingConfig =
+            serde_json::from_str(json).expect("should deserialise successfully");
+        assert_eq!(
+            cfg.scheme_type, "out_of_sample",
+            "scheme_type should be 'out_of_sample' after deserialisation"
+        );
+        let serialised = serde_json::to_string(&cfg).expect("should serialise successfully");
+        assert!(
+            serialised.contains("out_of_sample"),
+            "serialised JSON should contain 'out_of_sample', got: {serialised}"
         );
     }
 }

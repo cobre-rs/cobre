@@ -14,5 +14,6 @@
 //! - [`rng`] — wraps the derived seeds in a `Pcg64` generator and samples
 //!   standard-normal noise vectors
 
+pub mod quantile;
 pub mod rng;
 pub mod seed;

@@ -360,7 +360,7 @@ mod tests {
     fn slot_for_lp_row_returns_none_for_unmapped_cut_row() {
         let mut map = CutRowMap::new(100, 50);
         map.insert(0); // row 50
-                       // Row 51 was never assigned.
+        // Row 51 was never assigned.
         assert_eq!(map.slot_for_lp_row(51), None);
     }
 

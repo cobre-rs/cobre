@@ -30,7 +30,9 @@ use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -240,7 +242,7 @@ fn make_opening_tree_3h(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![id_h1, id_h2, id_h3];
 
-    generate_opening_tree(42, &[stage], 3, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 3, &mut decomposed, &entity_order).unwrap()
 }
 
 /// Build a `StochasticContext` for a 3-hydro, 5-stage system with seed 42.
@@ -398,7 +400,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
@@ -590,6 +592,8 @@ fn run_training(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
+                    sampling_scheme: SamplingScheme::InSample,
+                    stages: &[],
                 },
                 &fx.opening_tree,
                 &fx.risk_measures,
@@ -687,6 +691,8 @@ fn run_simulation(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
+                    sampling_scheme: SamplingScheme::InSample,
+                    stages: &[],
                 },
                 &sim_config,
                 SimulationOutputSpec {

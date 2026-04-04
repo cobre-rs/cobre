@@ -223,6 +223,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
         &mut decomposed,
         &entity_order,
     )
+    .unwrap()
 }
 
 fn make_sync_result(global_ub_mean: f64) -> SyncResult {

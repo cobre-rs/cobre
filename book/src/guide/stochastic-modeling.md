@@ -375,7 +375,7 @@ deterministic: the LP column upper bound comes from `constraints/ncs_bounds.parq
 
 ---
 
-## Scenario Count and Seeds
+## Seeds and Reproducibility
 
 ### `num_scenarios` in `stages.json`
 
@@ -394,31 +394,297 @@ This is distinct from `num_scenarios`: the forward pass draws new
 trajectories on each iteration using a deterministic per-iteration seed,
 while `num_scenarios` controls the pre-generated backward-pass tree.
 
-### The `seed` field
+### Dual-Seed Architecture
 
-The `seed` field in the `training` section of `config.json` is the base
-seed for all stochastic generation in the run:
+Cobre uses two independent seeds, each controlling a different part of the
+stochastic pipeline:
+
+**`training.tree_seed` in `config.json`** — the base seed for the opening
+scenario tree. This seed governs all backward-pass openings and, when the
+sampling scheme is `in_sample` (the default), also governs the forward-pass
+scenario selection. When the same case is run with the same `tree_seed`, the
+opening tree is bitwise identical across runs, regardless of the number of MPI
+ranks.
+
+**`scenario_source.seed` in `stages.json`** — the forward seed used when the
+sampling scheme is `out_of_sample`. This seed controls the fresh noise
+generated on-the-fly during each forward pass. It is completely independent of
+`tree_seed`: changing it does not affect the backward-pass tree, and changing
+`tree_seed` does not affect the out-of-sample forward pass.
+
+Both seeds are optional. When omitted, Cobre derives the seed from OS entropy
+at startup, producing a non-reproducible run. To make a run fully reproducible,
+specify both seeds explicitly:
 
 ```json
+// config.json
 {
   "training": {
+    "tree_seed": 42,
     "forward_passes": 50,
-    "seed": 42,
     "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]
   }
 }
 ```
 
-The default value is `42` when `seed` is omitted. When a seed is provided,
-every run with the same case directory and the same seed produces
-bitwise-identical scenarios, training trajectories, and simulation results.
-This reproducibility is guaranteed regardless of the number of MPI ranks,
-because each rank derives its scenario seeds independently from the base
-seed using a deterministic hash — no inter-rank coordination is required.
+```json
+// stages.json
+{
+  "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.12 },
+  "scenario_source": {
+    "sampling_scheme": "out_of_sample",
+    "seed": 99
+  },
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-02-01",
+      "blocks": [{ "id": 0, "name": "SINGLE", "hours": 744 }],
+      "num_scenarios": 100,
+      "sampling_method": "lhs"
+    }
+  ]
+}
+```
 
-To get a non-reproducible run (different scenarios each time), set
-`"seed": null` in `config.json`. Cobre will then derive the base seed from
-OS entropy at startup.
+When `tree_seed` is set to `null` in `config.json`, Cobre derives the base
+seed from OS entropy at startup, producing a different opening tree each run.
+The same applies to `scenario_source.seed`: a `null` value means the
+forward-pass noise is non-reproducible even if `tree_seed` is fixed.
+
+---
+
+## Noise Methods
+
+The `sampling_method` field in each stage entry of `stages.json` controls
+how noise vectors are generated within that stage when building the opening
+scenario tree. This is orthogonal to the sampling scheme (see
+[Sampling Schemes](#sampling-schemes) below), which controls where the
+forward-pass noise comes from. The noise method controls the algorithm;
+the sampling scheme controls the source.
+
+The default method is `"saa"` when `sampling_method` is omitted.
+
+### SAA — Sample Average Approximation
+
+SAA (Sample Average Approximation) is pure Monte Carlo sampling. Each opening
+draws an independent sequence of standard-normal values from a `Pcg64`
+generator seeded deterministically from the stage and opening index. There
+is no coordination between openings; each is drawn without knowledge of the
+others.
+
+SAA is the simplest and most general method. It works for any dimension count
+and any branching factor, and it has no restrictions on `num_scenarios`. Use
+SAA as your baseline when you are uncertain which method to choose, or when
+your branching factor is small (fewer than 50 scenarios per stage).
+
+Configure SAA by setting `"sampling_method": "saa"` (or by omitting the
+field, since SAA is the default).
+
+### LHS — Latin Hypercube Sampling
+
+LHS (Latin Hypercube Sampling) is stratified sampling. For a stage with
+`N = num_scenarios` openings, each dimension is divided into `N`
+equal-probability strata `[k/N, (k+1)/N)` for `k = 0, …, N-1`. Exactly one
+sample is placed within each stratum, and a Fisher-Yates shuffle independently
+assigns strata to openings for every dimension. The result is marginal
+uniformity: when you project all `N` noise vectors onto any single dimension,
+the resulting samples cover the entire range of the standard-normal
+distribution uniformly, with no stratum left empty.
+
+LHS is the recommended choice for moderate branching factors (50 to 200
+scenarios per stage). It reduces the variance of sample-average estimates
+compared to SAA for the same `N`, which typically means a better-converged
+backward-pass cut approximation for the same computational budget. LHS works
+for any dimension count.
+
+Configure LHS by setting `"sampling_method": "lhs"` in the stage entry.
+
+### QMC-Sobol
+
+QMC-Sobol uses Sobol quasi-random sequences, which are low-discrepancy
+sequences that fill the unit hypercube more evenly than independent random
+draws. Cobre implements the Joe-Kuo 2010 direction number dataset with
+Matousek linear scrambling. The scrambling applies an affine transformation
+`x' = a·x + b (mod 2^32)` with seed-derived parameters to each dimension,
+breaking correlations between dimensions while preserving the low-discrepancy
+property. The batch generator uses a Gray-code recurrence for O(1) updates
+per point.
+
+QMC-Sobol provides a faster convergence rate than both SAA and LHS for smooth
+integrands, meaning that a smaller branching factor can achieve equivalent
+policy quality. The convergence benefit is strongest when `num_scenarios` is a
+power of 2 (32, 64, 128, 256, …), because Sobol sequences have optimal
+2-equidistribution properties at powers of 2. You can use other values of
+`num_scenarios`, but the theoretical convergence advantage is reduced.
+
+QMC-Sobol supports up to 21,201 dimensions. If your system dimension (the
+total number of hydro plants, load buses, and NCS entities) exceeds 21,201,
+Cobre will return an error and refuse to run. In practice, this limit is
+never reached in hydrothermal planning models.
+
+Configure QMC-Sobol by setting `"sampling_method": "qmc_sobol"`.
+
+### QMC-Halton
+
+QMC-Halton uses Halton sequences, another family of low-discrepancy
+sequences. Each dimension uses a distinct prime base: dimension 1 uses
+base 2, dimension 2 uses base 3, dimension 3 uses base 5, and so on. The
+prime bases are computed at initialization time using the sieve of
+Eratosthenes (`sieve_primes`). Cobre applies Owen-style random digit
+scrambling to each dimension: a random permutation table is applied to each
+digit position in each dimension, breaking the correlation artifacts that
+affect plain Halton sequences at high dimensions (sometimes called the
+"Halton curse"). Permutation tables are derived deterministically from the
+stage seed.
+
+QMC-Halton has no dimension limit — it can handle arbitrarily many
+dimensions by sieving as many primes as needed. This makes it a good
+alternative to QMC-Sobol for very high-dimensional cases, though in practice
+the dimension limit of QMC-Sobol (21,201) is rarely reached. The convergence
+properties of QMC-Halton are similar to QMC-Sobol but the scrambling
+approach differs; some integrands favor one over the other.
+
+Configure QMC-Halton by setting `"sampling_method": "qmc_halton"`.
+
+### Selective (Reserved)
+
+The `"selective"` method is reserved for future use. It is intended to
+support representative scenario selection (clustering-based methods), but
+the required infrastructure is not yet implemented. If you configure a stage
+with `"sampling_method": "selective"`, Cobre will return an error for the
+opening tree generator. In the out-of-sample forward pass, it falls back to
+SAA and emits a diagnostic warning.
+
+### Comparison
+
+| Method     | Convergence rate  | Dimension limit | Scenario count        | Best for                                  |
+| ---------- | ----------------- | --------------- | --------------------- | ----------------------------------------- |
+| SAA        | O(N^{-1/2})       | None            | Any                   | General use, small branching factors      |
+| LHS        | Better than SAA   | None            | Any (50–200 typical)  | Moderate scenario counts, any dimension   |
+| QMC-Sobol  | O(N^{-1} log^d N) | 21,201          | Powers of 2 preferred | Best convergence, low-to-medium dimension |
+| QMC-Halton | O(N^{-1} log^d N) | None            | Any                   | High-dimension alternative to Sobol       |
+| Selective  | N/A               | N/A             | N/A                   | Not implemented; reserved for future use  |
+
+### Per-Stage Method Configuration
+
+The `sampling_method` field is set per stage in `stages.json`. Different
+stages in the same study can use different methods. This is useful when you
+want a high-quality low-discrepancy method for the near-term stages (where
+policy quality matters most) while using the simpler SAA for distant stages
+where the investment decisions are less sensitive to sampling quality.
+
+The following example configures a two-stage study where stage 0 uses LHS
+and stage 1 uses QMC-Sobol:
+
+```json
+{
+  "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.12 },
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-02-01",
+      "blocks": [{ "id": 0, "name": "SINGLE", "hours": 744 }],
+      "num_scenarios": 100,
+      "sampling_method": "lhs"
+    },
+    {
+      "id": 1,
+      "start_date": "2024-02-01",
+      "end_date": "2024-03-01",
+      "blocks": [{ "id": 0, "name": "SINGLE", "hours": 696 }],
+      "num_scenarios": 128,
+      "sampling_method": "qmc_sobol"
+    }
+  ]
+}
+```
+
+Mixed configurations are fully supported. Cobre applies each stage's method
+independently when building the opening tree.
+
+---
+
+## Sampling Schemes
+
+The sampling scheme controls where the forward-pass noise comes from. This
+is a different concept from the noise method: the noise method controls the
+algorithm used to generate noise vectors, while the sampling scheme controls
+whether the forward pass reuses the pre-generated opening tree or generates
+fresh noise on-the-fly.
+
+The sampling scheme is configured in `stages.json` under the top-level
+`scenario_source` object:
+
+```json
+{
+  "scenario_source": {
+    "sampling_scheme": "in_sample",
+    "seed": 42
+  }
+}
+```
+
+### InSample (default)
+
+With `"sampling_scheme": "in_sample"`, the forward pass reuses the
+pre-generated opening tree. At each `(iteration, scenario, stage)` triple,
+the solver selects one opening from the tree using a deterministic
+per-iteration hash derived from `tree_seed`. The backward pass and the forward
+pass see the same set of noise realizations: the same scenarios that were used
+to build cuts are the scenarios against which the forward trajectories are
+evaluated.
+
+InSample is the default when `scenario_source` is absent from `stages.json`.
+It is simple to configure, requires no additional seed, and is appropriate for
+most studies. The main limitation is that the forward pass cannot evaluate the
+policy on noise realizations outside the opening tree, which can lead to an
+optimistic bias when the branching factor is small.
+
+### OutOfSample
+
+With `"sampling_scheme": "out_of_sample"`, the forward pass generates fresh
+noise on-the-fly at each `(iteration, scenario, stage)` triple. The fresh
+noise is drawn from the same distribution as the opening tree but is
+independent of it — the forward pass never looks at the tree. Each call
+derives a unique noise vector from `scenario_source.seed`, the iteration
+index, the scenario index, and the stage ID. The per-stage `sampling_method`
+controls which algorithm (SAA, LHS, QMC-Sobol, or QMC-Halton) is used to
+generate the fresh noise.
+
+OutOfSample requires `scenario_source.seed` to be set. If it is absent,
+Cobre returns an error. Configure it as follows:
+
+```json
+{
+  "scenario_source": {
+    "sampling_scheme": "out_of_sample",
+    "seed": 99
+  }
+}
+```
+
+OutOfSample is preferred when you want to evaluate policy quality on scenarios
+that are independent of the scenarios used to build the policy. This avoids
+the in-sample optimism that arises with small branching factors, where the
+policy has effectively "seen" all the noise realizations during training.
+OutOfSample is especially useful during simulation, where you want an unbiased
+estimate of the policy's expected cost on new scenarios.
+
+### Historical and External (Not Implemented)
+
+The `"historical"` and `"external"` sampling schemes are reserved for future
+use. Configuring either of these will cause Cobre to return an error. They
+are documented here for completeness:
+
+- **Historical** — replay noise from a historical observation file, allowing
+  you to evaluate the policy against the actual historical sequence.
+- **External** — read scenario realizations from a user-supplied file,
+  allowing integration with external scenario generation tools.
+
+Both schemes will be implemented in a future release.
 
 ---
 
@@ -471,11 +737,11 @@ entity ordering when constructing the file externally.
   See [Exporting Stochastic Artifacts](./running-studies.md#exporting-stochastic-artifacts)
   for the complete workflow.
 
-### Interaction with `base_seed`
+### Interaction with `tree_seed`
 
-The `training.seed` field in `config.json` remains required even when a
+The `training.tree_seed` field in `config.json` remains required even when a
 user-supplied opening tree is present. The opening tree and forward-pass noise
-are independent: `training.seed` governs the forward-pass scenario sampling
+are independent: `tree_seed` governs the forward-pass scenario sampling
 performed by `sample_forward()`, which uses SipHash seeds derived independently
 of the opening tree. Supplying a custom opening tree has no effect on forward-pass
 noise.
@@ -572,5 +838,6 @@ page in the methodology reference, or Oliveira et al. (2022), _Energies_
 ## Related Pages
 
 - [Anatomy of a Case](../tutorial/anatomy-of-a-case.md) — introductory walkthrough of the `scenarios/` directory and Parquet schemas
-- [Configuration](./configuration.md) — full documentation of `config.json` fields including `seed` and `forward_passes`
+- [Configuration](./configuration.md) — full documentation of `config.json` fields including `tree_seed` and `forward_passes`
 - [cobre-stochastic](../crates/stochastic.md) — internal architecture of the stochastic crate: PAR preprocessing, Cholesky correlation, opening tree, and seed derivation
+- [ADR: Noise Method Dispatch and Forward Sampler](../../docs/design/adr-noise-method-forward-sampler.md) — design decisions behind the noise method enum, per-stage dispatch, and OutOfSample forward sampler

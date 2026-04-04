@@ -31,14 +31,14 @@ use std::ops::Range;
 use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
-use crate::lp_builder::{GenericConstraintRowEntry, COST_SCALE_FACTOR};
+use crate::StageIndexer;
+use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
     SimulationInflowLagResult, SimulationNonControllableResult, SimulationPumpingResult,
     SimulationStageResult, SimulationThermalResult,
 };
-use crate::StageIndexer;
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -231,11 +231,7 @@ impl StageExtractionSpec<'_> {
     fn col_scale_factor(&self, col: usize) -> f64 {
         if col < self.col_scale.len() {
             let d = self.col_scale[col];
-            if d == 0.0 {
-                1.0
-            } else {
-                d
-            }
+            if d == 0.0 { 1.0 } else { d }
         } else {
             1.0
         }
@@ -858,11 +854,7 @@ fn compute_cost_result(
     let scale_factor = |col: usize| -> f64 {
         if col < col_scale.len() {
             let d = col_scale[col];
-            if d == 0.0 {
-                1.0
-            } else {
-                d
-            }
+            if d == 0.0 { 1.0 } else { d }
         } else {
             1.0
         }
@@ -1317,11 +1309,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts,
-        SolutionView, StageExtractionSpec,
+        EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
+        assign_scenarios, extract_stage_result,
     };
-    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
     use crate::StageIndexer;
+    use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -1600,7 +1592,7 @@ mod tests {
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-                                                 // Hydro 10, lag 0 → primal[2] = 50.0
+        // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);
@@ -1814,7 +1806,7 @@ mod tests {
         primal[1] = 200.0; // storage h1
         primal[2] = 50.0; // lag h0
         primal[3] = 60.0; // lag h1
-                          // primal[4..6] = z_inflow (zeros)
+        // primal[4..6] = z_inflow (zeros)
         primal[6] = 90.0; // storage_in h0
         primal[7] = 180.0; // storage_in h1
         primal[8] = 500.0; // theta
@@ -1822,7 +1814,7 @@ mod tests {
         primal[10] = 40.0; // turbine h1 b0
         primal[11] = 5.0; // spillage h0 b0
         primal[12] = 0.0; // spillage h1 b0
-                          // primal[13..15] = diversion (zeros)
+        // primal[13..15] = diversion (zeros)
         primal[15] = 80.0; // thermal t0 b0
         primal[16] = 15.0; // line_fwd l0 b0
         primal[17] = 0.0; // line_rev l0 b0
@@ -2490,7 +2482,7 @@ mod tests {
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 50.0; // storage h0
         primal[1] = 80.0; // storage h1
-                          // primal[2..4] = z_inflow (zeros)
+        // primal[2..4] = z_inflow (zeros)
         primal[4] = 45.0; // storage_in h0
         primal[5] = 75.0; // storage_in h1
         primal[6] = 0.0; // theta
@@ -2498,7 +2490,7 @@ mod tests {
         primal[8] = 30.0; // turbine h1 b0
         primal[9] = 0.0; // spillage h0 b0
         primal[10] = 0.0; // spillage h1 b0
-                          // primal[11..13] = diversion (zeros)
+        // primal[11..13] = diversion (zeros)
         primal[13] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
@@ -2668,12 +2660,12 @@ mod tests {
         let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0; // storage h0
-                           // primal[1] = z_inflow h0 (zero)
+        // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
         primal[3] = 0.0; // theta
         primal[4] = 10.0; // turbine h0 b0
         primal[5] = 0.0; // spillage h0 b0
-                         // primal[6] = diversion h0 b0 (zero)
+        // primal[6] = diversion h0 b0 (zero)
         primal[7] = 3.5; // Q_ev — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
@@ -2741,8 +2733,8 @@ mod tests {
         primal[0] = 200.0;
         // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
-                           // primal[3] = theta = 0
-                           // primal[6] = diversion h0 b0 (zero)
+        // primal[3] = theta = 0
+        // primal[6] = diversion h0 b0 (zero)
         primal[7] = 2.0; // Q_ev
         primal[8] = 0.5; // f_evap_plus (under-evaporation -> neg)
         primal[9] = 0.0; // f_evap_minus (over-evaporation -> pos)
@@ -2821,7 +2813,7 @@ mod tests {
 
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
-                      // FPHA generation column 13: objective_coeff=0.01
+        // FPHA generation column 13: objective_coeff=0.01
         obj[13] = 0.01;
 
         let dual = vec![0.0_f64; 2];
@@ -2912,8 +2904,8 @@ mod tests {
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
         obj[13] = 0.01; // FPHA generation cost (scaled)
-                        // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
-                        //                           = 1.0 * 500 + 0.01 * 30 = 500.3
+        // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
+        //                           = 1.0 * 500 + 0.01 * 30 = 500.3
         let objective_val = 500.3_f64;
 
         let dual = vec![0.0_f64; 2];
@@ -2998,7 +2990,7 @@ mod tests {
 
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
-                      // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
+        // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
         obj[13] = 0.01;
 
         // Build col_scale: all 1.0 except column 13 = 2.0.

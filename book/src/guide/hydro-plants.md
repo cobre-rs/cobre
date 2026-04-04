@@ -646,7 +646,7 @@ filling operation is active.
 
 The `penalties` block inside a hydro plant definition overrides the global defaults
 from `penalties.json` for that specific plant. When the block is absent, all penalty
-values fall back to the global defaults. When it is present, it must contain all 11
+values fall back to the global defaults. When it is present, it must contain all penalty
 fields.
 
 Penalty costs are added to the LP objective when soft constraint violations occur.
@@ -665,23 +665,45 @@ solver to avoid infeasible or undesirable operating states.
   "outflow_violation_above_cost": 500.0,
   "generation_violation_below_cost": 1000.0,
   "evaporation_violation_cost": 5000.0,
-  "water_withdrawal_violation_cost": 1000.0
+  "water_withdrawal_violation_cost": 1000.0,
+  "water_withdrawal_violation_pos_cost": 1200.0,
+  "water_withdrawal_violation_neg_cost": 800.0,
+  "evaporation_violation_pos_cost": 5000.0,
+  "evaporation_violation_neg_cost": 5000.0,
+  "inflow_nonnegativity_cost": 1000.0
 }
 ```
 
-| Field                             | Unit   | Description                                                                                                                                                                                        |
-| --------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spillage_cost`                   | $/m³/s | Penalty per m³/s of water spilled. Setting this low (e.g., 0.01) makes spillage the least-cost way to relieve a flood situation. Setting it high penalizes wasted water in water-scarce scenarios. |
-| `diversion_cost`                  | $/m³/s | Penalty per m³/s of diverted flow exceeding the diversion channel capacity.                                                                                                                        |
-| `fpha_turbined_cost`              | $/MWh  | Penalty per MWh of turbined generation in the FPHA approximation. Not used by `constant_productivity`.                                                                                             |
-| `storage_violation_below_cost`    | $/hm³  | Penalty per hm³ of storage below `min_storage_hm3`. Should be set high (thousands) to make violations a last resort.                                                                               |
-| `filling_target_violation_cost`   | $/hm³  | Penalty per hm³ of storage below the filling target. Only active when a `filling` block is present.                                                                                                |
-| `turbined_violation_below_cost`   | $/m³/s | Penalty per m³/s of turbined flow below `min_turbined_m3s`.                                                                                                                                        |
-| `outflow_violation_below_cost`    | $/m³/s | Penalty per m³/s of total outflow below `min_outflow_m3s`. Set high to enforce ecological flow requirements.                                                                                       |
-| `outflow_violation_above_cost`    | $/m³/s | Penalty per m³/s of total outflow above `max_outflow_m3s`. Set high to enforce flood channel capacity limits.                                                                                      |
-| `generation_violation_below_cost` | $/MW   | Penalty per MW of generation below `min_generation_mw`.                                                                                                                                            |
-| `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation. Only active when the `evaporation` block is present.                                                                                           |
-| `water_withdrawal_violation_cost` | $/m³/s | Penalty per m³/s of water withdrawal constraint violation.                                                                                                                                         |
+| Field                                 | Unit   | Description                                                                                                                                                                                        |
+| ------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spillage_cost`                       | $/m³/s | Penalty per m³/s of water spilled. Setting this low (e.g., 0.01) makes spillage the least-cost way to relieve a flood situation. Setting it high penalizes wasted water in water-scarce scenarios. |
+| `diversion_cost`                      | $/m³/s | Penalty per m³/s of diverted flow exceeding the diversion channel capacity.                                                                                                                        |
+| `fpha_turbined_cost`                  | $/MWh  | Penalty per MWh of turbined generation in the FPHA approximation. Not used by `constant_productivity`.                                                                                             |
+| `storage_violation_below_cost`        | $/hm³  | Penalty per hm³ of storage below `min_storage_hm3`. Should be set high (thousands) to make violations a last resort.                                                                               |
+| `filling_target_violation_cost`       | $/hm³  | Penalty per hm³ of storage below the filling target. Only active when a `filling` block is present.                                                                                                |
+| `turbined_violation_below_cost`       | $/m³/s | Penalty per m³/s of turbined flow below `min_turbined_m3s`. Applied per block.                                                                                                                     |
+| `outflow_violation_below_cost`        | $/m³/s | Penalty per m³/s of total outflow below `min_outflow_m3s`. Set high to enforce ecological flow requirements. Applied per block.                                                                    |
+| `outflow_violation_above_cost`        | $/m³/s | Penalty per m³/s of total outflow above `max_outflow_m3s`. Set high to enforce flood channel capacity limits. Applied per block.                                                                   |
+| `generation_violation_below_cost`     | $/MW   | Penalty per MW of generation below `min_generation_mw`. Applied per block.                                                                                                                         |
+| `evaporation_violation_cost`          | $/mm   | Symmetric evaporation violation penalty. Applies to both directions unless overridden by directional fields.                                                                                       |
+| `water_withdrawal_violation_cost`     | $/m³/s | Symmetric water withdrawal violation penalty. Applies to both directions unless overridden by directional fields.                                                                                  |
+| `evaporation_violation_pos_cost`      | $/mm   | Over-evaporation violation penalty. Overrides `evaporation_violation_cost` for the positive direction.                                                                                             |
+| `evaporation_violation_neg_cost`      | $/mm   | Under-evaporation violation penalty. Overrides `evaporation_violation_cost` for the negative direction.                                                                                            |
+| `water_withdrawal_violation_pos_cost` | $/m³/s | Over-withdrawal violation penalty. Overrides `water_withdrawal_violation_cost` for the positive direction.                                                                                         |
+| `water_withdrawal_violation_neg_cost` | $/m³/s | Under-withdrawal violation penalty. Overrides `water_withdrawal_violation_cost` for the negative direction.                                                                                        |
+| `inflow_nonnegativity_cost`           | $/m³/s | Per-plant override for the global inflow non-negativity penalty. Only active when `modeling.inflow_non_negativity.method` is `"penalty"` or `"truncation_with_penalty"`.                           |
+
+The `evaporation_violation_cost` and `water_withdrawal_violation_cost` fields act as
+symmetric defaults: the same penalty applies whether the violation is positive
+(over-evaporation or over-withdrawal) or negative (under-evaporation or
+under-withdrawal). When the directional fields are present
+(`evaporation_violation_pos_cost`, `evaporation_violation_neg_cost`,
+`water_withdrawal_violation_pos_cost`, `water_withdrawal_violation_neg_cost`),
+they override the symmetric default for their respective direction, allowing
+asymmetric penalty weights. The `turbined_violation_below_cost`,
+`outflow_violation_below_cost`, `outflow_violation_above_cost`, and
+`generation_violation_below_cost` penalties are applied independently to each
+dispatch block within a stage.
 
 ### Three-Tier Resolution Cascade
 
@@ -694,7 +716,7 @@ Penalty values are resolved from the most specific to the most general source:
 The `penalties` block on a plant replaces the global default for that plant alone.
 All plants that do not have a `penalties` block use the global values from
 `penalties.json`. The global `penalties.json` file must always be present and must
-contain all 11 hydro penalty fields.
+contain all hydro penalty fields.
 
 ---
 

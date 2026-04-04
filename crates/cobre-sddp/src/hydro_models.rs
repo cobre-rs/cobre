@@ -22,7 +22,7 @@ use std::path::Path;
 
 use cobre_core::{EntityId, System, entities::hydro::HydroGenerationModel};
 use cobre_io::extensions::{
-    FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
+    FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
 };
 
 use crate::SddpError;
@@ -860,7 +860,7 @@ fn fit_planes_for_hydro(
 ) -> Result<FphaFitResult, SddpError> {
     validate_computed_prerequisites(hydro, geometry_map)?;
 
-    // Use the first study stage as representative for FphaConfig lookup.
+    // Use the first study stage as representative for FphaColumnLayout lookup.
     // In the MVP, the fitting result is stage-independent.
     let representative_stage = study_stages.first().ok_or_else(|| {
         SddpError::Validation(format!(
@@ -873,7 +873,7 @@ fn fit_planes_for_hydro(
         .and_then(|c| find_fpha_config_for_stage(c, representative_stage))
         .ok_or_else(|| {
             SddpError::Validation(format!(
-                "hydro {} (id={}) has source: \"computed\" but no FphaConfig \
+                "hydro {} (id={}) has source: \"computed\" but no FphaColumnLayout \
                  was found in hydro_production_models.json",
                 hydro.name, hydro.id.0
             ))
@@ -926,14 +926,14 @@ fn config_uses_computed_fpha(config: &ProductionModelConfig) -> bool {
     }
 }
 
-/// Extract the [`FphaConfig`] that applies to a given stage from a [`ProductionModelConfig`].
+/// Extract the [`FphaColumnLayout`] that applies to a given stage from a [`ProductionModelConfig`].
 ///
 /// Returns `None` when no stage range or season entry covers the stage, or when
 /// the matched entry has no `fpha_config` field.
 fn find_fpha_config_for_stage<'a>(
     config: &'a ProductionModelConfig,
     stage: &cobre_core::temporal::Stage,
-) -> Option<&'a FphaConfig> {
+) -> Option<&'a FphaColumnLayout> {
     match &config.selection_mode {
         SelectionMode::StageRanges { ranges } => {
             for range in ranges {
@@ -1717,7 +1717,7 @@ mod tests {
         },
     };
     use cobre_io::extensions::{
-        FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig,
+        FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig,
         SelectionMode, StageRange,
     };
 
@@ -1830,7 +1830,7 @@ mod tests {
                     start_stage_id: 0,
                     end_stage_id: None,
                     model: "fpha".to_string(),
-                    fpha_config: Some(FphaConfig {
+                    fpha_config: Some(FphaColumnLayout {
                         source: "precomputed".to_string(),
                         volume_discretization_points: None,
                         turbine_discretization_points: None,
@@ -1852,7 +1852,7 @@ mod tests {
                     start_stage_id: 0,
                     end_stage_id: None,
                     model: "fpha".to_string(),
-                    fpha_config: Some(FphaConfig {
+                    fpha_config: Some(FphaColumnLayout {
                         source: "computed".to_string(),
                         volume_discretization_points: None,
                         turbine_discretization_points: None,
@@ -2040,7 +2040,7 @@ mod tests {
         );
     }
 
-    /// find_fpha_config_for_stage: returns Some(&FphaConfig) when stage is in the range.
+    /// find_fpha_config_for_stage: returns Some(&FphaColumnLayout) when stage is in the range.
     #[test]
     fn find_fpha_config_for_stage_returns_config_in_range() {
         let config = computed_fpha_config(0);
@@ -2049,7 +2049,7 @@ mod tests {
         let result = find_fpha_config_for_stage(&config, &stage);
         assert!(
             result.is_some(),
-            "expected Some(FphaConfig) for stage 5, got None"
+            "expected Some(FphaColumnLayout) for stage 5, got None"
         );
         assert_eq!(
             result.expect("just checked is_some").source,
@@ -2069,7 +2069,7 @@ mod tests {
                     start_stage_id: 5,
                     end_stage_id: Some(10),
                     model: "fpha".to_string(),
-                    fpha_config: Some(FphaConfig {
+                    fpha_config: Some(FphaColumnLayout {
                         source: "computed".to_string(),
                         volume_discretization_points: None,
                         turbine_discretization_points: None,
@@ -4302,7 +4302,7 @@ mod tests {
                 .expect("fit_planes_for_hydro must succeed for valid Sobradinho-style input");
         let planes = &fit_result.planes;
 
-        // Plane count must be within the expected range for default FphaConfig.
+        // Plane count must be within the expected range for default FphaColumnLayout.
         assert!(
             (3..=10).contains(&planes.len()),
             "expected 3–10 planes, got {}",

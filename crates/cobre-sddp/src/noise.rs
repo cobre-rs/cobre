@@ -337,7 +337,7 @@ mod tests {
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
-        LoadModel,
+        LoadModel, SamplingScheme,
     };
     use cobre_core::temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -537,7 +537,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// One-hydro, one-load-bus, n-stage `StochasticContext`.
@@ -672,7 +672,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── transform_inflow_noise: None method ──────────────────────────────────
@@ -714,6 +714,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 
@@ -771,6 +773,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 
@@ -828,6 +832,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 

@@ -505,7 +505,7 @@ mod tests {
             modeling: ModelingConfig::default(),
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: Some(10),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 100 }]),
                 stopping_mode: "any".to_string(),

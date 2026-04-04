@@ -41,6 +41,7 @@
 //!     cut_selection: None,
 //!     shutdown_flag: None,
 //!     start_iteration: 0,
+//!     export_states: false,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -77,6 +78,7 @@ use crate::cut_selection::CutSelectionStrategy;
 ///     cut_selection: None,
 ///     shutdown_flag: None,
 ///     start_iteration: 0,
+///     export_states: false,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -164,6 +166,14 @@ pub struct TrainingConfig {
     /// `start_iteration + 1` and runs up to `max_iterations`.
     /// Default: `0` (fresh training).
     pub start_iteration: u64,
+
+    /// Whether to allocate the visited-states archive for state export.
+    ///
+    /// When `true`, the archive is allocated so forward-pass trial points are
+    /// recorded for checkpoint persistence. When `false`, the archive is only
+    /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
+    /// Default: `false`.
+    pub export_states: bool,
 }
 
 #[cfg(test)]
@@ -187,6 +197,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -206,6 +217,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -221,6 +233,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -239,6 +252,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -259,6 +273,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         assert!(config.event_sender.is_none());
     }
@@ -278,6 +293,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         assert!(config.event_sender.is_some());
@@ -316,6 +332,7 @@ mod tests {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

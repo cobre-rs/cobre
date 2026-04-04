@@ -40,14 +40,28 @@ use crate::{SddpError, TrajectoryRecord};
 /// happen once in [`ExchangeBuffers::new`] and are reused across stages and
 /// iterations, keeping the per-stage exchange allocation-free.
 ///
+/// ## Padded layout and real counts
+///
+/// When `total_forward_passes` does not divide evenly among ranks, some ranks
+/// hold fewer actual forward passes than `local_count` (the max). The receive
+/// buffer is always sized uniformly to `local_count * num_ranks * n_state` so
+/// that `allgatherv` uses identical counts and displacements per rank. Ranks
+/// with fewer actual forward passes zero-pad their trailing send-buffer slots.
+///
+/// The true total forward pass count is tracked in `real_total` and exposed
+/// via [`real_total_scenarios`](Self::real_total_scenarios). Use
+/// [`pack_real_states_into`](Self::pack_real_states_into) to extract only the
+/// non-padded state vectors from the receive buffer.
+///
 /// # Buffer layout
 ///
-/// | Buffer      | Length                           | Description                                 |
-/// |-------------|----------------------------------|---------------------------------------------|
-/// | `send_buf`  | `local_count * n_state`          | This rank's state vectors, packed contiguously |
-/// | `recv_buf`  | `local_count * num_ranks * n_state` | All ranks' state vectors in rank-major order |
-/// | `counts`    | `num_ranks`                      | Each entry = `local_count * n_state`        |
-/// | `displs`    | `num_ranks`                      | Entry `r` = `r * local_count * n_state`     |
+/// | Buffer         | Length                              | Description                                  |
+/// |----------------|-------------------------------------|----------------------------------------------|
+/// | `send_buf`     | `local_count * n_state`             | This rank's state vectors, packed contiguously |
+/// | `recv_buf`     | `local_count * num_ranks * n_state` | All ranks' state vectors in rank-major order  |
+/// | `counts`       | `num_ranks`                         | Each entry = `local_count * n_state`         |
+/// | `displs`       | `num_ranks`                         | Entry `r` = `r * local_count * n_state`      |
+/// | `actual_counts`| `num_ranks`                         | Actual forward passes per rank (≤ `local_count`) |
 ///
 /// # Examples
 ///
@@ -69,6 +83,7 @@ use crate::{SddpError, TrajectoryRecord};
 ///
 /// assert_eq!(bufs.gathered_states(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 /// assert_eq!(bufs.total_scenarios(), 3);
+/// assert_eq!(bufs.real_total_scenarios(), 3);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExchangeBuffers {
@@ -98,11 +113,22 @@ pub struct ExchangeBuffers {
     /// Length of each state vector.
     n_state: usize,
 
-    /// Number of local scenarios (forward passes per rank).
+    /// Number of local scenarios (forward passes per rank, padded to the max).
     local_count: usize,
 
     /// Total number of MPI ranks.
     num_ranks: usize,
+
+    /// Actual forward pass count per rank (may be less than `local_count` for
+    /// ranks that received fewer passes in a non-divisible distribution).
+    ///
+    /// Length `num_ranks`. Sum equals `real_total`.
+    actual_counts: Vec<usize>,
+
+    /// True total forward passes across all ranks (sum of `actual_counts`).
+    ///
+    /// Equal to `local_count * num_ranks` when the distribution is even.
+    real_total: usize,
 }
 
 impl ExchangeBuffers {
@@ -111,16 +137,75 @@ impl ExchangeBuffers {
     /// All allocations occur here. Subsequent calls to [`exchange`](Self::exchange)
     /// reuse these buffers without allocating.
     ///
+    /// When `total_forward_passes` divides evenly among ranks, this is
+    /// equivalent to calling [`with_actual_counts`](Self::with_actual_counts)
+    /// with uniform `actual_per_rank`. For uneven distributions, prefer
+    /// `with_actual_counts` so that [`real_total_scenarios`](Self::real_total_scenarios)
+    /// and [`pack_real_states_into`](Self::pack_real_states_into) return
+    /// correct results.
+    ///
     /// # Arguments
     ///
     /// - `n_state` — length of each state vector (`N * (1 + L)` from the
     ///   stage indexer).
-    /// - `local_count` — number of local scenarios (`config.forward_passes`).
+    /// - `local_count` — number of local scenarios per rank (the maximum across
+    ///   all ranks when the distribution is uneven).
     /// - `num_ranks` — total number of MPI ranks (`comm.size()`).
     #[must_use]
     pub fn new(n_state: usize, local_count: usize, num_ranks: usize) -> Self {
-        let per_rank = local_count * n_state;
+        let actual_per_rank = vec![local_count; num_ranks];
+        Self::with_actual_counts(n_state, local_count, num_ranks, &actual_per_rank)
+    }
+
+    /// Construct pre-allocated exchange buffers with per-rank actual forward
+    /// pass counts.
+    ///
+    /// Use this constructor when the total number of forward passes does not
+    /// divide evenly among ranks so that
+    /// [`real_total_scenarios`](Self::real_total_scenarios) and
+    /// [`pack_real_states_into`](Self::pack_real_states_into) return correct
+    /// results.
+    ///
+    /// The `allgatherv` buffer sizing still uses `max_local_count` uniformly
+    /// for all ranks (the padded layout). Only the archival helpers use
+    /// `actual_per_rank`.
+    ///
+    /// # Arguments
+    ///
+    /// - `n_state` — length of each state vector.
+    /// - `max_local_count` — maximum forward passes on any single rank (used
+    ///   for uniform buffer sizing).
+    /// - `num_ranks` — total number of MPI ranks.
+    /// - `actual_per_rank` — slice of length `num_ranks` with the actual
+    ///   forward pass count for each rank. All entries must be
+    ///   `≤ max_local_count`.
+    ///
+    /// # Panics (debug builds only)
+    ///
+    /// Asserts that `actual_per_rank.len() == num_ranks` and that each entry
+    /// is `≤ max_local_count`.
+    #[must_use]
+    pub fn with_actual_counts(
+        n_state: usize,
+        max_local_count: usize,
+        num_ranks: usize,
+        actual_per_rank: &[usize],
+    ) -> Self {
+        debug_assert_eq!(
+            actual_per_rank.len(),
+            num_ranks,
+            "actual_per_rank.len() {} != num_ranks {}",
+            actual_per_rank.len(),
+            num_ranks,
+        );
+        debug_assert!(
+            actual_per_rank.iter().all(|&c| c <= max_local_count),
+            "all actual_per_rank entries must be <= max_local_count {max_local_count}",
+        );
+
+        let per_rank = max_local_count * n_state;
         let total = per_rank * num_ranks;
+        let real_total: usize = actual_per_rank.iter().sum();
 
         let counts: Vec<usize> = vec![per_rank; num_ranks];
         let displs: Vec<usize> = (0..num_ranks).map(|r| r * per_rank).collect();
@@ -131,8 +216,10 @@ impl ExchangeBuffers {
             counts,
             displs,
             n_state,
-            local_count,
+            local_count: max_local_count,
             num_ranks,
+            actual_counts: actual_per_rank.to_vec(),
+            real_total,
         }
     }
 
@@ -248,10 +335,49 @@ impl ExchangeBuffers {
 
     /// Return the total number of scenarios gathered from all ranks.
     ///
-    /// Equal to `local_count * num_ranks`.
+    /// Equal to `local_count * num_ranks`. This is the padded buffer size and
+    /// may exceed the true forward pass count when the distribution is uneven.
+    /// Use [`real_total_scenarios`](Self::real_total_scenarios) to obtain the
+    /// true count.
     #[must_use]
     pub fn total_scenarios(&self) -> usize {
         self.local_count * self.num_ranks
+    }
+
+    /// Return the true total number of forward passes across all ranks.
+    ///
+    /// When the total forward passes distribute evenly across ranks this equals
+    /// [`total_scenarios`](Self::total_scenarios). When some ranks have fewer
+    /// actual forward passes (non-divisible distribution), this returns the
+    /// sum of actual counts, which is less than `total_scenarios`.
+    #[must_use]
+    pub fn real_total_scenarios(&self) -> usize {
+        self.real_total
+    }
+
+    /// Copy only the real (non-padded) state vectors from the receive buffer
+    /// into `buf`.
+    ///
+    /// After a successful [`exchange`](Self::exchange), the receive buffer
+    /// contains `local_count * num_ranks` state slots in rank-major order.
+    /// Ranks with fewer actual forward passes have zero-padded trailing slots.
+    /// This method copies only the `actual_counts[r]` real slots for each rank
+    /// `r` into `buf`, producing a compact slice of
+    /// [`real_total_scenarios`](Self::real_total_scenarios) state vectors.
+    ///
+    /// The output length equals `real_total_scenarios() * n_state`.
+    ///
+    /// # Arguments
+    ///
+    /// - `buf` — destination buffer. It is cleared and then filled with the
+    ///   real state data. Capacity is preserved between calls.
+    pub fn pack_real_states_into(&self, buf: &mut Vec<f64>) {
+        buf.clear();
+        for r in 0..self.num_ranks {
+            let base = r * self.local_count * self.n_state;
+            let real_len = self.actual_counts[r] * self.n_state;
+            buf.extend_from_slice(&self.recv_buf[base..base + real_len]);
+        }
     }
 }
 
@@ -497,5 +623,107 @@ mod tests {
             matches!(result, Err(SddpError::Communication(_))),
             "expected SddpError::Communication, got: {result:?}",
         );
+    }
+
+    // ── with_actual_counts / real_total_scenarios / pack_real_states_into ─────
+
+    #[test]
+    fn real_total_scenarios_uneven_distribution() {
+        // AC: total_forward_passes=5, num_ranks=2, actual_per_rank=[3,2].
+        // real_total_scenarios() must return 5, not 6.
+        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 2, &[3, 2]);
+        assert_eq!(bufs.real_total_scenarios(), 5);
+        assert_eq!(bufs.total_scenarios(), 6); // padded buffer size unchanged
+    }
+
+    #[test]
+    fn real_total_scenarios_even_distribution() {
+        // AC: even split, real_total_scenarios() == total_scenarios().
+        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 2, &[3, 3]);
+        assert_eq!(bufs.real_total_scenarios(), 6);
+        assert_eq!(bufs.total_scenarios(), 6);
+    }
+
+    #[test]
+    fn real_total_scenarios_single_rank() {
+        // AC: num_ranks==1, real_total_scenarios() == total_scenarios().
+        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 1, &[3]);
+        assert_eq!(bufs.real_total_scenarios(), 3);
+        assert_eq!(bufs.total_scenarios(), 3);
+    }
+
+    #[test]
+    #[allow(clippy::erasing_op, clippy::identity_op)]
+    fn pack_real_states_into_excludes_padding() {
+        // AC: max_local_count=3, num_ranks=2, actual_per_rank=[3,2], n_state=2.
+        // Rank 0 has 3 real states, rank 1 has 2 real states + 1 zero-padded slot.
+        // pack_real_states_into must return exactly 5 state vectors (10 f64 values).
+        let n_state = 2;
+        let max_local = 3;
+        let num_ranks = 2;
+        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, max_local, num_ranks, &[3, 2]);
+
+        // Manually fill recv_buf:
+        // rank 0: slots [10,11], [20,21], [30,31]   (3 real)
+        // rank 1: slots [40,41], [50,51], [0, 0]    (2 real + 1 padding)
+        let rank0_base = 0 * max_local * n_state; // 0
+        let rank1_base = 1 * max_local * n_state; // 6
+        bufs.recv_buf[rank0_base..rank0_base + 2].copy_from_slice(&[10.0, 11.0]);
+        bufs.recv_buf[rank0_base + 2..rank0_base + 4].copy_from_slice(&[20.0, 21.0]);
+        bufs.recv_buf[rank0_base + 4..rank0_base + 6].copy_from_slice(&[30.0, 31.0]);
+        bufs.recv_buf[rank1_base..rank1_base + 2].copy_from_slice(&[40.0, 41.0]);
+        bufs.recv_buf[rank1_base + 2..rank1_base + 4].copy_from_slice(&[50.0, 51.0]);
+        // padding slot stays zero: recv_buf[rank1_base+4..rank1_base+6] = [0.0, 0.0]
+
+        let mut out = Vec::new();
+        bufs.pack_real_states_into(&mut out);
+
+        // Expect 5 vectors × 2 elements = 10 values, zero-padded slot excluded.
+        assert_eq!(
+            out.len(),
+            10,
+            "expected 10 f64 values (5 state vectors × 2)"
+        );
+        assert_eq!(
+            out,
+            vec![10.0, 11.0, 20.0, 21.0, 30.0, 31.0, 40.0, 41.0, 50.0, 51.0]
+        );
+    }
+
+    #[test]
+    fn pack_real_states_into_even_distribution_matches_gathered_states() {
+        // When distribution is even, pack_real_states_into must return the
+        // same data as gathered_states (in the same order).
+        use cobre_comm::LocalBackend;
+
+        let mut bufs = ExchangeBuffers::new(2, 3, 1);
+        let records = vec![
+            make_record(vec![1.0, 2.0]),
+            make_record(vec![3.0, 4.0]),
+            make_record(vec![5.0, 6.0]),
+        ];
+        let comm = LocalBackend;
+        bufs.exchange(&records, 0, 1, &comm).unwrap();
+
+        let mut packed = Vec::new();
+        bufs.pack_real_states_into(&mut packed);
+        assert_eq!(packed, bufs.gathered_states());
+    }
+
+    #[test]
+    fn pack_real_states_into_reuses_buffer_capacity() {
+        // Calling pack_real_states_into twice must clear and refill the buffer
+        // without changing its capacity (capacity is preserved after clear).
+        let n_state = 2;
+        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, 3, 2, &[3, 2]);
+        // Fill all recv_buf slots with 1.0 for simplicity.
+        bufs.recv_buf.fill(1.0);
+
+        let mut out = Vec::with_capacity(20);
+        bufs.pack_real_states_into(&mut out);
+        assert_eq!(out.len(), 10); // 5 real states × 2
+
+        bufs.pack_real_states_into(&mut out);
+        assert_eq!(out.len(), 10); // still 10 after second call (clear + refill)
     }
 }

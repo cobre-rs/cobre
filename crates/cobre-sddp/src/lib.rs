@@ -21,7 +21,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 // Relax strict production lints for test builds (normal in test contexts).
 #![cfg_attr(
@@ -115,7 +115,11 @@ pub use simulation::{
     SimulationThermalResult, StageSummaryStats, accumulate_category_costs, aggregate_simulation,
     assign_scenarios, extract_stage_result, simulate,
 };
-pub use solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics};
+pub use solver_stats::{
+    SCENARIO_STATS_STRIDE, SOLVER_STATS_DELTA_SCALAR_FIELDS, SolverStatsDelta, SolverStatsEntry,
+    aggregate_solver_statistics, pack_delta_scalars, pack_scenario_stats, unpack_delta_scalars,
+    unpack_scenario_stats,
+};
 pub use state_exchange::ExchangeBuffers;
 pub use stochastic_summary::{
     ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,

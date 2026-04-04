@@ -262,7 +262,10 @@ impl HighsSolver {
             num_cols: 0,
             num_rows: 0,
             has_model: false,
-            stats: SolverStatistics::default(),
+            stats: SolverStatistics {
+                retry_level_histogram: vec![0u64; 12],
+                ..SolverStatistics::default()
+            },
         })
     }
 

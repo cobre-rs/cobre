@@ -134,7 +134,7 @@ cobre/
 │   ├── cobre-io/           # JSON/Parquet input, FlatBuffers/Parquet output
 │   ├── cobre-stochastic/   # PAR(p) models, scenario generation
 │   ├── cobre-solver/       # LP solver abstraction (HiGHS backend)
-│   ├── cobre-comm/         # Communication abstraction (MPI, TCP, shm, local)
+│   ├── cobre-comm/         # Communication abstraction (MPI, local)
 │   ├── cobre-sddp/         # SDDP training loop, simulation, cut management
 │   ├── cobre-cli/          # Binary: run/validate/report/init/schema/summary/version
 │   ├── cobre-mcp/          # Binary: MCP server for AI agent integration
@@ -219,7 +219,16 @@ chore(ferrompi): update to v0.3.0
 
 ### Improving Documentation
 
-Documentation improvements are always welcome. The Rust API docs live inline in source code (rustdoc). The user guide and specification corpus live in [cobre-docs](https://github.com/cobre-rs/cobre-docs).
+Documentation improvements are always welcome. The Rust API docs live inline
+in source code (rustdoc). The user-facing book lives in this repository under
+`book/` — preview it locally with:
+
+```bash
+mdbook serve book --open
+```
+
+The methodology specification corpus lives in the separate
+[cobre-docs](https://github.com/cobre-rs/cobre-docs) repository.
 
 ## Coding Guidelines
 
@@ -278,7 +287,7 @@ See `.claude/architecture-rules.md` for the full Python parity checklist.
 
 #### cobre-comm
 
-- The `Communicator` trait must remain implementable by all four backends (MPI, TCP, shared-memory, local).
+- The `Communicator` trait must remain implementable by both backends (MPI and local).
 - Local backend has zero overhead — do not add indirection that penalizes single-process users.
 - MPI code requires an MPI installation to test; gate MPI tests appropriately.
 
@@ -333,7 +342,13 @@ Before tagging a new release:
    - Version number matches `Cargo.toml`
    - Test count is current (`cargo test --workspace --all-features 2>&1 | grep "test result:" | awk '{sum += $4} END {print sum}'`)
    - Feature list and known gaps are accurate
-3. Run `python3 scripts/check_claudemd_version.py` to verify version match
+3. Run quality checks:
+   ```bash
+   python3 scripts/check_claudemd_version.py
+   python3 scripts/check_book_version.py
+   python3 scripts/check_python_parity.py --max 0
+   python3 scripts/check_suppressions.py --max 10
+   ```
 4. Run `cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings`
 5. Tag: `git tag v<version>`
 

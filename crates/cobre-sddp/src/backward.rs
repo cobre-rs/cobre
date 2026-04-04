@@ -75,7 +75,7 @@
 
 use std::time::Instant;
 
-use cobre_comm::Communicator;
+use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -231,6 +231,27 @@ pub struct BackwardPassSpec<'a> {
     /// so that the domination test has access to all forward-pass trial points.
     /// Pass `None` when using `Level1`, `Lml1`, or no cut selection.
     pub visited_archive: Option<&'a mut crate::visited_states::VisitedStatesArchive>,
+
+    /// Pre-allocated buffer for per-slot binding increment aggregation.
+    ///
+    /// Reused across stages to avoid per-stage allocation. Sized to
+    /// `fcf.pools[successor].metadata.len()` after each `sync_packed_cuts`
+    /// call. Used for the `allreduce(Sum)` that synchronises cut binding
+    /// metadata across MPI ranks so that `active_count` and
+    /// `last_active_iter` reflect trial points from ALL ranks, not just this
+    /// rank's local forward passes.
+    pub metadata_sync_buf: &'a mut Vec<u64>,
+
+    /// Pre-allocated buffer for packing real (non-padded) gathered state
+    /// vectors when archiving visited states for dominated cut selection.
+    ///
+    /// When `visited_archive` is `Some`, this buffer is filled by
+    /// [`ExchangeBuffers::pack_real_states_into`] before each
+    /// `archive_gathered_states` call so that zero-padded trailing entries
+    /// (from ranks with fewer forward passes in an uneven distribution) are
+    /// never archived. Pass `&mut Vec::new()` when `visited_archive` is
+    /// `None`.
+    pub real_states_buf: &'a mut Vec<f64>,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -654,9 +675,13 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         }
 
         // Archive gathered states for dominated cut selection (if active).
+        // Use pack_real_states_into so that zero-padded trailing entries from
+        // ranks with fewer forward passes in an uneven distribution are never
+        // archived (ticket-003 fix).
         if let Some(ref mut archive) = spec.visited_archive {
-            let total_fwd = spec.exchange.total_scenarios();
-            archive.archive_gathered_states(t, spec.exchange.gathered_states(), total_fwd);
+            let total_fwd = spec.exchange.real_total_scenarios();
+            spec.exchange.pack_real_states_into(spec.real_states_buf);
+            archive.archive_gathered_states(t, spec.real_states_buf, total_fwd);
         }
 
         let successor = t + 1;
@@ -730,10 +755,6 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 &cut.coefficients,
             );
             cuts_generated += 1;
-            for &(slot, increment) in &cut.binding_increments {
-                fcf.pools[successor].metadata[slot].active_count += increment;
-                fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
-            }
         }
 
         // Per-stage cut sync: allgatherv distributes this stage's local cuts
@@ -744,6 +765,44 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_possible_truncation)]
         {
             cut_sync_ms += sync_start.elapsed().as_millis() as u64;
+        }
+
+        // Metadata sync: allreduce(Sum) the per-slot binding increment counts
+        // so that `active_count` and `last_active_iter` reflect trial points
+        // from ALL ranks, not just this rank's local forward passes.
+        //
+        // The pool size is read AFTER sync_packed_cuts so that remote cuts
+        // added by the allgatherv are included in the slot range.
+        let pool_size = fcf.pools[successor].metadata.len();
+        if pool_size > 0 {
+            // Build the local increment buffer from this rank's staged cuts.
+            spec.metadata_sync_buf.clear();
+            spec.metadata_sync_buf.resize(pool_size, 0u64);
+            for cut in &staged_cuts_buf {
+                for &(slot, increment) in &cut.binding_increments {
+                    spec.metadata_sync_buf[slot] += increment;
+                }
+            }
+
+            // Allreduce(Sum): every rank contributes its local increments and
+            // receives the global sum. For a single rank (LocalBackend) this
+            // is an identity copy — no behavior change.
+            let mut global_increments = vec![0u64; pool_size];
+            comm.allreduce(
+                spec.metadata_sync_buf,
+                &mut global_increments,
+                ReduceOp::Sum,
+            )
+            .map_err(SddpError::from)?;
+
+            // Apply global increments: slots with any increment from any rank
+            // have their active_count increased and last_active_iter updated.
+            for (slot, &inc) in global_increments.iter().enumerate() {
+                if inc > 0 {
+                    fcf.pools[successor].metadata[slot].active_count += inc;
+                    fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
+                }
+            }
         }
 
         // Snapshot pool stats after this stage's solves and compute delta.
@@ -791,6 +850,8 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
+    use cobre_core::scenario::SamplingScheme;
+
     use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
@@ -831,11 +892,12 @@ mod tests {
 
         fn allreduce<T: CommData>(
             &self,
-            _send: &[T],
-            _recv: &mut [T],
+            send: &[T],
+            recv: &mut [T],
             _op: ReduceOp,
         ) -> Result<(), CommError> {
-            unreachable!("StubComm allreduce not used in backward pass tests")
+            recv[..send.len()].copy_from_slice(send);
+            Ok(())
         }
 
         fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
@@ -868,6 +930,10 @@ mod tests {
         current_num_rows: usize,
         /// Number of times `solve_with_basis` was called.
         warm_start_calls: usize,
+        /// Dual padding value for rows beyond the base template (cuts).
+        /// Defaults to 0.0 (cuts not binding). Set to a positive value
+        /// to make all cuts appear binding in tests.
+        cut_dual_padding: f64,
         buf_primal: Vec<f64>,
         buf_dual: Vec<f64>,
         buf_reduced_costs: Vec<f64>,
@@ -885,6 +951,7 @@ mod tests {
                 call_count: 0,
                 current_num_rows: base_rows,
                 warm_start_calls: 0,
+                cut_dual_padding: 0.0,
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
@@ -902,10 +969,19 @@ mod tests {
                 call_count: 0,
                 current_num_rows: base_rows,
                 warm_start_calls: 0,
+                cut_dual_padding: 0.0,
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
             }
+        }
+
+        /// Like `always_ok` but added cut rows return positive duals,
+        /// making all existing cuts appear binding in subsequent solves.
+        fn always_ok_with_binding_cuts(solution: LpSolution) -> Self {
+            let mut s = Self::always_ok(solution);
+            s.cut_dual_padding = 1.0;
+            s
         }
     }
 
@@ -930,7 +1006,8 @@ mod tests {
             // Fill internal buffers, resizing dual to match current LP row count.
             self.buf_primal.clone_from(&self.solution.primal);
             self.buf_dual.clone_from(&self.solution.dual);
-            self.buf_dual.resize(self.current_num_rows, 0.0);
+            self.buf_dual
+                .resize(self.current_num_rows, self.cut_dual_padding);
             self.buf_reduced_costs
                 .clone_from(&self.solution.reduced_costs);
             Ok(cobre_solver::SolutionView {
@@ -1212,7 +1289,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────
@@ -1337,6 +1414,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1350,6 +1429,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1417,6 +1498,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1430,6 +1513,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1497,6 +1582,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1510,6 +1597,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1573,6 +1662,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1586,6 +1677,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1649,6 +1742,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1662,6 +1757,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1723,6 +1820,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1736,6 +1835,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         );
@@ -1841,6 +1942,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1854,6 +1957,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -1937,6 +2042,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1950,6 +2057,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2038,6 +2147,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2051,6 +2162,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2126,6 +2239,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2139,6 +2254,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2223,6 +2340,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2236,6 +2355,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2315,6 +2436,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2328,6 +2451,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2401,6 +2526,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2414,6 +2541,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2494,6 +2623,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2507,6 +2638,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         );
@@ -2614,6 +2747,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2627,6 +2762,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2672,6 +2809,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2685,6 +2824,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -2884,7 +3025,7 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
     /// AC: Given a backward pass with 1 stochastic load bus and opening noise
@@ -3005,6 +3146,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3018,6 +3161,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3138,6 +3283,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3151,6 +3298,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3276,6 +3425,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3289,6 +3440,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3379,6 +3532,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3392,6 +3547,8 @@ mod tests {
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
             },
             &comm,
         )
@@ -3421,5 +3578,128 @@ mod tests {
             "cut_sync_time_ms should be reasonable, got {}",
             result.cut_sync_time_ms
         );
+    }
+
+    /// Acceptance criterion C4 for ticket-002: within a single backward
+    /// iteration on a 3-stage system with `LocalBackend` (single-rank),
+    /// cuts generated at stage t=1 are visible at stage t=0 and appear
+    /// binding (mock returns positive cut duals). The metadata sync
+    /// correctly accumulates `active_count` and sets `last_active_iter`.
+    ///
+    /// Uses `MockSolver::always_ok_with_binding_cuts` so that cut rows
+    /// return positive duals, making them appear binding when evaluated.
+    #[test]
+    fn metadata_sync_updates_active_count_and_last_active_iter() {
+        use cobre_comm::LocalBackend;
+
+        // 3-stage system: backward loop processes t=1 then t=0.
+        // At t=1: generates cuts into pool[1], successor pool[2] is empty.
+        // At t=0: generates cuts into pool[0], successor pool[1] has cuts
+        //         from t=1. Mock duals make those cuts appear binding.
+        let n_stages = 3_usize;
+        let n_openings = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+
+        let n_state = indexer.n_state;
+        let forward_passes = 3_u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let solution = solution_1_0(100.0, -5.0);
+        let solver = MockSolver::always_ok_with_binding_cuts(solution);
+        let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+
+        let mut csb = CutSyncBuffers::new(n_state, forward_passes as usize, 1);
+
+        // Run a single backward iteration. The backward loop visits t=1
+        // (cuts go to pool[1]), then t=0 (cuts go to pool[0], binding
+        // checked against pool[1]).
+        let result = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+            },
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 1,
+                local_work: exchange.local_count(),
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+            },
+            &comm,
+        )
+        .unwrap();
+
+        // 3 stages × (n_stages-1=2 non-terminal) × 3 trial points = 6 cuts.
+        assert_eq!(result.cuts_generated, 6);
+
+        // Pool[1] received 3 cuts from t=1 backward pass.
+        // Slot formula: warm_start(0) + iteration(1) * fwd_passes(3) + fpi
+        // → slots 3, 4, 5. Populated count = 6 (high-water mark).
+        assert_eq!(fcf.pools[1].populated_count, 6);
+
+        // At t=0, the 3 cuts in pool[1] (slots 3,4,5) were evaluated for
+        // binding. The mock solver returns positive duals (cut_dual_padding
+        // = 1.0) for all cut rows. Each trial point has n_openings=2
+        // openings, and the binding check runs per opening. So each slot
+        // gets 3 trial points × 2 openings = 6 increments.
+        for slot in 3..6 {
+            assert!(
+                fcf.pools[1].metadata[slot].active_count > 0,
+                "slot {slot} active_count should be > 0 (cuts were binding)"
+            );
+            assert_eq!(
+                fcf.pools[1].metadata[slot].active_count, 6,
+                "slot {slot} active_count should be 6 (3 trial points × 2 openings)"
+            );
+            assert_eq!(
+                fcf.pools[1].metadata[slot].last_active_iter, 1,
+                "slot {slot} last_active_iter should be 1 (current iteration)"
+            );
+        }
+
+        // Pool[2] (terminal successor) received no cuts and no binding
+        // was checked against it — metadata should be at defaults.
+        assert_eq!(fcf.pools[2].populated_count, 0);
     }
 }

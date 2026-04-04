@@ -27,7 +27,7 @@ use crate::output::schemas::{
     buses_schema, contracts_schema, convergence_schema, costs_schema, cut_selection_schema,
     exchanges_schema, generic_violations_schema, hydros_schema, inflow_lags_schema,
     iteration_timing_schema, non_controllables_schema, pumping_stations_schema, rank_timing_schema,
-    thermals_schema,
+    retry_histogram_schema, solver_iterations_schema, thermals_schema,
 };
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
@@ -285,6 +285,8 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
         ("iteration_timing", iteration_timing_schema()),
         ("rank_timing", rank_timing_schema()),
         ("cut_selection", cut_selection_schema()),
+        ("solver_iterations", solver_iterations_schema()),
+        ("retry_histogram", retry_histogram_schema()),
     ];
 
     for (schema_name, schema) in schemas {
@@ -428,7 +430,13 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "forward_time_ms"
         | "backward_time_ms"
         | "communication_time_ms"
-        | "idle_time_ms" => return "ms",
+        | "idle_time_ms"
+        | "solve_time_ms"
+        | "load_model_time_ms"
+        | "add_rows_time_ms"
+        | "set_bounds_time_ms"
+        | "basis_set_time_ms"
+        | "selection_time_ms" => return "ms",
         _ => {}
     }
     // File-specific columns that need special handling.
@@ -625,6 +633,32 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("cut_selection", "cuts_active_before") => "Active cuts before selection ran",
         ("cut_selection", "cuts_deactivated") => "Cuts deactivated by selection",
         ("cut_selection", "cuts_active_after") => "Active cuts after selection",
+        ("cut_selection", "selection_time_ms") => "Wall-clock time for selection at this stage",
+        // ── solver_iterations ─────────────────────────────────────────────
+        ("solver_iterations", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
+        ("solver_iterations", "phase") => {
+            "Solver phase (forward, backward, lower_bound, simulation)"
+        }
+        ("solver_iterations", "stage") => "Stage index (-1 for non-per-stage phases)",
+        ("solver_iterations", "lp_solves") => "Number of LP solves",
+        ("solver_iterations", "lp_successes") => "Solves that returned optimal",
+        ("solver_iterations", "lp_retries") => "Solves requiring retry escalation",
+        ("solver_iterations", "lp_failures") => "Solves that exhausted all retry levels",
+        ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
+        ("solver_iterations", "basis_offered") => "Number of solve_with_basis calls",
+        ("solver_iterations", "basis_rejections") => "Times the warm-start basis was rejected",
+        ("solver_iterations", "simplex_iterations") => "Total simplex iterations",
+        ("solver_iterations", "solve_time_ms") => "Cumulative solve wall-clock time",
+        ("solver_iterations", "load_model_time_ms") => "Cumulative load_model call time",
+        ("solver_iterations", "add_rows_time_ms") => "Cumulative add_rows call time",
+        ("solver_iterations", "set_bounds_time_ms") => "Cumulative set_bounds call time",
+        ("solver_iterations", "basis_set_time_ms") => "Cumulative set_basis call time",
+        // ── retry_histogram ───────────────────────────────────────────────
+        ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
+        ("retry_histogram", "phase") => "Solver phase (forward, backward, lower_bound, simulation)",
+        ("retry_histogram", "stage") => "Stage index (-1 for non-per-stage phases)",
+        ("retry_histogram", "retry_level") => "Retry escalation level (0-based)",
+        ("retry_histogram", "count") => "Number of solves recovered at this level",
         _ => "",
     }
 }
@@ -1376,8 +1410,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 164,
-            "variables.csv must have exactly 164 data rows (one per column across all 14 schemas)"
+            row_count, 186,
+            "variables.csv must have exactly 186 data rows (one per column across all 16 schemas)"
         );
     }
 

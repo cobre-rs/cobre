@@ -27,18 +27,17 @@ system = cobre.io.load_case("path/to/case")
 print(f"System: {system.n_buses} buses, {system.n_hydros} hydros, {system.n_thermals} thermals")
 
 # Run training + simulation
-cobre.run.run("path/to/case", output_dir="output/")
+result = cobre.run.run("path/to/case", output_dir="output/")
+print(f"Converged: {result['converged']}, LB: {result['lower_bound']:.2f}")
 
-# Inspect convergence and simulation results
 convergence = cobre.results.load_convergence("output/")
-print(f"Converged after {len(convergence)} iterations")
+print(f"Iterations: {len(convergence)}")
 
 simulation = cobre.results.load_simulation("output/")
-print(f"Stages: {simulation.n_stages}, Scenarios: {simulation.n_scenarios}")
+print(f"Cost records: {len(simulation['costs'])}")
 
-# Read the saved policy (FlatBuffers FCF checkpoint)
-policy = cobre.results.load_policy("output/policy.fcf")
-print(f"Policy cuts: {policy.n_cuts}")
+policy = cobre.results.load_policy("output/")
+print(f"Iterations completed: {policy['metadata']['completed_iterations']}")
 ```
 
 ## Modules

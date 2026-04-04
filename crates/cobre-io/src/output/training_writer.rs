@@ -287,6 +287,7 @@ pub fn write_cut_selection_records(
     let mut active_before_builder = Int32Builder::with_capacity(n);
     let mut deactivated_builder = Int32Builder::with_capacity(n);
     let mut active_after_builder = Int32Builder::with_capacity(n);
+    let mut selection_time_builder = Float64Builder::with_capacity(n);
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     for r in records {
@@ -296,6 +297,7 @@ pub fn write_cut_selection_records(
         active_before_builder.append_value(r.cuts_active_before as i32);
         deactivated_builder.append_value(r.cuts_deactivated as i32);
         active_after_builder.append_value(r.cuts_active_after as i32);
+        selection_time_builder.append_value(r.selection_time_ms);
     }
 
     let batch = RecordBatch::try_new(
@@ -307,6 +309,7 @@ pub fn write_cut_selection_records(
             Arc::new(active_before_builder.finish()),
             Arc::new(deactivated_builder.finish()),
             Arc::new(active_after_builder.finish()),
+            Arc::new(selection_time_builder.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("cut_selection", e.to_string()))?;
@@ -738,6 +741,7 @@ mod tests {
                 cuts_active_before: 10,
                 cuts_deactivated: 0,
                 cuts_active_after: 10,
+                selection_time_ms: 0.0,
             },
             CutSelectionRecord {
                 iteration: 3,
@@ -746,6 +750,7 @@ mod tests {
                 cuts_active_before: 8,
                 cuts_deactivated: 2,
                 cuts_active_after: 6,
+                selection_time_ms: 1.5,
             },
         ];
         write_cut_selection_records(tmp.path(), &records, &config).unwrap();
@@ -759,6 +764,6 @@ mod tests {
             .unwrap();
         let batch: RecordBatch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 6);
+        assert_eq!(batch.num_columns(), 7);
     }
 }

@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn build_stochastic_summary_loaded_source_when_no_estimation_report() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn build_stochastic_summary_estimated_source_with_estimation_report() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 7, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
 
         let mut entries = BTreeMap::new();
         entries.insert(
@@ -711,7 +711,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 0, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 0);
 
         assert!(
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn build_stochastic_summary_stages_and_load_buses() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 1, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 1);
 
         assert_eq!(
@@ -750,7 +750,8 @@ mod tests {
         let system = make_system_with_hydro();
         // 2 stages × 2 openings × 1 dim = 4 entries
         let user_tree = OpeningTree::from_parts(vec![1.0_f64; 2 * 2], vec![2, 2], 1);
-        let stochastic = build_stochastic_context(&system, 42, &[], &[], Some(user_tree)).unwrap();
+        let stochastic =
+            build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -763,7 +764,7 @@ mod tests {
     #[test]
     fn opening_tree_source_generated() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 42, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -786,7 +787,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 1, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
 
         let mut entries = BTreeMap::new();
         entries.insert(
@@ -824,7 +825,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 1, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 1);
 
         assert!(
@@ -844,7 +845,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 0, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 0);
 
         assert!(

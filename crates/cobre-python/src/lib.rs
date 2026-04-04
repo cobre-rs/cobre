@@ -23,7 +23,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 use pyo3::prelude::*;
 

@@ -112,7 +112,7 @@ pub struct StageRange {
     /// Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"`.
     pub model: String,
     /// FPHA configuration, required when `model == "fpha"`.
-    pub fpha_config: Option<FphaConfig>,
+    pub fpha_config: Option<FphaColumnLayout>,
     /// Optional productivity override (MW per m3/s). When `Some`, this value
     /// replaces the entity's base `productivity_mw_per_m3s` for this stage range.
     /// Only valid for `"constant_productivity"` and `"linearized_head"` models.
@@ -128,7 +128,7 @@ pub struct SeasonConfig {
     /// Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"`.
     pub model: String,
     /// FPHA configuration, required when `model == "fpha"`.
-    pub fpha_config: Option<FphaConfig>,
+    pub fpha_config: Option<FphaColumnLayout>,
     /// Optional productivity override (MW per m3/s). When `Some`, this value
     /// replaces the entity's base `productivity_mw_per_m3s` for this season.
     /// Only valid for `"constant_productivity"` and `"linearized_head"` models.
@@ -138,7 +138,7 @@ pub struct SeasonConfig {
 
 /// Configuration for the FPHA production function model.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FphaConfig {
+pub struct FphaColumnLayout {
     /// `"computed"` (fit from topology) or `"precomputed"` (from `fpha_hyperplanes.parquet`).
     pub source: String,
     /// Number of volume discretization points used when computing hyperplanes.
@@ -222,7 +222,7 @@ struct RawStageRange {
     start_stage_id: i32,
     end_stage_id: Option<i32>,
     model: String,
-    fpha_config: Option<RawFphaConfig>,
+    fpha_config: Option<RawFphaColumnLayout>,
     productivity_override: Option<f64>,
 }
 
@@ -231,13 +231,13 @@ struct RawStageRange {
 struct RawSeasonConfig {
     season_id: i32,
     model: String,
-    fpha_config: Option<RawFphaConfig>,
+    fpha_config: Option<RawFphaColumnLayout>,
     productivity_override: Option<f64>,
 }
 
 /// Intermediate type for FPHA configuration.
 #[derive(Deserialize)]
-struct RawFphaConfig {
+struct RawFphaColumnLayout {
     source: String,
     volume_discretization_points: Option<i32>,
     turbine_discretization_points: Option<i32>,
@@ -456,7 +456,7 @@ fn validate_stage_range(
 /// The spec states: use absolute bounds (`volume_min_hm3`, `volume_max_hm3`) OR
 /// percentiles (`volume_min_percentile`, `volume_max_percentile`), not both.
 fn validate_fitting_window(
-    cfg: &RawFphaConfig,
+    cfg: &RawFphaColumnLayout,
     field_prefix: &str,
     path: &Path,
 ) -> Result<(), LoadError> {
@@ -515,7 +515,7 @@ fn convert_stage_range(raw: RawStageRange) -> StageRange {
         start_stage_id: raw.start_stage_id,
         end_stage_id: raw.end_stage_id,
         model: raw.model,
-        fpha_config: raw.fpha_config.map(convert_fpha_config),
+        fpha_config: raw.fpha_config.map(convert_fpha_column_layout),
         productivity_override: raw.productivity_override,
     }
 }
@@ -524,13 +524,13 @@ fn convert_season_config(raw: RawSeasonConfig) -> SeasonConfig {
     SeasonConfig {
         season_id: raw.season_id,
         model: raw.model,
-        fpha_config: raw.fpha_config.map(convert_fpha_config),
+        fpha_config: raw.fpha_config.map(convert_fpha_column_layout),
         productivity_override: raw.productivity_override,
     }
 }
 
-fn convert_fpha_config(raw: RawFphaConfig) -> FphaConfig {
-    FphaConfig {
+fn convert_fpha_column_layout(raw: RawFphaColumnLayout) -> FphaColumnLayout {
+    FphaColumnLayout {
         source: raw.source,
         volume_discretization_points: raw.volume_discretization_points,
         turbine_discretization_points: raw.turbine_discretization_points,

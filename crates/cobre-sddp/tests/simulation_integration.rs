@@ -21,7 +21,9 @@ use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId, TrainingEvent,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -192,7 +194,7 @@ fn make_opening_tree(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
 }
 
 #[allow(clippy::cast_possible_wrap)]
@@ -319,7 +321,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 fn minimal_template() -> StageTemplate {
@@ -415,7 +417,7 @@ fn make_config() -> Config {
         },
         training: IoTrainingConfig {
             enabled: true,
-            seed: None,
+            tree_seed: None,
             forward_passes: Some(1),
             stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]),
             stopping_mode: "any".to_string(),
@@ -596,6 +598,7 @@ fn train_simulate_write_cycle() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -623,6 +626,8 @@ fn train_simulate_write_cycle() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -773,6 +778,8 @@ fn train_simulate_write_cycle() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &sim_config,
         SimulationOutputSpec {
@@ -1309,6 +1316,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     let risk_measures = vec![RiskMeasure::Expectation; n_stages];
@@ -1324,6 +1332,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &opening_tree,
         &risk_measures,
@@ -1380,6 +1390,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &sim_config,
         SimulationOutputSpec {

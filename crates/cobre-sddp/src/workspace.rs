@@ -14,64 +14,20 @@ use crate::lp_builder::PatchBuffer;
 /// reference to noise transformation functions in `noise.rs`.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct ScratchBuffers {
-    /// Scratch buffer for transformed noise per hydro.
     pub(crate) noise_buf: Vec<f64>,
-    /// Scratch buffer for inflow in m³/s (used by simulation pipeline).
     pub(crate) inflow_m3s_buf: Vec<f64>,
-    /// Scratch buffer for lag state in lag-major layout (used by inflow truncation).
     pub(crate) lag_matrix_buf: Vec<f64>,
-    /// Scratch buffer for evaluated PAR inflows (used by inflow truncation).
     pub(crate) par_inflow_buf: Vec<f64>,
-    /// Scratch buffer for solved noise floor (used by inflow truncation).
     pub(crate) eta_floor_buf: Vec<f64>,
-    /// Zero-filled scratch buffer for `solve_par_noises` targets (inflow truncation).
     pub(crate) zero_targets_buf: Vec<f64>,
-    /// Scratch buffer for NCS column upper bounds (forward/backward pass).
-    ///
-    /// Sized to `n_stochastic_ncs * max_blocks`. Built per stage by
-    /// `transform_ncs_noise` before calling `solver.set_col_bounds`.
     pub(crate) ncs_col_upper_buf: Vec<f64>,
-    /// Scratch buffer for NCS column lower bounds (all zeros).
     pub(crate) ncs_col_lower_buf: Vec<f64>,
-    /// Pre-computed NCS column indices for `set_col_bounds`.
     pub(crate) ncs_col_indices_buf: Vec<usize>,
-    /// Scratch buffer for stochastic load RHS values (forward pass).
-    ///
-    /// Sized to `n_load_buses * max_blocks`. Built per stage by the forward pass
-    /// before calling [`PatchBuffer::fill_load_patches`].
     pub(crate) load_rhs_buf: Vec<f64>,
-    /// Scratch buffer for patched `row_lower` values (simulation extraction).
-    ///
-    /// Sized to the maximum template `row_lower.len()` across stages.
-    /// The simulation pipeline clones the template's `row_lower` into this
-    /// buffer and overwrites load balance rows with stochastic realizations
-    /// before passing to [`extract_stage_result`].
     pub(crate) row_lower_buf: Vec<f64>,
-    /// Scratch buffer for z-inflow definition row RHS values (m3/s).
-    ///
-    /// Filled by `transform_inflow_noise` with `base_h + sigma_h * eta_effective_h`
-    /// for each hydro. Used by `PatchBuffer::fill_z_inflow_patches` (Category 5).
     pub(crate) z_inflow_rhs_buf: Vec<f64>,
-    /// Scratch buffer for effective (possibly clamped) eta values per hydro.
-    ///
-    /// Filled by [`compute_effective_eta`] with either raw eta (no truncation)
-    /// or clamped eta (truncation active). Sized to `hydro_count`.
-    ///
-    /// [`compute_effective_eta`]: crate::noise::compute_effective_eta
     pub(crate) effective_eta_buf: Vec<f64>,
-    /// Scratch buffer for unscaled primal values.
-    ///
-    /// When column scaling is active, solver primal values are in scaled
-    /// coordinates. This buffer holds the unscaled values after applying
-    /// `x_original[j] = col_scale[j] * x_scaled[j]`. Reused across solves
-    /// to avoid per-solve allocation.
     pub(crate) unscaled_primal: Vec<f64>,
-    /// Scratch buffer for unscaled dual values.
-    ///
-    /// When row scaling is active, solver dual values are in scaled
-    /// coordinates. This buffer holds the unscaled values after applying
-    /// `dual_original[i] = row_scale[i] * dual_scaled[i]`. Reused across
-    /// solves to avoid per-solve allocation.
     pub(crate) unscaled_dual: Vec<f64>,
 }
 

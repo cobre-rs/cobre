@@ -27,7 +27,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 // Allow unwrap/expect in tests — these lints guard library code but are normal in test contexts.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]

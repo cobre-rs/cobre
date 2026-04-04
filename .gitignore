@@ -47,4 +47,5 @@ recordings/demo/
 __pycache__/
 
 # Python bindings
-.venv
+.venv.claude/
+.claude/

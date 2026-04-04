@@ -32,7 +32,7 @@
 //!
 //! This crate is in early development. The API **will** change.
 //!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the full roadmap.
+//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -71,7 +71,7 @@ pub use constraints::{
 };
 pub use error::LoadError;
 pub use extensions::{
-    FittingWindow, FphaConfig, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
+    FittingWindow, FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
     SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_hydro_geometry,
     load_production_models, parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
 };

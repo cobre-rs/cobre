@@ -272,7 +272,7 @@ mod tests {
             },
             training: TrainingConfig {
                 enabled: true,
-                seed: None,
+                tree_seed: None,
                 forward_passes: Some(4),
                 stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 10 }]),
                 stopping_mode: "any".to_string(),

@@ -253,7 +253,7 @@ fn delta_to_stats_row(
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
-        retry_level_histogram: delta.retry_level_histogram,
+        retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }
 
@@ -426,7 +426,10 @@ fn run_inner(
     let config = cobre_io::parse_config(&case_dir.join("config.json"))
         .map_err(|e| format!("config parse error: {e}"))?;
 
-    let seed = config.training.seed.map_or(DEFAULT_SEED, i64::unsigned_abs);
+    let seed = config
+        .training
+        .tree_seed
+        .map_or(DEFAULT_SEED, i64::unsigned_abs);
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
@@ -440,6 +443,7 @@ fn run_inner(
 
     let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
         .map_err(|e| e.to_string())?;
+    setup.set_export_states(config.exports.states);
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(

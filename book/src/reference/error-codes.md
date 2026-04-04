@@ -436,7 +436,7 @@ during development to surface unimplemented feature requests from valid input.
 **Example message:** `hydro production model 'fpha' is not yet implemented`
 
 **Resolution:** Avoid using the unimplemented feature until it is available.
-Check the [project roadmap](../overview/roadmap.md) for the implementation timeline.
+Check the [CHANGELOG](https://github.com/cobre-rs/cobre/blob/main/CHANGELOG.md) for the implementation timeline.
 Alternatively, use the currently supported alternatives (e.g., `"constant_productivity"`
 instead of `"fpha"` for hydro generation models).
 

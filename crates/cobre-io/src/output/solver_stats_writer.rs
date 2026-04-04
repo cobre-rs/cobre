@@ -1,7 +1,7 @@
 //! Parquet writer for per-iteration solver statistics.
 //!
-//! Writes `training/solver/iterations.parquet` with one row per
-//! (iteration, phase, stage) triple.
+//! Writes `training/solver/iterations.parquet` (scalar metrics) and
+//! `training/solver/retry_histogram.parquet` (normalized per-level retry counts).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 
 use super::error::OutputError;
-use super::schemas::solver_iterations_schema;
+use super::schemas::{retry_histogram_schema, solver_iterations_schema};
 
 /// A single row in the solver statistics Parquet file.
 #[derive(Debug, Clone)]
@@ -51,8 +51,9 @@ pub struct SolverStatsRow {
     pub set_bounds_time_ms: f64,
     /// Cumulative time in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
-    /// Per-level retry success counts (12 levels).
-    pub retry_level_histogram: [u64; 12],
+    /// Per-level retry success counts. Length depends on the solver backend
+    /// (e.g. 12 for `HiGHS`).
+    pub retry_level_histogram: Vec<u64>,
 }
 
 /// Write training solver statistics to `training/solver/iterations.parquet`.
@@ -82,15 +83,8 @@ pub fn write_simulation_solver_stats(
     write_solver_stats_to(&output_dir.join("simulation/solver"), rows)
 }
 
-/// Internal: write solver statistics rows to `{dir}/iterations.parquet`.
-fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
-    std::fs::create_dir_all(dir).map_err(|e| OutputError::io(dir, e))?;
-
-    let path = dir.join("iterations.parquet");
-    let tmp_path = path.with_extension("parquet.tmp");
-
-    let schema = Arc::new(solver_iterations_schema());
-
+/// Build Arrow column arrays for `iterations.parquet` (scalar metrics only).
+fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array::Array>> {
     let n = rows.len();
     let iteration_arr = UInt32Array::from(rows.iter().map(|r| r.iteration).collect::<Vec<_>>());
     let mut phase_builder = StringBuilder::with_capacity(n, n * 10);
@@ -132,18 +126,7 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
     let basis_set_time_arr =
         Float64Array::from(rows.iter().map(|r| r.basis_set_time_ms).collect::<Vec<_>>());
 
-    // Build 12 per-level retry histogram columns.
-    let retry_level_arrays: Vec<_> = (0..12)
-        .map(|lvl| {
-            Arc::new(UInt64Array::from(
-                rows.iter()
-                    .map(|r| r.retry_level_histogram[lvl])
-                    .collect::<Vec<_>>(),
-            )) as Arc<dyn arrow::array::Array>
-        })
-        .collect();
-
-    let mut columns: Vec<Arc<dyn arrow::array::Array>> = vec![
+    vec![
         Arc::new(iteration_arr),
         Arc::new(phase_arr),
         Arc::new(stage_arr),
@@ -160,25 +143,94 @@ fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), Outp
         Arc::new(add_rows_time_arr),
         Arc::new(set_bounds_time_arr),
         Arc::new(basis_set_time_arr),
-    ];
-    columns.extend(retry_level_arrays);
+    ]
+}
 
-    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)
-        .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
+/// Build a `RecordBatch` for `retry_histogram.parquet` from the histogram data
+/// embedded in each `SolverStatsRow`. Only rows with `count > 0` are emitted.
+fn build_retry_histogram_batch(rows: &[SolverStatsRow]) -> Result<RecordBatch, OutputError> {
+    let mut iterations = Vec::new();
+    let mut phases = Vec::new();
+    let mut stages = Vec::new();
+    let mut levels = Vec::new();
+    let mut counts = Vec::new();
 
+    for r in rows {
+        #[allow(clippy::cast_possible_truncation)]
+        for (level, &count) in r.retry_level_histogram.iter().enumerate() {
+            if count > 0 {
+                iterations.push(r.iteration);
+                phases.push(r.phase.as_str());
+                stages.push(r.stage);
+                levels.push(level as u32);
+                counts.push(count);
+            }
+        }
+    }
+
+    let n = iterations.len();
+    let mut phase_builder = StringBuilder::with_capacity(n, n * 10);
+    for p in &phases {
+        phase_builder.append_value(p);
+    }
+
+    let schema = Arc::new(retry_histogram_schema());
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt32Array::from(iterations)),
+            Arc::new(phase_builder.finish()),
+            Arc::new(Int32Array::from(stages)),
+            Arc::new(UInt32Array::from(levels)),
+            Arc::new(UInt64Array::from(counts)),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("retry_histogram", format!("RecordBatch: {e}")))
+}
+
+/// Write a `RecordBatch` to a Parquet file using atomic `.tmp` + rename.
+fn write_parquet(
+    path: &Path,
+    schema: &Arc<arrow::datatypes::Schema>,
+    batch: &RecordBatch,
+) -> Result<(), OutputError> {
+    let tmp_path = path.with_extension("parquet.tmp");
     let file = std::fs::File::create(&tmp_path).map_err(|e| OutputError::io(&tmp_path, e))?;
     let props = WriterProperties::builder()
         .set_compression(Compression::ZSTD(ZstdLevel::default()))
         .build();
-    let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))
+    let mut writer = ArrowWriter::try_new(file, Arc::clone(schema), Some(props))
         .map_err(|e| OutputError::serialization("solver_stats", format!("ArrowWriter: {e}")))?;
     writer
-        .write(&batch)
+        .write(batch)
         .map_err(|e| OutputError::serialization("solver_stats", format!("write: {e}")))?;
     writer
         .close()
         .map_err(|e| OutputError::serialization("solver_stats", format!("close: {e}")))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| OutputError::io(&path, e))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| OutputError::io(path, e))?;
+    Ok(())
+}
+
+/// Internal: write solver statistics to `{dir}/iterations.parquet` and
+/// `{dir}/retry_histogram.parquet`.
+fn write_solver_stats_to(dir: &Path, rows: &[SolverStatsRow]) -> Result<(), OutputError> {
+    std::fs::create_dir_all(dir).map_err(|e| OutputError::io(dir, e))?;
+
+    // iterations.parquet — scalar metrics
+    let iter_schema = Arc::new(solver_iterations_schema());
+    let columns = build_iterations_columns(rows);
+    let iter_batch = RecordBatch::try_new(Arc::clone(&iter_schema), columns)
+        .map_err(|e| OutputError::serialization("solver_stats", format!("RecordBatch: {e}")))?;
+    write_parquet(&dir.join("iterations.parquet"), &iter_schema, &iter_batch)?;
+
+    // retry_histogram.parquet — normalized per-level retry counts
+    let hist_schema = Arc::new(retry_histogram_schema());
+    let hist_batch = build_retry_histogram_batch(rows)?;
+    write_parquet(
+        &dir.join("retry_histogram.parquet"),
+        &hist_schema,
+        &hist_batch,
+    )?;
 
     Ok(())
 }
@@ -209,7 +261,7 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                retry_level_histogram: [0; 12],
+                retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
                 iteration: 1,
@@ -228,9 +280,16 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                retry_level_histogram: [0; 12],
+                retry_level_histogram: vec![0; 12],
             },
         ]
+    }
+
+    fn read_parquet(path: &std::path::Path) -> RecordBatch {
+        let file = std::fs::File::open(path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mut reader = builder.build().unwrap();
+        reader.next().unwrap().unwrap()
     }
 
     #[test]
@@ -240,16 +299,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        let path = dir.path().join("training/solver/iterations.parquet");
-        assert!(path.exists());
-
-        let file = std::fs::File::open(&path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let mut reader = builder.build().unwrap();
-        let batch = reader.next().unwrap().unwrap();
+        // iterations.parquet — 16 scalar columns
+        let iter_path = dir.path().join("training/solver/iterations.parquet");
+        assert!(iter_path.exists());
+        let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 28);
+        assert_eq!(batch.num_columns(), 16);
 
         let iteration_col = batch
             .column(0)
@@ -273,6 +329,20 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .unwrap();
         assert_eq!(simplex_col.value(0), 5000);
+
+        // retry_histogram.parquet — empty (make_rows has all-zero histograms)
+        let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
+        assert!(hist_path.exists());
+        let file = std::fs::File::open(&hist_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(builder.schema().fields().len(), 5);
+        let total_rows: usize = builder
+            .build()
+            .unwrap()
+            .flatten()
+            .map(|b| b.num_rows())
+            .sum();
+        assert_eq!(total_rows, 0);
     }
 
     #[test]
@@ -280,12 +350,86 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         write_solver_stats(dir.path(), &[]).unwrap();
 
-        let path = dir.path().join("training/solver/iterations.parquet");
-        assert!(path.exists());
-
-        let file = std::fs::File::open(&path).unwrap();
+        let iter_path = dir.path().join("training/solver/iterations.parquet");
+        assert!(iter_path.exists());
+        let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema();
-        assert_eq!(schema.fields().len(), 28);
+        assert_eq!(builder.schema().fields().len(), 16);
+
+        let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
+        assert!(hist_path.exists());
+        let file = std::fs::File::open(&hist_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(builder.schema().fields().len(), 5);
+    }
+
+    #[test]
+    fn retry_histogram_sparse_encoding() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let rows = vec![
+            SolverStatsRow {
+                iteration: 1,
+                phase: "forward".to_string(),
+                stage: -1,
+                lp_solves: 50,
+                lp_successes: 48,
+                lp_retries: 2,
+                lp_failures: 0,
+                retry_attempts: 3,
+                basis_offered: 40,
+                basis_rejections: 0,
+                simplex_iterations: 2000,
+                solve_time_ms: 10.0,
+                load_model_time_ms: 0.0,
+                add_rows_time_ms: 0.0,
+                set_bounds_time_ms: 0.0,
+                basis_set_time_ms: 0.0,
+                // Level 0: 5 recoveries, level 2: 1 recovery
+                retry_level_histogram: vec![5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            },
+            SolverStatsRow {
+                iteration: 1,
+                phase: "backward".to_string(),
+                stage: 0,
+                lp_solves: 100,
+                lp_successes: 100,
+                lp_retries: 0,
+                lp_failures: 0,
+                retry_attempts: 0,
+                basis_offered: 80,
+                basis_rejections: 0,
+                simplex_iterations: 5000,
+                solve_time_ms: 20.0,
+                load_model_time_ms: 0.0,
+                add_rows_time_ms: 0.0,
+                set_bounds_time_ms: 0.0,
+                basis_set_time_ms: 0.0,
+                retry_level_histogram: vec![0; 12],
+            },
+        ];
+
+        write_solver_stats(dir.path(), &rows).unwrap();
+
+        let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
+        let batch = read_parquet(&hist_path);
+
+        // Only 2 nonzero entries: (forward, level 0, 5) and (forward, level 2, 1)
+        assert_eq!(batch.num_rows(), 2);
+
+        let level_col = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        assert_eq!(level_col.value(0), 0);
+        assert_eq!(level_col.value(1), 2);
+
+        let count_col = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(count_col.value(0), 5);
+        assert_eq!(count_col.value(1), 1);
     }
 }

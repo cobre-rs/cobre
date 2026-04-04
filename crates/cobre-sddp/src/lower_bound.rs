@@ -483,6 +483,7 @@ mod tests {
             &mut decomposed,
             &entity_order,
         )
+        .unwrap()
     }
 
     // ── Mock communicator ────────────────────────────────────────────────────

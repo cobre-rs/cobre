@@ -85,7 +85,7 @@ pub trait SolverInterface: Send { ... }
 The trait defines 10 methods that together constitute the full LP lifecycle for
 one solver instance. Implementations must satisfy the pre- and post-condition
 contracts documented in each method's rustdoc. See the
-[`trait_def` rustdoc](../api/cobre_solver/trait.SolverInterface.html) for the
+[`trait_def` rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/trait.SolverInterface.html) for the
 complete contracts.
 
 ### Method summary
@@ -138,14 +138,14 @@ across all threads. Passed to `load_model` to bulk-load the LP. Fields include
 the CSC matrix arrays (`col_starts`, `row_indices`, `values`), bounds, objective
 coefficients, and layout metadata (`n_state`, `n_transfer`, `n_dual_relevant`,
 `n_hydro`, `max_par_order`) used by the calling algorithm for state transfer and
-cut extraction. See the [`StageTemplate` rustdoc](../api/cobre_solver/struct.StageTemplate.html).
+cut extraction. See the [`StageTemplate` rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.StageTemplate.html).
 
 ### `RowBatch`
 
 Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
 Assembled from an active constraint pool before each LP rebuild and passed to
 `add_rows` in a single call. Appended rows occupy the dynamic constraint region
-of the LP matrix. See the [`RowBatch` rustdoc](../api/cobre_solver/struct.RowBatch.html).
+of the LP matrix. See the [`RowBatch` rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.RowBatch.html).
 
 ### `Basis`
 
@@ -157,7 +157,7 @@ problem space for portability across solver versions and presolve strategies.
 When the LP gains new dynamic constraint rows after a basis was saved,
 `solve_with_basis` handles the dimension mismatch by filling new row slots
 with the solver-native "Basic" code. See the
-[`Basis` rustdoc](../api/cobre_solver/struct.Basis.html).
+[`Basis` rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.Basis.html).
 
 ### `SolutionView<'a>`
 
@@ -167,7 +167,7 @@ Zero-copy borrowed view over solver-internal buffers, returned by `solve` and
 references into the solver's internal arrays. The view borrows the solver and
 is valid until the next `&mut self` call. Call `to_owned()` to copy the data
 into an `LpSolution` when the solution must outlive the borrow. See the
-[`SolutionView` rustdoc](../api/cobre_solver/struct.SolutionView.html).
+[`SolutionView` rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.SolutionView.html).
 
 ### `LpSolution`
 
@@ -177,7 +177,7 @@ multipliers, normalized to the canonical sign convention), `reduced_costs`,
 `iterations`, and `solve_time_seconds`. Dual values are normalized before the
 struct is returned — HiGHS row duals are already in the canonical convention
 and require no negation. See the [`LpSolution`
-rustdoc](../api/cobre_solver/struct.LpSolution.html).
+rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.LpSolution.html).
 
 ### `SolverError`
 
@@ -197,7 +197,7 @@ variants correspond to six failure categories:
 carries a `message`, `TimeLimitExceeded` carries `elapsed_seconds`, and
 `IterationLimit` carries `iterations`. `InternalError` carries `message` and
 an optional `error_code`. See the [`SolverError`
-rustdoc](../api/cobre_solver/enum.SolverError.html).
+rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/enum.SolverError.html).
 
 ### `SolverStatistics`
 
@@ -207,7 +207,7 @@ Accumulated solve metrics for one solver instance: `solve_count`,
 monotonically from zero. `reset()` does not zero them — statistics persist for
 the lifetime of the solver instance and are aggregated across threads after
 iterative solving completes. See the [`SolverStatistics`
-rustdoc](../api/cobre_solver/struct.SolverStatistics.html).
+rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.SolverStatistics.html).
 
 ## HiGHS backend (`HighsSolver`)
 

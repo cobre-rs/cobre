@@ -31,7 +31,7 @@ use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId, TrainingEvent,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
-    scenario::{InflowModel, LoadModel},
+    scenario::{InflowModel, LoadModel, SamplingScheme},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -204,7 +204,7 @@ fn make_opening_tree_1_hydro(n_openings: usize) -> OpeningTree {
     let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
     let entity_order = vec![entity_id];
 
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order)
+    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
 }
 
 /// Build a `System` with 1 bus, 1 hydro, `n_stages` stages, and optionally
@@ -350,7 +350,7 @@ fn build_context_with_load(
     load_std_mw: f64,
 ) -> StochasticContext {
     let system = build_system_with_load(n_stages, 1, load_mean_mw, load_std_mw);
-    build_stochastic_context(&system, 42, &[], &[], None).unwrap()
+    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -461,6 +461,7 @@ fn test_stochastic_load_training_completes() {
         cut_selection: None,
         shutdown_flag: None,
         start_iteration: 0,
+        export_states: false,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -495,6 +496,8 @@ fn test_stochastic_load_training_completes() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &opening_tree,
         &risk_measures,
@@ -589,6 +592,7 @@ fn test_deterministic_load_training_matches_baseline() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -598,6 +602,8 @@ fn test_deterministic_load_training_matches_baseline() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &opening_tree,
         &risk_measures,
@@ -653,6 +659,7 @@ fn test_stochastic_load_seed_determinism() {
             cut_selection: None,
             shutdown_flag: None,
             start_iteration: 0,
+            export_states: false,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -683,6 +690,8 @@ fn test_stochastic_load_seed_determinism() {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &opening_tree,
             &risk_measures,

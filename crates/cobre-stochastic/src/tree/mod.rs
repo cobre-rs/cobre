@@ -12,7 +12,10 @@
 //!   correlation factors
 
 pub mod generate;
+pub mod lhs;
 pub mod opening_tree;
+pub mod qmc_halton;
+pub mod qmc_sobol;
 
 pub use generate::generate_opening_tree;
 pub use opening_tree::{OpeningTree, OpeningTreeView};

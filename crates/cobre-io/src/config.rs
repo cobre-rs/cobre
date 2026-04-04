@@ -113,11 +113,7 @@ pub struct TrainingConfig {
     pub enabled: bool,
 
     /// Random seed for the opening scenario tree (reproducible training).
-    ///
-    /// The JSON key `"tree_seed"` is canonical; `"seed"` is accepted as a
-    /// deprecated alias for backward compatibility with existing `config.json`
-    /// files.
-    #[serde(default, alias = "seed")]
+    #[serde(default)]
     pub tree_seed: Option<i64>,
 
     /// Number of forward-pass scenario trajectories $M$ per iteration.
@@ -702,21 +698,11 @@ mod tests {
         assert!(cfg.exports.cuts);
     }
 
-    /// AC: deprecated `"seed"` alias parses into `tree_seed` for backward compatibility.
-    #[test]
-    fn test_seed_deprecated_alias() {
-        let f = write_config(
-            r#"{"training": {"seed": 99, "forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}}"#,
-        );
-        let cfg = parse_config(f.path()).unwrap();
-        assert_eq!(cfg.training.tree_seed, Some(99));
-    }
-
     /// AC-2: missing `training.forward_passes` → SchemaError with field name.
     #[test]
     fn test_missing_forward_passes() {
         let f = write_config(
-            r#"{"training": {"seed": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}}"#,
+            r#"{"training": {"tree_seed": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}}"#,
         );
         let err = parse_config(f.path()).unwrap_err();
         match &err {
@@ -733,7 +719,7 @@ mod tests {
     /// AC-2 variant: missing `training.stopping_rules` → SchemaError.
     #[test]
     fn test_missing_stopping_rules() {
-        let f = write_config(r#"{"training": {"seed": 1, "forward_passes": 100}}"#);
+        let f = write_config(r#"{"training": {"tree_seed": 1, "forward_passes": 100}}"#);
         let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { field, .. } => {
@@ -771,7 +757,7 @@ mod tests {
             }
           },
           "training": {
-            "seed": 42,
+            "tree_seed": 42,
             "forward_passes": 192,
             "stopping_rules": [
               {"type": "iteration_limit", "limit": 50},

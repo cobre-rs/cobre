@@ -393,6 +393,9 @@ pub fn build_stochastic_context(
             opening_tree: opening_tree_prov,
             correlation: correlation_prov,
             inflow_model: inflow_prov,
+            inflow_scheme: None,
+            load_scheme: None,
+            ncs_scheme: None,
         }
     };
 

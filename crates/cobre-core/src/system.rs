@@ -11,11 +11,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, GenericConstraint, Hydro,
-    InflowModel, InitialConditions, Line, LoadModel, NcsModel, NetworkTopology,
-    NonControllableSource, PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
+    Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, ExternalScenarioRow,
+    GenericConstraint, Hydro, InflowHistoryRow, InflowModel, InitialConditions, Line, LoadModel,
+    NcsModel, NetworkTopology, NonControllableSource, PolicyGraph, PumpingStation, ResolvedBounds,
+    ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
+    ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, ScenarioSource, Stage, Thermal,
+    ValidationError,
 };
 
 /// Top-level system representation.
@@ -128,6 +129,16 @@ pub struct System {
     generic_constraints: Vec<GenericConstraint>,
     /// Top-level scenario source configuration (sampling scheme, seed).
     scenario_source: ScenarioSource,
+
+    // Raw scenario library data (H6 — historical and external sampling)
+    /// Raw historical inflow observations per (hydro, date) pair.
+    /// Sorted by `(hydro_id, date)` ascending. Empty when
+    /// `scenarios/inflow_history.parquet` is absent.
+    inflow_history: Vec<InflowHistoryRow>,
+    /// Raw external scenario rows per (stage, scenario, hydro) triple.
+    /// Sorted by `(stage_id, scenario_id, hydro_id)` ascending.
+    /// Empty when no external scenario file is present.
+    external_scenarios: Vec<ExternalScenarioRow>,
 }
 
 // Compile-time check that System is Send + Sync.
@@ -393,6 +404,23 @@ impl System {
         &self.scenario_source
     }
 
+    /// Returns the raw historical inflow observations, sorted by `(hydro_id, date)`.
+    ///
+    /// Returns an empty slice when `scenarios/inflow_history.parquet` was absent
+    /// at case-load time.
+    #[must_use]
+    pub fn inflow_history(&self) -> &[InflowHistoryRow] {
+        &self.inflow_history
+    }
+
+    /// Returns the raw external scenario rows, sorted by `(stage_id, scenario_id, hydro_id)`.
+    ///
+    /// Returns an empty slice when no external scenario file was present at case-load time.
+    #[must_use]
+    pub fn external_scenarios(&self) -> &[ExternalScenarioRow] {
+        &self.external_scenarios
+    }
+
     /// Replace the scenario models and correlation on this `System`, returning a new
     /// `System` with updated fields and all other fields preserved.
     ///
@@ -522,6 +550,8 @@ pub struct SystemBuilder {
     initial_conditions: InitialConditions,
     generic_constraints: Vec<GenericConstraint>,
     scenario_source: ScenarioSource,
+    inflow_history: Vec<InflowHistoryRow>,
+    external_scenarios: Vec<ExternalScenarioRow>,
 }
 
 impl Default for SystemBuilder {
@@ -561,6 +591,8 @@ impl SystemBuilder {
             initial_conditions: InitialConditions::default(),
             generic_constraints: Vec::new(),
             scenario_source: ScenarioSource::default(),
+            inflow_history: Vec::new(),
+            external_scenarios: Vec::new(),
         }
     }
 
@@ -750,6 +782,28 @@ impl SystemBuilder {
         self
     }
 
+    /// Set the raw historical inflow observations.
+    ///
+    /// Rows should be sorted by `(hydro_id, date)` ascending. When the
+    /// `scenarios/inflow_history.parquet` file is absent, omit this call
+    /// and the field will default to an empty `Vec`.
+    #[must_use]
+    pub fn inflow_history(mut self, rows: Vec<InflowHistoryRow>) -> Self {
+        self.inflow_history = rows;
+        self
+    }
+
+    /// Set the raw external scenario rows.
+    ///
+    /// Rows should be sorted by `(stage_id, scenario_id, hydro_id)` ascending.
+    /// When no external scenario file is present, omit this call and the field
+    /// will default to an empty `Vec`.
+    #[must_use]
+    pub fn external_scenarios(mut self, rows: Vec<ExternalScenarioRow>) -> Self {
+        self.external_scenarios = rows;
+        self
+    }
+
     /// Build the [`System`].
     ///
     /// Sorts all entity collections by [`EntityId`] (canonical ordering).
@@ -895,6 +949,8 @@ impl SystemBuilder {
             initial_conditions: self.initial_conditions,
             generic_constraints: self.generic_constraints,
             scenario_source: self.scenario_source,
+            inflow_history: self.inflow_history,
+            external_scenarios: self.external_scenarios,
         })
     }
 }
@@ -2231,5 +2287,79 @@ mod tests {
             deserialized.policy_graph().graph_type,
             system.policy_graph().graph_type
         );
+    }
+
+    // ---- inflow_history and external_scenarios field tests ------------------
+
+    /// Given a `SystemBuilder` with no `.inflow_history()` call, `inflow_history()`
+    /// must return an empty slice.
+    #[test]
+    fn test_system_inflow_history_defaults_empty() {
+        let system = SystemBuilder::new().build().expect("valid system");
+        assert!(
+            system.inflow_history().is_empty(),
+            "inflow_history must default to empty"
+        );
+    }
+
+    /// Given a `SystemBuilder` with `.inflow_history(rows)`, the system must store
+    /// and return the same rows via `inflow_history()`.
+    #[test]
+    fn test_system_inflow_history_stores_rows() {
+        use crate::scenario::InflowHistoryRow;
+        use chrono::NaiveDate;
+
+        let row1 = InflowHistoryRow {
+            hydro_id: EntityId(1),
+            date: NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date"),
+            value_m3s: 500.0,
+        };
+        let row2 = InflowHistoryRow {
+            hydro_id: EntityId(1),
+            date: NaiveDate::from_ymd_opt(2000, 2, 1).expect("valid date"),
+            value_m3s: 420.0,
+        };
+
+        let system = SystemBuilder::new()
+            .inflow_history(vec![row1.clone(), row2.clone()])
+            .build()
+            .expect("valid system");
+
+        assert_eq!(system.inflow_history().len(), 2);
+        assert_eq!(system.inflow_history()[0], row1);
+        assert_eq!(system.inflow_history()[1], row2);
+    }
+
+    /// Given a `SystemBuilder` with no `.external_scenarios()` call,
+    /// `external_scenarios()` must return an empty slice.
+    #[test]
+    fn test_system_external_scenarios_defaults_empty() {
+        let system = SystemBuilder::new().build().expect("valid system");
+        assert!(
+            system.external_scenarios().is_empty(),
+            "external_scenarios must default to empty"
+        );
+    }
+
+    /// Given a `SystemBuilder` with `.external_scenarios(rows)`, the system must
+    /// store and return the same rows via `external_scenarios()`.
+    #[test]
+    fn test_system_external_scenarios_stores_rows() {
+        use crate::scenario::ExternalScenarioRow;
+
+        let row = ExternalScenarioRow {
+            stage_id: 0,
+            scenario_id: 2,
+            hydro_id: EntityId(5),
+            value_m3s: 320.5,
+        };
+
+        let system = SystemBuilder::new()
+            .external_scenarios(vec![row.clone()])
+            .build()
+            .expect("valid system");
+
+        assert_eq!(system.external_scenarios().len(), 1);
+        assert_eq!(system.external_scenarios()[0], row);
     }
 }

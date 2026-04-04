@@ -38,41 +38,7 @@ use std::path::Path;
 use crate::LoadError;
 use crate::parquet_helpers::{extract_required_float64, extract_required_int32};
 
-/// A single row from `scenarios/external_scenarios.parquet`.
-///
-/// Each row defines the pre-computed inflow value for one (stage, scenario, hydro)
-/// triple. Used when [`SamplingScheme::External`](cobre_core::scenario::SamplingScheme)
-/// is active.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::ExternalScenarioRow;
-/// use cobre_core::EntityId;
-///
-/// let row = ExternalScenarioRow {
-///     stage_id: 0,
-///     scenario_id: 2,
-///     hydro_id: EntityId::from(5),
-///     value_m3s: 320.5,
-/// };
-/// assert_eq!(row.scenario_id, 2);
-/// assert!((row.value_m3s - 320.5).abs() < 1e-10);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExternalScenarioRow {
-    /// Stage index (0-based within `System::stages`).
-    pub stage_id: i32,
-
-    /// Scenario index (0-based). Must be >= 0.
-    pub scenario_id: i32,
-
-    /// Hydro plant this inflow value belongs to.
-    pub hydro_id: EntityId,
-
-    /// Pre-computed inflow value in m³/s. Must be finite.
-    pub value_m3s: f64,
-}
+pub use cobre_core::scenario::ExternalScenarioRow;
 
 /// Parse `scenarios/external_scenarios.parquet` and return a sorted row table.
 ///
@@ -172,8 +138,6 @@ pub fn parse_external_scenarios(path: &Path) -> Result<Vec<ExternalScenarioRow>,
     Ok(rows)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[allow(
     clippy::doc_markdown,
@@ -190,8 +154,6 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
@@ -229,14 +191,8 @@ mod tests {
         .expect("valid batch")
     }
 
-    // ── AC: 12 rows (2 stages x 3 scenarios x 2 hydros), verify sort order ───
-
-    /// Valid file with 12 rows (2 stages x 3 scenarios x 2 hydros) in scrambled
-    /// order. Result must be sorted by (stage_id, scenario_id, hydro_id).
     #[test]
     fn test_valid_12_rows_sorted_by_stage_scenario_hydro() {
-        // Input: scrambled order. All stages, scenarios, and hydros mixed.
-        // stage_ids, scenario_ids, hydro_ids, values — 12 rows.
         let batch = make_batch(
             &[1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0], // stage_id
             &[2, 0, 2, 0, 1, 1, 0, 0, 2, 2, 1, 1], // scenario_id
@@ -267,9 +223,6 @@ mod tests {
         assert!((rows[0].value_m3s - 100.0).abs() < 1e-10);
     }
 
-    // ── AC: value_m3s NaN -> SchemaError ──────────────────────────────────────
-
-    /// `value_m3s = NaN` -> SchemaError with field containing "value_m3s".
     #[test]
     fn test_nan_value_rejected() {
         let batch = make_batch(&[0], &[0], &[1], &[f64::NAN]);
@@ -291,9 +244,6 @@ mod tests {
         }
     }
 
-    // ── AC: value_m3s infinity -> SchemaError ─────────────────────────────────
-
-    /// `value_m3s = +inf` -> SchemaError with field containing "value_m3s".
     #[test]
     fn test_infinity_value_rejected() {
         let batch = make_batch(&[0], &[0], &[1], &[f64::INFINITY]);
@@ -315,9 +265,6 @@ mod tests {
         }
     }
 
-    // ── AC: scenario_id negative -> SchemaError ───────────────────────────────
-
-    /// `scenario_id = -1` -> SchemaError with field containing "scenario_id".
     #[test]
     fn test_negative_scenario_id_rejected() {
         let batch = make_batch(&[0], &[-1], &[1], &[100.0]);
@@ -339,9 +286,6 @@ mod tests {
         }
     }
 
-    // ── AC: missing hydro_id column -> SchemaError ────────────────────────────
-
-    /// File missing `hydro_id` column -> SchemaError with field "hydro_id".
     #[test]
     fn test_missing_hydro_id_column() {
         let schema_no_hydro = Arc::new(Schema::new(vec![
@@ -376,9 +320,6 @@ mod tests {
         }
     }
 
-    // ── AC: empty file -> Ok(vec![]) ──────────────────────────────────────────
-
-    /// Empty Parquet (0 rows) -> Ok(Vec::new()).
     #[test]
     fn test_empty_parquet_returns_empty_vec() {
         let batch = make_batch(&[], &[], &[], &[]);
@@ -387,18 +328,12 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    // ── AC: load_external_scenarios(None) -> Ok(vec![]) ──────────────────────
-
-    /// `load_external_scenarios(None)` returns `Ok(Vec::new())` without I/O.
     #[test]
     fn test_load_external_scenarios_none_returns_empty() {
         let result = super::super::load_external_scenarios(None).unwrap();
         assert!(result.is_empty(), "expected empty vec for None path");
     }
 
-    // ── AC: field values preserved ────────────────────────────────────────────
-
-    /// Field values survive the Parquet round-trip.
     #[test]
     fn test_field_values_preserved() {
         let batch = make_batch(&[3], &[7], &[42], &[288.75]);
@@ -413,9 +348,6 @@ mod tests {
         assert!((row.value_m3s - 288.75).abs() < 1e-10);
     }
 
-    // ── AC: scenario_id = 0 is valid ──────────────────────────────────────────
-
-    /// `scenario_id = 0` is the minimum valid value (0-based).
     #[test]
     fn test_scenario_id_zero_is_valid() {
         let batch = make_batch(&[0], &[0], &[1], &[150.0]);

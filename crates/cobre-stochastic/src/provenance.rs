@@ -7,6 +7,8 @@
 //! [`StochasticProvenance`] groups per-component provenance into a single value
 //! stored on [`StochasticContext`](crate::StochasticContext) and returned by its `provenance()` accessor.
 
+use cobre_core::scenario::SamplingScheme;
+
 /// Origin of a single stochastic pipeline component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentProvenance {
@@ -29,6 +31,15 @@ pub struct StochasticProvenance {
     pub correlation: ComponentProvenance,
     /// Origin of inflow PAR models (`Generated` when hydros present; `NotApplicable` otherwise).
     pub inflow_model: ComponentProvenance,
+    /// Sampling scheme configured for the inflow entity class.
+    /// `None` when per-class config is not yet applied.
+    pub inflow_scheme: Option<SamplingScheme>,
+    /// Sampling scheme configured for the load entity class.
+    /// `None` when per-class config is not yet applied.
+    pub load_scheme: Option<SamplingScheme>,
+    /// Sampling scheme configured for the NCS entity class.
+    /// `None` when per-class config is not yet applied.
+    pub ncs_scheme: Option<SamplingScheme>,
 }
 
 #[cfg(test)]
@@ -323,6 +334,30 @@ mod tests {
             ctx.provenance().inflow_model,
             ComponentProvenance::NotApplicable,
             "system with no hydros must produce inflow_model == NotApplicable"
+        );
+    }
+
+    #[test]
+    fn test_provenance_per_class_defaults_none() {
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .stages(vec![make_stage(0, 0, 3)])
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+
+        assert!(
+            ctx.provenance().inflow_scheme.is_none(),
+            "inflow_scheme must default to None before per-class config is wired"
+        );
+        assert!(
+            ctx.provenance().load_scheme.is_none(),
+            "load_scheme must default to None before per-class config is wired"
+        );
+        assert!(
+            ctx.provenance().ncs_scheme.is_none(),
+            "ncs_scheme must default to None before per-class config is wired"
         );
     }
 }

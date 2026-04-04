@@ -379,7 +379,6 @@ fn build_single_hydro_system(
         .scenario_source(ScenarioSource {
             sampling_scheme,
             seed: forward_seed,
-            selection_mode: None,
         })
         .build()
         .expect("SystemBuilder must produce a valid system")
@@ -443,7 +442,6 @@ fn build_two_hydro_system(
         .scenario_source(ScenarioSource {
             sampling_scheme,
             seed: forward_seed,
-            selection_mode: None,
         })
         .build()
         .expect("SystemBuilder must produce a valid system")

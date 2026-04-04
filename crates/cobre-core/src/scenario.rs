@@ -78,35 +78,15 @@ pub enum SamplingScheme {
 }
 
 // ---------------------------------------------------------------------------
-// ExternalSelectionMode
-// ---------------------------------------------------------------------------
-
-/// Scenario selection mode when [`SamplingScheme::External`] is active.
-///
-/// Controls whether external scenarios are replayed sequentially (useful for
-/// deterministic replay of a fixed test set) or drawn at random (useful for
-/// Monte Carlo evaluation with a large external library).
-///
-/// See [Input Scenarios §1.8](input-scenarios.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ExternalSelectionMode {
-    /// Scenarios are drawn uniformly at random from the external library.
-    Random,
-    /// Scenarios are replayed in file order, cycling when the end is reached.
-    Sequential,
-}
-
-// ---------------------------------------------------------------------------
 // ScenarioSource (SS14 top-level config)
 // ---------------------------------------------------------------------------
 
 /// Top-level scenario source configuration, parsed from `stages.json`.
 ///
-/// Groups the sampling scheme, random seed, and external selection mode
-/// that govern how forward-pass scenarios are produced. Populated during
-/// case loading by `cobre-io` from the `scenario_source` field in
-/// `stages.json`. Distinct from [`ScenarioSourceConfig`](crate::temporal::ScenarioSourceConfig),
+/// Groups the sampling scheme and random seed that govern how forward-pass
+/// scenarios are produced. Populated during case loading by `cobre-io` from
+/// the `scenario_source` field in `stages.json`. Distinct from
+/// [`ScenarioSourceConfig`](crate::temporal::ScenarioSourceConfig),
 /// which also holds the branching factor (`num_scenarios`).
 ///
 /// See [Input Scenarios §1.4, §1.8](input-scenarios.md).
@@ -119,7 +99,6 @@ pub enum ExternalSelectionMode {
 /// let source = ScenarioSource {
 ///     sampling_scheme: SamplingScheme::InSample,
 ///     seed: Some(42),
-///     selection_mode: None,
 /// };
 /// assert_eq!(source.sampling_scheme, SamplingScheme::InSample);
 /// ```
@@ -132,10 +111,6 @@ pub struct ScenarioSource {
     /// Random seed for reproducible opening tree generation.
     /// `None` means non-deterministic (OS entropy).
     pub seed: Option<i64>,
-
-    /// Selection mode when `sampling_scheme` is [`SamplingScheme::External`].
-    /// `None` for `InSample` and `Historical` schemes.
-    pub selection_mode: Option<ExternalSelectionMode>,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +278,81 @@ pub struct NcsModel {
 
     /// Standard deviation of the availability factor [dimensionless, >= 0].
     pub std: f64,
+}
+
+// ---------------------------------------------------------------------------
+// InflowHistoryRow (SS2.4 — raw historical observation)
+// ---------------------------------------------------------------------------
+
+/// A single row from `scenarios/inflow_history.parquet`.
+///
+/// Carries one historical inflow observation for a (hydro, date) pair.
+/// These rows constitute the raw historical record used by PAR(p) fitting
+/// routines in `cobre-stochastic` and by the historical scenario library
+/// constructed during solver setup.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::InflowHistoryRow};
+/// use chrono::NaiveDate;
+///
+/// let row = InflowHistoryRow {
+///     hydro_id: EntityId::from(1),
+///     date: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+///     value_m3s: 500.0,
+/// };
+/// assert_eq!(row.hydro_id, EntityId::from(1));
+/// assert_eq!(row.value_m3s, 500.0);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InflowHistoryRow {
+    /// Hydro plant this observation belongs to.
+    pub hydro_id: EntityId,
+    /// Date of the observation (timezone-free calendar date).
+    pub date: chrono::NaiveDate,
+    /// Mean inflow for this observation period in m³/s. Must be finite.
+    pub value_m3s: f64,
+}
+
+// ---------------------------------------------------------------------------
+// ExternalScenarioRow (SS2.5 — pre-computed external scenario value)
+// ---------------------------------------------------------------------------
+
+/// A single row from `scenarios/external_scenarios.parquet`.
+///
+/// Each row defines the pre-computed inflow value for one (stage, scenario, hydro)
+/// triple. Used when [`SamplingScheme::External`] is active.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalScenarioRow};
+///
+/// let row = ExternalScenarioRow {
+///     stage_id: 0,
+///     scenario_id: 2,
+///     hydro_id: EntityId::from(5),
+///     value_m3s: 320.5,
+/// };
+/// assert_eq!(row.scenario_id, 2);
+/// assert!((row.value_m3s - 320.5).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalScenarioRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// Hydro plant this inflow value belongs to.
+    pub hydro_id: EntityId,
+
+    /// Pre-computed inflow value in m³/s. Must be finite.
+    pub value_m3s: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +565,6 @@ impl Default for ScenarioSource {
         Self {
             sampling_scheme: SamplingScheme::InSample,
             seed: None,
-            selection_mode: None,
         }
     }
 }
@@ -538,12 +587,12 @@ impl Default for CorrelationModel {
 mod tests {
     use std::collections::BTreeMap;
 
+    #[cfg(feature = "serde")]
+    use super::ScenarioSource;
     use super::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry, InflowModel, NcsModel, SamplingScheme,
     };
-    #[cfg(feature = "serde")]
-    use super::{ExternalSelectionMode, ScenarioSource};
     use crate::EntityId;
 
     #[test]
@@ -685,7 +734,6 @@ mod tests {
         let source = ScenarioSource {
             sampling_scheme: SamplingScheme::InSample,
             seed: Some(12345),
-            selection_mode: None,
         };
         let json = serde_json::to_string(&source).unwrap();
         let deserialized: ScenarioSource = serde_json::from_str(&json).unwrap();
@@ -695,17 +743,15 @@ mod tests {
         let source_oos = ScenarioSource {
             sampling_scheme: SamplingScheme::OutOfSample,
             seed: Some(7),
-            selection_mode: None,
         };
         let json_oos = serde_json::to_string(&source_oos).unwrap();
         let deserialized_oos: ScenarioSource = serde_json::from_str(&json_oos).unwrap();
         assert_eq!(source_oos, deserialized_oos);
 
-        // External with selection mode
+        // External without seed
         let source_ext = ScenarioSource {
             sampling_scheme: SamplingScheme::External,
             seed: Some(99),
-            selection_mode: Some(ExternalSelectionMode::Sequential),
         };
         let json_ext = serde_json::to_string(&source_ext).unwrap();
         let deserialized_ext: ScenarioSource = serde_json::from_str(&json_ext).unwrap();
@@ -715,7 +761,6 @@ mod tests {
         let source_hist = ScenarioSource {
             sampling_scheme: SamplingScheme::Historical,
             seed: None,
-            selection_mode: None,
         };
         let json_hist = serde_json::to_string(&source_hist).unwrap();
         let deserialized_hist: ScenarioSource = serde_json::from_str(&json_hist).unwrap();

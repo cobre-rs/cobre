@@ -59,7 +59,7 @@
 
 use chrono::NaiveDate;
 use cobre_core::{
-    scenario::{ExternalSelectionMode, SamplingScheme, ScenarioSource},
+    scenario::{SamplingScheme, ScenarioSource},
     temporal::{
         Block, BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig,
         SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig,
@@ -172,9 +172,6 @@ pub(crate) struct RawScenarioSource {
     /// Optional random seed.
     #[serde(default)]
     seed: Option<i64>,
-    /// Selection mode for external scenarios: `"random"` or `"sequential"`.
-    #[serde(default)]
-    selection_mode: Option<String>,
 }
 
 /// Intermediate type for a study stage entry.
@@ -721,24 +718,9 @@ fn convert_scenario_source(
         None => Ok(ScenarioSource::default()),
         Some(r) => {
             let sampling_scheme = convert_sampling_scheme(&r.sampling_scheme, path)?;
-            let selection_mode = match r.selection_mode.as_deref() {
-                None => None,
-                Some("random") => Some(ExternalSelectionMode::Random),
-                Some("sequential") => Some(ExternalSelectionMode::Sequential),
-                Some(other) => {
-                    return Err(LoadError::SchemaError {
-                        path: path.to_path_buf(),
-                        field: "scenario_source.selection_mode".to_string(),
-                        message: format!(
-                            "unknown selection_mode '{other}', expected 'random' or 'sequential'"
-                        ),
-                    });
-                }
-            };
             Ok(ScenarioSource {
                 sampling_scheme,
                 seed: r.seed,
-                selection_mode,
             })
         }
     }
@@ -1093,35 +1075,6 @@ mod tests {
             SamplingScheme::InSample
         );
         assert_eq!(data.scenario_source.seed, Some(42));
-        assert!(data.scenario_source.selection_mode.is_none());
-    }
-
-    // ── AC: scenario_source external with selection_mode ─────────────────────
-
-    /// Given `scenario_source: {"sampling_scheme": "external", "selection_mode": "sequential"}`,
-    /// `result.scenario_source` has `External` and `Sequential`.
-    #[test]
-    fn test_parse_scenario_source_external_sequential() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": { "sampling_scheme": "external", "selection_mode": "sequential" },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        assert_eq!(
-            data.scenario_source.sampling_scheme,
-            SamplingScheme::External
-        );
-        assert_eq!(
-            data.scenario_source.selection_mode,
-            Some(ExternalSelectionMode::Sequential)
-        );
     }
 
     // ── AC: scenario_source out_of_sample ────────────────────────────────────
@@ -1147,7 +1100,6 @@ mod tests {
             SamplingScheme::OutOfSample
         );
         assert_eq!(data.scenario_source.seed, Some(42));
-        assert!(data.scenario_source.selection_mode.is_none());
     }
 
     // ── AC: season_definitions with 12 monthly seasons ────────────────────────
@@ -1610,7 +1562,6 @@ mod tests {
             SamplingScheme::InSample
         );
         assert!(data.scenario_source.seed.is_none());
-        assert!(data.scenario_source.selection_mode.is_none());
     }
 
     /// Stages in reverse ID order in JSON are returned sorted ascending.

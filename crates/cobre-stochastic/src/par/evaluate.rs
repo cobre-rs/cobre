@@ -291,8 +291,13 @@ pub fn evaluate_par_inflows(
 /// - **Residual recovery**: `target = historical_value` recovers the noise
 ///   that would reproduce a historical observation.
 ///
-/// When `sigma == 0.0`, noise has no effect on the output. `f64::NEG_INFINITY`
-/// is returned to indicate that no finite noise bound applies.
+/// When `sigma == 0.0`, noise has no effect on the output. Two cases apply:
+///
+/// - If `|target - deterministic_value| < 1e-10` (target matches the
+///   deterministic output), `0.0` is returned — any noise value would work,
+///   and zero is the canonical choice.
+/// - Otherwise `f64::NEG_INFINITY` is returned to signal that no finite noise
+///   can reach the target when sigma is zero.
 ///
 /// # Parameters
 ///
@@ -316,11 +321,22 @@ pub fn evaluate_par_inflows(
 /// assert!((eta - expected).abs() < 1e-10);
 /// ```
 ///
-/// Zero sigma returns `f64::NEG_INFINITY`:
+/// Zero sigma with a matching target returns `0.0`:
 ///
 /// ```
 /// use cobre_stochastic::solve_par_noise;
 ///
+/// // deterministic_value = 100.0 + 0.5 * 50.0 = 125.0; target matches → 0.0
+/// let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 125.0);
+/// assert_eq!(eta, 0.0_f64);
+/// ```
+///
+/// Zero sigma with a non-matching target returns `f64::NEG_INFINITY`:
+///
+/// ```
+/// use cobre_stochastic::solve_par_noise;
+///
+/// // deterministic_value = 125.0; target = 0.0 → impossible → NEG_INFINITY
 /// let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 0.0);
 /// assert_eq!(eta, f64::NEG_INFINITY);
 /// ```
@@ -333,9 +349,6 @@ pub fn solve_par_noise(
     sigma: f64,
     target: f64,
 ) -> f64 {
-    if sigma == 0.0 {
-        return f64::NEG_INFINITY;
-    }
     debug_assert!(
         lags.len() >= order,
         "lags.len() ({}) must be >= order ({})",
@@ -345,6 +358,13 @@ pub fn solve_par_noise(
     let mut deterministic_value = deterministic_base;
     for l in 0..order {
         deterministic_value += psi[l] * lags[l];
+    }
+    if sigma == 0.0 {
+        return if (target - deterministic_value).abs() < 1e-10 {
+            0.0
+        } else {
+            f64::NEG_INFINITY
+        };
     }
     (target - deterministic_value) / sigma
 }
@@ -427,14 +447,17 @@ pub fn solve_par_noise_batch(
         let psi = par_lp.psi_slice(stage, h);
         let order = par_lp.order(h);
 
-        if sigma == 0.0 {
-            output[h] = f64::NEG_INFINITY;
-            continue;
-        }
-
         let mut deterministic_value = base;
         for l in 0..order {
             deterministic_value += psi[l] * lag_matrix[l * n_series + h];
+        }
+        if sigma == 0.0 {
+            output[h] = if (targets[h] - deterministic_value).abs() < 1e-10 {
+                0.0
+            } else {
+                f64::NEG_INFINITY
+            };
+            continue;
         }
         output[h] = (targets[h] - deterministic_value) / sigma;
     }
@@ -900,6 +923,85 @@ mod tests {
         assert!(
             eta.is_infinite() && eta.is_sign_negative(),
             "zero sigma: expected NEG_INFINITY, got {eta}"
+        );
+    }
+
+    #[test]
+    fn test_solve_par_noise_sigma_zero_matching_target() {
+        // deterministic_value = 100.0 + 0.5 * 50.0 = 125.0; target matches → 0.0
+        let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 125.0);
+        assert_eq!(
+            eta, 0.0_f64,
+            "sigma=0, matching target: expected 0.0, got {eta}"
+        );
+    }
+
+    #[test]
+    fn test_solve_par_noise_sigma_zero_non_matching_target() {
+        // deterministic_value = 125.0; target = 200.0 → residual = 75.0 → NEG_INFINITY
+        let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 200.0);
+        assert_eq!(
+            eta,
+            f64::NEG_INFINITY,
+            "sigma=0, non-matching target: expected NEG_INFINITY, got {eta}"
+        );
+    }
+
+    #[test]
+    fn test_solve_par_noise_sigma_zero_near_matching_target() {
+        // deterministic_value = 125.0; target within 1e-11 → still matches
+        let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 125.0 + 1e-11);
+        assert_eq!(
+            eta, 0.0_f64,
+            "sigma=0, target within 1e-11: expected 0.0, got {eta}"
+        );
+    }
+
+    #[test]
+    fn test_solve_par_noise_batch_sigma_zero_matching_target() {
+        // Build a single-hydro, single-stage PAR with sigma=0 (std_m3s=0 → sigma=0).
+        // AR(0) with mean=125.0, std=0.0 → deterministic_value=125.0.
+        use cobre_core::{EntityId, scenario::InflowModel};
+
+        let stage = make_stage(0, 0, Some(0));
+        let model = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 125.0,
+            std_m3s: 0.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let par_lp =
+            crate::par::precompute::PrecomputedPar::build(&[model], &[stage], &[EntityId(1)])
+                .unwrap();
+
+        let lag_matrix: Vec<f64> = vec![];
+        // Matching target: deterministic_value = 125.0
+        let targets_match = vec![125.0_f64];
+        let mut output_match = vec![0.0_f64];
+        solve_par_noise_batch(&par_lp, 0, &lag_matrix, &targets_match, &mut output_match);
+        assert_eq!(
+            output_match[0], 0.0_f64,
+            "batch sigma=0, matching target: expected 0.0, got {}",
+            output_match[0]
+        );
+
+        // Non-matching target: deterministic_value = 125.0, target = 200.0
+        let targets_no_match = vec![200.0_f64];
+        let mut output_no_match = vec![0.0_f64];
+        solve_par_noise_batch(
+            &par_lp,
+            0,
+            &lag_matrix,
+            &targets_no_match,
+            &mut output_no_match,
+        );
+        assert_eq!(
+            output_no_match[0],
+            f64::NEG_INFINITY,
+            "batch sigma=0, non-matching target: expected NEG_INFINITY, got {}",
+            output_no_match[0]
         );
     }
 

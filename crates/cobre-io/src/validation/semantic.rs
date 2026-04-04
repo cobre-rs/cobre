@@ -81,7 +81,10 @@ fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
     for hydro in &data.hydros {
         if let Some(ds) = hydro.downstream_id {
             if downstream_set.contains(&ds.0) {
-                adjacency.entry(hydro.id.0).or_default().push(ds.0);
+                adjacency
+                    .entry(hydro.id.0)
+                    .or_insert_with(Vec::new)
+                    .push(ds.0);
             }
         }
     }
@@ -1527,7 +1530,6 @@ mod tests {
             scenario_source: ScenarioSource {
                 sampling_scheme: SamplingScheme::InSample,
                 seed: Some(42),
-                selection_mode: None,
             },
         }
     }
@@ -2539,7 +2541,6 @@ mod tests {
             scenario_source: ScenarioSource {
                 sampling_scheme: SamplingScheme::InSample,
                 seed: Some(42),
-                selection_mode: None,
             },
         }
     }
@@ -3404,7 +3405,6 @@ mod tests {
             scenario_source: ScenarioSource {
                 sampling_scheme: SamplingScheme::InSample,
                 seed: Some(42),
-                selection_mode: None,
             },
         }
     }
@@ -3624,7 +3624,6 @@ mod tests {
             scenario_source: ScenarioSource {
                 sampling_scheme: SamplingScheme::InSample,
                 seed: Some(42),
-                selection_mode: None,
             },
         }
     }
@@ -3918,7 +3917,6 @@ mod tests {
                 scenario_source: ScenarioSource {
                     sampling_scheme: SamplingScheme::InSample,
                     seed: Some(42),
-                    selection_mode: None,
                 },
             },
             initial_conditions: cobre_core::InitialConditions {

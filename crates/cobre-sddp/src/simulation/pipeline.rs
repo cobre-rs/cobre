@@ -47,11 +47,10 @@ use std::time::Instant;
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{ForwardSampler, SampleRequest, build_forward_sampler};
+use cobre_stochastic::{build_forward_sampler, ForwardSampler, SampleRequest};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -61,13 +60,14 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
+            StageExtractionSpec,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::SolverWorkspace,
+    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`ForwardSampler::sample`].
@@ -576,6 +576,7 @@ fn process_scenario_stages<S: SolverInterface>(
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
+        stochastic,
         initial_state,
         ..
     } = training_ctx;
@@ -594,8 +595,8 @@ fn process_scenario_stages<S: SolverInterface>(
             scenario: ids.global_scenario,
             stage: stage_id_u32,
             stage_idx: t,
-            noise_buf: &mut raw_noise_buf,
-            perm_scratch: &mut perm_scratch,
+            noise_buf: raw_noise_buf,
+            perm_scratch,
             total_scenarios: ids.total_scenarios,
         })?;
         let raw_noise = noise.as_slice();
@@ -933,12 +934,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::{simulate, SimulationOutputSpec};
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{ScratchBuffers, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1347,8 +1348,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }]
     }

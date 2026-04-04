@@ -140,8 +140,6 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     effective_eta_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
-                    raw_noise_buf: Vec::new(),
-                    perm_scratch: Vec::new(),
                 },
             })
             .collect();
@@ -201,8 +199,6 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     effective_eta_buf: Vec::with_capacity(hydro_count),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
-                    raw_noise_buf: Vec::new(),
-                    perm_scratch: Vec::new(),
                 },
             });
         }

@@ -976,7 +976,10 @@ mod tests {
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
         Bus, EntityId, SystemBuilder, TrainingEvent,
-        scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+        scenario::{
+            CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+            SamplingScheme,
+        },
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
@@ -1378,6 +1381,37 @@ mod tests {
         build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
     }
 
+    /// Build `n_stages` minimal [`Stage`] values with sequential `id`s (0..n_stages).
+    ///
+    /// Used to populate [`TrainingContext::stages`] so that
+    /// [`cobre_stochastic::build_forward_sampler`] can read per-stage noise methods.
+    fn make_stages(n_stages: usize) -> Vec<Stage> {
+        (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: Some(0),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: cobre_core::temporal::StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: cobre_core::temporal::StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect()
+    }
+
     fn make_fcf(
         n_stages: usize,
         n_state: usize,
@@ -1410,6 +1444,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1458,6 +1493,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1487,6 +1524,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1535,6 +1573,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1580,6 +1620,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1630,6 +1671,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1711,6 +1754,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1759,6 +1803,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1786,6 +1832,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1834,6 +1881,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1858,6 +1907,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1906,6 +1956,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -1936,6 +1988,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1986,6 +2039,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2023,6 +2078,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2076,6 +2132,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2123,6 +2181,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2176,6 +2235,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2239,6 +2300,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2287,6 +2349,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2318,6 +2382,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2372,6 +2437,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2418,6 +2485,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2466,6 +2534,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,
@@ -2493,6 +2563,7 @@ mod tests {
         let initial_state = vec![0.0_f64; indexer.n_state];
         let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2541,6 +2612,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &stages,
             },
             &opening_tree,
             &risk_measures,

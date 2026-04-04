@@ -29,10 +29,6 @@ pub(crate) struct ScratchBuffers {
     pub(crate) effective_eta_buf: Vec<f64>,
     pub(crate) unscaled_primal: Vec<f64>,
     pub(crate) unscaled_dual: Vec<f64>,
-    /// Pre-allocated buffer for `ForwardSampler::sample()` raw noise output.
-    pub(crate) raw_noise_buf: Vec<f64>,
-    /// Pre-allocated permutation scratch for LHS point-wise batch generation.
-    pub(crate) perm_scratch: Vec<usize>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -87,8 +83,6 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 effective_eta_buf: Vec::with_capacity(hydro_count),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }
     }

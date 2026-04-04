@@ -66,6 +66,10 @@ pub enum SimulationError {
     /// unexpectedly. Indicates a panic or crash in the output writer.
     #[error("simulation output channel closed unexpectedly")]
     ChannelClosed,
+
+    /// Forward sampler construction or sampling failure.
+    #[error("stochastic error: {0}")]
+    Stochastic(#[from] cobre_stochastic::StochasticError),
 }
 
 impl From<SimulationError> for SddpError {

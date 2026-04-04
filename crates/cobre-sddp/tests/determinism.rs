@@ -30,7 +30,9 @@ use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -590,6 +592,8 @@ fn run_training(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
+                    sampling_scheme: SamplingScheme::InSample,
+                    stages: &[],
                 },
                 &fx.opening_tree,
                 &fx.risk_measures,
@@ -687,6 +691,8 @@ fn run_simulation(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
+                    sampling_scheme: SamplingScheme::InSample,
+                    stages: &[],
                 },
                 &sim_config,
                 SimulationOutputSpec {

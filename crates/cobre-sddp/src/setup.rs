@@ -47,7 +47,10 @@ use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
-use cobre_core::{EntityId, System, TrainingEvent, entities::hydro::HydroGenerationModel};
+use cobre_core::{
+    EntityId, Stage, System, TrainingEvent, entities::hydro::HydroGenerationModel,
+    scenario::SamplingScheme,
+};
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{StochasticContext, context::OpeningTree};
 
@@ -252,6 +255,15 @@ pub struct StudySetup {
 
     // ── Scaling diagnostics ──────────────────────────────────────────────────
     scaling_report: crate::scaling_report::ScalingReport,
+
+    // ── Scenario source ───────────────────────────────────────────────────────
+    /// Forward-pass noise source scheme extracted from the system's scenario source.
+    sampling_scheme: SamplingScheme,
+    /// Study stages (id >= 0) owned for the lifetime of this setup.
+    ///
+    /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
+    /// can read per-stage noise methods when constructing an `OutOfSample` sampler.
+    stages: Vec<Stage>,
 
     // ── Config-derived scalars ────────────────────────────────────────────────
     seed: u64,
@@ -647,6 +659,15 @@ impl StudySetup {
             .collect();
         let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
 
+        // ── Scenario source ───────────────────────────────────────────────────
+        let sampling_scheme = system.scenario_source().sampling_scheme;
+        let stages: Vec<Stage> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+
         Ok(Self {
             stage_templates,
             stochastic,
@@ -662,6 +683,8 @@ impl StudySetup {
             block_counts_per_stage,
             max_blocks,
             scaling_report,
+            sampling_scheme,
+            stages,
             seed,
             forward_passes,
             max_iterations,
@@ -910,6 +933,8 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
+            sampling_scheme: self.sampling_scheme,
+            stages: &self.stages,
         }
     }
 
@@ -975,6 +1000,8 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
+            sampling_scheme: self.sampling_scheme,
+            stages: &self.stages,
         };
 
         crate::train(

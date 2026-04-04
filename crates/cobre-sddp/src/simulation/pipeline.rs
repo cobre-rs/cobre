@@ -28,7 +28,7 @@
 //! To avoid seed collisions with training forward pass seeds (which use
 //! `global_scenario = rank * forward_passes + m`), the simulation domain adds
 //! an offset of `u32::MAX / 2` to the scenario ID before passing it to
-//! [`sample_forward`]. This places simulation seeds in a disjoint region of
+//! [`ForwardSampler::sample`]. This places simulation seeds in a disjoint region of
 //! the SipHash-1-3 seed space (deterministic SipHash-1-3 seeds for communication-free parallel noise).
 //!
 //! ## Hot-path allocation discipline
@@ -47,7 +47,7 @@ use std::time::Instant;
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::sample_forward;
+use cobre_stochastic::{ForwardSampler, SampleRequest, build_forward_sampler};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
@@ -70,7 +70,7 @@ use crate::{
     workspace::SolverWorkspace,
 };
 
-/// Offset added to the simulation scenario ID before passing to [`sample_forward`].
+/// Offset added to the simulation scenario ID before passing to [`ForwardSampler::sample`].
 ///
 /// Separates the simulation seed domain from the training forward pass domain.
 /// Training uses `global_scenario = rank * forward_passes + m`, while
@@ -161,10 +161,15 @@ pub struct SimulationOutputSpec<'a> {
 struct ScenarioIds {
     /// Local scenario ID (0-based index within this rank's assigned slice).
     scenario_id: u32,
-    /// Global scenario ID (used for seed derivation in `sample_forward`).
+    /// Global scenario ID passed to [`ForwardSampler::sample`] as `scenario`.
+    ///
+    /// Already includes [`SIMULATION_SEED_OFFSET`] to separate the simulation
+    /// seed domain from the training forward pass domain.
     global_scenario: u32,
     /// Total number of stages in the planning horizon.
     num_stages: usize,
+    /// Total simulation scenario count, passed to [`SampleRequest::total_scenarios`].
+    total_scenarios: u32,
 }
 
 /// Rebuild the `row_lower` slice for a stage with full unscaling.
@@ -565,18 +570,18 @@ fn process_scenario_stages<S: SolverInterface>(
     output: &SimulationOutputSpec<'_>,
     ids: &ScenarioIds,
     stage_bases: &[Option<Basis>],
+    sampler: &ForwardSampler<'_>,
+    raw_noise_buf: &mut [f64],
+    perm_scratch: &mut [usize],
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
-        stochastic,
         initial_state,
         ..
     } = training_ctx;
     // Reset workspace state to the initial conditions for this scenario.
     ws.current_state.clear();
     ws.current_state.extend_from_slice(initial_state);
-    let tree_view = stochastic.tree_view();
-    let base_seed = stochastic.base_seed();
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
@@ -584,14 +589,16 @@ fn process_scenario_stages<S: SolverInterface>(
     for t in 0..ids.num_stages {
         #[allow(clippy::cast_possible_truncation)]
         let stage_id_u32 = t as u32;
-        let (_opening_idx, raw_noise) = sample_forward(
-            &tree_view,
-            base_seed,
-            0,
-            ids.global_scenario,
-            stage_id_u32,
-            t,
-        );
+        let noise = sampler.sample(SampleRequest {
+            iteration: 0,
+            scenario: ids.global_scenario,
+            stage: stage_id_u32,
+            stage_idx: t,
+            noise_buf: &mut raw_noise_buf,
+            perm_scratch: &mut perm_scratch,
+            total_scenarios: ids.total_scenarios,
+        })?;
+        let raw_noise = noise.as_slice();
         transform_inflow_noise(
             raw_noise,
             t,
@@ -813,6 +820,12 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     let sim_start = Instant::now();
     let scenarios_complete = AtomicU32::new(0);
 
+    let sampler = build_forward_sampler(
+        training_ctx.sampling_scheme,
+        training_ctx.stochastic,
+        training_ctx.stages,
+    )?;
+
     let worker_results: Vec<Result<(WorkerCosts, WorkerStats), SimulationError>> = workspaces
         .par_iter_mut()
         .enumerate()
@@ -822,6 +835,11 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
             let n_scenarios = end_local - start_local;
             let mut worker_costs = Vec::with_capacity(n_scenarios);
             let mut worker_stats = Vec::with_capacity(n_scenarios);
+            // Sampling scratch: allocated once per worker, reused across scenarios.
+            let noise_dim = training_ctx.stochastic.dim();
+            let mut raw_noise_buf = vec![0.0_f64; noise_dim];
+            #[allow(clippy::cast_possible_truncation)]
+            let mut perm_scratch = vec![0_usize; config.n_scenarios.max(1) as usize];
 
             for local_idx in start_local..end_local {
                 #[allow(clippy::cast_possible_truncation)]
@@ -839,8 +857,12 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                         scenario_id,
                         global_scenario,
                         num_stages,
+                        total_scenarios: config.n_scenarios,
                     },
                     stage_bases,
+                    &sampler,
+                    &mut raw_noise_buf,
+                    &mut perm_scratch,
                 )?;
                 let stats_after = ws.solver.statistics();
                 let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
@@ -901,6 +923,11 @@ mod tests {
     use std::sync::mpsc;
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+    use cobre_core::scenario::SamplingScheme;
+    use cobre_core::temporal::{
+        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+        StageStateConfig,
+    };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
@@ -1266,6 +1293,35 @@ mod tests {
         vec![vec![1.0]; n_stages]
     }
 
+    /// Build `n_stages` minimal [`Stage`] values (id = index) for [`TrainingContext`].
+    fn make_stages(n_stages: usize) -> Vec<Stage> {
+        use chrono::NaiveDate;
+        (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i32::try_from(i).unwrap(),
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: Some(0),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 3,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect()
+    }
+
     /// Wrap a `MockSolver` in a single-workspace slice for `simulate()` calls.
     ///
     /// All tests use a single workspace (serial execution) so that existing
@@ -1350,6 +1406,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1446,6 +1504,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1532,6 +1592,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1616,6 +1678,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1702,6 +1766,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1785,6 +1851,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1868,6 +1936,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1948,6 +2018,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -1991,8 +2063,6 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
-                    raw_noise_buf: Vec::new(),
-                    perm_scratch: Vec::new(),
                 },
             })
             .collect();
@@ -2018,6 +2088,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2128,6 +2200,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2232,6 +2306,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2321,6 +2397,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2421,6 +2499,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2520,6 +2600,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2634,6 +2716,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -2879,8 +2963,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }];
 
@@ -2914,6 +2996,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -3048,6 +3132,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -3155,8 +3241,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }];
 
@@ -3188,6 +3272,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -3421,8 +3507,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }]
     }
@@ -3497,6 +3581,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::Truncation,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {
@@ -3595,6 +3681,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &config,
             SimulationOutputSpec {

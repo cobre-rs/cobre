@@ -21,7 +21,9 @@ use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
     Bus, DeficitSegment, EntityId, TrainingEvent,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -624,6 +626,8 @@ fn train_simulate_write_cycle() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -774,6 +778,8 @@ fn train_simulate_write_cycle() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &sim_config,
         SimulationOutputSpec {
@@ -1326,6 +1332,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &opening_tree,
         &risk_measures,
@@ -1382,6 +1390,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &sim_config,
         SimulationOutputSpec {

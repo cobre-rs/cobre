@@ -337,7 +337,7 @@ mod tests {
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
-        LoadModel,
+        LoadModel, SamplingScheme,
     };
     use cobre_core::temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -407,8 +407,6 @@ mod tests {
             effective_eta_buf: Vec::with_capacity(n_hydros),
             unscaled_primal: Vec::new(),
             unscaled_dual: Vec::new(),
-            raw_noise_buf: Vec::new(),
-            perm_scratch: Vec::new(),
         }
     }
 
@@ -716,6 +714,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 
@@ -773,6 +773,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 
@@ -830,6 +832,8 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         };
         let mut scratch = make_scratch(1);
 

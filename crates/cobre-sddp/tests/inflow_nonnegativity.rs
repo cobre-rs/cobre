@@ -42,7 +42,9 @@ use cobre_core::{
     EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
     NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
     ResolvedPenalties, ThermalStageBounds,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
+    },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
@@ -586,6 +588,8 @@ fn train_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &fx.opening_tree,
         &fx.risk_measures,
@@ -652,6 +656,8 @@ fn simulate_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
+            sampling_scheme: SamplingScheme::InSample,
+            stages: &[],
         },
         &SimulationConfig {
             n_scenarios: 20,

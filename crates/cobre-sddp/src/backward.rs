@@ -850,6 +850,8 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
 
+    use cobre_core::scenario::SamplingScheme;
+
     use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
@@ -1100,8 +1102,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }]
     }
@@ -1414,6 +1414,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1496,6 +1498,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1578,6 +1582,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1656,6 +1662,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1734,6 +1742,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1810,6 +1820,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1930,6 +1942,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2028,6 +2042,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2131,6 +2147,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2221,6 +2239,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2320,6 +2340,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2414,6 +2436,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2502,6 +2526,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2597,6 +2623,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2690,8 +2718,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
@@ -2721,6 +2747,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2764,8 +2792,6 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
-                    raw_noise_buf: Vec::new(),
-                    perm_scratch: Vec::new(),
                 },
             })
             .collect();
@@ -2783,6 +2809,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3081,8 +3109,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -3120,6 +3146,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3224,8 +3252,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -3257,6 +3283,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3362,8 +3390,6 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
-                raw_noise_buf: Vec::new(),
-                perm_scratch: Vec::new(),
             },
         };
         let mut workspaces = vec![ws];
@@ -3399,6 +3425,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3504,6 +3532,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3618,6 +3648,8 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
+                sampling_scheme: SamplingScheme::InSample,
+                stages: &[],
             },
             &mut BackwardPassSpec {
                 records: &[],

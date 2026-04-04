@@ -157,19 +157,25 @@ pub struct SimulationOutputSpec<'a> {
     pub event_sender: Option<Sender<TrainingEvent>>,
 }
 
-/// Scenario identifiers bundled for `process_scenario_stages`.
-struct ScenarioIds {
+/// Scenario identifiers and scratch buffers bundled for `process_scenario_stages`.
+struct ScenarioIds<'a> {
     /// Local scenario ID (0-based index within this rank's assigned slice).
     scenario_id: u32,
-    /// Global scenario ID passed to [`ForwardSampler::sample`] as `scenario`.
+    /// Global scenario ID passed to `ForwardSampler::sample` as `scenario`.
     ///
     /// Already includes [`SIMULATION_SEED_OFFSET`] to separate the simulation
     /// seed domain from the training forward pass domain.
     global_scenario: u32,
     /// Total number of stages in the planning horizon.
     num_stages: usize,
-    /// Total simulation scenario count, passed to [`SampleRequest::total_scenarios`].
+    /// Total simulation scenario count, passed to `SampleRequest::total_scenarios`.
     total_scenarios: u32,
+    /// Per-stage warm-start bases from the training checkpoint.
+    stage_bases: &'a [Option<Basis>],
+    /// Caller-owned buffer for raw noise output (reused across stages).
+    raw_noise_buf: &'a mut [f64],
+    /// Caller-owned permutation scratch for LHS generation (reused across stages).
+    perm_scratch: &'a mut [usize],
 }
 
 /// Rebuild the `row_lower` slice for a stage with full unscaling.
@@ -562,18 +568,14 @@ fn extract_sim_stage_result(
     (immediate_cost, result)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn process_scenario_stages<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     cut_batches: &[RowBatch],
     output: &SimulationOutputSpec<'_>,
-    ids: &ScenarioIds,
-    stage_bases: &[Option<Basis>],
+    ids: &mut ScenarioIds<'_>,
     sampler: &ForwardSampler<'_>,
-    raw_noise_buf: &mut [f64],
-    perm_scratch: &mut [usize],
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
@@ -596,8 +598,8 @@ fn process_scenario_stages<S: SolverInterface>(
             scenario: ids.global_scenario,
             stage: stage_id_u32,
             stage_idx: t,
-            noise_buf: raw_noise_buf,
-            perm_scratch,
+            noise_buf: ids.raw_noise_buf,
+            perm_scratch: ids.perm_scratch,
             total_scenarios: ids.total_scenarios,
         })?;
         let raw_noise = noise.as_slice();
@@ -646,7 +648,7 @@ fn process_scenario_stages<S: SolverInterface>(
                 stage_id_u32,
                 scenario_id: ids.scenario_id,
             },
-            stage_bases.get(t).and_then(Option::as_ref),
+            ids.stage_bases.get(t).and_then(Option::as_ref),
         )?;
         let cum_d = ctx
             .cumulative_discount_factors
@@ -855,16 +857,16 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                     training_ctx,
                     &cut_batches,
                     &output,
-                    &ScenarioIds {
+                    &mut ScenarioIds {
                         scenario_id,
                         global_scenario,
                         num_stages,
                         total_scenarios: config.n_scenarios,
+                        stage_bases,
+                        raw_noise_buf: &mut raw_noise_buf,
+                        perm_scratch: &mut perm_scratch,
                     },
-                    stage_bases,
                     &sampler,
-                    &mut raw_noise_buf,
-                    &mut perm_scratch,
                 )?;
                 let stats_after = ws.solver.statistics();
                 let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);

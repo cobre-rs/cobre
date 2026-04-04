@@ -21,14 +21,14 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    read_convergence_summary, read_simulation_manifest, read_training_manifest, ConvergenceSummary,
-    OutputError, SimulationManifest, TrainingManifest,
+    ConvergenceSummary, OutputError, SimulationManifest, TrainingManifest,
+    read_convergence_summary, read_simulation_manifest, read_training_manifest,
 };
 
 use crate::{
     error::CliError,
     summary::{
-        print_simulation_summary, print_training_summary, SimulationSummary, TrainingSummary,
+        SimulationSummary, TrainingSummary, print_simulation_summary, print_training_summary,
     },
 };
 
@@ -203,7 +203,7 @@ mod tests {
         TrainingManifest,
     };
 
-    use super::{build_training_summary, convergence_fallback, SummaryArgs};
+    use super::{SummaryArgs, build_training_summary, convergence_fallback};
 
     fn make_training_manifest() -> TrainingManifest {
         TrainingManifest {

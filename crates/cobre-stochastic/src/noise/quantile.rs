@@ -137,7 +137,11 @@ pub fn norm_quantile(p: f64) -> f64 {
             + r * (C[2]
                 + r * (C[3] + r * (C[4] + r * (C[5] + r * (C[6] + r * (C[7] + r * C[8])))))));
 
-    if y <= 0.0 { -z } else { z }
+    if y <= 0.0 {
+        -z
+    } else {
+        z
+    }
 }
 
 #[cfg(test)]

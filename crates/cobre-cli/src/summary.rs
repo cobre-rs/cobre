@@ -178,11 +178,7 @@ fn format_production_line(summary: &HydroModelSummary) -> String {
 
 /// Pluralize "hydro" or "hydros" based on count.
 fn hydro_plural(count: usize) -> &'static str {
-    if count == 1 {
-        "hydro"
-    } else {
-        "hydros"
-    }
+    if count == 1 { "hydro" } else { "hydros" }
 }
 
 /// Format the evaporation detail line for a [`HydroModelSummary`].
@@ -650,8 +646,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
-        TrainingSummary,
+        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
+        print_summary,
     };
 
     fn make_training_summary() -> TrainingSummary {
@@ -921,8 +917,8 @@ mod tests {
     // ── StochasticSummary tests ────────────────────────────────────────────
 
     use super::{
-        format_stochastic_summary_string, print_stochastic_summary, ArOrderSummary,
-        StochasticSource, StochasticSummary,
+        ArOrderSummary, StochasticSource, StochasticSummary, format_stochastic_summary_string,
+        print_stochastic_summary,
     };
 
     fn make_stochastic_summary() -> StochasticSummary {
@@ -1341,7 +1337,7 @@ mod tests {
 
     // ── HydroModelSummary tests ────────────────────────────────────────────
 
-    use super::{format_hydro_model_summary_string, print_hydro_model_summary, HydroModelSummary};
+    use super::{HydroModelSummary, format_hydro_model_summary_string, print_hydro_model_summary};
     use cobre_core::EntityId;
     use cobre_sddp::FphaHydroDetail;
 

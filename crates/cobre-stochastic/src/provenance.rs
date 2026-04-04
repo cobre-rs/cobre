@@ -37,7 +37,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -46,11 +45,12 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use crate::{
+        context::{build_stochastic_context, OpeningTree},
         ComponentProvenance,
-        context::{OpeningTree, build_stochastic_context},
     };
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {

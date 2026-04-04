@@ -23,12 +23,12 @@
 use cobre_core::{EntityId, LoadModel, System};
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
     tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
-    StochasticError,
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -486,6 +486,7 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -495,7 +496,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
     use super::build_stochastic_context;

@@ -32,6 +32,7 @@ use cobre_sddp::{
     build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
     inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
     prepare_stochastic,
+    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -576,7 +577,9 @@ fn broadcast_and_build_setup(
     let seed = bcast_config.seed;
 
     // Rank 0 uses the stochastic context already built by `prepare_stochastic`.
-    // Non-root ranks reconstruct it from the broadcast opening tree.
+    // Non-root ranks reconstruct it from the broadcast system, opening tree,
+    // and case directory. All factor entries (load, NCS) and the forward seed
+    // must match rank 0's values for MPI reproducibility.
     let stochastic = if ctx.is_root {
         drop(tree_result);
         root_stochastic.ok_or_else(|| CliError::Internal {
@@ -585,10 +588,46 @@ fn broadcast_and_build_setup(
     } else {
         let user_tree: Option<OpeningTree> =
             tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
-        build_stochastic_context(&system, seed, None, &[], &[], user_tree).map_err(|e| {
-            CliError::Internal {
-                message: format!("stochastic context error: {e}"),
-            }
+        let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
+
+        let load_factor_entries =
+            load_load_factors_for_stochastic(&args.case_dir).map_err(|e| CliError::Internal {
+                message: format!("load factor error on non-root rank: {e}"),
+            })?;
+        let load_block_pairs: Vec<Vec<cobre_stochastic::normal::precompute::BlockFactorPair>> =
+            load_factor_entries
+                .iter()
+                .map(|e| {
+                    e.block_factors
+                        .iter()
+                        .map(|bf| (bf.block_id, bf.factor))
+                        .collect()
+                })
+                .collect();
+        let load_entity_factors: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
+            load_factor_entries
+                .iter()
+                .zip(load_block_pairs.iter())
+                .map(|(e, pairs)| (e.bus_id, e.stage_id, pairs.as_slice()))
+                .collect();
+
+        let ncs_raw = build_ncs_factor_entries(&system);
+        let ncs_entity_factors: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
+            ncs_raw
+                .iter()
+                .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
+                .collect();
+
+        build_stochastic_context(
+            &system,
+            seed,
+            forward_seed,
+            &load_entity_factors,
+            &ncs_entity_factors,
+            user_tree,
+        )
+        .map_err(|e| CliError::Internal {
+            message: format!("stochastic context error: {e}"),
         })?
     };
 

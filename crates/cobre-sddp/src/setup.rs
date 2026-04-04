@@ -1334,7 +1334,7 @@ fn load_user_opening_tree_inner(
 /// tuple format expected by `PrecomputedNormal::build`. Includes all NCS entities
 /// that have model entries in `non_controllable_stats.parquet`. Entities with
 /// `std_mw = 0` produce deterministic availability at their `mean_mw` value.
-fn build_ncs_factor_entries(
+pub fn build_ncs_factor_entries(
     system: &System,
 ) -> Vec<(
     cobre_core::EntityId,
@@ -1387,7 +1387,7 @@ fn build_ncs_factor_entries(
 /// Load `scenarios/load_factors.json` from the case directory, returning an
 /// empty vec when the file is absent. This is consumed by the stochastic
 /// context builder for per-block noise scaling.
-fn load_load_factors_for_stochastic(
+pub fn load_load_factors_for_stochastic(
     case_dir: &Path,
 ) -> Result<Vec<cobre_io::scenarios::LoadFactorEntry>, SddpError> {
     let path = case_dir.join("scenarios").join("load_factors.json");

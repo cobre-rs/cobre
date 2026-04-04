@@ -2,20 +2,20 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
+use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     tree::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
+        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
     },
-    StochasticError,
 };
 
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
@@ -123,14 +123,14 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
-        EntityId, Stage,
     };
 
-    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
+    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
 
     use super::generate_opening_tree;
 

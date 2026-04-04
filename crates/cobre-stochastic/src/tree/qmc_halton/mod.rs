@@ -355,7 +355,7 @@ pub fn scrambled_halton_point(spec: &HaltonPointSpec, output: &mut [f64]) {
 )]
 mod tests {
     use super::{
-        generate_qmc_halton, radical_inverse, scrambled_halton_point, sieve_primes, HaltonPointSpec,
+        HaltonPointSpec, generate_qmc_halton, radical_inverse, scrambled_halton_point, sieve_primes,
     };
 
     #[test]

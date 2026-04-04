@@ -74,15 +74,22 @@ impl ForwardNoise<'_, '_> {
 pub enum ForwardSampler<'a> {
     /// In-sample scheme: forward pass uses the pre-generated opening tree.
     InSample {
+        /// View into the pre-generated opening tree.
         tree: OpeningTreeView<'a>,
+        /// Base seed for deterministic scenario selection.
         base_seed: u64,
     },
     /// Out-of-sample scheme: forward pass generates fresh noise on-the-fly.
     OutOfSample {
+        /// Seed for the forward-pass noise generator.
         forward_seed: u64,
+        /// Noise dimension (hydros + load buses + NCS entities).
         dim: usize,
+        /// Per-stage noise generation method.
         noise_methods: Box<[NoiseMethod]>,
+        /// Canonical entity ordering for correlation application.
         entity_order: &'a [EntityId],
+        /// Pre-decomposed spatial correlation for noise correlation.
         correlation: &'a DecomposedCorrelation,
     },
     /// Historical replay scheme (stub — not yet implemented).
@@ -123,12 +130,19 @@ impl std::fmt::Debug for ForwardSampler<'_> {
 ///
 /// Bundles arguments to keep the `sample()` method signature within budget.
 pub struct SampleRequest<'b> {
+    /// Training iteration counter (0-based).
     pub iteration: u32,
+    /// Global scenario index (includes MPI offset).
     pub scenario: u32,
+    /// Stage domain ID used for seed derivation.
     pub stage: u32,
+    /// Stage array index used for tree/method lookup.
     pub stage_idx: usize,
+    /// Caller-owned buffer for fresh noise output (`OutOfSample` path).
     pub noise_buf: &'b mut [f64],
+    /// Caller-owned scratch for LHS permutation generation.
     pub perm_scratch: &'b mut [usize],
+    /// Total scenario count across all ranks (for LHS stratification).
     pub total_scenarios: u32,
 }
 

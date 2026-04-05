@@ -1141,6 +1141,10 @@ impl StudySetup {
             load_scheme: self.load_scheme,
             ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
+            historical_library: self.historical_library.as_ref(),
+            external_inflow_library: self.external_inflow_library.as_ref(),
+            external_load_library: self.external_load_library.as_ref(),
+            external_ncs_library: self.external_ncs_library.as_ref(),
         }
     }
 
@@ -1208,6 +1212,10 @@ impl StudySetup {
             load_scheme: self.load_scheme,
             ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
+            historical_library: self.historical_library.as_ref(),
+            external_inflow_library: self.external_inflow_library.as_ref(),
+            external_load_library: self.external_load_library.as_ref(),
+            external_ncs_library: self.external_ncs_library.as_ref(),
         };
 
         crate::train(

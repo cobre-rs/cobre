@@ -62,7 +62,10 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{SampleRequest, build_forward_sampler};
+use cobre_stochastic::context::ClassSchemes;
+use cobre_stochastic::{
+    ClassDimensions, ClassSampleRequest, ForwardSamplerConfig, SampleRequest, build_forward_sampler,
+};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
@@ -264,6 +267,7 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
+
 /// Push one negated, scaled coefficient entry into the cut row batch.
 ///
 /// Shared by the sparse and dense paths in [`build_cut_row_batch_into`] to
@@ -903,8 +907,24 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
         build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
     }
-    let sampler =
-        build_forward_sampler(training_ctx.inflow_scheme, stochastic, training_ctx.stages)?;
+    let sampler = build_forward_sampler(ForwardSamplerConfig {
+        class_schemes: ClassSchemes {
+            inflow: Some(training_ctx.inflow_scheme),
+            load: Some(training_ctx.load_scheme),
+            ncs: Some(training_ctx.ncs_scheme),
+        },
+        ctx: stochastic,
+        stages: training_ctx.stages,
+        dims: ClassDimensions {
+            n_hydros: stochastic.dim() - stochastic.n_load_buses() - stochastic.n_stochastic_ncs(),
+            n_load_buses: stochastic.n_load_buses(),
+            n_ncs: stochastic.n_stochastic_ncs(),
+        },
+        historical_library: training_ctx.historical_library,
+        external_inflow_library: training_ctx.external_inflow_library,
+        external_load_library: training_ctx.external_load_library,
+        external_ncs_library: training_ctx.external_ncs_library,
+    })?;
     let n_workers = workspaces.len().max(1);
 
     let mut remaining: &mut [TrajectoryRecord] = records;
@@ -963,6 +983,21 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
                     let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
+
+                    if t == 0 {
+                        let class_req = ClassSampleRequest {
+                            iteration: i32,
+                            scenario: s32,
+                            stage: 0,
+                            stage_idx: 0,
+                            total_scenarios: total_scenarios_u32,
+                        };
+                        sampler.apply_initial_state(
+                            &class_req,
+                            &mut ws.current_state,
+                            indexer.inflow_lags.start,
+                        );
+                    }
                     let noise = sampler.sample(SampleRequest {
                         iteration: i32,
                         scenario: s32,
@@ -1631,6 +1666,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1728,6 +1767,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1831,6 +1874,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2217,6 +2264,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2373,6 +2424,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2405,6 +2460,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2500,6 +2559,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2802,6 +2865,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -2968,6 +3035,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -3201,6 +3272,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3316,6 +3391,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3426,6 +3505,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3513,6 +3596,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,

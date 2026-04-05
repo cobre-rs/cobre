@@ -2,7 +2,7 @@
 
 use cobre_core::{Stage, scenario::SamplingScheme};
 use cobre_solver::StageTemplate;
-use cobre_stochastic::StochasticContext;
+use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{HorizonMode, InflowNonNegativityMethod, StageIndexer};
 
@@ -69,4 +69,20 @@ pub struct TrainingContext<'a> {
     pub ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) in index order; required by [`cobre_stochastic::build_forward_sampler`].
     pub stages: &'a [Stage],
+    /// Pre-standardized historical inflow windows library.
+    ///
+    /// `Some` when `inflow_scheme == SamplingScheme::Historical`, `None` otherwise.
+    pub historical_library: Option<&'a HistoricalScenarioLibrary>,
+    /// Pre-standardized external inflow scenario library.
+    ///
+    /// `Some` when `inflow_scheme == SamplingScheme::External`, `None` otherwise.
+    pub external_inflow_library: Option<&'a ExternalScenarioLibrary>,
+    /// Pre-standardized external load scenario library.
+    ///
+    /// `Some` when `load_scheme == SamplingScheme::External`, `None` otherwise.
+    pub external_load_library: Option<&'a ExternalScenarioLibrary>,
+    /// Pre-standardized external NCS scenario library.
+    ///
+    /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
+    pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,
 }

@@ -6,13 +6,12 @@
 //!
 //! Supported methods: SAA, LHS, QMC (Sobol/Halton), Selective (falls back to SAA).
 
-use cobre_core::{EntityId, temporal::NoiseMethod};
+use cobre_core::temporal::NoiseMethod;
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
     StochasticError,
-    correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_forward_seed},
     tree::{
         lhs::{LhsPointSpec, sample_lhs_point},
@@ -49,12 +48,40 @@ pub(crate) struct FreshNoiseSpec {
 ///
 /// Panics if `output.len() < spec.dim` or (for LHS)
 /// `perm_scratch.len() < spec.total_scenarios`.
+#[cfg(test)]
 pub(crate) fn sample_fresh(
     spec: FreshNoiseSpec,
     output: &mut [f64],
     perm_scratch: &mut [usize],
-    correlation: &DecomposedCorrelation,
-    entity_order: &[EntityId],
+    correlation: &crate::correlation::resolve::DecomposedCorrelation,
+    entity_order: &[cobre_core::EntityId],
+) -> Result<(), StochasticError> {
+    fill_uncorrelated(spec, output, perm_scratch)?;
+    #[allow(clippy::cast_possible_wrap)]
+    correlation.apply_correlation(spec.stage_id as i32, &mut output[..spec.dim], entity_order);
+    Ok(())
+}
+
+/// Fill `output[0..spec.dim]` with independent N(0,1) noise without applying correlation.
+///
+/// Dispatches on [`NoiseMethod`] exactly as [`sample_fresh`] does for the
+/// uncorrelated phase, but omits the Cholesky correlation step. Correlation is
+/// applied externally by the composite `ForwardSampler` after all class segments
+/// have been filled.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::DimensionExceedsCapacity`] when `QmcSobol`
+/// and `spec.dim > MAX_SOBOL_DIM`.
+///
+/// # Panics
+///
+/// Panics if `output.len() < spec.dim` or (for LHS)
+/// `perm_scratch.len() < spec.total_scenarios`.
+pub(crate) fn fill_uncorrelated(
+    spec: FreshNoiseSpec,
+    output: &mut [f64],
+    perm_scratch: &mut [usize],
 ) -> Result<(), StochasticError> {
     match spec.noise_method {
         NoiseMethod::Saa => {
@@ -109,10 +136,6 @@ pub(crate) fn sample_fresh(
             fill_saa(spec, output);
         }
     }
-
-    #[allow(clippy::cast_possible_wrap)]
-    correlation.apply_correlation(spec.stage_id as i32, &mut output[..spec.dim], entity_order);
-
     Ok(())
 }
 
@@ -152,7 +175,7 @@ mod tests {
 
     use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
 
-    use super::{FreshNoiseSpec, sample_fresh};
+    use super::{FreshNoiseSpec, fill_uncorrelated, sample_fresh};
 
     fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         let n = entity_ids.len();
@@ -387,5 +410,84 @@ mod tests {
             out_selective, out_saa,
             "Selective fallback must produce the same output as Saa with the same inputs"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for fill_uncorrelated
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fill_uncorrelated_saa_deterministic() {
+        let spec = base_spec(NoiseMethod::Saa);
+        let mut out_a = vec![0.0f64; spec.dim];
+        let mut out_b = vec![0.0f64; spec.dim];
+        let mut perm = vec![0usize; spec.total_scenarios as usize];
+
+        fill_uncorrelated(spec, &mut out_a, &mut perm).unwrap();
+        fill_uncorrelated(spec, &mut out_b, &mut perm).unwrap();
+
+        assert_eq!(
+            out_a, out_b,
+            "fill_uncorrelated with identical SAA inputs must produce bit-identical output"
+        );
+    }
+
+    #[test]
+    fn test_fill_uncorrelated_sobol_dim_exceeds_capacity() {
+        let spec = FreshNoiseSpec {
+            dim: 21_202, // one above MAX_SOBOL_DIM = 21_201
+            ..base_spec(NoiseMethod::QmcSobol)
+        };
+        let mut output = vec![0.0f64; spec.dim];
+        let mut perm = vec![0usize; spec.total_scenarios as usize];
+
+        let result = fill_uncorrelated(spec, &mut output, &mut perm);
+
+        match result {
+            Err(StochasticError::DimensionExceedsCapacity {
+                dim: got_dim,
+                max_dim,
+                method,
+            }) => {
+                assert_eq!(got_dim, 21_202, "dim field");
+                assert_eq!(max_dim, 21_201, "max_dim field");
+                assert!(
+                    method.contains("sobol"),
+                    "method must contain 'sobol', got: {method}"
+                );
+            }
+            Ok(()) => panic!("expected Err(DimensionExceedsCapacity) but got Ok"),
+            Err(other) => panic!("expected DimensionExceedsCapacity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fill_uncorrelated_produces_finite_values() {
+        let methods = [
+            NoiseMethod::Saa,
+            NoiseMethod::Lhs,
+            NoiseMethod::QmcSobol,
+            NoiseMethod::QmcHalton,
+            NoiseMethod::Selective,
+        ];
+
+        for method in methods {
+            let spec = FreshNoiseSpec {
+                scenario: 5,
+                ..base_spec(method)
+            };
+            let mut output = vec![0.0f64; spec.dim];
+            let mut perm = vec![0usize; spec.total_scenarios as usize];
+
+            let result = fill_uncorrelated(spec, &mut output, &mut perm);
+
+            assert!(
+                result.is_ok(),
+                "{method:?}: fill_uncorrelated must return Ok(()), got {result:?}"
+            );
+            for (i, &v) in output.iter().enumerate() {
+                assert!(v.is_finite(), "{method:?}: output[{i}] is not finite: {v}");
+            }
+        }
     }
 }

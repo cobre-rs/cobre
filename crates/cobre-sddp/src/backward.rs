@@ -171,16 +171,13 @@ struct StagedCut {
 pub struct BackwardPassSpec<'a> {
     /// Exchange buffers for gathering trial-point states via `allgatherv`.
     ///
-    /// When `records` is non-empty, `run_backward_pass` calls
-    /// `exchange.exchange(records, t, ...)` once per stage before processing
-    /// trial points at that stage. When `records` is empty (test path), the
-    /// caller is responsible for pre-populating the exchange buffers before
-    /// calling `run_backward_pass`.
+    /// When non-empty, populates exchange buffers per stage. When empty (test path),
+    /// the caller is responsible for pre-populating the exchange buffers.
     pub exchange: &'a mut ExchangeBuffers,
 
     /// Forward-pass trajectory records used to populate `exchange` per stage.
     ///
-    /// Length must be `local_work * num_stages` when non-empty. Pass `&[]` in
+    /// Length must be `local_work * num_stages` when non-empty; pass `&[]` in
     /// tests that pre-populate `exchange` directly.
     pub records: &'a [TrajectoryRecord],
 
@@ -1431,6 +1428,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1517,6 +1518,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1603,6 +1608,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1685,6 +1694,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1767,6 +1780,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1847,6 +1864,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1971,6 +1992,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2073,6 +2098,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2180,6 +2209,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2274,6 +2307,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2377,6 +2414,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2475,6 +2516,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2567,6 +2612,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2666,6 +2715,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2792,6 +2845,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2856,6 +2913,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3208,6 +3269,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3347,6 +3412,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3491,6 +3560,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3600,6 +3673,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3718,6 +3795,10 @@ mod tests {
                 load_scheme: SamplingScheme::InSample,
                 ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &mut BackwardPassSpec {
                 records: &[],

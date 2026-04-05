@@ -82,10 +82,6 @@ pub struct ExternalScenarioLibrary {
     entity_class: &'static str,
 }
 
-// Send + Sync are derived automatically by the compiler: all fields are
-// Box<[f64]>, usize, or &'static str — all of which are Send + Sync.
-// No interior mutability is present, so no manual impl is required.
-
 impl ExternalScenarioLibrary {
     /// Construct a new library with zero-filled buffers.
     ///

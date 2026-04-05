@@ -95,10 +95,6 @@ pub struct HistoricalScenarioLibrary {
     max_order: usize,
 }
 
-// Send + Sync are derived automatically by the compiler: all fields are
-// Box<[f64]>, Box<[i32]>, or usize — all of which are Send + Sync.
-// No interior mutability is present, so no manual impl is required.
-
 impl HistoricalScenarioLibrary {
     /// Construct a new library with zero-filled buffers.
     ///

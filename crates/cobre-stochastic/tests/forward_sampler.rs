@@ -31,11 +31,38 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    StochasticError,
+    ForwardSampler, StochasticError,
     context::{ClassSchemes, StochasticContext, build_stochastic_context},
     sampling::insample::sample_forward,
-    sampling::{ForwardNoise, SampleRequest, build_forward_sampler},
+    sampling::{ForwardSamplerConfig, SampleRequest, build_forward_sampler},
+    tree::generate::ClassDimensions,
 };
+
+fn make_sampler_config<'a>(
+    scheme: SamplingScheme,
+    ctx: &'a StochasticContext,
+    stages: &'a [Stage],
+) -> ForwardSamplerConfig<'a> {
+    let dim = ctx.dim();
+    ForwardSamplerConfig {
+        class_schemes: ClassSchemes {
+            inflow: Some(scheme),
+            load: Some(scheme),
+            ncs: Some(scheme),
+        },
+        ctx,
+        stages,
+        dims: ClassDimensions {
+            n_hydros: dim,
+            n_load_buses: 0,
+            n_ncs: 0,
+        },
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+    }
+}
 
 fn make_bus(id: i32) -> Bus {
     Bus {
@@ -250,7 +277,9 @@ fn insample_dispatch_returns_tree_slice_of_correct_dim() {
     );
     let ctx = build_test_ctx(&system, None);
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::InSample, &ctx, &stages).unwrap();
+    let sampler =
+        build_forward_sampler(make_sampler_config(SamplingScheme::InSample, &ctx, &stages))
+            .unwrap();
     let dim = ctx.dim();
 
     let mut noise_buf = vec![0.0f64; dim];
@@ -268,20 +297,14 @@ fn insample_dispatch_returns_tree_slice_of_correct_dim() {
         })
         .unwrap();
 
-    match result {
-        ForwardNoise::TreeSlice(slice) => {
-            assert_eq!(
-                slice.len(),
-                dim,
-                "tree slice length {} != dim {}",
-                slice.len(),
-                dim
-            );
-        }
-        other @ ForwardNoise::FreshNoise(_) => {
-            panic!("expected ForwardNoise::TreeSlice, got: {other:?}")
-        }
-    }
+    let slice = result.as_slice();
+    assert_eq!(
+        slice.len(),
+        dim,
+        "noise slice length {} != dim {}",
+        slice.len(),
+        dim
+    );
 }
 
 #[test]
@@ -292,7 +315,9 @@ fn insample_copy_equivalence_matches_direct_call() {
     );
     let ctx = build_test_ctx(&system, None);
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::InSample, &ctx, &stages).unwrap();
+    let sampler =
+        build_forward_sampler(make_sampler_config(SamplingScheme::InSample, &ctx, &stages))
+            .unwrap();
     let dim = ctx.dim();
 
     let mut noise_buf = vec![0.0f64; dim];
@@ -328,7 +353,12 @@ fn out_of_sample_dispatch_returns_fresh_noise_of_correct_dim() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
 
     let mut noise_buf = vec![0.0f64; dim];
@@ -346,20 +376,14 @@ fn out_of_sample_dispatch_returns_fresh_noise_of_correct_dim() {
         })
         .unwrap();
 
-    match result {
-        ForwardNoise::FreshNoise(slice) => {
-            assert_eq!(
-                slice.len(),
-                dim,
-                "fresh noise slice length {} != dim {}",
-                slice.len(),
-                dim
-            );
-        }
-        other @ ForwardNoise::TreeSlice(_) => {
-            panic!("expected ForwardNoise::FreshNoise, got: {other:?}")
-        }
-    }
+    let slice = result.as_slice();
+    assert_eq!(
+        slice.len(),
+        dim,
+        "fresh noise slice length {} != dim {}",
+        slice.len(),
+        dim
+    );
 }
 
 #[test]
@@ -370,7 +394,12 @@ fn out_of_sample_is_deterministic() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
 
     let mut buf_a = vec![0.0f64; dim];
@@ -417,7 +446,12 @@ fn out_of_sample_scenario_changes_noise() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
 
     let mut buf_0 = vec![0.0f64; dim];
@@ -469,7 +503,12 @@ fn out_of_sample_noise_is_finite() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
     let total_scenarios: u32 = 100;
 
@@ -507,7 +546,12 @@ fn out_of_sample_correlation_matches_target() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
     assert_eq!(dim, 2, "expected dim=2 for 2 hydros");
 
@@ -562,7 +606,12 @@ fn out_of_sample_per_stage_method_mixing() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
     let total_scenarios: u32 = 10;
 
@@ -611,7 +660,11 @@ fn factory_rejects_out_of_sample_without_seed() {
     let ctx = build_test_ctx(&system, None); // forward_seed = None
     let stages = stages_from_system(&system);
 
-    let result = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages);
+    let result = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ));
 
     match result {
         Err(StochasticError::MissingScenarioSource { scheme, .. }) => {
@@ -633,7 +686,11 @@ fn factory_rejects_historical() {
     let ctx = build_test_ctx(&system, None);
     let stages = stages_from_system(&system);
 
-    let result = build_forward_sampler(SamplingScheme::Historical, &ctx, &stages);
+    let result = build_forward_sampler(make_sampler_config(
+        SamplingScheme::Historical,
+        &ctx,
+        &stages,
+    ));
 
     match result {
         Err(StochasticError::MissingScenarioSource { scheme, .. }) => {
@@ -655,7 +712,8 @@ fn factory_rejects_external() {
     let ctx = build_test_ctx(&system, None);
     let stages = stages_from_system(&system);
 
-    let result = build_forward_sampler(SamplingScheme::External, &ctx, &stages);
+    let result =
+        build_forward_sampler(make_sampler_config(SamplingScheme::External, &ctx, &stages));
 
     match result {
         Err(StochasticError::MissingScenarioSource { scheme, .. }) => {
@@ -676,7 +734,12 @@ fn out_of_sample_resume_invariance() {
     );
     let ctx = build_test_ctx(&system, Some(99));
     let stages = stages_from_system(&system);
-    let sampler = build_forward_sampler(SamplingScheme::OutOfSample, &ctx, &stages).unwrap();
+    let sampler = build_forward_sampler(make_sampler_config(
+        SamplingScheme::OutOfSample,
+        &ctx,
+        &stages,
+    ))
+    .unwrap();
     let dim = ctx.dim();
 
     let mut buf_first = vec![0.0f64; dim];

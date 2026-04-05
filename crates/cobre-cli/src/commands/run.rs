@@ -626,6 +626,11 @@ fn broadcast_and_build_setup(
             &load_entity_factors,
             &ncs_entity_factors,
             user_tree,
+            cobre_stochastic::ClassSchemes {
+                inflow: Some(system.scenario_source().inflow_scheme),
+                load: Some(system.scenario_source().load_scheme),
+                ncs: Some(system.scenario_source().ncs_scheme),
+            },
         )
         .map_err(|e| CliError::Internal {
             message: format!("stochastic context error: {e}"),

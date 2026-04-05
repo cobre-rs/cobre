@@ -61,8 +61,12 @@ pub struct TrainingContext<'a> {
     pub stochastic: &'a StochasticContext,
     /// Initial state vector for stage 0.
     pub initial_state: &'a [f64],
-    /// Forward-pass noise source scheme (in-sample, out-of-sample, etc.).
-    pub sampling_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the inflow entity class.
+    pub inflow_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the load entity class.
+    pub load_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the NCS entity class.
+    pub ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) in index order; required by [`cobre_stochastic::build_forward_sampler`].
     pub stages: &'a [Stage],
 }

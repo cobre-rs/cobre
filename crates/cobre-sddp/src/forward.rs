@@ -903,11 +903,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
         build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
     }
-    let sampler = build_forward_sampler(
-        training_ctx.sampling_scheme,
-        stochastic,
-        training_ctx.stages,
-    )?;
+    let sampler =
+        build_forward_sampler(training_ctx.inflow_scheme, stochastic, training_ctx.stages)?;
     let n_workers = workspaces.len().max(1);
 
     let mut remaining: &mut [TrajectoryRecord] = records;
@@ -1040,7 +1037,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
@@ -1388,7 +1385,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1617,7 +1627,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -1712,7 +1724,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -1813,7 +1827,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2197,7 +2213,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2351,7 +2369,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2381,7 +2401,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2474,7 +2496,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2656,7 +2680,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2761,7 +2798,9 @@ mod tests {
                 inflow_method,
                 stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -2925,7 +2964,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -3070,7 +3111,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -3143,7 +3197,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {
@@ -3256,7 +3312,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &ForwardPassBatch {
@@ -3364,7 +3422,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &ForwardPassBatch {
@@ -3449,7 +3509,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
             },
             &ForwardPassBatch {

@@ -46,7 +46,7 @@ use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassDimensions, OpeningTree, StochasticContext, build_stochastic_context,
+    ClassDimensions, ClassSchemes, OpeningTree, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -362,7 +362,20 @@ fn build_context_with_load(
     load_std_mw: f64,
 ) -> StochasticContext {
     let system = build_system_with_load(n_stages, 1, load_mean_mw, load_std_mw);
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -508,7 +521,9 @@ fn test_stochastic_load_training_completes() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &opening_tree,
@@ -614,7 +629,9 @@ fn test_deterministic_load_training_matches_baseline() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &stochastic,
             initial_state: &initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &opening_tree,
@@ -702,7 +719,9 @@ fn test_stochastic_load_seed_determinism() {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &opening_tree,

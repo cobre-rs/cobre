@@ -58,8 +58,9 @@ use cobre_sddp::{
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    ClassDimensions, OpeningTree, PrecomputedPar, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
+    ClassDimensions, ClassSchemes, OpeningTree, PrecomputedPar, StochasticContext,
+    build_stochastic_context, correlation::resolve::DecomposedCorrelation,
+    tree::generate::generate_opening_tree,
 };
 
 // ===========================================================================
@@ -363,7 +364,20 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 /// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
@@ -600,7 +614,9 @@ fn train_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -668,7 +684,9 @@ fn simulate_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &SimulationConfig {

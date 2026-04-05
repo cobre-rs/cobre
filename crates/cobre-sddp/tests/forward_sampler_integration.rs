@@ -48,7 +48,7 @@ use cobre_sddp::{
     hydro_models::PrepareHydroModelsResult, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
-use cobre_stochastic::build_stochastic_context;
+use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure
@@ -377,8 +377,11 @@ fn build_single_hydro_system(
         .bounds(bounds)
         .penalties(penalties)
         .scenario_source(ScenarioSource {
-            sampling_scheme,
+            inflow_scheme: sampling_scheme,
+            load_scheme: sampling_scheme,
+            ncs_scheme: sampling_scheme,
             seed: forward_seed,
+            historical_years: None,
         })
         .build()
         .expect("SystemBuilder must produce a valid system")
@@ -440,8 +443,11 @@ fn build_two_hydro_system(
         .bounds(bounds)
         .penalties(penalties)
         .scenario_source(ScenarioSource {
-            sampling_scheme,
+            inflow_scheme: sampling_scheme,
+            load_scheme: sampling_scheme,
+            ncs_scheme: sampling_scheme,
             seed: forward_seed,
+            historical_years: None,
         })
         .build()
         .expect("SystemBuilder must produce a valid system")
@@ -455,8 +461,20 @@ fn run_programmatic(
     // Extract forward_seed from scenario_source — mirrors what prepare_stochastic does.
     let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
 
-    let stochastic = build_stochastic_context(system, 42, forward_seed, &[], &[], None)
-        .expect("build_stochastic_context must succeed");
+    let stochastic = build_stochastic_context(
+        system,
+        42,
+        forward_seed,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed");
 
     let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 

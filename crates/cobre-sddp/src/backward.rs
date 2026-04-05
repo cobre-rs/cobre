@@ -1164,7 +1164,7 @@ mod tests {
                 StageStateConfig,
             },
         };
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -1289,7 +1289,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── Unit tests ────────────────────────────────────────────────────────────
@@ -1414,7 +1427,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1498,7 +1513,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1582,7 +1599,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1662,7 +1681,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1742,7 +1763,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1820,7 +1843,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -1942,7 +1967,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2042,7 +2069,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2147,7 +2176,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2239,7 +2270,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2340,7 +2373,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2436,7 +2471,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2526,7 +2563,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2623,7 +2662,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2747,7 +2788,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2809,7 +2852,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -2896,7 +2941,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -3025,7 +3070,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// AC: Given a backward pass with 1 stochastic load bus and opening noise
@@ -3146,7 +3204,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -3283,7 +3343,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -3425,7 +3487,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -3532,7 +3596,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {
@@ -3648,7 +3714,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &[],
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &mut BackwardPassSpec {

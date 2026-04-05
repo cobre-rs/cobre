@@ -43,7 +43,7 @@ use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassDimensions, OpeningTree, StochasticContext, build_stochastic_context,
+    ClassDimensions, ClassSchemes, OpeningTree, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -433,7 +433,20 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -565,7 +578,9 @@ fn run_one_deterministic_pass(
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         opening_tree,
@@ -626,7 +641,9 @@ fn train_converges_with_mock_solver() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -718,7 +735,9 @@ fn train_lb_monotonically_nondecreasing() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -797,7 +816,9 @@ fn train_emits_correct_event_sequence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -878,7 +899,9 @@ fn train_stops_at_iteration_limit() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -949,7 +972,9 @@ fn train_stops_on_graceful_shutdown() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -1010,7 +1035,9 @@ fn train_propagates_infeasible_error() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -1098,7 +1125,9 @@ fn d17_level1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,
@@ -1244,7 +1273,9 @@ fn d18_lml1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         },
         &fx.opening_tree,

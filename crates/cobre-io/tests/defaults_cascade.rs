@@ -286,9 +286,9 @@ fn test_stages_absent_scenario_source_uses_defaults() {
     let data = parse_stages(f.path()).unwrap();
 
     assert_eq!(
-        data.scenario_source.sampling_scheme,
+        data.scenario_source.inflow_scheme,
         SamplingScheme::InSample,
-        "absent scenario_source must default sampling_scheme to InSample"
+        "absent scenario_source must default inflow_scheme to InSample"
     );
     assert!(
         data.scenario_source.seed.is_none(),
@@ -300,9 +300,7 @@ fn test_stages_absent_scenario_source_uses_defaults() {
 /// must preserve the seed as `Some(42)`.
 #[test]
 fn test_stages_scenario_source_seed_preserved() {
-    let json = minimal_stages_json_with(
-        r#""scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },"#,
-    );
+    let json = minimal_stages_json_with(r#""scenario_source": { "seed": 42 },"#);
     let f = write_json(&json);
     let data = parse_stages(f.path()).unwrap();
 
@@ -312,9 +310,9 @@ fn test_stages_scenario_source_seed_preserved() {
         "scenario_source.seed must be Some(42) when explicitly set"
     );
     assert_eq!(
-        data.scenario_source.sampling_scheme,
+        data.scenario_source.inflow_scheme,
         SamplingScheme::InSample,
-        "sampling_scheme must be InSample"
+        "inflow_scheme must be InSample (default when class key absent)"
     );
 }
 

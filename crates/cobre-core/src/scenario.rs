@@ -89,6 +89,10 @@ pub enum SamplingScheme {
 /// [`ScenarioSourceConfig`](crate::temporal::ScenarioSourceConfig),
 /// which also holds the branching factor (`num_scenarios`).
 ///
+/// Each entity class (inflow, load, NCS) independently specifies its
+/// forward-pass noise source via a dedicated `SamplingScheme` field.
+/// The `seed` and `historical_years` fields are shared across all classes.
+///
 /// See [Input Scenarios §1.4, §1.8](input-scenarios.md).
 ///
 /// # Examples
@@ -97,20 +101,80 @@ pub enum SamplingScheme {
 /// use cobre_core::scenario::{SamplingScheme, ScenarioSource};
 ///
 /// let source = ScenarioSource {
-///     sampling_scheme: SamplingScheme::InSample,
+///     inflow_scheme: SamplingScheme::InSample,
+///     load_scheme: SamplingScheme::OutOfSample,
+///     ncs_scheme: SamplingScheme::InSample,
 ///     seed: Some(42),
+///     historical_years: None,
 /// };
-/// assert_eq!(source.sampling_scheme, SamplingScheme::InSample);
+/// assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
+/// assert_eq!(source.load_scheme, SamplingScheme::OutOfSample);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScenarioSource {
-    /// Noise source used during the forward pass.
-    pub sampling_scheme: SamplingScheme,
+    /// Noise source used during the inflow forward pass.
+    pub inflow_scheme: SamplingScheme,
+
+    /// Noise source used during the load forward pass.
+    pub load_scheme: SamplingScheme,
+
+    /// Noise source used during the NCS (non-controllable source) forward pass.
+    pub ncs_scheme: SamplingScheme,
 
     /// Random seed for reproducible opening tree generation.
     /// `None` means non-deterministic (OS entropy).
     pub seed: Option<i64>,
+
+    /// Historical year pool for [`SamplingScheme::Historical`] inflow sampling.
+    /// When `None`, all valid windows are auto-discovered at validation time.
+    pub historical_years: Option<HistoricalYears>,
+}
+
+// ---------------------------------------------------------------------------
+// HistoricalYears (SS14 — year pool for Historical sampling)
+// ---------------------------------------------------------------------------
+
+/// Specifies which historical years to draw from when using
+/// [`SamplingScheme::Historical`] sampling.
+///
+/// Preserves user intent (list vs range) so that validation and error messages
+/// can reference the original specification form. Expansion into a concrete
+/// year list is deferred to `cobre-io` validation (Tier 1) and Epic 04 library
+/// construction.
+///
+/// When absent (represented as `Option<HistoricalYears>::None` at the
+/// `ScenarioSource` level), all valid windows are auto-discovered at
+/// validation time.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::scenario::HistoricalYears;
+///
+/// // Explicit list of years
+/// let list = HistoricalYears::List(vec![1940, 1953, 1971]);
+/// assert!(matches!(list, HistoricalYears::List(_)));
+///
+/// // Inclusive range shorthand
+/// let range = HistoricalYears::Range { from: 1940, to: 2010 };
+/// assert!(matches!(range, HistoricalYears::Range { from: 1940, to: 2010 }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HistoricalYears {
+    /// Explicit list of historical years (e.g., `[1940, 1953, 1971]`).
+    List(Vec<i32>),
+
+    /// Inclusive range shorthand (e.g., years 1940 through 2010).
+    /// `from` and `to` are both inclusive. Validation of `from <= to`
+    /// is performed by `cobre-io` (ticket-014 Tier 1 validation).
+    Range {
+        /// First year of the range (inclusive).
+        from: i32,
+        /// Last year of the range (inclusive).
+        to: i32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -563,8 +627,11 @@ pub struct CorrelationModel {
 impl Default for ScenarioSource {
     fn default() -> Self {
         Self {
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             seed: None,
+            historical_years: None,
         }
     }
 }
@@ -730,41 +797,122 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn test_scenario_source_serde_roundtrip() {
-        // InSample with seed
+        use super::HistoricalYears;
+
+        // All three schemes set to different values with seed and no historical_years
         let source = ScenarioSource {
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::OutOfSample,
+            ncs_scheme: SamplingScheme::External,
             seed: Some(12345),
+            historical_years: None,
         };
         let json = serde_json::to_string(&source).unwrap();
         let deserialized: ScenarioSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, deserialized);
 
-        // OutOfSample with seed
-        let source_oos = ScenarioSource {
-            sampling_scheme: SamplingScheme::OutOfSample,
-            seed: Some(7),
-        };
-        let json_oos = serde_json::to_string(&source_oos).unwrap();
-        let deserialized_oos: ScenarioSource = serde_json::from_str(&json_oos).unwrap();
-        assert_eq!(source_oos, deserialized_oos);
-
-        // External without seed
-        let source_ext = ScenarioSource {
-            sampling_scheme: SamplingScheme::External,
-            seed: Some(99),
-        };
-        let json_ext = serde_json::to_string(&source_ext).unwrap();
-        let deserialized_ext: ScenarioSource = serde_json::from_str(&json_ext).unwrap();
-        assert_eq!(source_ext, deserialized_ext);
-
-        // Historical without seed
+        // Historical inflow with historical_years list
         let source_hist = ScenarioSource {
-            sampling_scheme: SamplingScheme::Historical,
-            seed: None,
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: Some(HistoricalYears::List(vec![1990, 2000, 2010])),
         };
         let json_hist = serde_json::to_string(&source_hist).unwrap();
         let deserialized_hist: ScenarioSource = serde_json::from_str(&json_hist).unwrap();
         assert_eq!(source_hist, deserialized_hist);
+
+        // Historical inflow with historical_years range and no seed
+        let source_range = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: Some(HistoricalYears::Range {
+                from: 1940,
+                to: 2010,
+            }),
+        };
+        let json_range = serde_json::to_string(&source_range).unwrap();
+        let deserialized_range: ScenarioSource = serde_json::from_str(&json_range).unwrap();
+        assert_eq!(source_range, deserialized_range);
+
+        // All InSample, no seed, no historical_years (default-like)
+        let source_default = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let json_default = serde_json::to_string(&source_default).unwrap();
+        let deserialized_default: ScenarioSource = serde_json::from_str(&json_default).unwrap();
+        assert_eq!(source_default, deserialized_default);
+    }
+
+    #[test]
+    fn test_scenario_source_default() {
+        let source = ScenarioSource::default();
+        assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
+        assert_eq!(source.load_scheme, SamplingScheme::InSample);
+        assert_eq!(source.ncs_scheme, SamplingScheme::InSample);
+        assert!(source.seed.is_none());
+        assert!(source.historical_years.is_none());
+    }
+
+    #[test]
+    fn test_historical_years_list_construction() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::List(vec![1940, 1953, 1971]);
+        match &years {
+            HistoricalYears::List(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v[0], 1940);
+                assert_eq!(v[1], 1953);
+                assert_eq!(v[2], 1971);
+            }
+            HistoricalYears::Range { .. } => panic!("expected List variant"),
+        }
+    }
+
+    #[test]
+    fn test_historical_years_range_construction() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::Range {
+            from: 1940,
+            to: 2010,
+        };
+        match years {
+            HistoricalYears::Range { from, to } => {
+                assert_eq!(from, 1940);
+                assert_eq!(to, 2010);
+            }
+            HistoricalYears::List(_) => panic!("expected Range variant"),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_historical_years_list_serde_roundtrip() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::List(vec![1940, 1953, 1971]);
+        let json = serde_json::to_string(&years).unwrap();
+        let deserialized: HistoricalYears = serde_json::from_str(&json).unwrap();
+        assert_eq!(years, deserialized);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_historical_years_range_serde_roundtrip() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::Range {
+            from: 1940,
+            to: 2010,
+        };
+        let json = serde_json::to_string(&years).unwrap();
+        let deserialized: HistoricalYears = serde_json::from_str(&json).unwrap();
+        assert_eq!(years, deserialized);
     }
 
     #[cfg(feature = "serde")]

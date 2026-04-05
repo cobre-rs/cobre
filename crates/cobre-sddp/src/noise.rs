@@ -346,7 +346,7 @@ mod tests {
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::StageTemplate;
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
     use std::collections::BTreeMap;
 
     use crate::{
@@ -537,7 +537,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// One-hydro, one-load-bus, n-stage `StochasticContext`.
@@ -672,7 +685,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── transform_inflow_noise: None method ──────────────────────────────────
@@ -714,7 +740,9 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         };
         let mut scratch = make_scratch(1);
@@ -773,7 +801,9 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         };
         let mut scratch = make_scratch(1);
@@ -832,7 +862,9 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
         };
         let mut scratch = make_scratch(1);

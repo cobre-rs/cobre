@@ -22,7 +22,7 @@ pub mod provenance;
 pub mod sampling;
 pub mod tree;
 
-pub use context::{StochasticContext, build_stochastic_context};
+pub use context::{ClassSchemes, StochasticContext, build_stochastic_context};
 pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
 pub use error::StochasticError;
 pub use noise::quantile::norm_quantile;

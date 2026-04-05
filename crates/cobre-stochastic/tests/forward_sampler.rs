@@ -32,7 +32,7 @@ use cobre_core::{
 };
 use cobre_stochastic::{
     StochasticError,
-    context::{StochasticContext, build_stochastic_context},
+    context::{ClassSchemes, StochasticContext, build_stochastic_context},
     sampling::insample::sample_forward,
     sampling::{ForwardNoise, SampleRequest, build_forward_sampler},
 };
@@ -217,7 +217,20 @@ fn build_test_system(methods: &[NoiseMethod], correlation: CorrelationModel) -> 
 }
 
 fn build_test_ctx(system: &cobre_core::System, forward_seed: Option<u64>) -> StochasticContext {
-    build_stochastic_context(system, 42, forward_seed, &[], &[], None).unwrap()
+    build_stochastic_context(
+        system,
+        42,
+        forward_seed,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 fn stages_from_system(system: &cobre_core::System) -> Vec<Stage> {

@@ -24,6 +24,7 @@ use cobre_core::{
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -31,7 +32,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    ClassDimensions, build_stochastic_context,
+    ClassDimensions, ClassSchemes, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
     tree::lhs::{LhsPointSpec, sample_lhs_point},
@@ -298,8 +299,20 @@ fn build_lhs_context(
         .build()
         .expect("build_lhs_context: system build must succeed");
 
-    build_stochastic_context(&system, base_seed, None, &[], &[], None)
-        .expect("build_lhs_context: build_stochastic_context must succeed")
+    build_stochastic_context(
+        &system,
+        base_seed,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_lhs_context: build_stochastic_context must succeed")
 }
 
 // ---------------------------------------------------------------------------

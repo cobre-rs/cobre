@@ -311,7 +311,10 @@ mod tests {
     };
 
     use super::{ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
-    use crate::{StochasticError, context::build_stochastic_context};
+    use crate::{
+        StochasticError,
+        context::{ClassSchemes, build_stochastic_context},
+    };
 
     fn make_bus(id: i32) -> Bus {
         Bus {
@@ -451,7 +454,20 @@ mod tests {
             .correlation(identity_correlation(&[1]))
             .build()
             .unwrap();
-        let ctx = build_stochastic_context(&system, 42, forward_seed, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            forward_seed,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         (ctx, stages)
     }
 

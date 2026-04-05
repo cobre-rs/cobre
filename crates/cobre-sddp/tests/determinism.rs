@@ -48,7 +48,7 @@ use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassDimensions, OpeningTree, StochasticContext, build_stochastic_context,
+    ClassDimensions, ClassSchemes, OpeningTree, StochasticContext, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
 };
 
@@ -412,7 +412,20 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 /// Build a `StageTemplate` for a 3-hydro, PAR(0) stage LP.
@@ -604,7 +617,9 @@ fn run_training(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
-                    sampling_scheme: SamplingScheme::InSample,
+                    inflow_scheme: SamplingScheme::InSample,
+                    load_scheme: SamplingScheme::InSample,
+                    ncs_scheme: SamplingScheme::InSample,
                     stages: &[],
                 },
                 &fx.opening_tree,
@@ -703,7 +718,9 @@ fn run_simulation(
                     inflow_method: &InflowNonNegativityMethod::None,
                     stochastic: &fx.stochastic,
                     initial_state: &fx.initial_state,
-                    sampling_scheme: SamplingScheme::InSample,
+                    inflow_scheme: SamplingScheme::InSample,
+                    load_scheme: SamplingScheme::InSample,
+                    ncs_scheme: SamplingScheme::InSample,
                     stages: &[],
                 },
                 &sim_config,

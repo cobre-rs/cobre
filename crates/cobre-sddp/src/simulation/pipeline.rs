@@ -825,7 +825,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     let scenarios_complete = AtomicU32::new(0);
 
     let sampler = build_forward_sampler(
-        training_ctx.sampling_scheme,
+        training_ctx.inflow_scheme,
         training_ctx.stochastic,
         training_ctx.stages,
     )?;
@@ -1162,7 +1162,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus = Bus {
             id: EntityId(0),
@@ -1280,7 +1280,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1375,7 +1388,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1473,7 +1488,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1561,7 +1578,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1647,7 +1666,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1735,7 +1756,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1820,7 +1843,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1905,7 +1930,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -1987,7 +2014,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2057,7 +2086,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2169,7 +2200,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2275,7 +2308,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2366,7 +2401,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2468,7 +2505,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2569,7 +2608,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2685,7 +2726,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -2747,7 +2790,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -2861,7 +2904,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// When a simulation has 1 stochastic load bus (mean=300, std=30),
@@ -2965,7 +3021,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -3101,7 +3159,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -3241,7 +3301,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -3305,7 +3367,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus = Bus {
             id: EntityId(0),
@@ -3417,7 +3479,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
@@ -3550,7 +3625,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::Truncation,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,
@@ -3650,7 +3727,9 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
             },
             &config,

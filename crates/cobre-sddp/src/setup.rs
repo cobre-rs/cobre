@@ -27,11 +27,11 @@
 //! ```rust,no_run
 //! use cobre_sddp::setup::StudySetup;
 //! use cobre_sddp::hydro_models::PrepareHydroModelsResult;
-//! use cobre_stochastic::build_stochastic_context;
+//! use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
-//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None)?;
+//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None, ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
@@ -257,8 +257,12 @@ pub struct StudySetup {
     scaling_report: crate::scaling_report::ScalingReport,
 
     // ── Scenario source ───────────────────────────────────────────────────────
-    /// Forward-pass noise source scheme extracted from the system's scenario source.
-    sampling_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the inflow entity class.
+    inflow_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the load entity class.
+    load_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the NCS entity class.
+    ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) owned for the lifetime of this setup.
     ///
     /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
@@ -660,7 +664,9 @@ impl StudySetup {
         let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
 
         // ── Scenario source ───────────────────────────────────────────────────
-        let sampling_scheme = system.scenario_source().sampling_scheme;
+        let inflow_scheme = system.scenario_source().inflow_scheme;
+        let load_scheme = system.scenario_source().load_scheme;
+        let ncs_scheme = system.scenario_source().ncs_scheme;
         let stages: Vec<Stage> = system
             .stages()
             .iter()
@@ -683,7 +689,9 @@ impl StudySetup {
             block_counts_per_stage,
             max_blocks,
             scaling_report,
-            sampling_scheme,
+            inflow_scheme,
+            load_scheme,
+            ncs_scheme,
             stages,
             seed,
             forward_passes,
@@ -933,7 +941,9 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
-            sampling_scheme: self.sampling_scheme,
+            inflow_scheme: self.inflow_scheme,
+            load_scheme: self.load_scheme,
+            ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
         }
     }
@@ -1000,7 +1010,9 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
-            sampling_scheme: self.sampling_scheme,
+            inflow_scheme: self.inflow_scheme,
+            load_scheme: self.load_scheme,
+            ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
         };
 
@@ -1488,6 +1500,11 @@ pub fn prepare_stochastic(
         &entity_factor_entries,
         &ncs_entity_factor_entries,
         user_opening_tree,
+        cobre_stochastic::ClassSchemes {
+            inflow: Some(system.scenario_source().inflow_scheme),
+            load: Some(system.scenario_source().load_scheme),
+            ncs: Some(system.scenario_source().ncs_scheme),
+        },
     )?;
 
     Ok(PrepareStochasticResult {
@@ -1520,7 +1537,7 @@ mod tests {
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
             thermal::{Thermal, ThermalCostSegment},
         },
-        scenario::{InflowModel, LoadModel},
+        scenario::{InflowModel, LoadModel, SamplingScheme},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
@@ -1531,7 +1548,7 @@ mod tests {
         ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
         TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
-    use cobre_stochastic::build_stochastic_context;
+    use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 
     // ── Fixture helpers ───────────────────────────────────────────────────────
 
@@ -1812,8 +1829,20 @@ mod tests {
     fn new_minimal_valid_system_returns_ok() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1832,8 +1861,20 @@ mod tests {
     fn new_zero_stages_returns_validation_error() {
         let system = minimal_system(0);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1856,8 +1897,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 50);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1901,8 +1954,20 @@ mod tests {
     fn fcf_mut_allows_cut_insertion() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1925,8 +1990,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1948,8 +2025,20 @@ mod tests {
     fn cut_selection_none_when_disabled() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1970,8 +2059,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2014,8 +2115,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2053,8 +2166,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2091,8 +2216,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2132,8 +2269,20 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2158,8 +2307,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2188,8 +2349,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2242,8 +2415,20 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2652,8 +2837,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 5);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
         let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
 
         let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
@@ -3027,8 +3224,20 @@ mod tests {
         let system =
             minimal_system_2_hydros_with_past_inflows(3, vec![600.0, 500.0], vec![200.0, 100.0]);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,

@@ -252,12 +252,12 @@ impl PrecomputedPar {
     /// Panics if `stage >= n_stages` or `hydro >= n_hydros`.
     #[must_use]
     pub fn deterministic_base(&self, stage: usize, hydro: usize) -> f64 {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             hydro < self.n_hydros,
             "hydro index {hydro} is out of bounds (n_hydros = {})",
             self.n_hydros
@@ -272,12 +272,12 @@ impl PrecomputedPar {
     /// Panics if `stage >= n_stages` or `hydro >= n_hydros`.
     #[must_use]
     pub fn sigma(&self, stage: usize, hydro: usize) -> f64 {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             hydro < self.n_hydros,
             "hydro index {hydro} is out of bounds (n_hydros = {})",
             self.n_hydros
@@ -297,12 +297,12 @@ impl PrecomputedPar {
     /// Panics if `stage >= n_stages` or `hydro >= n_hydros`.
     #[must_use]
     pub fn psi_slice(&self, stage: usize, hydro: usize) -> &[f64] {
-        assert!(
+        debug_assert!(
             stage < self.n_stages,
             "stage index {stage} is out of bounds (n_stages = {})",
             self.n_stages
         );
-        assert!(
+        debug_assert!(
             hydro < self.n_hydros,
             "hydro index {hydro} is out of bounds (n_hydros = {})",
             self.n_hydros
@@ -323,7 +323,7 @@ impl PrecomputedPar {
     /// Panics if `hydro >= n_hydros`.
     #[must_use]
     pub fn order(&self, hydro: usize) -> usize {
-        assert!(
+        debug_assert!(
             hydro < self.n_hydros,
             "hydro index {hydro} is out of bounds (n_hydros = {})",
             self.n_hydros

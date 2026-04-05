@@ -481,6 +481,8 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_fpha_penalty_rule(data, ctx);
     check_scenario_models(data, ctx);
     check_correlation_matrices(data, ctx);
+    check_correlation_same_type(data, ctx);
+    check_external_scheme_has_files(data, ctx);
     check_load_factor_consistency(data, ctx);
     check_estimation_prerequisites(data, ctx);
     check_past_inflows_coverage(data, ctx);
@@ -1055,6 +1057,87 @@ fn check_correlation_matrices(data: &ParsedData, ctx: &mut ValidationContext) {
                 }
             }
         }
+    }
+}
+
+// ── M4: Same-type enforcement within correlation groups ──────────────────────
+
+/// Validates that all entities within each correlation group share the same
+/// `entity_type` value. Mixed groups produce incorrect covariance matrices.
+fn check_correlation_same_type(data: &ParsedData, ctx: &mut ValidationContext) {
+    let Some(correlation) = &data.correlation else {
+        return;
+    };
+
+    for profile in correlation.profiles.values() {
+        for group in &profile.groups {
+            if group.entities.is_empty() {
+                continue;
+            }
+            let first_type = &group.entities[0].entity_type;
+            for entity in &group.entities[1..] {
+                if entity.entity_type != *first_type {
+                    ctx.add_error(
+                        ErrorKind::BusinessRuleViolation,
+                        "scenarios/correlation.json",
+                        Some(format!("CorrelationGroup '{}'", group.name)),
+                        format!(
+                            "CorrelationGroup '{}': entity {} has type '{}' but entity {} has \
+                             type '{}'; all entities in a group must share the same entity_type",
+                            group.name,
+                            group.entities[0].id.0,
+                            first_type,
+                            entity.id.0,
+                            entity.entity_type,
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// ── F2-002: External scheme requires external scenario files ─────────────────
+
+/// Validates that when a class uses the `External` sampling scheme, the
+/// corresponding external scenario file data is non-empty.
+fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut ValidationContext) {
+    use cobre_core::scenario::SamplingScheme;
+
+    let source = &data.stages.scenario_source;
+
+    if source.inflow_scheme == SamplingScheme::External && data.external_scenarios.is_empty() {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "stages.json",
+            Some("scenario_source.inflow"),
+            "inflow class uses 'external' scheme but no external_inflow_scenarios.parquet \
+             data was found; external scheme requires corresponding scenario file"
+                .to_string(),
+        );
+    }
+
+    if source.load_scheme == SamplingScheme::External && data.external_load_scenarios.is_empty() {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "stages.json",
+            Some("scenario_source.load"),
+            "load class uses 'external' scheme but no external_load_scenarios.parquet \
+             data was found; external scheme requires corresponding scenario file"
+                .to_string(),
+        );
+    }
+
+    if source.ncs_scheme == SamplingScheme::External && data.external_ncs_scenarios.is_empty() {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "stages.json",
+            Some("scenario_source.ncs"),
+            "ncs class uses 'external' scheme but no external_ncs_scenarios.parquet \
+             data was found; external scheme requires corresponding scenario file"
+                .to_string(),
+        );
     }
 }
 

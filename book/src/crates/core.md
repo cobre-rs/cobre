@@ -220,7 +220,7 @@ Fields: `id`, `name`, `bus_id`, `entry_stage_id`, `exit_stage_id`,
 | `GnlConfig`          | `lag_stages: i32`                                | Dispatch anticipation lag for GNL thermal units        |
 | `DiversionChannel`   | `downstream_id: EntityId`, `max_flow_m3s: f64`   | Water diversion bypassing turbines and spillways       |
 | `FillingConfig`      | `start_stage_id: i32`, `filling_inflow_m3s: f64` | Reservoir filling operation from a fixed inflow source |
-| `HydroPenalties`     | 11 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
+| `HydroPenalties`     | 16 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
 
 ## EntityId
 
@@ -407,7 +407,7 @@ let cost    = resolve_ncs_curtailment_cost(entity_override, &global);
 let hydro_p = resolve_hydro_penalties(&entity_overrides, &global);
 ```
 
-`HydroPenalties` holds 11 pre-resolved `f64` fields:
+`HydroPenalties` holds 16 pre-resolved `f64` fields:
 
 | Field                             | Unit   | Description                                        |
 | --------------------------------- | ------ | -------------------------------------------------- |
@@ -422,6 +422,11 @@ let hydro_p = resolve_hydro_penalties(&entity_overrides, &global);
 | `generation_violation_below_cost` | $/MW   | Penalty per MW of generation below minimum         |
 | `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation |
 | `water_withdrawal_violation_cost` | $/m³/s | Penalty per m³/s of water withdrawal violation     |
+| `water_withdrawal_violation_pos_cost` | $/m³/s | Penalty per m³/s of over-withdrawal              |
+| `water_withdrawal_violation_neg_cost` | $/m³/s | Penalty per m³/s of under-withdrawal             |
+| `evaporation_violation_pos_cost`      | $/mm   | Penalty per mm of over-evaporation               |
+| `evaporation_violation_neg_cost`      | $/mm   | Penalty per mm of under-evaporation              |
+| `inflow_nonnegativity_cost`           | $/m³/s | Penalty per m³/s of inflow non-negativity slack  |
 
 The optional `HydroPenaltyOverrides` struct mirrors `HydroPenalties` with all
 fields as `Option<f64>`. It is an intermediate type used during case loading;

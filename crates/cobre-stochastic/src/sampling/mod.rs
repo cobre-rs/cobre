@@ -39,7 +39,7 @@ pub use historical::{
 pub use window::discover_historical_windows;
 pub(crate) mod out_of_sample;
 
-use cobre_core::{EntityId, Stage, scenario::SamplingScheme, temporal::NoiseMethod};
+use cobre_core::{EntityId, scenario::SamplingScheme, temporal::NoiseMethod, temporal::Stage};
 
 use crate::{
     StochasticError, context::StochasticContext, correlation::resolve::DecomposedCorrelation,
@@ -54,9 +54,15 @@ use crate::{
 ///
 /// A newtype wrapping a borrowed slice; lifetime tied to the caller-supplied buffer.
 #[derive(Debug)]
-pub struct ForwardNoise<'b>(pub &'b [f64]);
+pub struct ForwardNoise<'b>(&'b [f64]);
 
-impl ForwardNoise<'_> {
+impl<'b> ForwardNoise<'b> {
+    /// Create a new `ForwardNoise` from a borrowed slice.
+    #[must_use]
+    pub fn new(data: &'b [f64]) -> Self {
+        Self(data)
+    }
+
     /// Return the underlying noise slice.
     #[must_use]
     pub fn as_slice(&self) -> &[f64] {
@@ -72,6 +78,7 @@ impl ForwardNoise<'_> {
 ///
 /// Present (`Some`) only for `OutOfSample` samplers. `InSample`, `Historical`,
 /// and `External` samplers produce pre-correlated noise and must not apply it again.
+#[derive(Debug)]
 pub struct CorrelationRef<'a> {
     /// Pre-decomposed Cholesky factors for this entity class.
     pub decomposed: &'a DecomposedCorrelation,
@@ -254,7 +261,7 @@ impl ForwardSampler<'_> {
             );
         }
 
-        Ok(ForwardNoise(&req.noise_buf[..total_dim]))
+        Ok(ForwardNoise::new(&req.noise_buf[..total_dim]))
     }
 }
 
@@ -267,7 +274,7 @@ impl ForwardSampler<'_> {
 /// Bundles the per-class scheme selections, stochastic context, stage list,
 /// class dimensions, and optional library references into a single struct to
 /// keep the factory function signature within the argument budget.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ForwardSamplerConfig<'a> {
     /// Per-class sampling scheme selections.
     pub class_schemes: crate::context::ClassSchemes,
@@ -529,6 +536,85 @@ pub fn build_forward_sampler(
         load_correlation,
         ncs_correlation,
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Shared helper
+// ---------------------------------------------------------------------------
+
+/// Build the full observation sequence as `(year_offset, season_id)` pairs.
+///
+/// Returns `max_order + stages.len()` entries in chronological order:
+/// - Indices `0..max_order`: pre-study lag seasons (oldest first)
+/// - Indices `max_order..max_order + stages.len()`: study seasons
+///
+/// The year offset relative to the window starting year increments whenever
+/// the season sequence wraps from `n_seasons - 1` back to `0`.
+///
+/// When `n_seasons == 1` (annual data), every entry advances exactly one year
+/// (wrap-detection is suppressed to avoid self-referential offsets).
+pub(crate) fn build_observation_sequence(
+    stages: &[Stage],
+    max_order: usize,
+    n_seasons: usize,
+) -> Vec<(i32, usize)> {
+    if stages.is_empty() {
+        return Vec::new();
+    }
+
+    let study_seasons: Vec<usize> = stages.iter().filter_map(|s| s.season_id).collect();
+    if study_seasons.is_empty() {
+        return Vec::new();
+    }
+
+    // Build lag seasons by stepping backwards from study_seasons[0].
+    // Lag seasons are in chronological order (oldest lag first).
+    let first_study_season = study_seasons[0];
+    let lag_seasons: Vec<usize> = (1..=max_order)
+        .rev()
+        .map(|k| {
+            // Step k seasons before first_study_season, wrapping modularly.
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+            let n = n_seasons as i32;
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+            let s = first_study_season as i32;
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+            let k_i32 = k as i32;
+            #[allow(clippy::cast_sign_loss)]
+            let season = ((s - k_i32 % n + n) % n) as usize;
+            season
+        })
+        .collect();
+
+    // Concatenate: lag seasons (oldest first) then study seasons.
+    let full_seasons: Vec<usize> = lag_seasons.into_iter().chain(study_seasons).collect();
+
+    // Assign year offsets.
+    //
+    // When n_seasons == 1 (annual data), every step advances exactly one year.
+    // Season-wrap detection (`season < prev_season`) would never fire because
+    // `0 < 0` is always false, producing wrong self-referential year offsets.
+    // Use explicit year arithmetic for the single-season case instead.
+    let mut result = Vec::with_capacity(full_seasons.len());
+    if n_seasons == 1 {
+        // Annual: each entry in full_seasons is a separate year offset.
+        #[allow(clippy::cast_possible_wrap)]
+        for (i, &season) in full_seasons.iter().enumerate() {
+            result.push((i as i32, season));
+        }
+    } else {
+        let mut year_offset: i32 = 0;
+        let mut prev_season = full_seasons[0];
+        for (i, &season) in full_seasons.iter().enumerate() {
+            if i > 0 && season < prev_season {
+                year_offset += 1;
+            }
+            result.push((year_offset, season));
+            prev_season = season;
+        }
+    }
+
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -955,14 +1041,14 @@ mod tests {
     #[test]
     fn test_forward_noise_as_slice_newtype() {
         let data = [1.0f64, 2.0, 3.0];
-        let noise = ForwardNoise(&data);
+        let noise = ForwardNoise::new(&data);
         assert_eq!(noise.as_slice(), &data);
     }
 
     #[test]
     fn test_forward_noise_as_slice() {
         let buf = [4.0f64, 5.0];
-        let noise = ForwardNoise(&buf);
+        let noise = ForwardNoise::new(&buf);
         assert_eq!(noise.as_slice(), &buf);
     }
 

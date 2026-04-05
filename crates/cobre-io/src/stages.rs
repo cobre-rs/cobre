@@ -207,6 +207,7 @@ pub(crate) struct RawScenarioSource {
 
 /// Intermediate type for a per-class scenario configuration.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawClassConfig {
     /// Scheme string: `"in_sample"`, `"out_of_sample"`, `"external"`, or `"historical"`.
@@ -607,6 +608,17 @@ fn validate_risk_measure(
     stage_index: usize,
     path: &Path,
 ) -> Result<(), LoadError> {
+    if let RawRiskMeasure::Expectation(s) = risk {
+        if !s.eq_ignore_ascii_case("expectation") {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: format!("stages[{stage_index}].risk_measure"),
+                message: format!(
+                    "unrecognized risk measure string '{s}'; expected \"expectation\" or a CVaR object"
+                ),
+            });
+        }
+    }
     if let RawRiskMeasure::CVaR { cvar } = risk {
         if cvar.alpha <= 0.0 || cvar.alpha > 1.0 {
             return Err(LoadError::SchemaError {
@@ -852,6 +864,22 @@ fn validate_scenario_source(source: &ScenarioSource, path: &Path) -> Result<(), 
             field: "scenario_source.historical_years".to_string(),
             message: "historical_years is specified but no class uses the 'historical' scheme"
                 .to_string(),
+        });
+    }
+
+    // V1.x: Historical scheme is only valid for the inflow class.
+    if source.load_scheme == SamplingScheme::Historical {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "scenario_source.load.scheme".to_string(),
+            message: "'historical' scheme is only valid for the inflow class; load class must use in_sample, out_of_sample, or external".to_string(),
+        });
+    }
+    if source.ncs_scheme == SamplingScheme::Historical {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "scenario_source.ncs.scheme".to_string(),
+            message: "'historical' scheme is only valid for the inflow class; ncs class must use in_sample, out_of_sample, or external".to_string(),
         });
     }
 

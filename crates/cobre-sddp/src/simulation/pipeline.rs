@@ -840,9 +840,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         ctx: training_ctx.stochastic,
         stages: training_ctx.stages,
         dims: ClassDimensions {
-            n_hydros: training_ctx.stochastic.dim()
-                - training_ctx.stochastic.n_load_buses()
-                - training_ctx.stochastic.n_stochastic_ncs(),
+            n_hydros: training_ctx.stochastic.n_hydros(),
             n_load_buses: training_ctx.stochastic.n_load_buses(),
             n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
         },

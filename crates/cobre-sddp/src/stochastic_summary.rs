@@ -9,7 +9,7 @@
 //! other callers without pulling in CLI-specific display dependencies. Display/formatting
 //! methods that use `console::style` remain in `cobre-cli`.
 
-use cobre_core::System;
+use cobre_core::{System, scenario::SamplingScheme};
 use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
 use cobre_stochastic::{ComponentProvenance, StochasticContext};
@@ -129,6 +129,14 @@ pub struct StochasticSummary {
     pub n_stages: usize,
     /// Number of buses with stochastic load noise.
     pub n_load_buses: usize,
+    /// Number of stochastic NCS entities in the noise dimension.
+    pub n_stochastic_ncs: usize,
+    /// Sampling scheme for the inflow entity class (`None` when not configured).
+    pub inflow_scheme: Option<SamplingScheme>,
+    /// Sampling scheme for the load entity class (`None` when not configured).
+    pub load_scheme: Option<SamplingScheme>,
+    /// Sampling scheme for the NCS entity class (`None` when not configured).
+    pub ncs_scheme: Option<SamplingScheme>,
     /// Random seed used for noise generation.
     pub seed: u64,
 }
@@ -242,9 +250,12 @@ pub fn build_stochastic_summary(
         ComponentProvenance::NotApplicable => StochasticSource::None,
     };
 
-    // Correlation dimension is n_hydros × n_hydros (hydro-to-hydro spatial correlation).
-    let correlation_dim = if n_hydros > 0 {
-        Some(format!("{n_hydros}x{n_hydros}"))
+    // Correlation dimension spans all correlated entities: hydros + load buses + NCS.
+    // `stochastic.dim()` returns `n_hydros + n_load_buses + n_stochastic_ncs`, which is
+    // the full noise dimension that the Cholesky decomposition operates on.
+    let n_correlated = stochastic.dim();
+    let correlation_dim = if n_correlated > 0 {
+        Some(format!("{n_correlated}x{n_correlated}"))
     } else {
         None
     };
@@ -262,6 +273,8 @@ pub fn build_stochastic_summary(
     let openings_per_stage: Vec<usize> = opening_tree.openings_per_stage_slice().to_vec();
     let n_stages = stochastic.n_stages();
     let n_load_buses = stochastic.n_load_buses();
+    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    let provenance = stochastic.provenance();
 
     StochasticSummary {
         inflow_source,
@@ -274,6 +287,10 @@ pub fn build_stochastic_summary(
         openings_per_stage,
         n_stages,
         n_load_buses,
+        n_stochastic_ncs,
+        inflow_scheme: provenance.inflow_scheme,
+        load_scheme: provenance.load_scheme,
+        ncs_scheme: provenance.ncs_scheme,
         seed,
     }
 }
@@ -968,6 +985,113 @@ mod tests {
             matches!(summary.correlation_source, StochasticSource::None),
             "NotApplicable correlation must produce None, got {:?}",
             summary.correlation_source
+        );
+    }
+
+    // ── build_stochastic_summary field and correlation_dim tests ─────────────
+
+    /// Verify that the new per-class scheme fields are populated from provenance
+    /// and that `correlation_dim` reflects the full noise dimension (not just
+    /// `n_hydros`).
+    #[test]
+    fn build_stochastic_summary_new_fields_and_correlation_dim() {
+        let system = make_system_with_hydro();
+        let stochastic = build_stochastic_context(
+            &system,
+            99,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::OutOfSample),
+                ncs: Some(SamplingScheme::Historical),
+            },
+        )
+        .unwrap();
+
+        let summary = build_stochastic_summary(&system, &stochastic, None, 99);
+
+        // Per-class scheme fields must reflect what was passed to the context.
+        assert_eq!(
+            summary.inflow_scheme,
+            Some(SamplingScheme::InSample),
+            "inflow_scheme must be InSample"
+        );
+        assert_eq!(
+            summary.load_scheme,
+            Some(SamplingScheme::OutOfSample),
+            "load_scheme must be OutOfSample"
+        );
+        assert_eq!(
+            summary.ncs_scheme,
+            Some(SamplingScheme::Historical),
+            "ncs_scheme must be Historical"
+        );
+
+        // n_stochastic_ncs must be 0 for a hydro-only system.
+        assert_eq!(
+            summary.n_stochastic_ncs, 0,
+            "n_stochastic_ncs must be 0 when no NCS entities"
+        );
+
+        // correlation_dim must be derived from stochastic.dim(), not just n_hydros.
+        // For this single-hydro system with no load buses and no NCS: dim == 1.
+        let expected_dim = stochastic.dim();
+        let expected_str = format!("{expected_dim}x{expected_dim}");
+        // correlation_dim is Some("NxN") when dim > 0, None when dim == 0.
+        // The dimension reflects the noise vector size, not the correlation model presence.
+        assert_eq!(
+            summary.correlation_dim,
+            if stochastic.dim() > 0 {
+                Some(expected_str)
+            } else {
+                None
+            },
+            "correlation_dim must be derived from stochastic.dim()"
+        );
+    }
+
+    /// Verify that `correlation_dim` for a system with a real correlation model
+    /// uses `dim()` (hydros + load buses + NCS), not just `n_hydros`.
+    #[test]
+    fn build_stochastic_summary_correlation_dim_uses_full_dim() {
+        let stages = vec![make_stage(0, 0), make_stage(1, 1)];
+        let inflow_models = vec![make_inflow_model(10, 0), make_inflow_model(10, 1)];
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(1)])
+            .hydros(vec![make_hydro(10)])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[10]))
+            .build()
+            .unwrap();
+
+        let stochastic = build_stochastic_context(
+            &system,
+            0,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
+
+        let summary = build_stochastic_summary(&system, &stochastic, None, 0);
+
+        // One hydro, zero load buses, zero NCS: dim == 1.
+        let dim = stochastic.dim();
+        assert_eq!(dim, 1, "expected dim == 1 for single-hydro system");
+        assert_eq!(
+            summary.correlation_dim,
+            Some("1x1".to_string()),
+            "correlation_dim must be '1x1' for a single-hydro system (dim==1)"
         );
     }
 

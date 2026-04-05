@@ -32,10 +32,7 @@ use cobre_core::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{
-    ClassDimensions, ClassSchemes, OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
-};
+use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
 
 use cobre_io::{
     Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
@@ -145,68 +142,6 @@ impl SolverInterface for MockSolver {
     fn name(&self) -> &'static str {
         "MockIntegration"
     }
-}
-
-fn make_opening_tree(n_openings: usize) -> OpeningTree {
-    let stage = Stage {
-        index: 0,
-        id: 0,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "S".to_string(),
-            duration_hours: 744.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: true,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor: n_openings,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-
-    let entity_id = EntityId(1);
-    let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "default".to_string(),
-        CorrelationProfile {
-            groups: vec![CorrelationGroup {
-                name: "g1".to_string(),
-                entities: vec![CorrelationEntity {
-                    entity_type: "inflow".to_string(),
-                    id: entity_id,
-                }],
-                matrix: vec![vec![1.0]],
-            }],
-        },
-    );
-    let corr_model = CorrelationModel {
-        method: "cholesky".to_string(),
-        profiles,
-        schedule: vec![],
-    };
-    let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
-    let entity_order = vec![entity_id];
-
-    generate_opening_tree(
-        42,
-        &[stage],
-        1,
-        &mut decomposed,
-        &entity_order,
-        ClassDimensions {
-            n_hydros: 1,
-            n_load_buses: 0,
-            n_ncs: 0,
-        },
-    )
-    .unwrap()
 }
 
 #[allow(clippy::cast_possible_wrap)]
@@ -392,7 +327,6 @@ struct Fixture {
     base_rows: Vec<usize>,
     indexer: StageIndexer,
     initial_state: Vec<f64>,
-    opening_tree: OpeningTree,
     stochastic: StochasticContext,
     horizon: HorizonMode,
     risk_measures: Vec<RiskMeasure>,
@@ -407,7 +341,6 @@ impl Fixture {
         // base_row: the AR-dynamics row offset is 1 (1 dual-relevant row)
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -420,7 +353,6 @@ impl Fixture {
             base_rows,
             indexer,
             initial_state,
-            opening_tree,
             stochastic,
             horizon,
             risk_measures,
@@ -660,7 +592,6 @@ fn train_simulate_write_cycle() {
             external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(3),
         &comm,
@@ -1319,7 +1250,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     let templates = vec![t0.clone(); n_stages];
     let base_rows = vec![templates_result.base_rows[0]; n_stages];
     let initial_state = vec![100.0_f64; indexer.n_state];
-    let opening_tree = make_opening_tree(1);
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
@@ -1378,7 +1308,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             external_ncs_library: None,
             stages: &[],
         },
-        &opening_tree,
         &risk_measures,
         iteration_limit(1),
         &StubComm,

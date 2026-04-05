@@ -36,8 +36,9 @@ use cobre_core::{
     ThermalStageBounds,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
-        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-        ExternalScenarioRow, InflowHistoryRow, InflowModel, LoadModel, NcsModel, SamplingScheme,
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, ExternalLoadRow,
+        ExternalNcsRow, ExternalScenarioRow, InflowHistoryRow, InflowModel, LoadModel, NcsModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -1061,5 +1062,247 @@ fn mixed_scheme_convergence() {
     assert!(
         result_b.final_lb.is_finite(),
         "combo 2: final_lb must be finite"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// External load / NCS library population tests (F1-106)
+// ---------------------------------------------------------------------------
+
+/// Generate `n_stages × n_scenarios` external load rows for a single bus.
+fn build_external_load_rows(
+    bus_id: EntityId,
+    n_stages: usize,
+    n_scenarios: usize,
+) -> Vec<ExternalLoadRow> {
+    let mut rows = Vec::with_capacity(n_stages * n_scenarios);
+    for stage in 0..n_stages {
+        for scenario in 0..n_scenarios {
+            rows.push(ExternalLoadRow {
+                stage_id: stage as i32,
+                scenario_id: scenario as i32,
+                bus_id,
+                value_mw: 50.0 + 5.0 * (scenario as f64),
+            });
+        }
+    }
+    rows
+}
+
+/// Generate `n_stages × n_scenarios` external NCS rows for a single NCS source.
+fn build_external_ncs_rows(
+    ncs_id: EntityId,
+    n_stages: usize,
+    n_scenarios: usize,
+) -> Vec<ExternalNcsRow> {
+    let mut rows = Vec::with_capacity(n_stages * n_scenarios);
+    for stage in 0..n_stages {
+        for scenario in 0..n_scenarios {
+            rows.push(ExternalNcsRow {
+                stage_id: stage as i32,
+                scenario_id: scenario as i32,
+                ncs_id,
+                value: 0.6 + 0.04 * (scenario as f64 / n_scenarios as f64),
+            });
+        }
+    }
+    rows
+}
+
+/// Build a system whose load scheme is `External`, backed by pre-computed
+/// `ExternalLoadRow` data on the `System`.
+///
+/// Has 1 bus, 1 hydro, 1 load model, and 3 monthly stages.
+fn build_external_load_system(n_scenarios: usize, forward_seed: Option<i64>) -> cobre_core::System {
+    let bus = Bus {
+        id: EntityId(0),
+        name: "B0".to_string(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 1000.0,
+        }],
+        excess_cost: 0.0,
+    };
+    let hydro = make_hydro(1);
+    let stages: Vec<Stage> = (0..3).map(|i| make_monthly_stage(i, 5)).collect();
+    let inflow_models: Vec<InflowModel> = (0..3)
+        .map(|i| InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        })
+        .collect();
+    let load_models: Vec<LoadModel> = (0..3)
+        .map(|i| LoadModel {
+            bus_id: EntityId(0),
+            stage_id: i as i32,
+            mean_mw: 60.0,
+            std_mw: 10.0,
+        })
+        .collect();
+    let ext_load_rows = build_external_load_rows(EntityId(0), 3, n_scenarios);
+    let correlation = make_correlation(&[EntityId(1)]);
+    let bounds = build_resolved_bounds(1, 3);
+    let penalties = build_resolved_penalties(1, 1, 3);
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .external_load_scenarios(ext_load_rows)
+        .correlation(correlation)
+        .bounds(bounds)
+        .penalties(penalties)
+        .scenario_source(ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::External,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: forward_seed,
+            historical_years: None,
+        })
+        .build()
+        .expect("SystemBuilder for external load must succeed")
+}
+
+/// Build a system whose NCS scheme is `External`, backed by pre-computed
+/// `ExternalNcsRow` data on the `System`.
+///
+/// Has 1 bus, 1 hydro, 1 NCS source, and 3 monthly stages.
+fn build_external_ncs_system(n_scenarios: usize, forward_seed: Option<i64>) -> cobre_core::System {
+    let bus = Bus {
+        id: EntityId(0),
+        name: "B0".to_string(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 1000.0,
+        }],
+        excess_cost: 0.0,
+    };
+    let hydro = make_hydro(1);
+    let ncs = NonControllableSource {
+        id: EntityId(10),
+        name: "NCS0".to_string(),
+        bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        max_generation_mw: 30.0,
+        curtailment_cost: 0.0,
+    };
+    let stages: Vec<Stage> = (0..3).map(|i| make_monthly_stage(i, 5)).collect();
+    let inflow_models: Vec<InflowModel> = (0..3)
+        .map(|i| InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        })
+        .collect();
+    let ncs_models: Vec<NcsModel> = (0..3)
+        .map(|i| NcsModel {
+            ncs_id: EntityId(10),
+            stage_id: i as i32,
+            mean: 20.0,
+            std: 5.0,
+        })
+        .collect();
+    let ext_ncs_rows = build_external_ncs_rows(EntityId(10), 3, n_scenarios);
+    let correlation = make_correlation(&[EntityId(1)]);
+    let bounds = build_resolved_bounds(1, 3);
+    let penalties = build_resolved_penalties_with_ncs(1, 1, 1, 3);
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro])
+        .non_controllable_sources(vec![ncs])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .ncs_models(ncs_models)
+        .external_ncs_scenarios(ext_ncs_rows)
+        .correlation(correlation)
+        .bounds(bounds)
+        .penalties(penalties)
+        .scenario_source(ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::External,
+            seed: forward_seed,
+            historical_years: None,
+        })
+        .build()
+        .expect("SystemBuilder for external NCS must succeed")
+}
+
+/// Verify that `ClassSampler::External` for load populates
+/// `StudySetup::external_load_library` and produces a finite lower bound.
+///
+/// Builds a system with `load_scheme = External` and 20 pre-computed
+/// `ExternalLoadRow` entries per stage. After training, asserts that
+/// `external_load_library()` is `Some` and the final lower bound is finite.
+#[test]
+fn external_load_library_populated() {
+    const FORWARD_PASSES: u32 = 10;
+    const MAX_ITERATIONS: u64 = 20;
+    const N_SCENARIOS: usize = 20;
+
+    let system = build_external_load_system(N_SCENARIOS, Some(42));
+    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+
+    assert!(
+        setup.external_load_library().is_some(),
+        "external_load_library must be Some when load_scheme is External"
+    );
+    assert!(
+        setup.external_inflow_library().is_none(),
+        "external_inflow_library must be None when inflow_scheme is InSample"
+    );
+    assert!(
+        setup.external_ncs_library().is_none(),
+        "external_ncs_library must be None when ncs_scheme is InSample"
+    );
+    assert!(
+        result.final_lb.is_finite(),
+        "final_lb must be finite for External load scheme, got {}",
+        result.final_lb
+    );
+}
+
+/// Verify that `ClassSampler::External` for NCS populates
+/// `StudySetup::external_ncs_library` and produces a finite lower bound.
+///
+/// Builds a system with `ncs_scheme = External` and 20 pre-computed
+/// `ExternalNcsRow` entries per stage. After training, asserts that
+/// `external_ncs_library()` is `Some` and the final lower bound is finite.
+#[test]
+fn external_ncs_library_populated() {
+    const FORWARD_PASSES: u32 = 10;
+    const MAX_ITERATIONS: u64 = 20;
+    const N_SCENARIOS: usize = 20;
+
+    let system = build_external_ncs_system(N_SCENARIOS, Some(42));
+    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+
+    assert!(
+        setup.external_ncs_library().is_some(),
+        "external_ncs_library must be Some when ncs_scheme is External"
+    );
+    assert!(
+        setup.external_inflow_library().is_none(),
+        "external_inflow_library must be None when inflow_scheme is InSample"
+    );
+    assert!(
+        setup.external_load_library().is_none(),
+        "external_load_library must be None when load_scheme is InSample"
+    );
+    assert!(
+        result.final_lb.is_finite(),
+        "final_lb must be finite for External NCS scheme, got {}",
+        result.final_lb
     );
 }

@@ -173,7 +173,7 @@ pub fn discover_historical_windows(
     // (n_seasons - 1) to 0, indicating a calendar year boundary.
     // -----------------------------------------------------------------------
     let required_sequence: Vec<(i32, usize)> =
-        build_required_sequence(stages, max_par_order, n_seasons);
+        super::build_observation_sequence(stages, max_par_order, n_seasons);
 
     // -----------------------------------------------------------------------
     // Determine the candidate year set to evaluate.
@@ -239,71 +239,6 @@ pub fn discover_historical_windows(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Build the full required observation sequence as `(year_offset, season_id)` pairs.
-///
-/// The sequence starts with `max_par_order` lag observations (derived by
-/// stepping backwards from `study_seasons[0]`), followed by the study stage
-/// observations in order.
-///
-/// The year offset relative to the window starting year `y` increments
-/// whenever the season index wraps from `n_seasons - 1` to `0`.
-fn build_required_sequence(
-    stages: &[Stage],
-    max_par_order: usize,
-    n_seasons: usize,
-) -> Vec<(i32, usize)> {
-    if stages.is_empty() {
-        return Vec::new();
-    }
-
-    // Collect study season_ids in stage order.
-    let study_seasons: Vec<usize> = stages.iter().filter_map(|s| s.season_id).collect();
-
-    if study_seasons.is_empty() {
-        return Vec::new();
-    }
-
-    // Build lag seasons by stepping backwards from study_seasons[0].
-    // Lag seasons are in chronological order (oldest lag first).
-    let first_study_season = study_seasons[0];
-    let lag_seasons: Vec<usize> = (1..=max_par_order)
-        .rev()
-        .map(|k| {
-            // Step k seasons before first_study_season, wrapping modularly.
-            // n_seasons is always small (12 for monthly, 52 for weekly) so
-            // truncation from usize to i32 is safe in practice.
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let n = n_seasons as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let s = first_study_season as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let k_i32 = k as i32;
-            #[allow(clippy::cast_sign_loss)]
-            let season = ((s - k_i32 % n + n) % n) as usize;
-            season
-        })
-        .collect();
-
-    // Concatenate: lag seasons (oldest first) then study seasons.
-    let full_seasons: Vec<usize> = lag_seasons.into_iter().chain(study_seasons).collect();
-
-    // Assign year offsets: year increments whenever season wraps 0..n_seasons-1 -> 0.
-    let mut result = Vec::with_capacity(full_seasons.len());
-    let mut year_offset: i32 = 0;
-    let mut prev_season = full_seasons[0];
-
-    for (i, &season) in full_seasons.iter().enumerate() {
-        if i > 0 && season < prev_season {
-            // Season wrapped around: we crossed a year boundary.
-            year_offset += 1;
-        }
-        result.push((year_offset, season));
-        prev_season = season;
-    }
-
-    result
-}
 
 /// Return `true` if all required observations exist in the lookup for every hydro.
 fn is_window_complete(

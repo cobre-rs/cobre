@@ -104,7 +104,7 @@ pub enum SamplingScheme {
 /// assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
 /// assert_eq!(source.load_scheme, SamplingScheme::OutOfSample);
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScenarioSource {
     /// Noise source used during the inflow forward pass.

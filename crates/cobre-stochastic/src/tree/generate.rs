@@ -72,7 +72,7 @@ pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
     dim: usize,
-    correlation: &mut DecomposedCorrelation,
+    correlation: &DecomposedCorrelation,
     entity_order: &[EntityId],
     dims: ClassDimensions,
 ) -> Result<OpeningTree, StochasticError> {
@@ -1091,6 +1091,234 @@ mod tests {
                 assert_eq!(
                     per_class, full,
                     "stage={stage_idx} opening={opening_idx}: per-class differs from full-vector (multi-class)"
+                );
+            }
+        }
+    }
+
+    /// Per-class vs full-vector equivalence for `NoiseMethod::Lhs`.
+    ///
+    /// Generates a tree with 2 correlated hydros (rho=0.8) using LHS noise via
+    /// `generate_opening_tree`, then manually reproduces the full-vector path
+    /// (call `generate_lhs` on the full stage batch, then apply full-vector
+    /// Cholesky per opening) and asserts bit-identical results.
+    ///
+    /// The LHS batch generator fills the entire `[n_openings × dim]` buffer in
+    /// one call, after which each opening's noise slice is transformed by the
+    /// Cholesky factor. This mirrors the per-class path, which splits the noise
+    /// into class segments and applies each class's Cholesky factor separately.
+    /// Under a same-type correlation group (block-diagonal L) the two paths must
+    /// produce identical output (ticket-m9).
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_per_class_tree_matches_full_vector_tree_lhs() {
+        let rho = 0.8_f64;
+        let entity_ids = [EntityId(1), EntityId(2)];
+        let n = entity_ids.len();
+        let matrix: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| if i == j { 1.0 } else { rho }).collect())
+            .collect();
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "hydro_group".to_string(),
+                    entities: entity_ids
+                        .iter()
+                        .map(|&id| CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id,
+                        })
+                        .collect(),
+                    matrix,
+                }],
+            },
+        );
+        let corr_model = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        let n_openings = 8;
+        let dim = 2_usize;
+        let base_seed = 77_u64;
+        let stages = vec![
+            make_stage_with_method(0, 0, n_openings, NoiseMethod::Lhs),
+            make_stage_with_method(1, 1, n_openings, NoiseMethod::Lhs),
+        ];
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let mut corr_per_class = DecomposedCorrelation::build(&corr_model).unwrap();
+        let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
+
+        // Generate tree via the per-class path.
+        let tree_per_class = generate_opening_tree(
+            base_seed,
+            &stages,
+            dim,
+            &mut corr_per_class,
+            &entity_order,
+            dims,
+        )
+        .unwrap();
+
+        // Reproduce the full-vector path: generate all openings for a stage
+        // in one LHS batch, then apply full-vector Cholesky per opening.
+        use crate::tree::lhs::generate_lhs;
+        corr_full.resolve_positions(&entity_order);
+
+        let n_stages = stages.len();
+        let openings_per_stage: Vec<usize> = stages
+            .iter()
+            .map(|s| s.scenario_config.branching_factor)
+            .collect();
+        let mut stage_offsets = Vec::with_capacity(n_stages);
+        let mut running_offset = 0usize;
+        for &n in &openings_per_stage {
+            stage_offsets.push(running_offset);
+            running_offset += n * dim;
+        }
+        let mut data_full = vec![0.0f64; running_offset];
+
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let n = openings_per_stage[stage_idx];
+            let offset = stage_offsets[stage_idx];
+            let stage_slice = &mut data_full[offset..offset + n * dim];
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            generate_lhs(base_seed, stage.id as u32, n, dim, stage_slice);
+            for opening_idx in 0..n {
+                let start = opening_idx * dim;
+                let noise = &mut stage_slice[start..start + dim];
+                corr_full.apply_correlation(stage.id, noise, &entity_order);
+            }
+        }
+
+        for stage_idx in 0..n_stages {
+            let n = openings_per_stage[stage_idx];
+            for opening_idx in 0..n {
+                let per_class = tree_per_class.opening(stage_idx, opening_idx);
+                let offset = stage_offsets[stage_idx] + opening_idx * dim;
+                let full = &data_full[offset..offset + dim];
+                assert_eq!(
+                    per_class, full,
+                    "Lhs: stage={stage_idx} opening={opening_idx}: per-class differs from full-vector"
+                );
+            }
+        }
+    }
+
+    /// Per-class vs full-vector equivalence for `NoiseMethod::QmcHalton`.
+    ///
+    /// Same structure as `test_per_class_tree_matches_full_vector_tree_lhs` but
+    /// uses `generate_qmc_halton` for the full-vector reproduction path and
+    /// `NoiseMethod::QmcHalton` in the stage configuration.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_per_class_tree_matches_full_vector_tree_halton() {
+        let rho = 0.8_f64;
+        let entity_ids = [EntityId(1), EntityId(2)];
+        let n = entity_ids.len();
+        let matrix: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| if i == j { 1.0 } else { rho }).collect())
+            .collect();
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "hydro_group".to_string(),
+                    entities: entity_ids
+                        .iter()
+                        .map(|&id| CorrelationEntity {
+                            entity_type: "inflow".to_string(),
+                            id,
+                        })
+                        .collect(),
+                    matrix,
+                }],
+            },
+        );
+        let corr_model = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        let n_openings = 8;
+        let dim = 2_usize;
+        let base_seed = 77_u64;
+        let stages = vec![
+            make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcHalton),
+            make_stage_with_method(1, 1, n_openings, NoiseMethod::QmcHalton),
+        ];
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let mut corr_per_class = DecomposedCorrelation::build(&corr_model).unwrap();
+        let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
+
+        // Generate tree via the per-class path.
+        let tree_per_class = generate_opening_tree(
+            base_seed,
+            &stages,
+            dim,
+            &mut corr_per_class,
+            &entity_order,
+            dims,
+        )
+        .unwrap();
+
+        // Reproduce the full-vector path: generate all openings for a stage
+        // in one QMC-Halton batch, then apply full-vector Cholesky per opening.
+        use crate::tree::qmc_halton::generate_qmc_halton;
+        corr_full.resolve_positions(&entity_order);
+
+        let n_stages = stages.len();
+        let openings_per_stage: Vec<usize> = stages
+            .iter()
+            .map(|s| s.scenario_config.branching_factor)
+            .collect();
+        let mut stage_offsets = Vec::with_capacity(n_stages);
+        let mut running_offset = 0usize;
+        for &n in &openings_per_stage {
+            stage_offsets.push(running_offset);
+            running_offset += n * dim;
+        }
+        let mut data_full = vec![0.0f64; running_offset];
+
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let n = openings_per_stage[stage_idx];
+            let offset = stage_offsets[stage_idx];
+            let stage_slice = &mut data_full[offset..offset + n * dim];
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            generate_qmc_halton(base_seed, stage.id as u32, n, dim, stage_slice);
+            for opening_idx in 0..n {
+                let start = opening_idx * dim;
+                let noise = &mut stage_slice[start..start + dim];
+                corr_full.apply_correlation(stage.id, noise, &entity_order);
+            }
+        }
+
+        for stage_idx in 0..n_stages {
+            let n = openings_per_stage[stage_idx];
+            for opening_idx in 0..n {
+                let per_class = tree_per_class.opening(stage_idx, opening_idx);
+                let offset = stage_offsets[stage_idx] + opening_idx * dim;
+                let full = &data_full[offset..offset + dim];
+                assert_eq!(
+                    per_class, full,
+                    "QmcHalton: stage={stage_idx} opening={opening_idx}: per-class differs from full-vector"
                 );
             }
         }

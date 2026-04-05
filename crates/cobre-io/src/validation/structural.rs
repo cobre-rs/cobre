@@ -6,7 +6,7 @@
 //!
 //! Call [`validate_structure`] with a path to the case root and a mutable
 //! [`ValidationContext`].  It returns a [`FileManifest`] that records which of
-//! the 34 input files are present.  Missing required files produce
+//! the 39 input files are present.  Missing required files produce
 //! [`ErrorKind::FileNotFound`] entries in the context.  Missing optional files
 //! leave the corresponding manifest field `false` without adding any error.
 //!
@@ -28,7 +28,7 @@ use super::{ErrorKind, ValidationContext};
 
 // ── FileManifest ─────────────────────────────────────────────────────────────
 
-/// Records whether each of the 36 input files is present in the case directory.
+/// Records whether each of the 39 input files is present in the case directory.
 ///
 /// All fields default to `false`.  After calling [`validate_structure`], each field
 /// is `true` if the corresponding file was found on disk.
@@ -131,7 +131,7 @@ struct FileEntry {
     required: bool,
 }
 
-/// All 34 input files in canonical order.
+/// All 39 input files in canonical order.
 const FILE_ENTRIES: &[FileEntry] = &[
     // Root-level — required
     FileEntry {

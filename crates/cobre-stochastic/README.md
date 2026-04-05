@@ -21,10 +21,14 @@ and carries no dependency on LP or MIP solvers.
 ## Key Types
 
 - **`StochasticContext`** — Bundles precomputed PAR parameters, correlated factors, and the opening tree for use in iterative algorithms
+- **`ForwardSampler`** — Composite struct holding one `ClassSampler` per entity class; entry point for forward-pass noise sampling
+- **`ClassSampler`** — Per-entity-class noise source enum with variants InSample, OutOfSample, Historical, and External
+- **`HistoricalScenarioLibrary`** — Pre-standardized historical inflow windows for historical replay sampling
+- **`ExternalScenarioLibrary`** — Pre-standardized external scenarios for inflow, load, or NCS classes
 - **`PrecomputedPar`** — Precomputed PAR(p) seasonal statistics and AR coefficients ready for fast evaluation
 - **`OpeningTree`** — Scenario tree structure defining which openings are sampled at each stage
 - **`CholeskyFactor`** — Lower-triangular Cholesky decomposition used to apply spatial correlation to noise draws
-- **`sample_forward`** — Draws a full set of scenario realisations for one iteration using deterministic seeds
+- **`build_forward_sampler`** — Factory function that constructs a `ForwardSampler` from a `ForwardSamplerConfig`
 
 ## Links
 

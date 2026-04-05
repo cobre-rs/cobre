@@ -146,15 +146,19 @@ impl ExternalScenarioLibrary {
     /// Returns the `n_entities`-length slice of eta values for `(stage, scenario)`.
     ///
     /// Layout: `eta[stage * n_scenarios * n_entities + scenario * n_entities + entity]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stage >= n_stages` or `scenario >= n_scenarios`.
     #[must_use]
     #[inline]
     pub fn eta_slice(&self, stage: usize, scenario: usize) -> &[f64] {
-        debug_assert!(
+        assert!(
             stage < self.n_stages,
             "stage ({stage}) must be < n_stages ({})",
             self.n_stages
         );
-        debug_assert!(
+        assert!(
             scenario < self.n_scenarios,
             "scenario ({scenario}) must be < n_scenarios ({})",
             self.n_scenarios
@@ -166,15 +170,19 @@ impl ExternalScenarioLibrary {
     /// Returns a mutable `n_entities`-length slice of eta values for `(stage, scenario)`.
     ///
     /// Used by the external-file parsing pass to populate the library.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stage >= n_stages` or `scenario >= n_scenarios`.
     #[must_use]
     #[inline]
     pub fn eta_slice_mut(&mut self, stage: usize, scenario: usize) -> &mut [f64] {
-        debug_assert!(
+        assert!(
             stage < self.n_stages,
             "stage ({stage}) must be < n_stages ({})",
             self.n_stages
         );
-        debug_assert!(
+        assert!(
             scenario < self.n_scenarios,
             "scenario ({scenario}) must be < n_scenarios ({})",
             self.n_scenarios
@@ -647,12 +655,25 @@ pub fn validate_external_library<S: std::hash::BuildHasher>(
 
     // -----------------------------------------------------------------------
     // V3.4 — Consistent scenario count: rows_per_stage[s] / n_entities must
-    // be the same for every stage.
+    // be the same for every stage, and rows must be exactly divisible by
+    // n_entities (no partial rows).
     //
     // Guard against zero entities to avoid division by zero; this situation
     // is benign (empty library) so we skip the check.
     // -----------------------------------------------------------------------
     if n_entities > 0 && n_stages > 0 {
+        // Check exact divisibility for every stage first.
+        for (stage_idx, &count) in rows_per_stage.iter().enumerate().take(n_stages) {
+            if count % n_entities != 0 {
+                return Err(StochasticError::InsufficientData {
+                    context: format!(
+                        "V3.4: external {class} library has {count} rows for stage \
+                         {stage_idx} which is not exactly divisible by {n_entities} \
+                         entities; each stage must have a whole number of scenarios",
+                    ),
+                });
+            }
+        }
         let first_count = rows_per_stage[0] / n_entities;
         for (stage_idx, &count) in rows_per_stage.iter().enumerate().take(n_stages).skip(1) {
             let stage_count = count / n_entities;

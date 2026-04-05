@@ -278,7 +278,7 @@ correlation matrix.
   "method": "cholesky",
   "profiles": {
     "default": {
-      "groups": [
+      "correlation_groups": [
         {
           "name": "basin_south",
           "entities": [

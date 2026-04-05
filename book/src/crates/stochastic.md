@@ -30,7 +30,7 @@ for deterministic noise generation.
 | `tree::lhs`               | Latin Hypercube Sampling: batch `generate_lhs` and point-wise `sample_lhs_point`                                                                                                    |
 | `tree::qmc_sobol`         | Sobol QMC sequence generation with Joe-Kuo direction tables and Matousek scrambling                                                                                                 |
 | `tree::qmc_halton`        | Halton QMC sequence generation with Owen-style digit scrambling and prime sieve                                                                                                     |
-| `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
+| `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` struct (composite sampler), `ClassSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
 | `sampling::out_of_sample` | Out-of-sample fresh noise generation dispatching over `NoiseMethod`                                                                                                                 |
 | `sampling::historical`    | Historical inflow replay: `HistoricalScenarioLibrary` construction, window discovery, eta standardization, lag seeding, and forward-pass window selection                           |
 | `sampling::external`      | External scenario sources: `ExternalScenarioLibrary` construction, per-class standardization (PAR inversion for inflow, mean/std for load and NCS), and forward-pass scenario lookup |
@@ -242,70 +242,91 @@ external numerical library is required.
 
 ### Forward sampler architecture
 
-The `ForwardSampler` enum provides a unified dispatch point for all supported
-forward-pass sampling strategies. This avoids `Box<dyn Trait>` (prohibited by
-project convention for closed variant sets) while allowing the optimizer's
-forward pass to call a single `sampler.sample(req)` regardless of which
-strategy is active.
+`ForwardSampler<'a>` is a composite struct that unifies all supported
+forward-pass sampling strategies under a single `sample()` dispatch method.
+It holds three `ClassSampler<'a>` instances — one per entity class (inflow,
+load, NCS) — and applies per-class Cholesky correlation only for
+`OutOfSample` class samplers. Use `build_forward_sampler` to construct the
+appropriate sampler from a `ForwardSamplerConfig` and a `StochasticContext`.
 
-#### `ForwardSampler<'a>` enum
+#### `ForwardSampler<'a>` struct
 
-Four variants:
-
-- **`InSample`**: forward pass selects noise from the pre-generated opening
-  tree. Stores `tree: OpeningTreeView<'a>` (a zero-copy borrowed view) and
-  `base_seed: u64`. Delegates to `sampling::insample::sample_forward`.
-- **`OutOfSample`**: forward pass generates fresh noise on-the-fly. Stores
-  `forward_seed`, `dim`, `noise_methods: Box<[NoiseMethod]>` (one per stage),
-  `entity_order: &'a [EntityId]`, and `correlation: &'a DecomposedCorrelation`.
-- **`Historical`**: stub, not yet implemented. Returns
-  `StochasticError::UnsupportedSamplingScheme`.
-- **`External`**: stub, not yet implemented. Returns
-  `StochasticError::UnsupportedSamplingScheme`.
+```rust,no_run
+pub struct ForwardSampler<'a> {
+    inflow: ClassSampler<'a>,
+    load: ClassSampler<'a>,
+    ncs: ClassSampler<'a>,
+    dims: ClassDimensions,
+    inflow_correlation: Option<CorrelationRef<'a>>,
+    load_correlation: Option<CorrelationRef<'a>>,
+    ncs_correlation: Option<CorrelationRef<'a>>,
+}
+```
 
 The lifetime `'a` refers to the `StochasticContext` that owns the opening
 tree, entity order, and correlation data. The sampler is constructed once and
-reused across all `(iteration, scenario, stage)` calls.
+reused across all `(iteration, scenario, stage)` calls without per-call
+allocation.
+
+The `sample()` method splits the caller-supplied `noise_buf` into three
+segments `[hydros | load_buses | ncs]`, delegates to each class sampler's
+`fill()`, then applies per-class Cholesky correlation where
+`Some(CorrelationRef)` is present. Correlation is only applied to
+`OutOfSample` class samplers; `InSample`, `Historical`, and `External`
+samplers produce pre-correlated noise that must not be transformed again.
+
+#### `ClassSampler<'a>` enum
+
+`ClassSampler<'a>` is the per-entity-class noise source. Four variants:
+
+- **`InSample`**: copies a segment from the pre-generated opening tree.
+  Stores `tree: OpeningTreeView<'a>`, `base_seed: u64`, `offset: usize`,
+  and `len: usize`. Delegates to `sampling::insample::sample_forward`.
+- **`OutOfSample`**: generates fresh independent N(0,1) noise on-the-fly.
+  Stores `forward_seed: u64`, `dim: usize`, and
+  `noise_methods: Box<[NoiseMethod]>` (one per stage).
+- **`Historical`**: replays a pre-standardized inflow window from a
+  `HistoricalScenarioLibrary`. Only supported for the inflow class.
+- **`External`**: reads from a pre-standardized `ExternalScenarioLibrary`.
+  Supported for inflow, load, and NCS classes.
 
 #### `build_forward_sampler` factory
 
 ```rust,no_run
-pub fn build_forward_sampler<'a>(
-    scheme: SamplingScheme,
-    ctx: &'a StochasticContext,
-    stages: &'a [Stage],
-) -> Result<ForwardSampler<'a>, StochasticError>
+pub fn build_forward_sampler(
+    config: ForwardSamplerConfig<'_>,
+) -> Result<ForwardSampler<'_>, StochasticError>
 ```
 
-Constructs the appropriate `ForwardSampler` variant from a `SamplingScheme`:
+Constructs a `ForwardSampler` from a `ForwardSamplerConfig` struct that
+bundles all construction parameters:
 
-- `InSample` — always succeeds; borrows `ctx.tree_view()` and `ctx.base_seed()`.
-- `OutOfSample` — requires `ctx.forward_seed()` to be `Some`; collects
-  per-stage `NoiseMethod` values from `stages` into a `Box<[NoiseMethod]>`.
-  Returns `StochasticError::MissingScenarioSource` if no forward seed is
-  configured.
-- `Historical` / `External` — return `StochasticError::MissingScenarioSource`
-  (not yet implemented).
+- `class_schemes` — per-class `SamplingScheme` selections (inflow, load, NCS).
+  A `None` scheme defaults to `InSample`.
+- `ctx` — `&StochasticContext` providing the opening tree, seeds, correlation,
+  and entity order.
+- `stages` — `&[Stage]` used by `OutOfSample` to read per-stage noise methods.
+- `dims` — `ClassDimensions` with per-class entity counts for buffer splitting.
+- `historical_library` — required when inflow scheme is `Historical`.
+- `external_inflow_library`, `external_load_library`, `external_ncs_library` —
+  required when the corresponding class scheme is `External`.
 
-#### `ForwardNoise<'a, 'b>` dual-lifetime return type
+Returns `StochasticError::MissingScenarioSource` when:
+- `OutOfSample` is requested but no `forward_seed` is configured in `ctx`.
+- `Historical` is requested for the inflow class but `historical_library` is `None`.
+- `Historical` is requested for load or NCS (only inflow is supported).
+- `External` is requested but the corresponding library is `None`.
+
+#### `ForwardNoise<'b>` return type
 
 ```rust,no_run
-pub enum ForwardNoise<'a, 'b> {
-    TreeSlice(&'a [f64]),
-    FreshNoise(&'b [f64]),
-}
+pub struct ForwardNoise<'b>(pub &'b [f64]);
 ```
 
-The two lifetime parameters allow the two variants to borrow from different
-allocations:
-
-- `'a` — lifetime of the `StochasticContext` (opening tree data). Used by
-  `InSample`: the returned slice is a sub-slice of the pre-generated tree.
-- `'b` — lifetime of the caller-supplied `noise_buf`. Used by `OutOfSample`:
-  the sampler writes into the buffer and returns a slice borrowing from it.
-
-`ForwardNoise::as_slice()` extracts the underlying `&[f64]` regardless of
-which variant is active, allowing callers to consume the noise uniformly.
+A newtype wrapping a borrowed slice of noise values. The lifetime `'b` is
+tied to the caller-supplied `noise_buf`. `ForwardNoise::as_slice()` returns
+the underlying `&[f64]`, allowing callers to consume the noise uniformly
+regardless of which sampling variant produced it.
 
 #### `SampleRequest<'b>` argument bundle
 
@@ -322,7 +343,7 @@ pub struct SampleRequest<'b> {
 ```
 
 Bundles seven per-call arguments to keep `ForwardSampler::sample()` within the
-project's argument-budget convention. `noise_buf` must be at least `dim`
+project's argument-budget convention. `noise_buf` must be at least `dims.total`
 elements long; `perm_scratch` must be at least `total_scenarios` elements long.
 Both are caller-owned, pre-allocated working buffers — no allocation inside
 `sample()`.
@@ -330,28 +351,30 @@ Both are caller-owned, pre-allocated working buffers — no allocation inside
 #### `FreshNoiseSpec` internal bundle
 
 `FreshNoiseSpec` (in `sampling::out_of_sample`) bundles seed, dimension, and
-method parameters for `sample_fresh`. It is `pub(crate)` and not part of the
-public API.
+method parameters for `fill_uncorrelated`. It is `pub(crate)` and not part of
+the public API.
 
 #### OutOfSample dispatch path
 
-When `ForwardSampler::OutOfSample` is active, `sample()` performs the
-following steps:
+When a `ClassSampler::OutOfSample` is active, its `fill()` method performs
+the following steps:
 
 1. Look up `noise_methods[stage_idx]` to determine the `NoiseMethod` for the
    current stage. Returns `StochasticError::InsufficientData` if `stage_idx`
    is out of bounds.
-2. Build a `FreshNoiseSpec` bundling the forward seed, iteration, scenario,
-   stage ID, dim, and total scenario count.
-3. Call `out_of_sample::sample_fresh(spec, noise_buf, perm_scratch, correlation,
-entity_order)`, which:
-   a. Dispatches on `NoiseMethod`: calls `fill_saa` (SAA), `sample_lhs_point`
-   (LHS), `scrambled_sobol_point` (QmcSobol), or `scrambled_halton_point`
+2. Build a `FreshNoiseSpec` bundling the forward seed, noise method, iteration,
+   scenario, stage ID, dim, and total scenario count.
+3. Call `fill_uncorrelated(spec, output, perm_scratch)`, which dispatches on
+   `NoiseMethod`: calls `fill_saa` (SAA), `sample_lhs_point` (LHS),
+   `scrambled_sobol_point` (QmcSobol), or `scrambled_halton_point`
    (QmcHalton). `Selective` falls back to SAA with a `tracing::warn!`.
-   b. Applies `correlation.apply_correlation(stage_id, &mut noise_buf[..dim],
-   entity_order)` in-place, transforming independent noise to correlated noise.
-4. Return `ForwardNoise::FreshNoise(&noise_buf[..dim])`.
 
+After all three class buffers are filled, `ForwardSampler::sample()` applies
+per-class Cholesky correlation for each class that has `Some(CorrelationRef)`.
+The correlation transform calls `decomposed.apply_correlation_for_class(stage,
+buf, entity_order, class_name)` in-place, transforming the independent N(0,1)
+noise to spatially correlated noise. The final `ForwardNoise` wraps the full
+combined buffer slice.
 ### `StochasticContext` as the integration entry point
 
 `StochasticContext` bundles the three independently-built components into a
@@ -575,36 +598,40 @@ A zero-copy borrowed view over an `OpeningTree`, with the same accessor API:
 
 ### `ForwardSampler<'a>`
 
-Unified forward-pass sampler enum. Constructed once per run via
+Composite forward-pass sampler struct holding one `ClassSampler<'a>` per
+entity class (inflow, load, NCS). Constructed once per run via
 `build_forward_sampler` and reused across all `(iteration, scenario, stage)`
-calls without per-call allocation. Four variants:
+calls without per-call allocation. The lifetime `'a` borrows from the
+`StochasticContext` that owns the opening tree, entity order, and correlation
+data. See "Forward sampler architecture" above.
+
+### `ClassSampler<'a>`
+
+Per-entity-class noise source enum. Four variants:
 
 | Variant       | Description                                                      |
 | ------------- | ---------------------------------------------------------------- |
-| `InSample`    | Selects noise from the pre-generated opening tree                |
-| `OutOfSample` | Generates fresh noise on-the-fly using the stage's `NoiseMethod` |
-| `Historical`  | Stub — not yet implemented                                       |
-| `External`    | Stub — not yet implemented                                       |
+| `InSample`    | Copies a segment from the pre-generated opening tree             |
+| `OutOfSample` | Generates fresh independent N(0,1) noise on-the-fly              |
+| `Historical`  | Replays a pre-standardized window from `HistoricalScenarioLibrary` |
+| `External`    | Reads from a pre-standardized `ExternalScenarioLibrary`          |
 
-The lifetime `'a` borrows from the `StochasticContext` that owns the tree,
-entity order, and correlation data. See "Forward sampler architecture" above.
+The `fill()` method writes exactly `output.len()` f64 values into the
+caller-provided buffer. For `InSample`, `Historical`, and `External` the
+noise is pre-correlated; for `OutOfSample` the noise is independent N(0,1)
+and correlation is applied at the `ForwardSampler` level.
 
-### `ForwardNoise<'a, 'b>`
+### `ForwardNoise<'b>`
 
-Noise payload returned by `ForwardSampler::sample`. Two variants:
-
-| Variant      | Source                      | Lifetime |
-| ------------ | --------------------------- | -------- |
-| `TreeSlice`  | Sub-slice of opening tree   | `'a`     |
-| `FreshNoise` | Caller-supplied `noise_buf` | `'b`     |
-
-`as_slice() -> &[f64]` extracts the underlying slice regardless of variant.
+Noise payload returned by `ForwardSampler::sample`. A newtype wrapping
+`&'b [f64]`. The lifetime `'b` is tied to the caller-supplied `noise_buf`.
+`as_slice() -> &[f64]` extracts the underlying slice.
 
 ### `SampleRequest<'b>`
 
 Per-call argument bundle for `ForwardSampler::sample`. Fields: `iteration`,
 `scenario`, `stage` (domain ID as `u32`), `stage_idx` (array position as
-`usize`), `noise_buf: &'b mut [f64]` (at least `dim` elements),
+`usize`), `noise_buf: &'b mut [f64]` (at least `dims.total` elements),
 `perm_scratch: &'b mut [usize]` (at least `total_scenarios` elements),
 `total_scenarios: u32`.
 
@@ -613,17 +640,14 @@ Per-call argument bundle for `ForwardSampler::sample`. Fields: `iteration`,
 Factory function:
 
 ```rust,no_run
-pub fn build_forward_sampler<'a>(
-    scheme: SamplingScheme,
-    ctx: &'a StochasticContext,
-    stages: &'a [Stage],
-) -> Result<ForwardSampler<'a>, StochasticError>
+pub fn build_forward_sampler(
+    config: ForwardSamplerConfig<'_>,
+) -> Result<ForwardSampler<'_>, StochasticError>
 ```
 
-Returns `StochasticError::MissingScenarioSource` for `OutOfSample` without a
-configured `forward_seed`, and for `Historical` / `External` (not yet
-implemented).
-
+Constructs a `ForwardSampler` from a `ForwardSamplerConfig` struct. Returns
+`StochasticError::MissingScenarioSource` when required resources are absent
+for the configured scheme. See "Forward sampler architecture" above.
 ### `StochasticError`
 
 Returned by all fallible APIs. Nine variants covering six failure domains:

@@ -282,6 +282,15 @@ impl StochasticContext {
         self.n_stochastic_ncs
     }
 
+    /// Returns the number of hydro entities in the stochastic model.
+    ///
+    /// Equal to `dim() - n_load_buses() - n_stochastic_ncs()`. Exposed here
+    /// to avoid repeating the three-term subtraction at every call site.
+    #[must_use]
+    pub fn n_hydros(&self) -> usize {
+        self.dim - self.n_load_buses - self.n_stochastic_ncs
+    }
+
     /// Returns the number of study stages in the opening tree.
     #[must_use]
     pub fn n_stages(&self) -> usize {
@@ -418,7 +427,7 @@ pub fn build_stochastic_context(
 
     let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids)?;
 
-    let mut correlation = if dim == 0 || system.correlation().profiles.is_empty() {
+    let correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()
     } else {
         DecomposedCorrelation::build(system.correlation())?
@@ -438,7 +447,7 @@ pub fn build_stochastic_context(
             base_seed,
             &study_stages,
             dim,
-            &mut correlation,
+            &correlation,
             &entity_order,
             ClassDimensions {
                 n_hydros: hydro_ids.len(),

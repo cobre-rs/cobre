@@ -939,6 +939,10 @@ mod tests {
             openings_per_stage: vec![20; 60],
             n_stages: 60,
             n_load_buses: 3,
+            n_stochastic_ncs: 0,
+            inflow_scheme: None,
+            load_scheme: None,
+            ncs_scheme: None,
             seed: 42,
         }
     }

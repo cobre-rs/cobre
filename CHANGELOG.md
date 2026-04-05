@@ -32,9 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Composite `ForwardSampler` architecture** -- Holds per-class
   `ClassSampler` instances and applies inter-class correlation after
   per-class noise generation, replacing the previous monolithic sampler.
-- **`historical_years` config** -- New field in `stages.json`
-  `scenario_source` sub-objects for specifying which historical years are
-  eligible as replay windows. Accepts a list (`[2010, 2015, 2020]`) or a
+- **`historical_years` config** -- New field in the `stages.json`
+  `scenario_source` object for specifying which historical years are
+  eligible as inflow replay windows. Accepts a list (`[2010, 2015, 2020]`) or a
   range (`{from: 2010, to: 2023}`).
 - **Same-type enforcement for correlation groups** -- All entities in a
   correlation group must share the same `entity_type`. Mixed-type groups
@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`scenario_source` per-class format** -- The `stages.json`
   `scenario_source` object changed from a flat `sampling_scheme` string to
   per-class sub-objects with `inflow`, `load`, and `ncs` keys, each
-  carrying its own `scheme` and optional `historical_years` or `file` field.
+  carrying its own `scheme` field. The `historical_years` field is at the
+  top-level `scenario_source` object, not per-class.
   The old flat format is detected at parse time and produces a clear error.
 - **`InflowHistoryRow` and `ExternalScenarioRow` relocated** -- These row
   types moved from `cobre-io` to `cobre-core::scenario` so that

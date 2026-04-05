@@ -421,7 +421,15 @@ fn check_scenario_references(
                             "ncs",
                             "NonControllableSource",
                         ),
-                        _ => {
+                        other => {
+                            ctx.add_error(
+                                ErrorKind::InvalidReference,
+                                "scenarios/correlation.json",
+                                Some(format!("CorrelationEntity({other}, {})", entity.id.0)),
+                                format!(
+                                    "unknown entity_type '{other}'; valid types are: inflow, load, ncs"
+                                ),
+                            );
                             continue;
                         }
                     };
@@ -1579,9 +1587,18 @@ mod tests {
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
             .collect();
-        // Only the "inflow" entity is checked; unknown types are skipped
-        assert_eq!(inv.len(), 1, "only inflow entity_type should produce error");
-        assert!(inv[0].message.contains("999"));
+        // The "inflow" entity with non-existent hydro produces an error,
+        // and the "unknown" entity_type also produces an error (M3 fix).
+        assert_eq!(
+            inv.len(),
+            2,
+            "expected errors for invalid hydro and unknown entity_type"
+        );
+        assert!(inv.iter().any(|e| e.message.contains("999")));
+        assert!(
+            inv.iter()
+                .any(|e| e.message.contains("unknown entity_type"))
+        );
     }
 
     /// `CorrelationEntity` with `entity_type == "inflow"` and a valid hydro id

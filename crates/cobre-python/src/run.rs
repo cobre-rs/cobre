@@ -752,7 +752,8 @@ fn stochastic_summary_to_dict<'py>(
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
 /// Returns a dict with keys: `"converged"`, `"iterations"`, `"lower_bound"`, `"upper_bound"`,
-/// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`.
+/// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`,
+/// `"hydro_models"`.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]

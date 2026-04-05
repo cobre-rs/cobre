@@ -45,10 +45,7 @@ use cobre_sddp::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{
-    ClassDimensions, ClassSchemes, OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
-};
+use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
 
 // ===========================================================================
 // Shared helpers
@@ -151,72 +148,6 @@ impl SolverInterface for MockSolver {
     fn name(&self) -> &'static str {
         "MockLoadIntegration"
     }
-}
-
-/// Build an `OpeningTree` with `n_openings` at stage 0 using seed 42,
-/// with a noise dimension that matches a 1-hydro system (no load buses).
-fn make_opening_tree_1_hydro(n_openings: usize) -> OpeningTree {
-    let stage = Stage {
-        index: 0,
-        id: 0,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "S".to_string(),
-            duration_hours: 744.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: true,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor: n_openings,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-
-    let entity_id = EntityId(1);
-    // Use a 1x1 identity correlation for the single hydro entity, matching
-    // the `make_opening_tree` pattern from `integration.rs`.
-    let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "default".to_string(),
-        cobre_core::scenario::CorrelationProfile {
-            groups: vec![cobre_core::scenario::CorrelationGroup {
-                name: "g1".to_string(),
-                entities: vec![cobre_core::scenario::CorrelationEntity {
-                    entity_type: "inflow".to_string(),
-                    id: entity_id,
-                }],
-                matrix: vec![vec![1.0]],
-            }],
-        },
-    );
-    let corr_model = cobre_core::scenario::CorrelationModel {
-        method: "cholesky".to_string(),
-        profiles,
-        schedule: vec![],
-    };
-    let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
-    let entity_order = vec![entity_id];
-
-    generate_opening_tree(
-        42,
-        &[stage],
-        1,
-        &mut decomposed,
-        &entity_order,
-        ClassDimensions {
-            n_hydros: 1,
-            n_load_buses: 0,
-            n_ncs: 0,
-        },
-    )
-    .unwrap()
 }
 
 /// Build a `System` with 1 bus, 1 hydro, `n_stages` stages, and optionally
@@ -463,7 +394,6 @@ fn test_stochastic_load_training_completes() {
     let templates = vec![minimal_template(); n_stages];
     let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; indexer.n_state];
-    let opening_tree = make_opening_tree_1_hydro(1);
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
@@ -530,7 +460,6 @@ fn test_stochastic_load_training_completes() {
             external_ncs_library: None,
             stages: &[],
         },
-        &opening_tree,
         &risk_measures,
         iteration_limit(3),
         &comm,
@@ -585,7 +514,6 @@ fn test_deterministic_load_training_matches_baseline() {
     let templates = vec![minimal_template(); n_stages];
     let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; indexer.n_state];
-    let opening_tree = make_opening_tree_1_hydro(1);
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
     };
@@ -642,7 +570,6 @@ fn test_deterministic_load_training_matches_baseline() {
             external_ncs_library: None,
             stages: &[],
         },
-        &opening_tree,
         &risk_measures,
         iteration_limit(3),
         &comm,
@@ -674,7 +601,6 @@ fn test_stochastic_load_seed_determinism() {
         let templates = vec![minimal_template(); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree_1_hydro(1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -736,7 +662,6 @@ fn test_stochastic_load_seed_determinism() {
                 external_ncs_library: None,
                 stages: &[],
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit(3),
             &comm,

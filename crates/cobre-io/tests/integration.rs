@@ -497,6 +497,167 @@ fn test_external_scenarios_absent_returns_empty() {
     );
 }
 
+// ── test_external_load_scenarios_wired_into_system ───────────────────────────
+
+/// Given a case directory with `scenarios/external_load_scenarios.parquet`
+/// containing 2 stages × 3 scenarios × 1 bus (6 rows), `load_case` must return
+/// a `System` whose `external_load_scenarios()` slice has exactly 6 entries,
+/// all with finite `value_mw`.
+#[test]
+fn test_external_load_scenarios_wired_into_system() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // Build 2 stages × 3 scenarios × 1 bus = 6 rows.
+    let mut stage_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut scenario_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut bus_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut values: Vec<f64> = Vec::with_capacity(6);
+
+    for stage_id in 0_i32..2 {
+        for scenario_id in 0_i32..3 {
+            stage_ids.push(stage_id);
+            scenario_ids.push(scenario_id);
+            bus_ids.push(1);
+            values.push(100.0 + f64::from(stage_id) * 50.0 + f64::from(scenario_id) * 10.0);
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("scenario_id", DataType::Int32, false),
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("value_mw", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(stage_ids)),
+            Arc::new(Int32Array::from(scenario_ids)),
+            Arc::new(Int32Array::from(bus_ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    let file = std::fs::File::create(dir.path().join("scenarios/external_load_scenarios.parquet"))
+        .unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for external_load_scenarios case: {e}"));
+
+    assert_eq!(
+        system.external_load_scenarios().len(),
+        6,
+        "system.external_load_scenarios() must have 6 rows (2 stages × 3 scenarios × 1 bus)"
+    );
+    for row in system.external_load_scenarios() {
+        assert!(
+            row.value_mw.is_finite(),
+            "every external_load_scenarios row must have a finite value_mw"
+        );
+    }
+}
+
+// ── test_external_ncs_scenarios_wired_into_system ─────────────────────────────
+
+/// Given a case directory with `scenarios/external_ncs_scenarios.parquet`
+/// containing 2 stages × 4 scenarios × 2 NCS sources (16 rows), `load_case`
+/// must return a `System` whose `external_ncs_scenarios()` slice has exactly
+/// 16 entries, all with finite `value`.
+#[test]
+fn test_external_ncs_scenarios_wired_into_system() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // The referential validator checks that every ncs_id exists in the NCS
+    // registry.  Write a non_controllable_sources.json declaring NCS 1 and 2
+    // on bus_id=1 (the only bus in the minimal case).
+    helpers::write_file(
+        dir.path(),
+        "system/non_controllable_sources.json",
+        r#"{
+    "non_controllable_sources": [
+        { "id": 1, "name": "NCS_A", "bus_id": 1, "max_generation_mw": 50.0 },
+        { "id": 2, "name": "NCS_B", "bus_id": 1, "max_generation_mw": 30.0 }
+    ]
+}"#,
+    );
+
+    // Build 2 stages × 4 scenarios × 2 NCS sources = 16 rows.
+    let mut stage_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut scenario_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut ncs_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut values: Vec<f64> = Vec::with_capacity(16);
+
+    for stage_id in 0_i32..2 {
+        for scenario_id in 0_i32..4 {
+            for ncs_id in 1_i32..=2 {
+                stage_ids.push(stage_id);
+                scenario_ids.push(scenario_id);
+                ncs_ids.push(ncs_id);
+                // availability factor in (0, 1]
+                values.push(0.5 + 0.1 * f64::from(scenario_id) + 0.05 * f64::from(ncs_id - 1));
+            }
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("scenario_id", DataType::Int32, false),
+        Field::new("ncs_id", DataType::Int32, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(stage_ids)),
+            Arc::new(Int32Array::from(scenario_ids)),
+            Arc::new(Int32Array::from(ncs_ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    let file =
+        std::fs::File::create(dir.path().join("scenarios/external_ncs_scenarios.parquet")).unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for external_ncs_scenarios case: {e}"));
+
+    assert_eq!(
+        system.external_ncs_scenarios().len(),
+        16,
+        "system.external_ncs_scenarios() must have 16 rows (2 stages × 4 scenarios × 2 NCS)"
+    );
+    for row in system.external_ncs_scenarios() {
+        assert!(
+            row.value.is_finite(),
+            "every external_ncs_scenarios row must have a finite value"
+        );
+    }
+}
+
 // ── test_postcard_round_trip ──────────────────────────────────────────────────
 
 /// Given a System produced by `load_case`, serializing it with `serialize_system`

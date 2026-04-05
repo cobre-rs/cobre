@@ -745,20 +745,24 @@ impl StudySetup {
                 }
                 // Determine uniform scenario count from stage 0 (or 0 if no rows).
                 let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
-                    rows_per_stage[0] / n_hydros.max(1)
+                    if rows_per_stage[0] % n_hydros != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external inflow rows at stage 0 ({}) is not divisible by \
+                                     hydro count ({n_hydros}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_hydros
                 } else {
                     0
                 };
                 let mut library =
                     ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_hydros, "inflow");
-                standardize_external_inflow(
-                    &mut library,
-                    external_rows,
-                    &hydro_ids,
-                    &stages,
-                    stochastic.par(),
-                    &system.initial_conditions().past_inflows,
-                );
                 validate_external_library(
                     &library,
                     &hydro_ids,
@@ -768,6 +772,14 @@ impl StudySetup {
                     forward_passes,
                 )
                 .map_err(SddpError::Stochastic)?;
+                standardize_external_inflow(
+                    &mut library,
+                    external_rows,
+                    &hydro_ids,
+                    &stages,
+                    stochastic.par(),
+                    &system.initial_conditions().past_inflows,
+                );
                 Some(library)
             } else {
                 None
@@ -800,19 +812,24 @@ impl StudySetup {
                     }
                 }
                 let n_scenarios_ext = if n_buses > 0 && !rows_per_stage.is_empty() {
-                    rows_per_stage[0] / n_buses.max(1)
+                    if rows_per_stage[0] % n_buses != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external load rows at stage 0 ({}) is not divisible by \
+                                     bus count ({n_buses}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_buses
                 } else {
                     0
                 };
                 let mut library =
                     ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_buses, "load");
-                standardize_external_load(
-                    &mut library,
-                    external_rows,
-                    &bus_ids,
-                    system.load_models(),
-                    n_stages,
-                );
                 validate_external_library(
                     &library,
                     &bus_ids,
@@ -822,6 +839,13 @@ impl StudySetup {
                     forward_passes,
                 )
                 .map_err(SddpError::Stochastic)?;
+                standardize_external_load(
+                    &mut library,
+                    external_rows,
+                    &bus_ids,
+                    system.load_models(),
+                    n_stages,
+                );
                 Some(library)
             } else {
                 None
@@ -850,18 +874,23 @@ impl StudySetup {
                 }
             }
             let n_scenarios_ext = if n_ncs > 0 && !rows_per_stage.is_empty() {
-                rows_per_stage[0] / n_ncs.max(1)
+                if rows_per_stage[0] % n_ncs != 0 {
+                    return Err(SddpError::Stochastic(
+                        cobre_stochastic::StochasticError::InsufficientData {
+                            context: format!(
+                                "external NCS rows at stage 0 ({}) is not divisible by \
+                                 NCS count ({n_ncs}); each stage must have exactly \
+                                 n_scenarios * n_entities rows",
+                                rows_per_stage[0],
+                            ),
+                        },
+                    ));
+                }
+                rows_per_stage[0] / n_ncs
             } else {
                 0
             };
             let mut library = ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_ncs, "ncs");
-            standardize_external_ncs(
-                &mut library,
-                external_rows,
-                &ncs_ids,
-                system.ncs_models(),
-                n_stages,
-            );
             validate_external_library(
                 &library,
                 &ncs_ids,
@@ -871,6 +900,13 @@ impl StudySetup {
                 forward_passes,
             )
             .map_err(SddpError::Stochastic)?;
+            standardize_external_ncs(
+                &mut library,
+                external_rows,
+                &ncs_ids,
+                system.ncs_models(),
+                n_stages,
+            );
             Some(library)
         } else {
             None
@@ -1224,7 +1260,6 @@ impl StudySetup {
             &mut self.fcf,
             &stage_ctx,
             &training_ctx,
-            self.stochastic.opening_tree(),
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             comm,
@@ -3870,8 +3905,6 @@ mod tests {
     fn external_inflow_library_built_when_scheme_is_external() {
         use cobre_core::scenario::{ExternalScenarioRow, ScenarioSource};
 
-        let mut system_base = minimal_system(2);
-
         // Build external inflow rows: 3 scenarios × 1 hydro × 2 stages.
         // Hydro ID = 3 (from minimal_system). Stage IDs 0, 1. Scenario IDs 0, 1, 2.
         let hydro_id = EntityId(3);
@@ -4090,9 +4123,6 @@ mod tests {
             seed: None,
             historical_years: None,
         };
-
-        // Suppress unused variable warning for the unused base system.
-        let _ = system_base;
 
         let system = SystemBuilder::new()
             .buses(vec![bus])
@@ -4417,6 +4447,310 @@ mod tests {
         assert_eq!(lib.entity_class(), "load");
     }
 
+    /// Given a `System` with `ncs_scheme = External` and valid external NCS
+    /// rows, when `StudySetup::new()` is called, then
+    /// `external_ncs_library()` returns `Some` and `n_entities() > 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    fn external_ncs_library_built_when_scheme_is_external() {
+        use cobre_core::{
+            NonControllableSource,
+            scenario::{ExternalNcsRow, NcsModel, ScenarioSource},
+            system::SystemBuilder,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        // NCS entity: wind plant with EntityId(4).
+        let ncs_id = EntityId(4);
+        let ncs_source = NonControllableSource {
+            id: ncs_id,
+            name: "Wind1".to_string(),
+            bus_id: EntityId(1),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            max_generation_mw: 100.0,
+            curtailment_cost: 0.01,
+        };
+
+        use chrono::NaiveDate;
+        use cobre_core::scenario::InflowModel as CoreInflowModel;
+
+        let stages: Vec<Stage> = (0..2usize)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<CoreInflowModel> = (0..2usize)
+            .map(|i| CoreInflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..2usize)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        // NCS models: mean=0.8, std=0.1 for both stages.
+        let ncs_models: Vec<NcsModel> = (0..2usize)
+            .map(|i| NcsModel {
+                ncs_id,
+                stage_id: i as i32,
+                mean: 0.8,
+                std: 0.1,
+            })
+            .collect();
+
+        // External NCS rows: 3 scenarios × 1 NCS × 2 stages.
+        let mut external_ncs_rows: Vec<ExternalNcsRow> = Vec::new();
+        for stage_id in 0i32..2 {
+            for scenario_id in 0i32..3 {
+                external_ncs_rows.push(ExternalNcsRow {
+                    stage_id,
+                    scenario_id,
+                    ncs_id,
+                    value: 0.7 + scenario_id as f64 * 0.1,
+                });
+            }
+        }
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 1,
+                n_stages: 2,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::External,
+            seed: None,
+            historical_years: None,
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .non_controllable_sources(vec![ncs_source])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .ncs_models(ncs_models)
+            .external_ncs_scenarios(external_ncs_rows)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system with external NCS: valid");
+
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::External),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let lib = setup
+            .external_ncs_library()
+            .expect("expected Some(ExternalScenarioLibrary) for External NCS scheme");
+        assert!(
+            lib.n_entities() > 0,
+            "expected n_entities > 0 in external NCS library"
+        );
+        assert_eq!(lib.n_stages(), 2);
+        assert_eq!(lib.n_scenarios(), 3);
+        assert_eq!(lib.entity_class(), "ncs");
+    }
+
     /// Given a `System` with `inflow_scheme = Historical` but a user pool
     /// that references a year with no data, when `StudySetup::new()` is
     /// called, then it returns `Err` with a message about windows.
@@ -4425,16 +4759,8 @@ mod tests {
         // system_with_historical_inflow has data for years 1990-1991.
         // We use HistoricalYears::List with year 2050 (no data) to force
         // zero valid windows after filtering.
-        use cobre_core::scenario::{HistoricalYears, ScenarioSource};
+        use cobre_core::scenario::ScenarioSource;
         use cobre_core::system::SystemBuilder;
-
-        // Rebuild the system with a user pool that has no matching years.
-        let base = system_with_historical_inflow(2);
-        // We need to rebuild because scenario_source is immutable after build.
-        // The simplest approach: get the base system's data and rebuild with
-        // a modified scenario_source. Unfortunately SystemBuilder doesn't
-        // support cloning from an existing System, so we use the helper
-        // pattern but override the scenario_source by rebuilding from scratch.
 
         // Instead, let's build a system with Historical scheme and empty
         // inflow_history (no rows at all). This guarantees zero candidate
@@ -4653,8 +4979,6 @@ mod tests {
             .penalties(penalties)
             .build()
             .expect("system: valid");
-
-        let _ = base; // suppress unused warning on base
 
         let config = minimal_config(1, 5);
         let stochastic = build_stochastic_context(

@@ -35,7 +35,6 @@ use cobre_core::{StageSelectionRecord, TrainingEvent};
 use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
-use cobre_stochastic::OpeningTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
@@ -321,7 +320,7 @@ fn broadcast_basis_cache<C: Communicator>(
 ///
 /// let result = train(
 ///     &mut solver, config, &mut fcf, &templates, &base_rows,
-///     &indexer, &initial_state, &opening_tree, &stochastic,
+///     &indexer, &initial_state, &stochastic,
 ///     &horizon, &risk, stopping, &comm,
 ///     || HiggsBackend::new(),
 /// )?;
@@ -333,7 +332,7 @@ fn broadcast_basis_cache<C: Communicator>(
 ///
 /// Panics if `templates.len() != horizon.num_stages()` or if
 /// `risk_measures.len() != horizon.num_stages()` or if
-/// `opening_tree.n_openings(0) == 0`.
+/// `training_ctx.stochastic.opening_tree().n_openings(0) == 0`.
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -345,7 +344,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     fcf: &mut FutureCostFunction,
     stage_ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    opening_tree: &OpeningTree,
     risk_measures: &[RiskMeasure],
     stopping_rules: StoppingRuleSet,
     comm: &C,
@@ -834,7 +832,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             base_row: stage_ctx.base_rows[0],
             noise_scale: stage_ctx.noise_scale,
             n_hydros: stage_ctx.n_hydros,
-            opening_tree,
+            opening_tree: training_ctx.stochastic.opening_tree(),
             risk_measure: &risk_measures[0],
             stochastic: Some(training_ctx.stochastic),
             n_load_buses: stage_ctx.n_load_buses,
@@ -991,9 +989,7 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::{
-        ClassSchemes, StochasticContext, build_stochastic_context, tree::opening_tree::OpeningTree,
-    };
+    use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
 
     use super::train;
     use crate::{
@@ -1175,84 +1171,6 @@ mod tests {
         fn size(&self) -> usize {
             1
         }
-    }
-
-    /// Build a single-stage `OpeningTree` with one opening.
-    ///
-    /// Uses `generate_opening_tree` from the stochastic crate with a minimal
-    /// single-entity, single-stage configuration.
-    fn make_opening_tree(n_openings: usize) -> OpeningTree {
-        use chrono::NaiveDate;
-        use cobre_core::{
-            EntityId,
-            scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
-            temporal::{
-                Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-                StageStateConfig,
-            },
-        };
-        use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
-        use std::collections::BTreeMap;
-
-        let stage = Stage {
-            index: 0,
-            id: 0,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: n_openings,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-
-        let entity_id = EntityId(1);
-        let mut profiles = BTreeMap::new();
-        profiles.insert(
-            "default".to_string(),
-            CorrelationProfile {
-                groups: vec![CorrelationGroup {
-                    name: "g1".to_string(),
-                    entities: vec![CorrelationEntity {
-                        entity_type: "inflow".to_string(),
-                        id: entity_id,
-                    }],
-                    matrix: vec![vec![1.0]],
-                }],
-            },
-        );
-        let corr_model = CorrelationModel {
-            method: "cholesky".to_string(),
-            profiles,
-            schedule: vec![],
-        };
-        let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
-        let entity_order = vec![entity_id];
-
-        cobre_stochastic::tree::generate::generate_opening_tree(
-            42,
-            &[stage],
-            1,
-            &mut decomposed,
-            &entity_order,
-            cobre_stochastic::ClassDimensions {
-                n_hydros: 1,
-                n_load_buses: 0,
-                n_ncs: 0,
-            },
-        )
-        .unwrap()
     }
 
     /// Build a minimal `StochasticContext` with `n_stages` stages and a single
@@ -1463,7 +1381,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -1523,7 +1440,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -1549,7 +1465,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -1609,7 +1524,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -1651,7 +1565,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -1713,7 +1626,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
             &comm,
@@ -1791,7 +1703,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -1851,7 +1762,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -1875,7 +1785,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -1935,7 +1844,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
             &comm,
@@ -1956,7 +1864,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2016,7 +1923,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(1),
             &comm,
@@ -2043,7 +1949,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2105,7 +2010,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -2139,7 +2043,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2204,7 +2107,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -2248,7 +2150,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2313,7 +2214,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(2),
             &comm,
@@ -2373,7 +2273,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2433,7 +2332,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(3),
             &comm,
@@ -2461,7 +2359,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2527,7 +2424,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -2570,7 +2466,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2630,7 +2525,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,
@@ -2654,7 +2548,6 @@ mod tests {
         let templates = vec![minimal_template(indexer.n_state); n_stages];
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
         let horizon = HorizonMode::Finite {
@@ -2714,7 +2607,6 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
             },
-            &opening_tree,
             &risk_measures,
             iteration_limit_rules(5),
             &comm,

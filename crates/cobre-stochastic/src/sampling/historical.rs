@@ -188,15 +188,19 @@ impl HistoricalScenarioLibrary {
     /// Returns the `n_hydros`-length slice of eta values for `(window, stage)`.
     ///
     /// Layout: `eta[window * n_stages * n_hydros + stage * n_hydros + hydro]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `window >= n_windows` or `stage >= n_stages`.
     #[must_use]
     #[inline]
     pub fn eta_slice(&self, window: usize, stage: usize) -> &[f64] {
-        debug_assert!(
+        assert!(
             window < self.n_windows,
             "window ({window}) must be < n_windows ({})",
             self.n_windows
         );
-        debug_assert!(
+        assert!(
             stage < self.n_stages,
             "stage ({stage}) must be < n_stages ({})",
             self.n_stages
@@ -208,15 +212,19 @@ impl HistoricalScenarioLibrary {
     /// Returns a mutable `n_hydros`-length slice of eta values for `(window, stage)`.
     ///
     /// Used by the eta-standardisation pass (ticket-019) to populate the library.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `window >= n_windows` or `stage >= n_stages`.
     #[must_use]
     #[inline]
     pub fn eta_slice_mut(&mut self, window: usize, stage: usize) -> &mut [f64] {
-        debug_assert!(
+        assert!(
             window < self.n_windows,
             "window ({window}) must be < n_windows ({})",
             self.n_windows
         );
-        debug_assert!(
+        assert!(
             stage < self.n_stages,
             "stage ({stage}) must be < n_stages ({})",
             self.n_stages
@@ -352,20 +360,6 @@ pub fn standardize_historical_windows(
     }
 
     // -----------------------------------------------------------------------
-    // Build observation lookup: (hydro_id, year, season_id) -> value_m3s.
-    //
-    // season_id is derived from the observation date via month0() (0 = January),
-    // consistent with the window discovery algorithm in window.rs.
-    // -----------------------------------------------------------------------
-    let lookup: std::collections::HashMap<(EntityId, i32, usize), f64> = inflow_history
-        .iter()
-        .map(|r| {
-            let season_id = r.date.month0() as usize;
-            ((r.hydro_id, r.date.year(), season_id), r.value_m3s)
-        })
-        .collect();
-
-    // -----------------------------------------------------------------------
     // Compute n_seasons from the stage season_ids (consistent with window.rs).
     // -----------------------------------------------------------------------
     let n_seasons = stages
@@ -375,16 +369,82 @@ pub fn standardize_historical_windows(
         .map_or(1, |m| m + 1);
 
     // -----------------------------------------------------------------------
+    // Build flat 3D observation table indexed by (hydro_idx, year_offset, season_id).
+    //
+    // Layout: table[hydro_idx * n_years * n_seasons + year_offset * n_seasons + season_id]
+    //
+    // Missing entries are represented by f64::NAN.  Valid inflow values are
+    // always finite, so NAN is a safe sentinel for "not present".
+    //
+    // This replaces the previous HashMap<(EntityId,i32,usize),f64> and
+    // reduces lookup cost from O(1) amortised with hash overhead to O(1)
+    // with a single multiply-add index computation.
+    // -----------------------------------------------------------------------
+
+    // Build hydro_id -> hydro_idx map (used only during table construction).
+    let hydro_id_to_idx: std::collections::HashMap<EntityId, usize> = hydro_ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
+
+    // Year range from the inflow history.
+    let (min_year, max_year) = match (
+        inflow_history.iter().map(|r| r.date.year()).min(),
+        inflow_history.iter().map(|r| r.date.year()).max(),
+    ) {
+        (Some(lo), Some(hi)) => (lo, hi),
+        _ => {
+            // Empty history — nothing to do (early-exit guard above already
+            // covers the n_hydros/n_stages/window_years checks).
+            return;
+        }
+    };
+    #[allow(clippy::cast_sign_loss)]
+    let n_years = (max_year - min_year + 1) as usize;
+
+    // Allocate flat table initialised to NAN (= missing).
+    let table_size = n_hydros * n_years * n_seasons;
+    let mut obs_table = vec![f64::NAN; table_size];
+
+    // Helper: compute flat index for (hydro_idx, year, season_id).
+    let table_idx = |h: usize, year: i32, s: usize| -> Option<usize> {
+        if year < min_year || year > max_year || s >= n_seasons {
+            return None;
+        }
+        #[allow(clippy::cast_sign_loss)]
+        let y = (year - min_year) as usize;
+        Some(h * n_years * n_seasons + y * n_seasons + s)
+    };
+
+    // Populate the table from inflow history.
+    for r in inflow_history {
+        let season_id = r.date.month0() as usize;
+        if let Some(&h) = hydro_id_to_idx.get(&r.hydro_id) {
+            if let Some(idx) = table_idx(h, r.date.year(), season_id) {
+                obs_table[idx] = r.value_m3s;
+            }
+        }
+    }
+
+    // Inline lookup: returns the table value for (hydro_idx, year, season_id).
+    // Preserves the debug_assert contract: NAN in the table indicates a missing
+    // observation that window discovery should have excluded.
+    let lookup = |h: usize, year: i32, season_id: usize| -> f64 {
+        table_idx(h, year, season_id).map_or(0.0, |idx| {
+            let v = obs_table[idx];
+            if v.is_nan() { 0.0 } else { v }
+        })
+    };
+
+    // -----------------------------------------------------------------------
     // Build the full observation sequence template as (year_offset, season_id).
     //
-    // This is the same sequence used by window discovery (window.rs):
-    //   - first max_order entries are lag seasons (chronological, oldest first)
-    //   - then n_stages entries are study seasons
-    //
-    // Year offset starts at 0 (the window starting year) and increments
-    // whenever the season sequence wraps from (n_seasons - 1) to 0.
+    // Indices 0..max_order   : pre-study lag seasons (oldest first)
+    // Indices max_order..end : study seasons
     // -----------------------------------------------------------------------
-    let full_sequence: Vec<(i32, usize)> = build_observation_sequence(stages, max_order, n_seasons);
+    let full_sequence: Vec<(i32, usize)> =
+        super::build_observation_sequence(stages, max_order, n_seasons);
 
     // -----------------------------------------------------------------------
     // Pre-allocate a reusable lag buffer for solve_par_noise calls.
@@ -415,11 +475,13 @@ pub fn standardize_historical_windows(
                     let seq_idx = max_order - 1 - lag_buf_idx;
                     let (year_offset, season_id) = full_sequence[seq_idx];
                     let obs_year = window_year + year_offset;
-                    let value = lookup
-                        .get(&(hydro_ids[h], obs_year, season_id))
-                        .copied()
-                        .unwrap_or(0.0);
-                    lag_slice[lag_buf_idx * n_hydros + h] = value;
+                    debug_assert!(
+                        table_idx(h, obs_year, season_id).is_some_and(|i| !obs_table[i].is_nan()),
+                        "missing lag observation for hydro={}, year={obs_year}, season={season_id}; \
+                         window discovery should have excluded this window",
+                        hydro_ids[h].0,
+                    );
+                    lag_slice[lag_buf_idx * n_hydros + h] = lookup(h, obs_year, season_id);
                 }
             }
         }
@@ -440,10 +502,13 @@ pub fn standardize_historical_windows(
                 // Look up the target raw observation for this (window, stage, hydro).
                 let (year_offset, season_id) = full_sequence[max_order + t];
                 let obs_year = window_year + year_offset;
-                let target = lookup
-                    .get(&(hydro_ids[h], obs_year, season_id))
-                    .copied()
-                    .unwrap_or(0.0);
+                debug_assert!(
+                    table_idx(h, obs_year, season_id).is_some_and(|i| !obs_table[i].is_nan()),
+                    "missing study observation for hydro={}, year={obs_year}, season={season_id}; \
+                     window discovery should have excluded this window",
+                    hydro_ids[h].0,
+                );
+                let target = lookup(h, obs_year, season_id);
 
                 // Build the lag vector from raw historical observations (BR6).
                 // lag_buf[0] = raw inflow at t-1, lag_buf[1] = raw at t-2, etc.
@@ -459,10 +524,15 @@ pub fn standardize_historical_windows(
                     let seq_idx = max_order + t - (l + 1);
                     let (lag_year_offset, lag_season_id) = full_sequence[seq_idx];
                     let lag_year = window_year + lag_year_offset;
-                    *slot = lookup
-                        .get(&(hydro_ids[h], lag_year, lag_season_id))
-                        .copied()
-                        .unwrap_or(0.0);
+                    debug_assert!(
+                        table_idx(h, lag_year, lag_season_id)
+                            .is_some_and(|i| !obs_table[i].is_nan()),
+                        "missing lag observation for hydro={}, year={lag_year}, \
+                         season={lag_season_id}; window discovery should have excluded \
+                         this window",
+                        hydro_ids[h].0,
+                    );
+                    *slot = lookup(h, lag_year, lag_season_id);
                 }
 
                 let det_base = par.deterministic_base(t, h);
@@ -598,12 +668,12 @@ pub fn validate_historical_library(
         for t in 0..library.n_stages() {
             let eta = library.eta_slice(w, t);
             for (h, &value) in eta.iter().enumerate() {
-                if value == f64::NEG_INFINITY {
+                if value == f64::NEG_INFINITY || value.is_nan() {
                     return Err(StochasticError::InsufficientData {
                         context: format!(
-                            "V2.3: historical library contains NEG_INFINITY eta at \
-                             window {w}, stage {t}, hydro {h} — sigma=0 with \
-                             non-matching historical observation",
+                            "V2.3: historical library contains non-finite eta (NEG_INFINITY or NaN) \
+                             at window {w}, stage {t}, hydro {h} — sigma=0 with \
+                             non-matching historical observation or numerical failure",
                         ),
                     });
                 }
@@ -637,67 +707,6 @@ pub fn validate_historical_library(
     }
 
     Ok(())
-}
-
-/// Build the full observation sequence as `(year_offset, season_id)` pairs.
-///
-/// This is the same logic as `build_required_sequence` in `window.rs`, but
-/// returns all entries (lag seasons + study seasons) rather than just checking
-/// their presence. Kept local to avoid cross-module coupling.
-///
-/// Returns `max_order + stages.len()` entries in chronological order:
-/// - Indices `0..max_order`: pre-study lag seasons (oldest first)
-/// - Indices `max_order..max_order + stages.len()`: study seasons
-fn build_observation_sequence(
-    stages: &[Stage],
-    max_order: usize,
-    n_seasons: usize,
-) -> Vec<(i32, usize)> {
-    if stages.is_empty() {
-        return Vec::new();
-    }
-
-    let study_seasons: Vec<usize> = stages.iter().filter_map(|s| s.season_id).collect();
-    if study_seasons.is_empty() {
-        return Vec::new();
-    }
-
-    // Build lag seasons by stepping backwards from study_seasons[0].
-    // Lag seasons are in chronological order (oldest lag first).
-    let first_study_season = study_seasons[0];
-    let lag_seasons: Vec<usize> = (1..=max_order)
-        .rev()
-        .map(|k| {
-            // Step k seasons before first_study_season, wrapping modularly.
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let n = n_seasons as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let s = first_study_season as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let k_i32 = k as i32;
-            #[allow(clippy::cast_sign_loss)]
-            let season = ((s - k_i32 % n + n) % n) as usize;
-            season
-        })
-        .collect();
-
-    // Concatenate: lag seasons (oldest first) then study seasons.
-    let full_seasons: Vec<usize> = lag_seasons.into_iter().chain(study_seasons).collect();
-
-    // Assign year offsets: year increments whenever season wraps.
-    let mut result = Vec::with_capacity(full_seasons.len());
-    let mut year_offset: i32 = 0;
-    let mut prev_season = full_seasons[0];
-
-    for (i, &season) in full_seasons.iter().enumerate() {
-        if i > 0 && season < prev_season {
-            year_offset += 1;
-        }
-        result.push((year_offset, season));
-        prev_season = season;
-    }
-
-    result
 }
 
 // ---------------------------------------------------------------------------

@@ -327,7 +327,7 @@ fn test_estimate_from_history_fixed_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let (updated, _report) = estimate_from_history(system, case_dir, &config)
+    let (updated, _report, _path) = estimate_from_history(system, case_dir, &config)
         .expect("estimation should succeed with 15 years of monthly data");
 
     // One InflowModel per (hydro_id, stage_id) pair: 1 hydro × 180 stages = 180 models.
@@ -389,7 +389,7 @@ fn test_estimate_from_history_aic_order() {
     let system = build_system_with_one_hydro();
     let config = parse_config(case_dir);
 
-    let (updated, _report) = estimate_from_history(system, case_dir, &config)
+    let (updated, _report, _path) = estimate_from_history(system, case_dir, &config)
         .expect("AIC estimation should succeed with 15 years of monthly data");
 
     let models = updated.inflow_models();
@@ -712,7 +712,7 @@ fn test_estimation_round_trip_par1() {
     let system = build_system_for_par1(1);
     let config = parse_config(case_dir);
 
-    let (updated, _report) = estimate_from_history(system, case_dir, &config)
+    let (updated, _report, _path) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with N=200 per season should succeed");
 
     let n_stages_rt = N_OBS_PER_SEASON * N_SEASONS_RT;
@@ -785,6 +785,174 @@ fn test_estimation_round_trip_par1() {
     }
 }
 
+// ── PartialEstimation integration tests ──────────────────────────────────────
+
+/// Write `inflow_seasonal_stats.parquet` with known user stats for one hydro
+/// covering all stages in `build_system_for_par1(1)`.
+///
+/// The user values are `mean_m3s = USER_MEAN` and `std_m3s = USER_STD`, chosen
+/// to be clearly distinct from anything the estimator would produce from the
+/// synthetic PAR(1) data (whose true mean is `TRUE_MEAN = 300.0` and std is
+/// `TRUE_STD = 60.0`).
+const USER_MEAN: f64 = 12_345.6;
+const USER_STD: f64 = 1_111.1;
+
+fn write_user_inflow_seasonal_stats(case_dir: &Path) {
+    use cobre_core::EntityId;
+    use cobre_io::output::write_inflow_seasonal_stats;
+    use cobre_io::scenarios::InflowSeasonalStatsRow;
+
+    let n_stages = N_OBS_PER_SEASON * N_SEASONS_RT;
+
+    // One row per stage (seasons alternate 0, 1, 0, 1, ...).
+    let rows: Vec<InflowSeasonalStatsRow> = (0..n_stages)
+        .map(|stage_id| InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(1_i32),
+            stage_id: stage_id as i32,
+            mean_m3s: USER_MEAN,
+            std_m3s: USER_STD,
+        })
+        .collect();
+
+    write_inflow_seasonal_stats(
+        &case_dir.join("scenarios/inflow_seasonal_stats.parquet"),
+        &rows,
+    )
+    .expect("write_inflow_seasonal_stats must succeed");
+}
+
+/// Build the same system as `build_system_for_par1(1)` but with pre-loaded
+/// inflow models whose `mean_m3s = USER_MEAN` and `std_m3s = USER_STD`.
+///
+/// This represents the state after `load_case` has parsed
+/// `inflow_seasonal_stats.parquet` and produced `InflowModel` entries
+/// (with empty `ar_coefficients`), before estimation.
+fn build_system_for_par1_with_user_stats() -> cobre_core::System {
+    use cobre_core::scenario::InflowModel;
+
+    let base = build_system_for_par1(1);
+    let stages = base.stages();
+
+    let inflow_models: Vec<InflowModel> = stages
+        .iter()
+        .map(|s| InflowModel {
+            hydro_id: EntityId::from(1_i32),
+            stage_id: s.id,
+            mean_m3s: USER_MEAN,
+            std_m3s: USER_STD,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        })
+        .collect();
+
+    // Re-build with the same entities + stages + user inflow models.
+    // We take the stages and hydros out of the base system.
+    let stages_owned = stages.to_vec();
+    let hydros_owned = base.hydros().to_vec();
+    let buses_owned = (0..base.n_buses())
+        .map(|_| Bus {
+            id: EntityId::from(BUS_ID),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: Some(f64::INFINITY),
+                cost_per_mwh: 3000.0,
+            }],
+            excess_cost: 0.0,
+        })
+        .take(1)
+        .collect::<Vec<_>>();
+
+    SystemBuilder::new()
+        .buses(buses_owned)
+        .hydros(hydros_owned)
+        .stages(stages_owned)
+        .inflow_models(inflow_models)
+        .build()
+        .expect("valid system for PAR(1) partial estimation")
+}
+
+/// P1 / AC-T8-3: `PartialEstimation` end-to-end — user stats are preserved
+/// and AR coefficients are estimated from history.
+///
+/// Setup:
+/// - `inflow_history.parquet`: real PAR(1) data for 1 hydro, 2 seasons,
+///   200 observations per season.
+/// - `inflow_seasonal_stats.parquet`: real Parquet written via
+///   `write_inflow_seasonal_stats` with known user values
+///   (`USER_MEAN = 12345.6`, `USER_STD = 1111.1`).
+/// - No `inflow_ar_coefficients.parquet` → `PartialEstimation` path.
+/// - System pre-loaded with user inflow models (same USER_MEAN / USER_STD).
+///
+/// Asserts:
+/// - Every returned `InflowModel` has `mean_m3s == USER_MEAN` (bitwise).
+/// - Every returned `InflowModel` has `std_m3s == USER_STD` (bitwise).
+/// - Every returned `InflowModel` has at least one AR coefficient.
+#[test]
+fn test_partial_estimation_end_to_end() {
+    let dir = TempDir::new().unwrap();
+    let case_dir = dir.path();
+
+    // Write the case skeleton (config.json and required stubs).
+    create_minimal_case_skeleton(case_dir, "pacf", 2);
+
+    // Write real inflow history for 1 hydro (PAR(1), 200 obs per season).
+    write_par1_inflow_history(&case_dir.join("scenarios/inflow_history.parquet"), 1);
+
+    // Write real user seasonal stats — these must survive partial estimation unchanged.
+    write_user_inflow_seasonal_stats(case_dir);
+
+    // Build system with pre-loaded user inflow models.
+    let system = build_system_for_par1_with_user_stats();
+    let config = parse_config(case_dir);
+
+    let (updated, report, path) =
+        estimate_from_history(system, case_dir, &config).expect("partial estimation must succeed");
+
+    // Verify the correct path was taken.
+    assert_eq!(
+        path,
+        cobre_sddp::estimation::EstimationPath::PartialEstimation,
+        "expected PartialEstimation path, got {path:?}"
+    );
+
+    // Report must be present for the PartialEstimation path.
+    let report = report.expect("PartialEstimation must return Some(EstimationReport)");
+    assert_eq!(report.method, "PACF", "estimation method must be PACF");
+    assert_eq!(
+        report.entries.len(),
+        1,
+        "report must contain exactly 1 entry (one hydro)"
+    );
+
+    let models = updated.inflow_models();
+    assert!(!models.is_empty(), "must produce at least one inflow model");
+
+    for m in models {
+        // User stats must be bitwise identical — no rounding or transformation.
+        assert_eq!(
+            m.mean_m3s.to_bits(),
+            USER_MEAN.to_bits(),
+            "mean_m3s must equal USER_MEAN ({USER_MEAN}) for stage {}; got {}",
+            m.stage_id,
+            m.mean_m3s
+        );
+        assert_eq!(
+            m.std_m3s.to_bits(),
+            USER_STD.to_bits(),
+            "std_m3s must equal USER_STD ({USER_STD}) for stage {}; got {}",
+            m.stage_id,
+            m.std_m3s
+        );
+
+        // AR coefficients must be estimated from history (non-empty).
+        assert!(
+            !m.ar_coefficients.is_empty(),
+            "ar_coefficients must be non-empty for stage {} (estimated from history)",
+            m.stage_id
+        );
+    }
+}
+
 /// C-037-5: PAR(1) round-trip with 2 hydros and 2 seasons.
 ///
 /// Same as `test_estimation_round_trip_par1` but with 2 hydros. Verifies that
@@ -806,7 +974,7 @@ fn test_estimation_round_trip_two_hydros() {
     let system = build_system_for_par1(N_HYDROS);
     let config = parse_config(case_dir);
 
-    let (updated, _report) = estimate_from_history(system, case_dir, &config)
+    let (updated, _report, _path) = estimate_from_history(system, case_dir, &config)
         .expect("PAR(1) estimation with 2 hydros should succeed");
 
     let models = updated.inflow_models();

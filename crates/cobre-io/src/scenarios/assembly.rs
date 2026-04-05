@@ -38,6 +38,11 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 /// [`InflowModel`] has an empty `ar_coefficients` vec and `residual_std_ratio = 1.0`
 /// (white-noise identity).
 ///
+/// When `stats` is empty (regardless of whether `coefficients` is non-empty),
+/// the function returns an empty `Vec` without error. The P7 estimation path
+/// (`UserArHistoryStats`) loads AR coefficients independently via
+/// `parse_inflow_ar_coefficients` and does not route them through this function.
+///
 /// # Errors
 ///
 /// | Condition                                              | Error variant              |
@@ -70,8 +75,11 @@ pub fn assemble_inflow_models(
     stats: Vec<InflowSeasonalStatsRow>,
     coefficients: Vec<InflowArCoefficientRow>,
 ) -> Result<Vec<InflowModel>, LoadError> {
-    // Short-circuit: both empty.
-    if stats.is_empty() && coefficients.is_empty() {
+    // Short-circuit: no stats means there is no base to join AR coefficients onto.
+    // When stats is empty the result is always an empty vec regardless of whether
+    // coefficients are present. The P7 estimation path (UserArHistoryStats) loads
+    // AR independently and does not depend on this join to produce inflow models.
+    if stats.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -308,6 +316,38 @@ mod tests {
     fn test_assemble_inflow_models_both_empty() {
         let models = assemble_inflow_models(vec![], vec![]).unwrap();
         assert!(models.is_empty());
+    }
+
+    /// AC-009-1: `assemble_inflow_models(vec![], non_empty_coefficients)` must
+    /// return `Ok(Vec::new())` without error.
+    ///
+    /// This is the P7 (UserArHistoryStats) case: `inflow_seasonal_stats.parquet`
+    /// is absent so `stats` is empty, but `inflow_ar_coefficients.parquet` is
+    /// present. The function must not raise a SchemaError for "orphaned" AR
+    /// entries — instead it returns an empty vec because there is no base to
+    /// join onto. The estimation path loads AR independently.
+    #[test]
+    fn test_assemble_inflow_models_empty_stats_non_empty_ar_returns_empty() {
+        let coefficients = vec![InflowArCoefficientRow {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            lag: 1,
+            coefficient: 0.5,
+            residual_std_ratio: 0.85,
+        }];
+
+        let result = assemble_inflow_models(vec![], coefficients);
+        assert!(
+            result.is_ok(),
+            "empty stats + non-empty AR must return Ok, got: {:?}",
+            result
+        );
+        let models = result.unwrap();
+        assert!(
+            models.is_empty(),
+            "empty stats must produce empty InflowModel vec, got {} models",
+            models.len()
+        );
     }
 
     #[test]

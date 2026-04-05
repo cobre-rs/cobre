@@ -80,7 +80,7 @@ pub use cut_selection::{
 };
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
-pub use estimation::{EstimationError, EstimationReport};
+pub use estimation::{EstimationError, EstimationPath, EstimationReport};
 pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use hydro_models::{

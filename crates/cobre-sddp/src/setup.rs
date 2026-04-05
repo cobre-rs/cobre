@@ -1718,7 +1718,7 @@ pub fn prepare_stochastic(
     config: &cobre_io::Config,
     seed: u64,
 ) -> Result<PrepareStochasticResult, SddpError> {
-    let (system, estimation_report) =
+    let (system, estimation_report, _estimation_path) =
         crate::estimation::estimate_from_history(system, case_dir, config)?;
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;

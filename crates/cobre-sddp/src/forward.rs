@@ -64,19 +64,19 @@ use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -349,13 +349,21 @@ pub fn build_cut_row_batch_into(
         // Unified state coefficient loop: sparse iterates over the nonzero
         // mask, dense iterates over all state indices. Both yield (col_index,
         // coefficient) pairs and share the same push logic.
+        //
+        // state_to_lp_column remaps outgoing-state indices to LP columns.
+        // For storage (j < N) the mapping is identity. For lag dimensions
+        // the outgoing state after shift_lag_state stores z_inflow at lag 0
+        // and shifted incoming lags at lag 1+, so the cut must reference the
+        // corresponding LP columns (z_inflow and incoming lag l−1).
         if is_sparse {
             for &j in mask {
-                push_scaled_coefficient(batch, j, coefficients[j], col_scale);
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, coefficients[j], col_scale);
             }
         } else {
             for (j, &c) in coefficients.iter().enumerate() {
-                push_scaled_coefficient(batch, j, c, col_scale);
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, c, col_scale);
             }
         }
 
@@ -472,16 +480,20 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
         );
 
         // Build the row using the same transformation as build_cut_row_batch_into.
+        // state_to_lp_column remaps outgoing-state indices to LP columns
+        // (identity for storage; z_inflow for lag 0; shifted incoming lag for
+        // lag l ≥ 1).
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch_buf.row_starts.push(nz_offset as i32);
 
         for (j, &c) in coefficients.iter().enumerate() {
+            let lp_col = indexer.state_to_lp_column(j);
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            batch_buf.col_indices.push(j as i32);
+            batch_buf.col_indices.push(lp_col as i32);
             let d = if col_scale.is_empty() {
                 1.0
             } else {
-                col_scale[j]
+                col_scale[lp_col]
             };
             batch_buf.values.push(-c * d);
         }
@@ -1109,20 +1121,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1543,14 +1555,14 @@ mod tests {
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
-        assert_eq!(batch.col_indices[0], 0);
-        assert_eq!(batch.col_indices[1], 1);
+        assert_eq!(batch.col_indices[0], 0); // storage col 0
+        assert_eq!(batch.col_indices[1], 2); // lag 0 → z_inflow col N*(1+L)=2
         assert_eq!(batch.col_indices[2], 4); // theta at N*(3+L) = 1*(3+1) = 4
         assert_eq!(batch.values[0], -1.0);
         assert_eq!(batch.values[1], -3.0);
         assert_eq!(batch.values[2], 1.0);
-        assert_eq!(batch.col_indices[3], 0);
-        assert_eq!(batch.col_indices[4], 1);
+        assert_eq!(batch.col_indices[3], 0); // storage col 0
+        assert_eq!(batch.col_indices[4], 2); // lag 0 → z_inflow col 2
         assert_eq!(batch.col_indices[5], 4); // theta at N*(3+L) = 4
         assert_eq!(batch.values[3], -2.0);
         assert_eq!(batch.values[4], -4.0);
@@ -1568,7 +1580,7 @@ mod tests {
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
-        assert_eq!(batch.col_indices, vec![0, 1, 4]); // theta at N*(3+L) = 4
+        assert_eq!(batch.col_indices, vec![0, 2, 4]); // lag 0 → z_inflow col 2; theta at 4
         assert_eq!(batch.values, vec![0.0, -7.0, 1.0]);
         assert_eq!(batch.row_lower, vec![3.0]);
     }

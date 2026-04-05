@@ -31,13 +31,13 @@ use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_io::{
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
+    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
 };
 use cobre_sddp::{
-    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
 };
-use cobre_solver::SolverInterface;
 use cobre_solver::highs::HighsSolver;
+use cobre_solver::SolverInterface;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;
@@ -1432,7 +1432,7 @@ fn d16_par1_lag_shift() {
     // The expected cost with correct lag shift differs from the PAR(0)-equivalent
     // cost. With psi=0.5 and initial lag=200, inflows decrease across stages
     // (150, 125, 112.5), producing higher deficits than if the lag never shifted.
-    assert_cost(result.final_lb, 5_475_000.0, 1.0, "D16");
+    assert_cost(result.final_lb, 7_756_250.0, 1.0, "D16");
 }
 
 /// Regression guard for the model-persistence optimization (S1).
@@ -1676,7 +1676,7 @@ fn d19_multi_hydro_par_truncation() {
 ///
 /// If the lag-major/hydro-major indexing bug regresses, different lag values
 /// are read for each hydro during PAR evaluation, producing a different cost.
-pub const D19_EXPECTED_COST: f64 = 1_218_090.894_148_668;
+pub const D19_EXPECTED_COST: f64 = 1_332_425.292_764_49;
 
 /// Operational violation slacks: 1 hydro with active min_outflow, max_outflow,
 /// min_turbined, and min_generation bounds.
@@ -2596,7 +2596,7 @@ fn d25_simulation_discount_factors() {
 
 /// D26 expected lower bound: recorded with corrected forward-prediction fix.
 /// Regression guard against backward-prediction (P5) bug.
-pub const D26_EXPECTED_COST: f64 = 46_109_640.428_218_86;
+pub const D26_EXPECTED_COST: f64 = 47_721_588.894_912_5;
 
 /// D26: PAR(2) estimation from inflow history (regression guard for forward-prediction fix).
 /// Exercises full PAR(p) pipeline with PACF order selection and Yule-Walker fitting.

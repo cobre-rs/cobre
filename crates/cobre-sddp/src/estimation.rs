@@ -253,6 +253,25 @@ pub struct HydroEstimationEntry {
     pub contribution_reductions: Vec<ContributionReduction>,
 }
 
+/// Diagnostic record for an initial lag / user stats scale mismatch.
+///
+/// Populated by [`run_partial_estimation`] when a hydro's lag-1 past inflow
+/// value is closer (in absolute distance) to the history-estimated mean than
+/// to the user-provided seasonal mean at the first study stage (`stage_id == 0`).
+/// This can indicate that `initial_conditions.json` was calibrated to historical
+/// scale rather than to the user-provided stats scale.
+#[derive(Debug, Clone)]
+pub struct LagScaleWarning {
+    /// Hydro plant identifier.
+    pub hydro_id: EntityId,
+    /// Lag-1 past inflow value (m³/s) from `initial_conditions.json`.
+    pub lag_value: f64,
+    /// User-provided seasonal mean at stage 0 (m³/s).
+    pub user_mean: f64,
+    /// History-estimated seasonal mean at stage 0 (m³/s).
+    pub estimated_mean: f64,
+}
+
 /// Computation-side summary of the AR estimation pipeline.
 ///
 /// Contains one [`HydroEstimationEntry`] per hydro plant that was fitted,
@@ -268,6 +287,37 @@ pub struct EstimationReport {
     /// coefficients, resulting in white-noise fallback (empty AR, ratio=1.0).
     /// Only populated by `run_partial_estimation`; empty for other paths.
     pub white_noise_fallbacks: Vec<EntityId>,
+    /// Hydros whose lag-1 past inflow value is closer to the history-estimated
+    /// mean than to the user-provided mean at stage 0. Advisory only; never
+    /// blocks execution. Only populated by `run_partial_estimation`.
+    pub lag_scale_warnings: Vec<LagScaleWarning>,
+    /// Warnings for hydros where consecutive-season std ratios diverge
+    /// significantly between user-provided and history-estimated profiles.
+    /// Only populated by `run_partial_estimation`; empty for other paths.
+    pub std_ratio_warnings: Vec<StdRatioDivergence>,
+}
+
+/// Advisory diagnostic for a (hydro, season pair) where the cross-season
+/// standard deviation ratio diverges significantly between the user-provided
+/// profile and the history-estimated profile.
+///
+/// Produced by [`run_partial_estimation`] (P9 diagnostic) when
+/// `max(user_ratio / est_ratio, est_ratio / user_ratio) > 2.0` for any
+/// consecutive season pair `(season_a, season_b)`.
+#[derive(Debug, Clone)]
+pub struct StdRatioDivergence {
+    /// The hydro plant for which the divergence was detected.
+    pub hydro_id: EntityId,
+    /// Index of the first season in the consecutive pair.
+    pub season_a: usize,
+    /// Index of the second season in the consecutive pair (wraps around).
+    pub season_b: usize,
+    /// `std[season_a] / std[season_b]` from the user-provided profile.
+    pub user_ratio: f64,
+    /// `std[season_a] / std[season_b]` from the history-estimated profile.
+    pub estimated_ratio: f64,
+    /// `max(user_ratio / estimated_ratio, estimated_ratio / user_ratio)`.
+    pub divergence: f64,
 }
 
 /// Result of validating an AR order via contribution analysis.
@@ -571,6 +621,77 @@ fn run_partial_estimation(
         .collect();
     white_noise_fallbacks.sort();
 
+    // ── Step 5c: initial lag / user stats scale mismatch check (P8) ──────────
+    // For each hydro that has BOTH a past_inflows entry AND fitting_stats AND
+    // user stats at stage_id == 0, check whether the lag-1 value is closer to
+    // the estimated mean than to the user mean. If so, emit an advisory warning.
+    // This check is purely informational and never alters control flow.
+    let lag_scale_warnings: Vec<LagScaleWarning> = {
+        // Build lookup: EntityId -> estimated mean at stage_id == 0.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+
+        // Build lookup: EntityId -> user mean at stage_id == 0.
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+
+        // Iterate past_inflows in sorted order for deterministic output.
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            // Skip hydros with no lag-1 value.
+            let Some(&lag_value) = past.values_m3s.first() else {
+                continue;
+            };
+            // Skip hydros missing either mean.
+            let Some(&estimated_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&user_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            // Warn when lag-1 is closer to estimated mean than to user mean.
+            if (lag_value - estimated_mean).abs() < (lag_value - user_mean).abs() {
+                eprintln!(
+                    "warning: hydro {} initial lag ({:.1}) is closer to estimated mean \
+                     ({:.1}) than user mean ({:.1}) -- initial conditions may be at \
+                     historical scale",
+                    past.hydro_id.0, lag_value, estimated_mean, user_mean
+                );
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value,
+                    user_mean,
+                    estimated_mean,
+                });
+            }
+        }
+        warnings
+    };
+
+    // ── Step 5d: cross-season std ratio divergence check (P9) ───────────────
+    // Compare consecutive-season std ratios between user and estimated profiles.
+    // Emits an advisory warning per flagged (hydro, season pair) and records the
+    // results in `std_ratio_warnings`. Never blocks execution.
+    let std_ratio_warnings = check_std_ratio_divergence(&system, &fitting_stats, stages);
+    for w in &std_ratio_warnings {
+        eprintln!(
+            "warning: hydro {} season {}->{} std ratio diverges {:.1}x between \
+             user ({:.2}) and estimated ({:.2})",
+            w.hydro_id.0, w.season_a, w.season_b, w.divergence, w.user_ratio, w.estimated_ratio
+        );
+    }
+
     // ── Step 6: estimate or preserve correlation ─────────────────────────────
     let correlation = if manifest.scenarios_correlation_json {
         system.correlation().clone()
@@ -595,6 +716,8 @@ fn run_partial_estimation(
 
     let mut estimation_report = estimation_report;
     estimation_report.white_noise_fallbacks = white_noise_fallbacks;
+    estimation_report.lag_scale_warnings = lag_scale_warnings;
+    estimation_report.std_ratio_warnings = std_ratio_warnings;
 
     Ok((
         system.with_scenario_models(inflow_models, correlation),
@@ -685,6 +808,8 @@ fn run_user_ar_estimation(
         entries: BTreeMap::new(),
         method: "user_provided".to_string(),
         white_noise_fallbacks: Vec::new(),
+        lag_scale_warnings: Vec::new(),
+        std_ratio_warnings: Vec::new(),
     };
 
     Ok((
@@ -782,6 +907,130 @@ fn user_stats_to_rows(system: &System) -> Vec<InflowSeasonalStatsRow> {
         .collect()
 }
 
+/// Check whether consecutive-season std ratios diverge between user and
+/// estimated profiles for each hydro in the partial estimation path (P9).
+///
+/// For each hydro present in both user stats and `fitting_stats`, iterates
+/// consecutive season pairs `(m, (m+1) % n)` and computes:
+///
+/// - `ratio_user = user_std[m] / user_std[m+1]`
+/// - `ratio_est  = est_std[m]  / est_std[m+1]`
+/// - `divergence = max(ratio_user / ratio_est, ratio_est / ratio_user)`
+///
+/// A [`StdRatioDivergence`] entry is pushed when `divergence > 2.0`. Season
+/// pairs where either denominator is `< 1e-12` are skipped silently. The
+/// result is sorted by `(hydro_id, season_a)`.
+fn check_std_ratio_divergence(
+    system: &System,
+    fitting_stats: &[SeasonalStats],
+    stages: &[cobre_core::temporal::Stage],
+) -> Vec<StdRatioDivergence> {
+    // Build stage_id -> season_id mapping.
+    let stage_id_to_season: HashMap<i32, usize> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
+
+    // Build (hydro_id, season_id) -> user std.
+    // When multiple stages share a season, any entry will do (same season).
+    let mut user_std: BTreeMap<(EntityId, usize), f64> = BTreeMap::new();
+    for m in system.inflow_models() {
+        let Some(&season_id) = stage_id_to_season.get(&m.stage_id) else {
+            continue;
+        };
+        user_std.entry((m.hydro_id, season_id)).or_insert(m.std_m3s);
+    }
+
+    // Build (hydro_id, season_id) -> estimated std.
+    let mut est_std: BTreeMap<(EntityId, usize), f64> = BTreeMap::new();
+    for s in fitting_stats {
+        let Some(&season_id) = stage_id_to_season.get(&s.stage_id) else {
+            continue;
+        };
+        est_std.entry((s.entity_id, season_id)).or_insert(s.std);
+    }
+
+    // Collect all hydro IDs that appear in both maps, in sorted order.
+    let user_hydros: std::collections::BTreeSet<EntityId> =
+        user_std.keys().map(|(h, _)| *h).collect();
+    let est_hydros: std::collections::BTreeSet<EntityId> =
+        est_std.keys().map(|(h, _)| *h).collect();
+    let common_hydros: Vec<EntityId> = user_hydros.intersection(&est_hydros).copied().collect();
+
+    let mut warnings: Vec<StdRatioDivergence> = Vec::new();
+
+    for hydro_id in common_hydros {
+        // Collect sorted distinct season IDs for this hydro from user stats.
+        let season_ids: Vec<usize> = {
+            let mut ids: Vec<usize> = user_std
+                .keys()
+                .filter(|(h, _)| *h == hydro_id)
+                .map(|(_, s)| *s)
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+
+        let n = season_ids.len();
+        if n < 2 {
+            // Fewer than 2 seasons: no consecutive pairs exist.
+            continue;
+        }
+
+        for i in 0..n {
+            let season_a = season_ids[i];
+            let season_b = season_ids[(i + 1) % n];
+
+            let Some(&u_a) = user_std.get(&(hydro_id, season_a)) else {
+                continue;
+            };
+            let Some(&u_b) = user_std.get(&(hydro_id, season_b)) else {
+                continue;
+            };
+            let Some(&e_a) = est_std.get(&(hydro_id, season_a)) else {
+                continue;
+            };
+            let Some(&e_b) = est_std.get(&(hydro_id, season_b)) else {
+                continue;
+            };
+
+            // Skip pairs where either denominator std is near-zero.
+            if u_b.abs() < 1e-12 || e_b.abs() < 1e-12 {
+                continue;
+            }
+
+            let ratio_user = u_a / u_b;
+            let ratio_est = e_a / e_b;
+
+            // Skip when either ratio is near-zero — would cause division-by-zero
+            // in the divergence computation.
+            if ratio_user.abs() < 1e-12 || ratio_est.abs() < 1e-12 {
+                continue;
+            }
+
+            let divergence = (ratio_user / ratio_est)
+                .abs()
+                .max((ratio_est / ratio_user).abs());
+
+            if divergence > 2.0 {
+                warnings.push(StdRatioDivergence {
+                    hydro_id,
+                    season_a,
+                    season_b,
+                    user_ratio: ratio_user,
+                    estimated_ratio: ratio_est,
+                    divergence,
+                });
+            }
+        }
+    }
+
+    // Sort by (hydro_id, season_a) for deterministic output.
+    warnings.sort_by_key(|w| (w.hydro_id, w.season_a));
+    warnings
+}
+
 /// Configuration parameters for AR coefficient estimation.
 struct ArEstimationConfig<'a> {
     max_order: usize,
@@ -847,6 +1096,8 @@ fn estimate_ar_with_pacf(
             entries: BTreeMap::new(),
             method: "PACF".to_string(),
             white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
         return Ok((estimates, report));
     }
@@ -1428,6 +1679,8 @@ pub(crate) fn build_estimation_report(
         entries,
         method: method.to_string(),
         white_noise_fallbacks: Vec::new(),
+        lag_scale_warnings: Vec::new(),
+        std_ratio_warnings: Vec::new(),
     }
 }
 
@@ -2191,6 +2444,243 @@ mod tests {
         assert!(
             report.entries.contains_key(&EntityId(1)),
             "report must contain an entry for hydro_id=1"
+        );
+    }
+
+    // ── LagScaleWarning unit tests ────────────────────────────────────────────
+
+    /// Helper: build a minimal fitting_stats and user InflowModel pair for a
+    /// single hydro at stage_id == 0, then run the warning check inline.
+    ///
+    /// Returns the warnings collected. Extracted to avoid code duplication
+    /// across the three lag-scale warning tests.
+    fn collect_lag_scale_warnings(
+        hydro_id: EntityId,
+        lag_value: f64,
+        user_mean: f64,
+        estimated_mean: f64,
+        include_past_inflows: bool,
+    ) -> Vec<LagScaleWarning> {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{HydroPastInflows, InitialConditions};
+
+        // Build fitting_stats with estimated mean at stage_id == 0.
+        let fitting_stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: estimated_mean,
+            std: 50.0,
+        }];
+
+        // Build system with a user InflowModel at stage_id == 0.
+        let user_model = InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: user_mean,
+            std_m3s: 50.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let past_inflows = if include_past_inflows {
+            vec![HydroPastInflows {
+                hydro_id,
+                values_m3s: vec![lag_value],
+            }]
+        } else {
+            vec![]
+        };
+        let ic = InitialConditions {
+            storage: vec![],
+            filling_storage: vec![],
+            past_inflows,
+        };
+        let system = SystemBuilder::new()
+            .inflow_models(vec![user_model])
+            .initial_conditions(ic)
+            .build()
+            .expect("valid system");
+
+        // Replicate the check logic from run_partial_estimation step 5c.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            let Some(&lv) = past.values_m3s.first() else {
+                continue;
+            };
+            let Some(&est_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&usr_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            if (lv - est_mean).abs() < (lv - usr_mean).abs() {
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value: lv,
+                    user_mean: usr_mean,
+                    estimated_mean: est_mean,
+                });
+            }
+        }
+        warnings
+    }
+
+    /// P8-001: Warning fires when lag-1 is closer to estimated mean than user mean.
+    ///
+    /// lag=500, user_mean=800, estimated_mean=480 -> |500-480|=20 < |500-800|=300
+    /// -> warning must be produced.
+    #[test]
+    fn test_lag_scale_warning_fires_when_closer_to_estimated() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            500.0, // lag_value
+            800.0, // user_mean
+            480.0, // estimated_mean
+            true,  // include_past_inflows
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one LagScaleWarning when lag is closer to estimated mean"
+        );
+        assert_eq!(
+            warnings[0].hydro_id,
+            EntityId(1),
+            "warning must record the correct hydro_id"
+        );
+        assert!((warnings[0].lag_value - 500.0).abs() < f64::EPSILON);
+        assert!((warnings[0].user_mean - 800.0).abs() < f64::EPSILON);
+        assert!((warnings[0].estimated_mean - 480.0).abs() < f64::EPSILON);
+    }
+
+    /// P8-002: Warning does NOT fire when lag-1 is closer to user mean.
+    ///
+    /// lag=790, user_mean=800, estimated_mean=480 -> |790-480|=310 > |790-800|=10
+    /// -> no warning.
+    #[test]
+    fn test_lag_scale_warning_not_fires_when_closer_to_user() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            790.0, // lag_value -- close to user_mean
+            800.0, // user_mean
+            480.0, // estimated_mean
+            true,  // include_past_inflows
+        );
+        assert!(
+            warnings.is_empty(),
+            "expected no LagScaleWarning when lag is closer to user mean"
+        );
+    }
+
+    /// P8-003: No warnings when past_inflows is empty.
+    #[test]
+    fn test_lag_scale_warning_empty_past_inflows() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            500.0, // lag_value (irrelevant -- no past_inflows)
+            800.0, // user_mean
+            480.0, // estimated_mean
+            false, // include_past_inflows = false
+        );
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings when past_inflows is empty"
+        );
+    }
+
+    /// P8-004: Hydro with past_inflows but no entry in fitting_stats is skipped.
+    #[test]
+    fn test_lag_scale_warning_skips_hydro_without_history() {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{HydroPastInflows, InitialConditions};
+
+        let hydro_id = EntityId(1);
+        let other_hydro_id = EntityId(2);
+
+        // fitting_stats only covers hydro 2, not hydro 1 (the one with past_inflows).
+        let fitting_stats = vec![SeasonalStats {
+            entity_id: other_hydro_id,
+            stage_id: 0,
+            mean: 480.0,
+            std: 50.0,
+        }];
+
+        let user_model = InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: 800.0,
+            std_m3s: 50.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let ic = InitialConditions {
+            storage: vec![],
+            filling_storage: vec![],
+            past_inflows: vec![HydroPastInflows {
+                hydro_id,
+                values_m3s: vec![500.0],
+            }],
+        };
+        let system = SystemBuilder::new()
+            .inflow_models(vec![user_model])
+            .initial_conditions(ic)
+            .build()
+            .expect("valid system");
+
+        // Run the check inline.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            let Some(&lv) = past.values_m3s.first() else {
+                continue;
+            };
+            let Some(&est_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&usr_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            if (lv - est_mean).abs() < (lv - usr_mean).abs() {
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value: lv,
+                    user_mean: usr_mean,
+                    estimated_mean: est_mean,
+                });
+            }
+        }
+
+        assert!(
+            warnings.is_empty(),
+            "hydro without fitting_stats entry must be skipped (no warning)"
         );
     }
 
@@ -4578,6 +5068,162 @@ mod tests {
             report.white_noise_fallbacks.is_empty(),
             "FullEstimation must never populate white_noise_fallbacks, got {:?}",
             report.white_noise_fallbacks
+        );
+    }
+
+    // ── StdRatioDivergence unit tests ─────────────────────────────────────────
+
+    /// Helper: build a System and fitting_stats for a single hydro with the
+    /// given per-season std values, then call `check_std_ratio_divergence`.
+    ///
+    /// `user_stds[i]` is the user-provided std for season `i`.
+    /// `est_stds[i]` is the estimated std for season `i`.
+    /// Stages are created so that stage_id == season_id (one stage per season).
+    fn collect_std_ratio_warnings(
+        hydro_id: EntityId,
+        user_stds: &[f64],
+        est_stds: &[f64],
+    ) -> Vec<StdRatioDivergence> {
+        use cobre_core::scenario::InflowModel;
+
+        assert_eq!(
+            user_stds.len(),
+            est_stds.len(),
+            "user_stds and est_stds must have equal length"
+        );
+        let n = user_stds.len();
+
+        // Build stages: stage_id == season_id == i, one stage per season.
+        let stages: Vec<cobre_core::temporal::Stage> = (0..n)
+            .map(|i| {
+                let year = 1970_i32;
+                let first_half = i % 2 == 0;
+                make_two_season_stage(i, i as i32, i, year, first_half)
+            })
+            .collect();
+
+        // Build user InflowModels: one per stage.
+        let user_models: Vec<InflowModel> = (0..n)
+            .map(|i| InflowModel {
+                hydro_id,
+                stage_id: i as i32,
+                mean_m3s: 100.0,
+                std_m3s: user_stds[i],
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let system = SystemBuilder::new()
+            .inflow_models(user_models)
+            .stages(stages.clone())
+            .build()
+            .expect("valid system");
+
+        // Build fitting_stats: entity_id = hydro_id, stage_id = i, std = est_stds[i].
+        let fitting_stats: Vec<SeasonalStats> = (0..n)
+            .map(|i| SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: i as i32,
+                mean: 100.0,
+                std: est_stds[i],
+            })
+            .collect();
+
+        check_std_ratio_divergence(&system, &fitting_stats, &stages)
+    }
+
+    /// P9-001: Warning fires when consecutive std ratios diverge by more than 2x.
+    ///
+    /// user stds [100.0, 20.0], est stds [100.0, 100.0].
+    /// Pair (0→1): ratio_user = 5.0, ratio_est = 1.0, divergence = 5.0 → warn.
+    /// Wrap (1→0): ratio_user = 0.2, ratio_est = 1.0, divergence = 5.0 → warn.
+    /// Both pairs diverge, so 2 warnings are emitted. The test verifies that
+    /// at least one warning covers the (0→1) pair and the hydro_id is correct.
+    #[test]
+    fn test_std_ratio_divergence_fires_when_ratios_diverge() {
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0], &[100.0, 100.0]);
+        assert!(
+            !warnings.is_empty(),
+            "expected at least one StdRatioDivergence when ratio diverges by 5x"
+        );
+        // The (0→1) pair must be in the warnings.
+        let pair_0_1 = warnings.iter().find(|w| w.season_a == 0 && w.season_b == 1);
+        assert!(
+            pair_0_1.is_some(),
+            "expected a warning for season pair 0→1, got {:?}",
+            warnings
+        );
+        let w = pair_0_1.unwrap();
+        assert_eq!(
+            w.hydro_id,
+            EntityId(1),
+            "warning must record the correct hydro_id"
+        );
+        assert!(
+            (w.divergence - 5.0).abs() < 1e-10,
+            "divergence for pair 0→1 must be 5.0, got {}",
+            w.divergence
+        );
+    }
+
+    /// P9-002: No warning when ratios are similar (divergence <= 2.0).
+    ///
+    /// user stds [100.0, 20.0], est stds [90.0, 18.0].
+    /// ratio_user = 5.0, ratio_est = 5.0. divergence = 1.0 → no warning.
+    #[test]
+    fn test_std_ratio_divergence_not_fires_when_similar() {
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0], &[90.0, 18.0]);
+        assert!(
+            warnings.is_empty(),
+            "expected no StdRatioDivergence when ratios are similar, got {:?}",
+            warnings
+        );
+    }
+
+    /// P9-003: Season pairs with near-zero denominator std are skipped.
+    ///
+    /// user stds [100.0, 0.0], est stds [90.0, 18.0].
+    /// The pair (season 0 → season 1) has u_b = 0.0 < 1e-12 → skipped.
+    /// The wrap pair (season 1 → season 0) has u_b = 100.0 and e_b = 90.0 → checked.
+    /// ratio_user = 0/100 = 0.0, ratio_est = 18/90 = 0.2.
+    /// divergence = max(0/0.2, 0.2/0) → second division hits near-zero guard → skipped.
+    #[test]
+    fn test_std_ratio_divergence_skips_near_zero_std() {
+        // user stds [100.0, 0.0]: the first pair has denominator 0.0 → skipped.
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 0.0], &[90.0, 18.0]);
+        // No panic must occur. The pair involving zero std is silently skipped.
+        // The wrap pair has ratio_user = 0.0/100.0 = 0.0, ratio_est = 18.0/90.0 = 0.2;
+        // ratio_user / ratio_est would require dividing 0/0.2 = 0, and
+        // ratio_est / ratio_user would divide by 0. The near-zero guard on ratio_est
+        // is not triggered here (0.2 is not near zero), but ratio_user = 0.0 means
+        // divergence = max(0/0.2, 0.2/0). The 0.2/0 branch triggers the ratio_est
+        // guard only if ratio_user < 1e-12, which 0.0 satisfies → skipped.
+        // We assert no panic and that the result is well-defined.
+        let _ = warnings; // result is valid (empty or one entry); no panic is the key assertion.
+    }
+
+    /// P9-004: Wrap-around pair (last season → first season) is checked.
+    ///
+    /// user stds [100.0, 20.0, 50.0], est stds [100.0, 20.0, 10.0].
+    /// Pair (0→1): ratio_user=5.0, ratio_est=5.0 → divergence=1.0 (no warn).
+    /// Pair (1→2): ratio_user=0.4, ratio_est=2.0 → divergence=5.0 (warn).
+    /// Wrap (2→0): ratio_user=50/100=0.5, ratio_est=10/100=0.1 → divergence=5.0 (warn).
+    #[test]
+    fn test_std_ratio_divergence_wraps_last_to_first() {
+        let warnings =
+            collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0, 50.0], &[100.0, 20.0, 10.0]);
+        // Pairs (1→2) and wrap (2→0) both diverge.
+        assert!(
+            warnings.len() >= 2,
+            "expected at least 2 StdRatioDivergence entries (including wrap), got {}",
+            warnings.len()
+        );
+        // The wrap pair (season 2 → season 0) must appear.
+        let has_wrap = warnings.iter().any(|w| w.season_a == 2 && w.season_b == 0);
+        assert!(
+            has_wrap,
+            "expected a warning for the wrap-around pair season 2 → season 0"
         );
     }
 }

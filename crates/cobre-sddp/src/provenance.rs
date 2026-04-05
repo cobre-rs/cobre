@@ -267,6 +267,8 @@ mod tests {
             entries,
             method: method.to_owned(),
             white_noise_fallbacks: fallbacks.iter().map(|&id| EntityId(id)).collect(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         }
     }
 

@@ -32,8 +32,6 @@ use super::{ErrorKind, ValidationContext, schema::ParsedData};
 /// * `data` — fully parsed case data produced by [`super::schema::validate_schema`].
 /// * `ctx`  — mutable validation context that accumulates diagnostics.
 pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut ValidationContext) {
-    // ── Build O(1) lookup sets for each entity registry ───────────────────────
-
     let ids = LookupSets {
         bus: data.buses.iter().map(|b| b.id.0).collect(),
         hydro: data.hydros.iter().map(|h| h.id.0).collect(),
@@ -48,8 +46,6 @@ pub(crate) fn validate_referential_integrity(data: &ParsedData, ctx: &mut Valida
             .collect(),
         generic_constraint: data.generic_constraints.iter().map(|g| g.id.0).collect(),
     };
-
-    // ── Dispatch to per-entity-group validators ─────────────────────────────
 
     check_line_references(data, ctx, &ids.bus);
     check_hydro_references(data, ctx, &ids.bus, &ids.hydro);
@@ -349,6 +345,7 @@ fn check_extension_references(
 }
 
 /// Rules 15-20: Scenario data references.
+#[allow(clippy::too_many_lines)]
 fn check_scenario_references(
     data: &ParsedData,
     ctx: &mut ValidationContext,
@@ -450,11 +447,39 @@ fn check_scenario_references(
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(
                 ErrorKind::InvalidReference,
-                "scenarios/external_scenarios.parquet",
+                "scenarios/external_inflow_scenarios.parquet",
                 Some(format!("ExternalScenarioRow[{i}]")),
                 format!(
                     "ExternalScenarioRow[{i}] references non-existent Hydro {} via field 'hydro_id'",
                     row.hydro_id.0
+                ),
+            );
+        }
+    }
+
+    for (i, row) in data.external_load_scenarios.iter().enumerate() {
+        if !bus_ids.contains(&row.bus_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/external_load_scenarios.parquet",
+                Some(format!("ExternalLoadRow[{i}]")),
+                format!(
+                    "ExternalLoadRow[{i}] references non-existent Bus {} via field 'bus_id'",
+                    row.bus_id.0
+                ),
+            );
+        }
+    }
+
+    for (i, row) in data.external_ncs_scenarios.iter().enumerate() {
+        if !ncs_ids.contains(&row.ncs_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/external_ncs_scenarios.parquet",
+                Some(format!("ExternalNcsRow[{i}]")),
+                format!(
+                    "ExternalNcsRow[{i}] references non-existent NonControllableSource {} via field 'ncs_id'",
+                    row.ncs_id.0
                 ),
             );
         }
@@ -977,8 +1002,6 @@ mod tests {
         },
     };
 
-    // ── Minimal valid JSON fragments (reused from schema.rs tests) ────────────
-
     const VALID_CONFIG_JSON: &str = r#"{
         "training": {
             "forward_passes": 10,
@@ -1086,8 +1109,6 @@ mod tests {
         data
     }
 
-    // ── Entity constructor helpers ─────────────────────────────────────────────
-
     fn hydro_penalties() -> HydroPenalties {
         HydroPenalties {
             spillage_cost: 1.0,
@@ -1181,8 +1202,6 @@ mod tests {
         }
     }
 
-    // ── AC 1: All valid references — no errors ────────────────────────────────
-
     /// Given a `ParsedData` where all entity cross-references are valid,
     /// `validate_referential_integrity` adds no errors to `ctx`.
     #[test]
@@ -1198,8 +1217,6 @@ mod tests {
             ctx.errors()
         );
     }
-
-    // ── AC 2: Invalid Line.source_bus_id ─────────────────────────────────────
 
     /// Given a `ParsedData` where Line id=5 has `source_bus_id` referencing
     /// non-existent bus id=999, `validate_referential_integrity` adds exactly 1
@@ -1234,8 +1251,6 @@ mod tests {
             "message should contain '999', got: {msg}"
         );
     }
-
-    // ── AC 3: Hydro.downstream_id = Some(non-existent) ───────────────────────
 
     /// Given a `ParsedData` where `Hydro` id=3 has `downstream_id = Some(EntityId(100))`
     /// and hydro 100 does not exist, `validate_referential_integrity` adds an
@@ -1274,8 +1289,6 @@ mod tests {
         );
     }
 
-    // ── AC 4: Empty optional collections — no false positives ────────────────
-
     /// Given a `ParsedData` with empty `pumping_stations` and `energy_contracts`,
     /// `validate_referential_integrity` produces no errors for those rules.
     #[test]
@@ -1293,8 +1306,6 @@ mod tests {
             ctx.errors()
         );
     }
-
-    // ── AC 5: Multiple invalid references — all collected ─────────────────────
 
     /// Given a `ParsedData` with 2 invalid bus references (Line, Thermal)
     /// and 1 invalid hydro reference (HydroGeometryRow), all 3 are collected.
@@ -1348,8 +1359,6 @@ mod tests {
         );
     }
 
-    // ── Rule group: Hydro -> bus refs ─────────────────────────────────────────
-
     /// Hydro with a valid bus_id produces no error.
     #[test]
     fn test_hydro_valid_bus_ref() {
@@ -1383,8 +1392,6 @@ mod tests {
         assert!(inv_ref[0].message.contains("bus_id"));
     }
 
-    // ── Rule 7: Hydro.downstream_id = None — no error ────────────────────────
-
     /// Hydro with `downstream_id = None` must not produce any error for rule 7.
     #[test]
     fn test_hydro_downstream_id_none_no_error() {
@@ -1401,8 +1408,6 @@ mod tests {
             "downstream_id = None should not produce errors"
         );
     }
-
-    // ── Rule 8: Hydro.diversion = None — no error ────────────────────────────
 
     /// Hydro with `diversion = None` must not produce any error for rule 8.
     #[test]
@@ -1446,8 +1451,6 @@ mod tests {
         assert!(inv[0].message.contains("999"));
     }
 
-    // ── Rule group: PumpingStation refs ──────────────────────────────────────
-
     /// PumpingStation with valid bus and hydro references produces no error.
     #[test]
     fn test_pumping_valid_refs() {
@@ -1482,8 +1485,6 @@ mod tests {
         assert!(inv[0].message.contains("source_hydro_id"));
         assert!(inv[0].message.contains("999"));
     }
-
-    // ── Rule group: Scenario refs ─────────────────────────────────────────────
 
     /// `InflowSeasonalStatsRow` referencing non-existent hydro produces 1 error.
     #[test]
@@ -1536,8 +1537,6 @@ mod tests {
         assert!(inv[0].message.contains("777"));
         assert!(inv[0].message.contains("bus_id"));
     }
-
-    // ── Rule 19: CorrelationEntity entity_type == "inflow" ────────────────────
 
     /// `CorrelationEntity` with invalid inflow, load, and ncs entity references
     /// produces one `InvalidReference` error per invalid reference.
@@ -1620,8 +1619,6 @@ mod tests {
             "valid inflow ref should not produce errors"
         );
     }
-
-    // ── Rule group: Constraint refs ───────────────────────────────────────────
 
     /// `ThermalBoundsRow` referencing a non-existent thermal produces 1 error.
     #[test]
@@ -1736,8 +1733,6 @@ mod tests {
         assert!(inv[0].message.contains("constraint_id"));
     }
 
-    // ── Rule group: Penalty override refs ─────────────────────────────────────
-
     /// `BusPenaltyOverrideRow` referencing a non-existent bus produces 1 error.
     #[test]
     fn test_bus_penalty_override_invalid_bus_ref() {
@@ -1804,8 +1799,6 @@ mod tests {
         validate_referential_integrity(&data, &mut ctx);
         assert!(!ctx.has_errors(), "valid NCS ref should not produce errors");
     }
-
-    // ── Rules 31-32: LoadFactorEntry referential checks ───────────────────────
 
     /// `LoadFactorEntry` with a non-existent `bus_id` produces 1
     /// `InvalidReference` error for `scenarios/load_factors.json`.
@@ -1902,8 +1895,6 @@ mod tests {
             "valid load_factors refs should produce no errors"
         );
     }
-
-    // ── Rules 36-41: NCS bounds and NCS factors referential checks ────────
 
     /// Valid `NcsBoundsRow` with an existing NCS ID and valid stage produces no errors.
     #[test]

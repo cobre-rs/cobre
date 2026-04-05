@@ -177,6 +177,10 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .initial_conditions(data.initial_conditions)
         .generic_constraints(data.generic_constraints)
         .scenario_source(data.stages.scenario_source)
+        .inflow_history(data.inflow_history)
+        .external_scenarios(data.external_scenarios)
+        .external_load_scenarios(data.external_load_scenarios)
+        .external_ncs_scenarios(data.external_ncs_scenarios)
         .build()
         .map_err(|errs| LoadError::ConstraintError {
             description: errs

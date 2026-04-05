@@ -37,10 +37,6 @@ use std::collections::BTreeMap;
 
 use crate::EntityId;
 
-// ---------------------------------------------------------------------------
-// SamplingScheme (SS14 scenario source)
-// ---------------------------------------------------------------------------
-
 /// Forward-pass noise source for multi-stage optimization solvers.
 ///
 /// Determines where the forward-pass scenario realisations come from.
@@ -77,9 +73,7 @@ pub enum SamplingScheme {
     Historical,
 }
 
-// ---------------------------------------------------------------------------
 // ScenarioSource (SS14 top-level config)
-// ---------------------------------------------------------------------------
 
 /// Top-level scenario source configuration, parsed from `stages.json`.
 ///
@@ -131,9 +125,7 @@ pub struct ScenarioSource {
     pub historical_years: Option<HistoricalYears>,
 }
 
-// ---------------------------------------------------------------------------
 // HistoricalYears (SS14 — year pool for Historical sampling)
-// ---------------------------------------------------------------------------
 
 /// Specifies which historical years to draw from when using
 /// [`SamplingScheme::Historical`] sampling.
@@ -177,9 +169,33 @@ pub enum HistoricalYears {
     },
 }
 
-// ---------------------------------------------------------------------------
+impl HistoricalYears {
+    /// Expand the year specification into a concrete sorted list.
+    ///
+    /// - `List` — returns the years as-is (caller order is preserved).
+    /// - `Range` — expands the inclusive range `[from, to]` into a full list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cobre_core::scenario::HistoricalYears;
+    ///
+    /// let list = HistoricalYears::List(vec![1995, 2000, 2005]);
+    /// assert_eq!(list.to_years(), vec![1995, 2000, 2005]);
+    ///
+    /// let range = HistoricalYears::Range { from: 2000, to: 2003 };
+    /// assert_eq!(range.to_years(), vec![2000, 2001, 2002, 2003]);
+    /// ```
+    #[must_use]
+    pub fn to_years(&self) -> Vec<i32> {
+        match self {
+            HistoricalYears::List(years) => years.clone(),
+            HistoricalYears::Range { from, to } => (*from..=*to).collect(),
+        }
+    }
+}
+
 // InflowModel (SS14 — per hydro, per stage)
-// ---------------------------------------------------------------------------
 
 /// Raw PAR(p) model parameters for a single (hydro, stage) pair.
 ///
@@ -255,9 +271,7 @@ impl InflowModel {
     }
 }
 
-// ---------------------------------------------------------------------------
 // LoadModel (SS14 — per bus, per stage)
-// ---------------------------------------------------------------------------
 
 /// Raw load seasonal statistics for a single (bus, stage) pair.
 ///
@@ -298,9 +312,7 @@ pub struct LoadModel {
     pub std_mw: f64,
 }
 
-// ---------------------------------------------------------------------------
 // NcsModel (per NCS entity, per stage)
-// ---------------------------------------------------------------------------
 
 /// Per-stage normal noise model parameters for a non-controllable source.
 ///
@@ -344,9 +356,7 @@ pub struct NcsModel {
     pub std: f64,
 }
 
-// ---------------------------------------------------------------------------
 // InflowHistoryRow (SS2.4 — raw historical observation)
-// ---------------------------------------------------------------------------
 
 /// A single row from `scenarios/inflow_history.parquet`.
 ///
@@ -380,11 +390,9 @@ pub struct InflowHistoryRow {
     pub value_m3s: f64,
 }
 
-// ---------------------------------------------------------------------------
 // ExternalScenarioRow (SS2.5 — pre-computed external scenario value)
-// ---------------------------------------------------------------------------
 
-/// A single row from `scenarios/external_scenarios.parquet`.
+/// A single row from `scenarios/external_inflow_scenarios.parquet`.
 ///
 /// Each row defines the pre-computed inflow value for one (stage, scenario, hydro)
 /// triple. Used when [`SamplingScheme::External`] is active.
@@ -419,9 +427,82 @@ pub struct ExternalScenarioRow {
     pub value_m3s: f64,
 }
 
-// ---------------------------------------------------------------------------
+// ExternalLoadRow (E2 — pre-computed external load scenario value)
+
+/// A single row from `scenarios/external_load_scenarios.parquet`.
+///
+/// Each row defines the pre-computed load value for one (stage, scenario, bus)
+/// triple. Used when [`SamplingScheme::External`] is active for load variables.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalLoadRow};
+///
+/// let row = ExternalLoadRow {
+///     stage_id: 0,
+///     scenario_id: 2,
+///     bus_id: EntityId::from(3),
+///     value_mw: 150.0,
+/// };
+/// assert_eq!(row.scenario_id, 2);
+/// assert!((row.value_mw - 150.0).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalLoadRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// Bus this load value belongs to.
+    pub bus_id: EntityId,
+
+    /// Pre-computed load value in MW. Must be finite.
+    pub value_mw: f64,
+}
+
+// ExternalNcsRow (E2 — pre-computed external NCS scenario value)
+
+/// A single row from `scenarios/external_ncs_scenarios.parquet`.
+///
+/// Each row defines the pre-computed dimensionless availability factor for one
+/// (stage, scenario, ncs) triple. Used when [`SamplingScheme::External`] is
+/// active for NCS availability variables.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalNcsRow};
+///
+/// let row = ExternalNcsRow {
+///     stage_id: 1,
+///     scenario_id: 0,
+///     ncs_id: EntityId::from(7),
+///     value: 0.85,
+/// };
+/// assert_eq!(row.ncs_id, EntityId::from(7));
+/// assert!((row.value - 0.85).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalNcsRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// NCS source this availability factor belongs to.
+    pub ncs_id: EntityId,
+
+    /// Pre-computed dimensionless availability factor. Must be finite.
+    pub value: f64,
+}
+
 // CorrelationEntity
-// ---------------------------------------------------------------------------
 
 /// A single entity reference within a correlation group.
 ///
@@ -447,9 +528,7 @@ pub struct CorrelationEntity {
     pub id: EntityId,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationGroup
-// ---------------------------------------------------------------------------
 
 /// A named group of correlated entities and their correlation matrix.
 ///
@@ -496,9 +575,7 @@ pub struct CorrelationGroup {
     pub matrix: Vec<Vec<f64>>,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationProfile
-// ---------------------------------------------------------------------------
 
 /// A named correlation profile containing one or more correlation groups.
 ///
@@ -537,9 +614,7 @@ pub struct CorrelationProfile {
     pub groups: Vec<CorrelationGroup>,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationScheduleEntry
-// ---------------------------------------------------------------------------
 
 /// Maps a stage to its active correlation profile name.
 ///
@@ -560,9 +635,7 @@ pub struct CorrelationScheduleEntry {
     pub profile_name: String,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationModel
-// ---------------------------------------------------------------------------
 
 /// Top-level correlation configuration for the scenario pipeline.
 ///
@@ -646,9 +719,7 @@ impl Default for CorrelationModel {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -11,12 +11,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, ExternalScenarioRow,
-    GenericConstraint, Hydro, InflowHistoryRow, InflowModel, InitialConditions, Line, LoadModel,
-    NcsModel, NetworkTopology, NonControllableSource, PolicyGraph, PumpingStation, ResolvedBounds,
-    ResolvedExchangeFactors, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
-    ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, ScenarioSource, Stage, Thermal,
-    ValidationError,
+    Bus, CascadeTopology, CorrelationModel, EnergyContract, EntityId, ExternalLoadRow,
+    ExternalNcsRow, ExternalScenarioRow, GenericConstraint, Hydro, InflowHistoryRow, InflowModel,
+    InitialConditions, Line, LoadModel, NcsModel, NetworkTopology, NonControllableSource,
+    PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
+    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
+    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
 };
 
 /// Top-level system representation.
@@ -137,8 +137,16 @@ pub struct System {
     inflow_history: Vec<InflowHistoryRow>,
     /// Raw external scenario rows per (stage, scenario, hydro) triple.
     /// Sorted by `(stage_id, scenario_id, hydro_id)` ascending.
-    /// Empty when no external scenario file is present.
+    /// Empty when no external inflow scenario file is present.
     external_scenarios: Vec<ExternalScenarioRow>,
+    /// Raw external load scenario rows per (stage, scenario, bus) triple.
+    /// Sorted by `(stage_id, scenario_id, bus_id)` ascending.
+    /// Empty when no external load scenario file is present.
+    external_load_scenarios: Vec<ExternalLoadRow>,
+    /// Raw external NCS scenario rows per (stage, scenario, ncs) triple.
+    /// Sorted by `(stage_id, scenario_id, ncs_id)` ascending.
+    /// Empty when no external NCS scenario file is present.
+    external_ncs_scenarios: Vec<ExternalNcsRow>,
 }
 
 // Compile-time check that System is Send + Sync.
@@ -413,12 +421,28 @@ impl System {
         &self.inflow_history
     }
 
-    /// Returns the raw external scenario rows, sorted by `(stage_id, scenario_id, hydro_id)`.
+    /// Returns the raw external inflow scenario rows, sorted by `(stage_id, scenario_id, hydro_id)`.
     ///
-    /// Returns an empty slice when no external scenario file was present at case-load time.
+    /// Returns an empty slice when no external inflow scenario file was present at case-load time.
     #[must_use]
     pub fn external_scenarios(&self) -> &[ExternalScenarioRow] {
         &self.external_scenarios
+    }
+
+    /// Returns the raw external load scenario rows, sorted by `(stage_id, scenario_id, bus_id)`.
+    ///
+    /// Returns an empty slice when no external load scenario file was present at case-load time.
+    #[must_use]
+    pub fn external_load_scenarios(&self) -> &[ExternalLoadRow] {
+        &self.external_load_scenarios
+    }
+
+    /// Returns the raw external NCS scenario rows, sorted by `(stage_id, scenario_id, ncs_id)`.
+    ///
+    /// Returns an empty slice when no external NCS scenario file was present at case-load time.
+    #[must_use]
+    pub fn external_ncs_scenarios(&self) -> &[ExternalNcsRow] {
+        &self.external_ncs_scenarios
     }
 
     /// Replace the scenario models and correlation on this `System`, returning a new
@@ -552,6 +576,8 @@ pub struct SystemBuilder {
     scenario_source: ScenarioSource,
     inflow_history: Vec<InflowHistoryRow>,
     external_scenarios: Vec<ExternalScenarioRow>,
+    external_load_scenarios: Vec<ExternalLoadRow>,
+    external_ncs_scenarios: Vec<ExternalNcsRow>,
 }
 
 impl Default for SystemBuilder {
@@ -593,6 +619,8 @@ impl SystemBuilder {
             scenario_source: ScenarioSource::default(),
             inflow_history: Vec::new(),
             external_scenarios: Vec::new(),
+            external_load_scenarios: Vec::new(),
+            external_ncs_scenarios: Vec::new(),
         }
     }
 
@@ -793,14 +821,36 @@ impl SystemBuilder {
         self
     }
 
-    /// Set the raw external scenario rows.
+    /// Set the raw external inflow scenario rows.
     ///
     /// Rows should be sorted by `(stage_id, scenario_id, hydro_id)` ascending.
-    /// When no external scenario file is present, omit this call and the field
-    /// will default to an empty `Vec`.
+    /// When no external inflow scenario file is present, omit this call and the
+    /// field will default to an empty `Vec`.
     #[must_use]
     pub fn external_scenarios(mut self, rows: Vec<ExternalScenarioRow>) -> Self {
         self.external_scenarios = rows;
+        self
+    }
+
+    /// Set the raw external load scenario rows.
+    ///
+    /// Rows should be sorted by `(stage_id, scenario_id, bus_id)` ascending.
+    /// When no external load scenario file is present, omit this call and the
+    /// field will default to an empty `Vec`.
+    #[must_use]
+    pub fn external_load_scenarios(mut self, rows: Vec<ExternalLoadRow>) -> Self {
+        self.external_load_scenarios = rows;
+        self
+    }
+
+    /// Set the raw external NCS scenario rows.
+    ///
+    /// Rows should be sorted by `(stage_id, scenario_id, ncs_id)` ascending.
+    /// When no external NCS scenario file is present, omit this call and the
+    /// field will default to an empty `Vec`.
+    #[must_use]
+    pub fn external_ncs_scenarios(mut self, rows: Vec<ExternalNcsRow>) -> Self {
+        self.external_ncs_scenarios = rows;
         self
     }
 
@@ -951,6 +1001,8 @@ impl SystemBuilder {
             scenario_source: self.scenario_source,
             inflow_history: self.inflow_history,
             external_scenarios: self.external_scenarios,
+            external_load_scenarios: self.external_load_scenarios,
+            external_ncs_scenarios: self.external_ncs_scenarios,
         })
     }
 }

@@ -20,9 +20,19 @@
 //! use cobre_stochastic::sampling::{ForwardSampler, build_forward_sampler};
 //! ```
 
-pub(crate) mod external;
-pub(crate) mod historical;
+pub mod external;
+pub mod historical;
 pub mod insample;
+pub mod window;
+
+pub use external::{
+    ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
+    standardize_external_ncs, validate_external_library,
+};
+pub use historical::{
+    HistoricalScenarioLibrary, standardize_historical_windows, validate_historical_library,
+};
+pub use window::discover_historical_windows;
 pub(crate) mod out_of_sample;
 
 use cobre_core::{EntityId, Stage, scenario::SamplingScheme, temporal::NoiseMethod};

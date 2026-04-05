@@ -31,10 +31,10 @@ pub use noise::seed::{derive_forward_seed, derive_opening_seed, derive_stage_see
 pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormal};
 #[allow(deprecated)]
 pub use par::{
-    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedPar,
-    SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par,
-    evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, levinson_durbin,
-    solve_par_noise, solve_par_noise_batch, solve_par_noises, validate_par_parameters,
+    ArCoefficientEstimate, ParValidationReport, ParWarning, PrecomputedPar, SeasonalStats,
+    estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par, evaluate_par_batch,
+    evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noise_batch,
+    solve_par_noises, validate_par_parameters,
 };
 pub use provenance::{ComponentProvenance, StochasticProvenance};
 pub use sampling::insample::sample_forward;

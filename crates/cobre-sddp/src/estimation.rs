@@ -29,9 +29,7 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
-    config::OrderSelectionMethod,
-    parse_inflow_history,
+    Config, FileManifest, LoadError, ValidationContext, parse_inflow_history,
     scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
     validate_structure,
 };
@@ -205,26 +203,6 @@ fn validate_order_contributions(
     }
 }
 
-/// Compute `residual_std_ratio` from a normalised prediction error variance (`sigma2`).
-///
-/// The Levinson-Durbin recursion can produce negative `sigma2` values when the
-/// estimated autocorrelation sequence does not form a positive-definite Toeplitz
-/// matrix. In Rust, `f64::sqrt()` of a negative number returns `NaN`, and
-/// `NaN.clamp(a, b)` propagates `NaN` (IEEE 754 semantics). A `NaN`
-/// `residual_std_ratio` would then poison the noise scale and eventually cause
-/// the `HiGHS` solver to reject row-bound patches.
-///
-/// This helper treats non-positive `sigma2` as evidence that the AR model at the
-/// given order is numerically unstable and falls back to the white-noise baseline
-/// (`residual_std_ratio = 1.0`).
-fn residual_std_ratio_from_sigma2(sigma2: f64) -> f64 {
-    if sigma2 <= 0.0 {
-        1.0
-    } else {
-        sigma2.sqrt().clamp(f64::EPSILON, 1.0)
-    }
-}
-
 /// Estimate PAR(p) model parameters from inflow history when explicit stats are absent.
 ///
 /// Reads the file manifest for `case_dir` to determine the input path. When
@@ -322,7 +300,6 @@ fn run_estimation(
         &ArEstimationConfig {
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
-            method: &config.estimation.order_selection,
             season_map,
         },
     )?;
@@ -358,17 +335,16 @@ fn run_estimation(
 struct ArEstimationConfig<'a> {
     max_order: usize,
     max_coeff_magnitude: Option<f64>,
-    method: &'a OrderSelectionMethod,
     season_map: Option<&'a cobre_core::temporal::SeasonMap>,
 }
 
-/// Estimate AR coefficients with the configured order selection method.
+/// Estimate AR coefficients using the periodic Yule-Walker / PACF method.
 ///
-/// For `Fixed`, delegates directly to `estimate_ar_coefficients`.
-/// For `Aic`, calls `estimate_ar_coefficients` at `max_order` to obtain full
-/// coefficients, then calls `levinson_durbin` per `(entity, season)` pair to
-/// get `sigma2_per_order` for AIC minimisation, and truncates the coefficient
-/// vector to the AIC-selected order.
+/// Delegates to [`estimate_ar_with_pacf`], which selects the AR order via the
+/// periodic PACF significance test (95% confidence, `z_alpha = 1.96`) and then
+/// solves the periodic Yule-Walker system at the selected order. The
+/// `cfg.method` field is accepted for API compatibility; only
+/// `OrderSelectionMethod::Pacf` is supported.
 fn estimate_ar_coefficients_with_selection(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -376,58 +352,15 @@ fn estimate_ar_coefficients_with_selection(
     hydro_ids: &[EntityId],
     cfg: &ArEstimationConfig<'_>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
-    match cfg.method {
-        OrderSelectionMethod::Fixed => {
-            let mut estimates = estimate_ar_coefficients_with_season_map(
-                observations,
-                seasonal_stats,
-                stages,
-                hydro_ids,
-                cfg.max_order,
-                cfg.season_map,
-            )?;
-
-            // Build stats_map and n_seasons for contribution validation.
-            let stage_index = stages
-                .iter()
-                .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
-                .collect::<Vec<_>>();
-            let stage_id_to_season: HashMap<i32, usize> = stage_index.iter().copied().collect();
-            let n_seasons = stage_index
-                .iter()
-                .map(|&(_, sid)| sid + 1)
-                .max()
-                .unwrap_or(0);
-            let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
-                .iter()
-                .filter_map(|s| {
-                    let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
-                    Some(((s.entity_id, season_id), s))
-                })
-                .collect();
-            let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
-
-            let reductions = apply_contribution_validation(
-                &mut estimates,
-                n_seasons,
-                &stats_map,
-                &sigma2_map,
-                cfg.max_coeff_magnitude,
-            );
-
-            let report = build_estimation_report(&estimates, n_seasons, &reductions, "fixed");
-            Ok((estimates, report))
-        }
-        OrderSelectionMethod::Pacf => estimate_ar_with_pacf(
-            observations,
-            seasonal_stats,
-            stages,
-            hydro_ids,
-            cfg.max_order,
-            cfg.season_map,
-            cfg.max_coeff_magnitude,
-        ),
-    }
+    estimate_ar_with_pacf(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        cfg.max_order,
+        cfg.season_map,
+        cfg.max_coeff_magnitude,
+    )
 }
 
 /// PACF-based AR order selection using periodic Yule-Walker method.
@@ -848,20 +781,8 @@ fn iterative_pacf_reduction(
 }
 
 /// Apply coefficient magnitude bound and contribution-based order validation
-/// to all AR estimates.
-///
-/// When `max_coeff_magnitude` is `Some(threshold)`, any (entity, season)
-/// with `|coefficient| > threshold` is immediately reduced to order 0
-/// before the contribution analysis runs. This acts as a fast-path safety
-/// net for the most extreme explosive models.
-///
-/// Then for each entity, groups all season coefficients and standard
-/// deviations, iterates per season: if negative contributions are found,
-/// the order is reduced to the maximum valid order and the coefficient
-/// vector truncated. The loop repeats until all contributions are
-/// non-negative or the order reaches zero.
-///
-/// Returns a map of `EntityId` -> list of `ContributionReduction` events.
+/// to all AR estimates (used only in tests after Fixed-path removal).
+#[cfg(test)]
 fn apply_contribution_validation(
     estimates: &mut [ArCoefficientEstimate],
     n_seasons: usize,
@@ -977,7 +898,8 @@ fn apply_contribution_validation(
                 } else if let Some(sigma2_vec) = sigma2_map.get(&(hydro_id, season_id)) {
                     if reduced_order <= sigma2_vec.len() {
                         let sigma2 = sigma2_vec[reduced_order - 1];
-                        estimates[idx].residual_std_ratio = residual_std_ratio_from_sigma2(sigma2);
+                        estimates[idx].residual_std_ratio =
+                            if sigma2 <= 0.0 { 1.0 } else { sigma2.sqrt() };
                     }
                 }
 
@@ -1375,7 +1297,7 @@ mod tests {
         let mut cfg: Config = serde_json::from_str(MINIMAL_CONFIG_JSON).unwrap();
         cfg.estimation = EstimationConfig {
             max_order: 2,
-            order_selection: OrderSelectionMethod::Fixed,
+            order_selection: OrderSelectionMethod::Pacf,
             min_observations_per_season: 2,
             max_coefficient_magnitude: None,
         };
@@ -1449,14 +1371,12 @@ mod tests {
         }
     }
 
-    /// When `OrderSelectionMethod::Fixed` is used, the returned `EstimationReport`
-    /// must have an empty entries map.
+    /// With empty observations the returned `EstimationReport` must have an
+    /// empty entries map.
     #[test]
-    fn test_estimation_report_empty_for_fixed() {
+    fn test_estimation_report_empty_for_pacf() {
         use cobre_core::temporal::Stage;
-        use cobre_io::config::OrderSelectionMethod;
 
-        let method = OrderSelectionMethod::Fixed;
         let observations: Vec<(EntityId, chrono::NaiveDate, f64)> = vec![];
         let seasonal_stats: Vec<SeasonalStats> = vec![];
         let stages: Vec<Stage> = vec![];
@@ -1471,7 +1391,6 @@ mod tests {
             &ArEstimationConfig {
                 max_order,
                 max_coeff_magnitude: None,
-                method: &method,
                 season_map: None,
             },
         )
@@ -1479,7 +1398,7 @@ mod tests {
 
         assert!(
             report.entries.is_empty(),
-            "Fixed method must produce empty EstimationReport"
+            "empty observations must produce empty EstimationReport"
         );
     }
 
@@ -2806,7 +2725,6 @@ mod tests {
     #[test]
     fn roundtrip_estimation_two_season_par2_recovers_coefficients() {
         use chrono::NaiveDate;
-        use cobre_io::config::OrderSelectionMethod;
 
         let hydro_id = EntityId(1);
         let n_years = 1000_usize;
@@ -2865,7 +2783,6 @@ mod tests {
             ));
         }
 
-        let method = OrderSelectionMethod::Pacf;
         let (estimates, _report) = estimate_ar_coefficients_with_selection(
             &observations,
             &seasonal_stats,
@@ -2874,7 +2791,6 @@ mod tests {
             &ArEstimationConfig {
                 max_order: 2,
                 max_coeff_magnitude: None,
-                method: &method,
                 season_map: Some(&season_map),
             },
         )

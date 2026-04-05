@@ -15,26 +15,19 @@
 //! 5. [`estimate_seasonal_stats`] — computes seasonal means and
 //!    Bessel-corrected standard deviations from historical observations,
 //!    grouped by `(entity, season)` pair.
-//! 6. [`estimate_ar_coefficients`] — legacy interface using Levinson-Durbin;
-//!    used by the `Fixed` order selection path.
+//! 6. [`estimate_ar_coefficients`] — produces white-noise (order-0) estimates
+//!    for all `(entity, season)` pairs; used by the PACF path when
+//!    `max_order == 0`.
 //! 7. [`estimate_correlation`] — computes the Pearson correlation matrix of
 //!    PAR model residuals across entities, returning a [`CorrelationModel`]
 //!    suitable for downstream Cholesky decomposition.
 //!
-//! ## Yule-Walker equations
+//! ## Periodic Yule-Walker equations
 //!
-//! For an AR(p) process with autocorrelations `ρ(1)..ρ(p)`, the
-//! Yule-Walker system is:
-//!
-//! ```text
-//! [ ρ(0)  ρ(1) … ρ(p-1) ] [ ψ₁ ]   [ ρ(1) ]
-//! [ ρ(1)  ρ(0) … ρ(p-2) ] [ ψ₂ ] = [ ρ(2) ]
-//! [  ⋮                   ] [  ⋮ ]   [  ⋮   ]
-//! [ ρ(p-1)…      ρ(0)   ] [ ψₚ ]   [ ρ(p) ]
-//! ```
-//!
-//! where `ρ(0) = 1` (normalised autocorrelation). The Levinson-Durbin
-//! recursion solves this in O(p²) without forming the full Toeplitz matrix.
+//! For a periodic AR(p) process the Yule-Walker system is non-Toeplitz because
+//! lags cross season boundaries. [`build_periodic_yw_matrix`] assembles the
+//! correct per-season matrix and [`estimate_periodic_ar_coefficients`] solves it
+//! via LU factorisation with partial pivoting.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -276,159 +269,6 @@ pub fn find_season_for_date(
 }
 
 // ---------------------------------------------------------------------------
-// Levinson-Durbin
-// ---------------------------------------------------------------------------
-
-/// Result of the Levinson-Durbin recursion.
-///
-/// Contains the AR coefficients, prediction error variances, and partial
-/// autocorrelation coefficients computed up to the requested order (which
-/// may be less than requested if near-singularity is detected).
-#[must_use]
-#[derive(Debug, Clone)]
-pub struct LevinsonDurbinResult {
-    /// AR coefficients ψ*₁..ψ*ₚ for the fitted order.
-    ///
-    /// Length equals the actual fitted order, which may be less than the
-    /// requested order if the recursion was truncated due to near-singularity.
-    pub coefficients: Vec<f64>,
-    /// Prediction error variance at each intermediate order.
-    ///
-    /// `sigma2_per_order[k]` is the prediction error variance for an AR model
-    /// of order `k+1`. Length equals the actual fitted order.
-    pub sigma2_per_order: Vec<f64>,
-    /// Partial autocorrelation coefficients (reflection coefficients).
-    ///
-    /// `parcor[k]` is the partial autocorrelation (reflection coefficient κ)
-    /// at order `k+1`. Length equals the actual fitted order.
-    pub parcor: Vec<f64>,
-    /// Final prediction error variance σ²ₚ for the fitted order.
-    ///
-    /// Equals `1.0` when `order == 0` (no AR component fitted).
-    pub sigma2: f64,
-}
-
-/// Solve the Yule-Walker equations via the Levinson-Durbin recursion.
-///
-/// Given autocorrelations `ρ(1)..ρ(p)` (not including `ρ(0) = 1.0`, which is
-/// implied), computes AR coefficients for a model of the requested `order`.
-///
-/// The recursion runs in O(p²) time and O(p) space. No general-purpose linear
-/// algebra library is required.
-///
-/// If the prediction error variance drops to or below [`f64::EPSILON`] at any
-/// intermediate step, the recursion is truncated at that step and coefficients
-/// computed up to the previous order are returned. This handles numerically
-/// singular or near-singular autocorrelation sequences gracefully.
-///
-/// # Parameters
-///
-/// - `autocorrelations` — the autocorrelation values `ρ(1), ρ(2), …, ρ(p_max)`.
-///   Must satisfy `autocorrelations.len() >= order`.
-/// - `order` — maximum AR order `p` to solve for.
-///
-/// # Examples
-///
-/// AR(1) with known solution:
-///
-/// ```
-/// use cobre_stochastic::par::fitting::levinson_durbin;
-///
-/// let result = levinson_durbin(&[0.5], 1);
-/// assert!((result.coefficients[0] - 0.5).abs() < 1e-10);
-/// assert!((result.sigma2 - 0.75).abs() < 1e-10);
-/// ```
-///
-/// Order-0 returns empty result with unit variance:
-///
-/// ```
-/// use cobre_stochastic::par::fitting::levinson_durbin;
-///
-/// let result = levinson_durbin(&[], 0);
-/// assert!(result.coefficients.is_empty());
-/// assert_eq!(result.sigma2, 1.0);
-/// ```
-pub fn levinson_durbin(autocorrelations: &[f64], order: usize) -> LevinsonDurbinResult {
-    debug_assert!(
-        autocorrelations.len() >= order,
-        "autocorrelations.len() ({}) must be >= order ({})",
-        autocorrelations.len(),
-        order
-    );
-
-    if order == 0 {
-        return LevinsonDurbinResult {
-            coefficients: Vec::new(),
-            sigma2_per_order: Vec::new(),
-            parcor: Vec::new(),
-            sigma2: 1.0,
-        };
-    }
-
-    // Pre-allocate all output vectors with the requested order capacity.
-    let mut coefficients = Vec::with_capacity(order);
-    let mut sigma2_per_order = Vec::with_capacity(order);
-    let mut parcor = Vec::with_capacity(order);
-
-    // Two coefficient buffers to implement the reflection step without
-    // in-place update hazards: a_prev holds AR(k) coefficients,
-    // a_curr accumulates AR(k+1) during each iteration.
-    let mut a_prev = vec![0.0_f64; order];
-    let mut a_curr = vec![0.0_f64; order];
-
-    let mut sigma2 = 1.0_f64;
-
-    for k in 0..order {
-        // Compute numerator: ρ(k+1) - Σ_{j=0}^{k-1} a_prev[j] * ρ(k-j)
-        // Note: ρ(0) = 1 is implicit; autocorrelations[i] = ρ(i+1).
-        let mut num = autocorrelations[k];
-        for j in 0..k {
-            // a_prev[j] is ψ_{j+1} for the current AR(k) model.
-            // ρ(k - j) = autocorrelations[k - j - 1]
-            num -= a_prev[j] * autocorrelations[k - j - 1];
-        }
-
-        let kappa = num / sigma2;
-
-        // Update AR(k+1) coefficients via the reflection step:
-        //   a_curr[j] = a_prev[j] - kappa * a_prev[k-1-j]   for j in 0..k
-        //   a_curr[k] = kappa
-        for j in 0..k {
-            a_curr[j] = a_prev[j] - kappa * a_prev[k - 1 - j];
-        }
-        a_curr[k] = kappa;
-
-        // Update prediction error variance.
-        let sigma2_next = sigma2 * (1.0 - kappa * kappa);
-
-        // Store partial autocorrelation and updated variance.
-        parcor.push(kappa);
-        sigma2_per_order.push(sigma2_next);
-        coefficients.clear();
-        coefficients.extend_from_slice(&a_curr[..=k]);
-
-        sigma2 = sigma2_next;
-
-        // Near-singularity guard: if sigma2 has collapsed, truncate here.
-        // The coefficients up to this order (which caused sigma2 to reach
-        // near-zero) are retained as valid; further orders would be unstable.
-        if sigma2 <= f64::EPSILON {
-            break;
-        }
-
-        // Rotate buffers: a_curr becomes a_prev for the next iteration.
-        a_prev[..=k].copy_from_slice(&a_curr[..=k]);
-    }
-
-    LevinsonDurbinResult {
-        coefficients,
-        sigma2_per_order,
-        parcor,
-        sigma2,
-    }
-}
-
-// ---------------------------------------------------------------------------
 // AR coefficient estimation
 // ---------------------------------------------------------------------------
 
@@ -451,39 +291,17 @@ pub struct ArCoefficientEstimate {
     pub residual_std_ratio: f64,
 }
 
-/// Estimate AR coefficients for all `(entity, season)` pairs.
+/// Produce white-noise (order-0) AR estimates for all `(entity, season)` pairs.
 ///
-/// Computes cross-seasonal autocorrelations from historical observations,
-/// then solves the Yule-Walker system via [`levinson_durbin`] to obtain
-/// standardized AR coefficients and the residual std ratio for each pair.
-///
-/// # Cross-seasonal autocorrelation
-///
-/// For season `m` and lag `l`, the cross-seasonal autocorrelation is:
-///
-/// ```text
-/// gamma_m(l) = (1/(N_m - 1)) * Σ_{t: season(t)=m} (a_t − μ_m)(a_{t−l} − μ_{m−l})
-/// rho_m(l)   = gamma_m(l) / (s_m · s_{m−l})
-/// ```
-///
-/// where `μ_m`, `s_m` come from `seasonal_stats`, and season indices wrap
-/// cyclically: season 0 follows season `M−1` (where `M` is the number of
-/// distinct seasons).
-///
-/// # Parameters
-///
-/// - `observations` — flat slice of `(entity_id, date, value)` triples,
-///   sorted by `(entity_id, date)`.
-/// - `seasonal_stats` — output of [`estimate_seasonal_stats`], sorted by
-///   `(entity_id, season_id)`.
-/// - `stages` — all study stages with `season_id` assignments.
-/// - `hydro_ids` — canonical sorted list of entity IDs to estimate for.
-/// - `max_order` — maximum AR order to fit.
+/// Every `(hydro_id, season_id)` pair present in `seasonal_stats` that belongs
+/// to `hydro_ids` receives an `ArCoefficientEstimate` with an empty coefficient
+/// vector and `residual_std_ratio = 1.0`. This function delegates to
+/// [`estimate_ar_coefficients_with_season_map`] with `season_map = None`.
 ///
 /// # Errors
 ///
-/// - [`StochasticError::InsufficientData`] when any `(entity, season)` pair
-///   has fewer than `max_order + 1` observations.
+/// - [`StochasticError::InsufficientData`] when `max_order > 0` (use the
+///   periodic Yule-Walker path via [`estimate_periodic_ar_coefficients`] instead).
 ///
 /// # Examples
 ///
@@ -520,8 +338,10 @@ pub struct ArCoefficientEstimate {
 ///     obs.push((EntityId::from(1), NaiveDate::from_ymd_opt(y, 2, 15).unwrap(), 200.0));
 /// }
 /// let stats = estimate_seasonal_stats(&obs, &stages_vec, &entity_ids).unwrap();
-/// let estimates = estimate_ar_coefficients(&obs, &stats, &stages_vec, &entity_ids, 1).unwrap();
+/// // order-0 produces white-noise estimates (empty coefficients, ratio = 1.0)
+/// let estimates = estimate_ar_coefficients(&obs, &stats, &stages_vec, &entity_ids, 0).unwrap();
 /// assert_eq!(estimates.len(), 2);
+/// assert!(estimates[0].coefficients.is_empty());
 /// ```
 pub fn estimate_ar_coefficients(
     observations: &[(EntityId, NaiveDate, f64)],
@@ -622,179 +442,65 @@ fn build_season_lookups<'a>(
     }
 }
 
-/// Estimate AR coefficients with an optional [`SeasonMap`] fallback for
-/// historical observations that predate the study horizon.
+/// Produce white-noise (order-0) AR estimates for every `(entity, season)` pair.
+///
+/// All `(hydro_id, season_id)` pairs found in `seasonal_stats` that belong to
+/// `hydro_ids` receive an `ArCoefficientEstimate` with an empty coefficient
+/// vector and `residual_std_ratio = 1.0`.
+///
+/// This function is called by the PACF estimation path when `max_order == 0`
+/// to populate the estimate vector before returning an empty report. The
+/// `observations`, `stages`, and `season_map` parameters are accepted for
+/// API compatibility but are not used in this implementation.
 ///
 /// # Errors
 ///
-/// Returns [`StochasticError::InsufficientData`] when insufficient
-/// observations exist for any `(entity, season)` group.
+/// Returns [`StochasticError::InsufficientData`] when `max_order > 0`; callers
+/// requiring AR order selection must use [`estimate_periodic_ar_coefficients`]
+/// and the periodic Yule-Walker path instead.
 pub fn estimate_ar_coefficients_with_season_map(
-    observations: &[(EntityId, NaiveDate, f64)],
+    _observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
     stages: &[Stage],
     hydro_ids: &[EntityId],
     max_order: usize,
-    season_map: Option<&SeasonMap>,
+    _season_map: Option<&SeasonMap>,
 ) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
-    let lookups = build_season_lookups(observations, seasonal_stats, stages);
-
-    // Group observations by (entity_id, season_id).
-    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
-    let mut group_obs: HashMap<(EntityId, usize), Vec<(NaiveDate, f64)>> = HashMap::new();
-    for &(entity_id, date, value) in observations {
-        if !entity_set.contains(&entity_id) {
-            continue;
-        }
-        let Some(season_id) = find_season_for_date(&lookups.stage_index, date)
-            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
-        else {
-            continue;
-        };
-        group_obs
-            .entry((entity_id, season_id))
-            .or_default()
-            .push((date, value));
+    if max_order > 0 {
+        return Err(StochasticError::InsufficientData {
+            context: format!(
+                "estimate_ar_coefficients_with_season_map called with max_order={max_order}; \
+                 only max_order=0 (white-noise) is supported"
+            ),
+        });
     }
 
-    compute_ar_per_group(&lookups, &group_obs, hydro_ids, max_order)
-}
+    // Build stage_id -> season_id lookup to map seasonal_stats entries.
+    let stage_id_to_season: HashMap<i32, usize> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
 
-/// Compute AR coefficients for each (hydro, season) pair via Levinson-Durbin.
-fn compute_ar_per_group(
-    lookups: &SeasonLookups<'_>,
-    group_obs: &HashMap<(EntityId, usize), Vec<(NaiveDate, f64)>>,
-    hydro_ids: &[EntityId],
-    max_order: usize,
-) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {
-    let mut result: Vec<ArCoefficientEstimate> = Vec::new();
+    let hydro_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
 
-    for &hydro_id in hydro_ids {
-        for season_id in 0..lookups.n_seasons {
-            let key = (hydro_id, season_id);
-
-            let Some(stats_m) = lookups.stats_lookup.get(&key) else {
-                continue;
-            };
-
-            // max_order == 0 or constant inflow → white noise.
-            if max_order == 0 || stats_m.std == 0.0 {
-                result.push(ArCoefficientEstimate {
-                    hydro_id,
-                    season_id,
-                    coefficients: Vec::new(),
-                    residual_std_ratio: 1.0,
-                });
-                continue;
+    let mut result: Vec<ArCoefficientEstimate> = seasonal_stats
+        .iter()
+        .filter_map(|s| {
+            if !hydro_set.contains(&s.entity_id) {
+                return None;
             }
-
-            let Some(pair_obs) = group_obs.get(&key) else {
-                continue;
-            };
-
-            let n_m = pair_obs.len();
-            if n_m < max_order + 1 {
-                return Err(StochasticError::InsufficientData {
-                    context: format!(
-                        "entity {hydro_id} season {season_id} has {n_m} observation(s); \
-                         need at least {} for max_order={max_order}",
-                        max_order + 1
-                    ),
-                });
-            }
-
-            let Some(all_obs) = lookups.entity_obs.get(&hydro_id) else {
-                continue;
-            };
-            let Some(date_index) = lookups.entity_date_index.get(&hydro_id) else {
-                continue;
-            };
-
-            let (autocorrelations, effective_order) = compute_cross_seasonal_autocorrelations(
-                lookups, stats_m, pair_obs, all_obs, date_index, hydro_id, season_id, max_order,
-            );
-
-            let ld_result = levinson_durbin(&autocorrelations, effective_order);
-            let residual_std_ratio = ld_result.sigma2.sqrt().max(f64::EPSILON.sqrt());
-
-            result.push(ArCoefficientEstimate {
-                hydro_id,
+            let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
+            Some(ArCoefficientEstimate {
+                hydro_id: s.entity_id,
                 season_id,
-                coefficients: ld_result.coefficients,
-                residual_std_ratio,
-            });
-        }
-    }
+                coefficients: Vec::new(),
+                residual_std_ratio: 1.0,
+            })
+        })
+        .collect();
 
     result.sort_unstable_by_key(|e| (e.hydro_id.0, e.season_id));
     Ok(result)
-}
-
-/// Compute cross-seasonal autocorrelations `rho_m(1)..rho_m(p)` for a single
-/// (hydro, season) pair using positional lag lookup.
-///
-/// Returns the autocorrelation vector and the effective order (may be truncated
-/// if lag-season stats are missing or have zero std).
-#[allow(clippy::too_many_arguments)]
-fn compute_cross_seasonal_autocorrelations(
-    lookups: &SeasonLookups<'_>,
-    stats_m: &SeasonalStats,
-    pair_obs: &[(NaiveDate, f64)],
-    all_obs: &[(NaiveDate, f64)],
-    date_index: &HashMap<NaiveDate, usize>,
-    hydro_id: EntityId,
-    season_id: usize,
-    max_order: usize,
-) -> (Vec<f64>, usize) {
-    let mut autocorrelations: Vec<f64> = Vec::with_capacity(max_order);
-    let mut effective_order = max_order;
-
-    for lag in 1..=max_order {
-        let lag_season = season_id
-            .wrapping_add(lookups.n_seasons)
-            .wrapping_sub(lag % lookups.n_seasons)
-            % lookups.n_seasons;
-
-        let lag_key = (hydro_id, lag_season);
-        let Some(stats_lag) = lookups.stats_lookup.get(&lag_key) else {
-            effective_order = lag - 1;
-            break;
-        };
-
-        if stats_lag.std == 0.0 {
-            effective_order = lag - 1;
-            break;
-        }
-
-        let mu_m = stats_m.mean;
-        let mu_lag = stats_lag.mean;
-        let mut cross_sum = 0.0_f64;
-        let mut valid_count = 0usize;
-
-        for &(date, value) in pair_obs {
-            let Some(&pos) = date_index.get(&date) else {
-                continue;
-            };
-            if pos < lag {
-                continue;
-            }
-            let (_, lagged_value) = all_obs[pos - lag];
-            cross_sum += (value - mu_m) * (lagged_value - mu_lag);
-            valid_count += 1;
-        }
-
-        if valid_count < 2 {
-            effective_order = lag - 1;
-            break;
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        let gamma = cross_sum / (valid_count - 1) as f64;
-        let rho = (gamma / (stats_m.std * stats_lag.std)).clamp(-1.0, 1.0);
-        autocorrelations.push(rho);
-    }
-
-    (autocorrelations, effective_order)
 }
 
 // ---------------------------------------------------------------------------
@@ -1805,301 +1511,9 @@ pub fn estimate_periodic_ar_coefficients(
 )]
 mod tests {
     use super::{
-        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, levinson_durbin,
-        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
-        solve_linear_system,
+        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, periodic_autocorrelation,
+        periodic_pacf, select_order_aic, select_order_pacf, solve_linear_system,
     };
-
-    // -----------------------------------------------------------------------
-    // AR(1) known values
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_ar1_known_values() {
-        // For AR(1): ψ₁ = ρ(1) = 0.5, σ² = 1 - 0.5² = 0.75.
-        let result = levinson_durbin(&[0.5], 1);
-        assert_eq!(result.coefficients.len(), 1);
-        assert!((result.coefficients[0] - 0.5).abs() < 1e-10);
-        assert!((result.sigma2 - 0.75).abs() < 1e-10);
-        assert_eq!(result.parcor.len(), 1);
-        assert!((result.parcor[0] - 0.5).abs() < 1e-10);
-        assert_eq!(result.sigma2_per_order.len(), 1);
-        assert!((result.sigma2_per_order[0] - 0.75).abs() < 1e-10);
-    }
-
-    #[test]
-    fn levinson_durbin_ar1_negative() {
-        // ρ(1) = -0.6 → ψ₁ = -0.6, σ² = 1 - 0.36 = 0.64.
-        let result = levinson_durbin(&[-0.6], 1);
-        assert_eq!(result.coefficients.len(), 1);
-        assert!((result.coefficients[0] - (-0.6)).abs() < 1e-10);
-        assert!((result.sigma2 - 0.64).abs() < 1e-10);
-        assert!((result.parcor[0] - (-0.6)).abs() < 1e-10);
-    }
-
-    // -----------------------------------------------------------------------
-    // AR(2) verification via Yule-Walker matrix multiply
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_ar2_known_values() {
-        // Yule-Walker for AR(2):
-        //   [ 1.0  0.8 ] [ ψ₁ ]   [ 0.8 ]
-        //   [ 0.8  1.0 ] [ ψ₂ ] = [ 0.5 ]
-        //
-        // Solution: ψ₁ = (0.8 - 0.8*0.5)/(1 - 0.64) = 0.4/0.36 ≈ 1.1111
-        //           ψ₂ = 0.5 - 0.8 * ψ₁ ≈ 0.5 - 0.8889 = -0.3889
-        let rho = [0.8_f64, 0.5];
-        let result = levinson_durbin(&rho, 2);
-
-        assert_eq!(result.coefficients.len(), 2);
-        assert!(result.sigma2 > 0.0);
-
-        // Verify Yule-Walker: R * ψ = r
-        // R[i][j] = ρ(|i-j|), r[i] = ρ(i+1)
-        // R * ψ:
-        //   row 0: 1.0 * ψ₁ + ρ(1) * ψ₂ = ρ(1)
-        //   row 1: ρ(1) * ψ₁ + 1.0 * ψ₂ = ρ(2)
-        let psi1 = result.coefficients[0];
-        let psi2 = result.coefficients[1];
-        let residual0 = (1.0 * psi1 + rho[0] * psi2) - rho[0];
-        let residual1 = (rho[0] * psi1 + 1.0 * psi2) - rho[1];
-        assert!(
-            residual0.abs() < 1e-10,
-            "Yule-Walker row 0 residual: {residual0}"
-        );
-        assert!(
-            residual1.abs() < 1e-10,
-            "Yule-Walker row 1 residual: {residual1}"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // AR(3) full Yule-Walker roundtrip
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_ar3_yule_walker_roundtrip() {
-        // rho = [0.8, 0.5, 0.3], order = 3
-        // Yule-Walker system:
-        //   R * ψ = r  where R[i][j] = ρ(|i-j|), r[i] = ρ(i+1)
-        let rho = [0.8_f64, 0.5, 0.3];
-        let result = levinson_durbin(&rho, 3);
-
-        assert_eq!(result.coefficients.len(), 3);
-        assert!(result.sigma2 > 0.0);
-
-        // Build the 3x3 Toeplitz matrix and verify R * ψ = r to 1e-10.
-        // R:
-        //   [ 1.0  0.8  0.5 ]
-        //   [ 0.8  1.0  0.8 ]
-        //   [ 0.5  0.8  1.0 ]
-        // r: [0.8, 0.5, 0.3]
-        let r_matrix = [
-            [1.0_f64, rho[0], rho[1]],
-            [rho[0], 1.0, rho[0]],
-            [rho[1], rho[0], 1.0],
-        ];
-        let psi = &result.coefficients;
-        for (i, row) in r_matrix.iter().enumerate() {
-            let dot: f64 = row.iter().zip(psi.iter()).map(|(r, p)| r * p).sum();
-            let residual = dot - rho[i];
-            assert!(
-                residual.abs() < 1e-10,
-                "Yule-Walker row {i} residual: {residual}"
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Order-0 edge case
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_order_zero() {
-        let result = levinson_durbin(&[], 0);
-        assert!(result.coefficients.is_empty());
-        assert!(result.parcor.is_empty());
-        assert!(result.sigma2_per_order.is_empty());
-        assert_eq!(result.sigma2, 1.0);
-    }
-
-    #[test]
-    fn levinson_durbin_order_zero_with_nonempty_autocorrelations() {
-        // Supplying extra autocorrelations with order=0 must still return empty.
-        let result = levinson_durbin(&[0.8, 0.5], 0);
-        assert!(result.coefficients.is_empty());
-        assert_eq!(result.sigma2, 1.0);
-    }
-
-    // -----------------------------------------------------------------------
-    // Near-singular / perfect correlation truncation
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_perfect_correlation_ar1() {
-        // ρ(1) = 1.0 → kappa = 1.0, σ² = 0.0. Coefficient should be 1.0.
-        let result = levinson_durbin(&[1.0], 1);
-        assert_eq!(result.coefficients.len(), 1);
-        assert!((result.coefficients[0] - 1.0).abs() < 1e-10);
-        assert!(result.sigma2 <= f64::EPSILON);
-    }
-
-    #[test]
-    fn levinson_durbin_near_singular_truncates() {
-        // Construct a sequence where σ² collapses at or before order 2 when
-        // order 3 is requested. ρ(1) = 0.99999 forces σ² very close to zero
-        // after AR(1), causing truncation before AR(3) is reached.
-        let rho = [0.99999_f64, 0.99998, 0.99997];
-        let result = levinson_durbin(&rho, 3);
-        // After AR(1): σ² = 1 - 0.99999² ≈ 2e-5, which is > EPSILON.
-        // After AR(2): the update may drive σ² to near-zero.
-        // The actual truncation point is implementation-dependent, but
-        // we require that the result length is <= 3 (the requested order).
-        assert!(result.coefficients.len() <= 3);
-        // sigma2 must be non-negative and finite.
-        assert!(result.sigma2.is_finite());
-        assert!(result.sigma2 >= 0.0);
-    }
-
-    #[test]
-    fn levinson_durbin_sigma2_causes_truncation_at_order2() {
-        // With ρ(1) = 1.0, AR(1) gives σ² = 0 ≤ EPSILON.
-        // Requesting order=3 should truncate at order 1.
-        let rho = [1.0_f64, 0.5, 0.3];
-        let result = levinson_durbin(&rho, 3);
-        // Truncation should stop at or before order 2.
-        assert!(result.coefficients.len() <= 2);
-        assert!(result.sigma2 <= f64::EPSILON);
-    }
-
-    // -----------------------------------------------------------------------
-    // sigma2_per_order is non-increasing
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_sigma2_per_order_monotone_decreasing() {
-        // Each additional AR order reduces (or maintains) prediction error.
-        // σ²_{k+1} = σ²_k * (1 - κ²) ≤ σ²_k.
-        let rho = [0.8_f64, 0.5, 0.3, 0.2];
-        let result = levinson_durbin(&rho, 4);
-        let sigma2_vals = &result.sigma2_per_order;
-        // Prepend σ²_0 = 1.0 for the comparison.
-        let mut prev = 1.0_f64;
-        for (k, &s) in sigma2_vals.iter().enumerate() {
-            assert!(
-                s <= prev + 1e-14,
-                "sigma2_per_order[{k}] = {s} > prev {prev}: not non-increasing"
-            );
-            prev = s;
-        }
-        // Final sigma2 must equal the last element in sigma2_per_order.
-        if let Some(&last) = sigma2_vals.last() {
-            assert!(
-                (result.sigma2 - last).abs() < 1e-15,
-                "sigma2 ({}) != sigma2_per_order.last() ({})",
-                result.sigma2,
-                last
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // parcor stored correctly
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn levinson_durbin_parcor_stored_correctly() {
-        // For AR(1): κ₁ = ρ(1) (the reflection coefficient IS ρ(1) for order 1).
-        let rho_1 = [0.7_f64];
-        let result = levinson_durbin(&rho_1, 1);
-        assert_eq!(result.parcor.len(), 1);
-        assert!(
-            (result.parcor[0] - 0.7).abs() < 1e-10,
-            "parcor[0] = {} != 0.7",
-            result.parcor[0]
-        );
-
-        // For AR(2): κ₁ = ρ(1), and κ₂ is computed from the recursion.
-        // Verify parcor has 2 entries and parcor[0] == κ₁ from AR(1).
-        let rho_2 = [0.7_f64, 0.4];
-        let result2 = levinson_durbin(&rho_2, 2);
-        assert_eq!(result2.parcor.len(), 2);
-        // κ₁ must equal ρ(1).
-        assert!(
-            (result2.parcor[0] - 0.7).abs() < 1e-10,
-            "parcor[0] = {} for AR(2) should equal ρ(1) = 0.7",
-            result2.parcor[0]
-        );
-        // κ₂ = (ρ(2) - κ₁ * ρ(1)) / (1 - κ₁²)
-        //     = (0.4 - 0.7 * 0.7) / (1 - 0.49)
-        //     = (0.4 - 0.49) / 0.51 = -0.09 / 0.51
-        let expected_kappa2 = (0.4 - 0.7 * 0.7) / (1.0 - 0.49);
-        assert!(
-            (result2.parcor[1] - expected_kappa2).abs() < 1e-10,
-            "parcor[1] = {} != expected {expected_kappa2}",
-            result2.parcor[1]
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Acceptance criteria from ticket
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn acceptance_ar3_yule_walker_satisfied() {
-        // Given autocorrelations = [0.8, 0.5, 0.3], order = 3:
-        // R * ψ = r must hold to within 1e-10.
-        let rho = [0.8_f64, 0.5, 0.3];
-        let result = levinson_durbin(&rho, 3);
-        assert_eq!(result.coefficients.len(), 3);
-        assert!(result.sigma2 > 0.0);
-
-        let r_matrix = [
-            [1.0_f64, rho[0], rho[1]],
-            [rho[0], 1.0, rho[0]],
-            [rho[1], rho[0], 1.0],
-        ];
-        for (i, row) in r_matrix.iter().enumerate() {
-            let dot: f64 = row
-                .iter()
-                .zip(result.coefficients.iter())
-                .map(|(r, p)| r * p)
-                .sum();
-            let residual = (dot - rho[i]).abs();
-            assert!(
-                residual < 1e-10,
-                "acceptance AR(3) Yule-Walker row {i} residual: {residual}"
-            );
-        }
-    }
-
-    #[test]
-    fn acceptance_ar1_half() {
-        // autocorrelations = [0.5], order = 1
-        // => coefficients == [0.5], sigma2 == 0.75
-        let result = levinson_durbin(&[0.5], 1);
-        assert!((result.coefficients[0] - 0.5).abs() < 1e-10);
-        assert!((result.sigma2 - 0.75).abs() < 1e-10);
-    }
-
-    #[test]
-    fn acceptance_order_zero() {
-        let result = levinson_durbin(&[0.5, 0.3], 0);
-        assert!(result.coefficients.is_empty());
-        assert!(result.parcor.is_empty());
-        assert!(result.sigma2_per_order.is_empty());
-        assert_eq!(result.sigma2, 1.0);
-    }
-
-    #[test]
-    fn acceptance_perfect_correlation_singular() {
-        // autocorrelations = [1.0], order = 1 → sigma2 near zero, coeff = [1.0]
-        let result = levinson_durbin(&[1.0], 1);
-        assert!(result.sigma2 <= f64::EPSILON);
-        assert_eq!(result.coefficients.len(), 1);
-        assert!((result.coefficients[0] - 1.0).abs() < 1e-10);
-    }
 
     // -----------------------------------------------------------------------
     // estimate_seasonal_stats tests
@@ -2465,333 +1879,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // estimate_ar_coefficients tests
-    // -----------------------------------------------------------------------
-
-    use super::estimate_ar_coefficients;
-
-    // -----------------------------------------------------------------------
-    // Test: known AR(1) process recovers coefficient approximately
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_known_ar1_process() {
-        // Generate a synthetic AR(1) process with φ = 0.6 for all seasons.
-        // We build a stationary AR(1) time series: x_t = 0.6 * x_{t-1} + ε_t
-        // using a splitmix64-style hash to produce high-quality pseudo-noise
-        // without any external PRNG dependency.
-        //
-        // Strategy: 100 years × 12 months = 1200 observations (large sample
-        // so estimation converges to within tolerance 0.1 of true φ=0.6).
-        let n_years = 200_i32;
-        let n_seasons = 12_usize;
-        let phi = 0.6_f64;
-
-        let stages = make_monthly_stages(1800, n_years as u32);
-        let entity_ids = vec![EntityId::from(1)];
-
-        let total = n_years as usize * n_seasons;
-
-        // splitmix64 hash: maps u64 -> u64, then normalises to [-2, 2].
-        let splitmix64 = |mut x: u64| -> f64 {
-            x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            x = x ^ (x >> 31);
-            // Map to [-2, 2] via a uniform-to-normal-like transform.
-            // We use the ratio (x / u64::MAX) * 4 - 2 as a simple bounded
-            // noise source; the key property is low serial correlation.
-            (x as f64 / u64::MAX as f64) * 4.0 - 2.0
-        };
-
-        let mut series: Vec<f64> = (0..total)
-            .map(|i| {
-                splitmix64(
-                    (i as u64)
-                        .wrapping_mul(6_364_136_223_846_793_005)
-                        .wrapping_add(1),
-                )
-            })
-            .collect();
-
-        // Apply AR(1) recursion: x_t = φ * x_{t-1} + ε_t
-        for t in 1..total {
-            series[t] += phi * series[t - 1];
-        }
-
-        let base_year = 1800;
-        let months = [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for year_off in 0..n_years {
-            for (m_idx, &month) in months.iter().enumerate() {
-                let t = year_off as usize * n_seasons + m_idx;
-                observations.push((
-                    EntityId::from(1),
-                    NaiveDate::from_ymd_opt(base_year + year_off, month, 15).unwrap(),
-                    series[t],
-                ));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-        let estimates =
-            estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 1).unwrap();
-
-        assert_eq!(estimates.len(), n_seasons, "expected one entry per season");
-
-        for est in &estimates {
-            assert_eq!(est.coefficients.len(), 1, "AR(1) should have 1 coefficient");
-            let coeff = est.coefficients[0];
-            assert!(
-                (coeff - phi).abs() < 0.1,
-                "season {}: coefficient {} not within 0.1 of expected {phi}",
-                est.season_id,
-                coeff
-            );
-            assert!(
-                est.residual_std_ratio > 0.0 && est.residual_std_ratio <= 1.0,
-                "season {}: residual_std_ratio {} out of (0, 1]",
-                est.season_id,
-                est.residual_std_ratio
-            );
-            // sqrt(1 - phi^2) = sqrt(0.64) = 0.8
-            let expected_ratio = (1.0 - phi * phi).sqrt();
-            assert!(
-                (est.residual_std_ratio - expected_ratio).abs() < 0.1,
-                "season {}: residual_std_ratio {} not within 0.1 of {expected_ratio}",
-                est.season_id,
-                est.residual_std_ratio
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: max_order = 0 => all entries have empty coefficients and ratio 1.0
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_max_order_zero_white_noise() {
-        let stages = make_monthly_stages(1990, 5);
-        let entity_ids = vec![EntityId::from(1)];
-
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for year in 1990..1995_i32 {
-            for month in 1u32..=12 {
-                observations.push(obs(1, year, month, 100.0 + month as f64));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-        let estimates =
-            estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 0).unwrap();
-
-        assert_eq!(estimates.len(), 12, "expected 12 season entries");
-        for est in &estimates {
-            assert!(
-                est.coefficients.is_empty(),
-                "max_order=0: coefficients must be empty for season {}",
-                est.season_id
-            );
-            assert_eq!(
-                est.residual_std_ratio, 1.0,
-                "max_order=0: residual_std_ratio must be 1.0 for season {}",
-                est.season_id
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: season with s_m = 0.0 => white noise entry (empty coefficients)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_zero_std_season_skipped() {
-        // All observations for season 0 (January) are identical => std = 0.
-        // All observations for season 1 (February) vary => std > 0.
-        let stages = make_monthly_stages(1990, 5);
-        let entity_ids = vec![EntityId::from(1)];
-
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for year in 1990..1995_i32 {
-            // January: constant value => std = 0.
-            observations.push(obs(1, year, 1, 100.0));
-            // February: varying value => std > 0.
-            observations.push(obs(1, year, 2, 100.0 + year as f64));
-            // Other months: constant per month.
-            for month in 3u32..=12 {
-                observations.push(obs(1, year, month, month as f64 * 10.0));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-
-        // January season (season_id = 0) has std = 0.
-        let jan_stats = stats
-            .iter()
-            .find(|s| s.stage_id == 1)
-            .expect("should have January stats");
-        assert_eq!(jan_stats.std, 0.0, "January std should be 0");
-
-        let estimates =
-            estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 2).unwrap();
-
-        // Find the January (season 0) entry.
-        let jan_est = estimates
-            .iter()
-            .find(|e| e.season_id == 0)
-            .expect("should have season 0 entry");
-        assert!(
-            jan_est.coefficients.is_empty(),
-            "zero-std season must have empty coefficients"
-        );
-        assert_eq!(
-            jan_est.residual_std_ratio, 1.0,
-            "zero-std season must have residual_std_ratio = 1.0"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: insufficient observations => InsufficientData error
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_insufficient_observations() {
-        // Only 3 years of monthly data: each season has 3 observations.
-        // With max_order = 3, need at least 4 observations per season.
-        // Values vary across years to ensure std > 0 (otherwise the zero-std
-        // early exit fires before the count check).
-        let stages = make_monthly_stages(1990, 3);
-        let entity_ids = vec![EntityId::from(1)];
-
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for (year_off, year) in (1990..1993_i32).enumerate() {
-            for month in 1u32..=12 {
-                // Values differ across years to ensure std > 0.
-                observations.push(obs(
-                    1,
-                    year,
-                    month,
-                    100.0 + month as f64 + year_off as f64 * 10.0,
-                ));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-        let result = estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 3);
-        assert!(
-            matches!(result, Err(StochasticError::InsufficientData { .. })),
-            "expected InsufficientData for 3 obs with max_order=3, got: {result:?}"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: cross-seasonal autocorrelation computed with hand-computed values
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_cross_seasonal_autocorrelation() {
-        // Build a 2-season (biannual) dataset with known cross-seasonal
-        // autocorrelation, then verify the estimated coefficient matches.
-        //
-        // Season 0 = January, season 1 = February.
-        // We place observations such that the cross-seasonal correlation
-        // rho_1(1) (lag of season 0 into season 1) is deterministic.
-        //
-        // Observations for entity 1:
-        //   Jan values: [a1, a2, a3, a4, a5]
-        //   Feb values: [b1, b2, b3, b4, b5]
-        //
-        // where b_i = a_i (perfectly correlated with previous month).
-        // Then rho_1(1) should be 1.0 (or near 1.0 for finite sample).
-        //
-        // We test with 10 years (each season gets 10 observations).
-
-        let stages = make_monthly_stages(1990, 10);
-        let entity_ids = vec![EntityId::from(1)];
-
-        // Use linearly increasing values: Jan_i = i, Feb_i = i (same as Jan_i).
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for (i, year) in (1990..2000_i32).enumerate() {
-            let val = (i + 1) as f64;
-            observations.push(obs(1, year, 1, val)); // Jan
-            observations.push(obs(1, year, 2, val + 0.5)); // Feb ≈ Jan
-            // Other months: enough data to avoid InsufficientData.
-            for month in 3u32..=12 {
-                observations.push(obs(1, year, month, month as f64 * 5.0 + i as f64));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-        let estimates =
-            estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 1).unwrap();
-
-        // We should get one entry per season (12 entries).
-        assert_eq!(estimates.len(), 12);
-
-        // For season 1 (February), the lag-1 autocorrelation (into January) should
-        // be high (close to 1.0) because Feb ≈ Jan of the same year.
-        let feb_est = estimates
-            .iter()
-            .find(|e| e.season_id == 1)
-            .expect("should have season 1 estimate");
-
-        assert_eq!(feb_est.coefficients.len(), 1);
-        // The coefficient should be positive and relatively large.
-        assert!(
-            feb_est.coefficients[0] > 0.5,
-            "February lag-1 coefficient should be > 0.5, got {}",
-            feb_est.coefficients[0]
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: residual_std_ratio in (0, 1] for all entries
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn estimate_ar_residual_std_ratio_in_range() {
-        let stages = make_monthly_stages(1990, 30);
-        let entity_ids = vec![EntityId::from(1), EntityId::from(2)];
-
-        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
-        for year in 1990..2020_i32 {
-            for month in 1u32..=12 {
-                // Entity 1: linearly increasing trend per year.
-                observations.push(obs(1, year, month, year as f64 + month as f64));
-                // Entity 2: decreasing trend.
-                observations.push(obs(2, year, month, 3000.0 - year as f64 + month as f64));
-            }
-        }
-
-        let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
-        let estimates =
-            estimate_ar_coefficients(&observations, &stats, &stages, &entity_ids, 3).unwrap();
-
-        assert_eq!(estimates.len(), 24, "expected 2 hydros × 12 seasons = 24");
-
-        for est in &estimates {
-            assert!(
-                est.residual_std_ratio > 0.0,
-                "entity {} season {}: residual_std_ratio {} must be > 0",
-                est.hydro_id,
-                est.season_id,
-                est.residual_std_ratio
-            );
-            assert!(
-                est.residual_std_ratio <= 1.0,
-                "entity {} season {}: residual_std_ratio {} must be <= 1.0",
-                est.hydro_id,
-                est.season_id,
-                est.residual_std_ratio
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // estimate_correlation tests
     // -----------------------------------------------------------------------
 
-    use super::{ArCoefficientEstimate, SeasonalStats, estimate_correlation};
+    use super::{
+        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+    };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
     /// Season 0 covers month `month` of each year.

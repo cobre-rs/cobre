@@ -571,6 +571,7 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
         };
         let fitting = estimation_report_to_fitting_report(&report);
 
@@ -724,6 +725,7 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
         };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 7);
@@ -908,6 +910,7 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
         };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 1);
@@ -1145,6 +1148,7 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "PACF".to_string(),
+            white_noise_fallbacks: Vec::new(),
         };
 
         let fitting = estimation_report_to_fitting_report(&report);

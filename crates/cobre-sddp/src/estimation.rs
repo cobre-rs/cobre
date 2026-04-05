@@ -2511,4 +2511,413 @@ mod tests {
         assert!((prestudy_neg2.mean_m3s - 110.0).abs() < f64::EPSILON);
         assert!((prestudy_neg2.std_m3s - 22.0).abs() < f64::EPSILON);
     }
+
+    // ── ticket-003: PACF and contribution cascade tests ──────────────────────
+
+    /// Simulate a 2-season PAR(2) process using deterministic LCG (Box-Muller).
+    /// Model: `z_t = phi_1 * z_{t-1} + phi_2 * z_{t-2} + noise_t`.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
+    fn simulate_two_season_par2(
+        phi_1: f64,
+        phi_2: f64,
+        n_years: usize,
+        seed: u64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n_total = n_years * 2;
+        let burnin = 200;
+        let n_generate = n_total + burnin;
+        let mut values = vec![0.0_f64; n_generate + 2];
+        let mut lcg: u64 = seed;
+
+        let lcg_next = |s: u64| -> u64 {
+            s.wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407)
+        };
+
+        for i in 2..n_generate + 2 {
+            lcg = lcg_next(lcg);
+            let u1 = (lcg >> 11) as f64 / (1u64 << 53) as f64;
+            lcg = lcg_next(lcg);
+            let u2 = (lcg >> 11) as f64 / (1u64 << 53) as f64;
+            let u1_safe = u1.max(1e-15);
+            let noise = (-2.0 * u1_safe.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+            values[i] = phi_1 * values[i - 1] + phi_2 * values[i - 2] + noise;
+        }
+
+        let start = burnin + 2;
+        let mut obs_s0 = Vec::with_capacity(n_years);
+        let mut obs_s1 = Vec::with_capacity(n_years);
+        for y in 0..n_years {
+            obs_s0.push(values[start + y * 2]);
+            obs_s1.push(values[start + y * 2 + 1]);
+        }
+        (obs_s0, obs_s1)
+    }
+
+    /// Build a minimal 2-season `Stage` for testing.
+    fn make_two_season_stage(
+        index: usize,
+        id: i32,
+        season_id: usize,
+        year: i32,
+        first_half: bool,
+    ) -> cobre_core::temporal::Stage {
+        use chrono::NaiveDate;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+
+        let (start_date, end_date) = if first_half {
+            (
+                NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+            )
+        } else {
+            (
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap(),
+            )
+        };
+
+        cobre_core::temporal::Stage {
+            index,
+            id,
+            start_date,
+            end_date,
+            season_id: Some(season_id),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 4380.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// Build a 2-season `SeasonMap` (H1: Jan–Jun, H2: Jul–Dec).
+    fn two_season_map() -> cobre_core::temporal::SeasonMap {
+        use cobre_core::temporal::{SeasonCycleType, SeasonDefinition, SeasonMap};
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                SeasonDefinition {
+                    id: 0,
+                    label: "H1".to_string(),
+                    month_start: 1,
+                    day_start: Some(1),
+                    month_end: Some(6),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 1,
+                    label: "H2".to_string(),
+                    month_start: 7,
+                    day_start: Some(1),
+                    month_end: Some(12),
+                    day_end: Some(31),
+                },
+            ],
+        }
+    }
+
+    /// Verify `iterative_pacf_reduction` does not spuriously reduce a stable
+    /// 2-season PAR(2) model (phi_1=0.7, phi_2=0.15). Checks termination,
+    /// order preservation, and coefficient matching.
+    #[test]
+    fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
+        use cobre_stochastic::par::fitting::{
+            estimate_periodic_ar_coefficients, periodic_pacf, select_order_pacf,
+        };
+
+        let hydro_id = EntityId(1);
+        let n_seasons = 2;
+        let n_years = 500_usize; // 500 obs/season; threshold ≈ 0.088 << PACF(2) ≈ 0.15.
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(0.7, 0.15, n_years, 137);
+
+        // Build group_obs and stats_map.
+        let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+        group_obs.insert((hydro_id, 0), obs_s0.clone());
+        group_obs.insert((hydro_id, 1), obs_s1.clone());
+
+        let mean_s0 = obs_s0.iter().sum::<f64>() / obs_s0.len() as f64;
+        let mean_s1 = obs_s1.iter().sum::<f64>() / obs_s1.len() as f64;
+        let std_s0 = {
+            let v = obs_s0.iter().map(|x| (x - mean_s0).powi(2)).sum::<f64>()
+                / (obs_s0.len() - 1) as f64;
+            v.sqrt()
+        };
+        let std_s1 = {
+            let v = obs_s1.iter().map(|x| (x - mean_s1).powi(2)).sum::<f64>()
+                / (obs_s1.len() - 1) as f64;
+            v.sqrt()
+        };
+
+        let stats_storage = vec![
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 0,
+                mean: mean_s0,
+                std: std_s0,
+            },
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 1,
+                mean: mean_s1,
+                std: std_s1,
+            },
+        ];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = stats_storage
+            .iter()
+            .enumerate()
+            .map(|(s, st)| ((hydro_id, s), st))
+            .collect();
+
+        // Run PACF order selection + YW estimation to get the starting estimates.
+        let stats_by_season_pop = {
+            let n = obs_s0.len() as f64;
+            let mu0 = mean_s0;
+            let mu1 = mean_s1;
+            let s0 = (obs_s0.iter().map(|x| (x - mu0).powi(2)).sum::<f64>() / n).sqrt();
+            let s1 = (obs_s1.iter().map(|x| (x - mu1).powi(2)).sum::<f64>() / n).sqrt();
+            vec![(mu0, s0), (mu1, s1)]
+        };
+        let obs_refs: Vec<&[f64]> = vec![&obs_s0, &obs_s1];
+        let z_alpha = 1.96_f64;
+        // Use max_order=2 because the generating process is AR(2).
+        // Higher max_order with periodic PACF on a 2-season split of a stationary
+        // process over-estimates order due to per-season standardization artifacts.
+        let max_order = 2_usize;
+
+        let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();
+        for season in 0..n_seasons {
+            let n_obs = obs_refs[season].len();
+            let pacf_values = periodic_pacf(
+                season,
+                max_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season_pop,
+            );
+            let selected = select_order_pacf(&pacf_values, n_obs, z_alpha).selected_order;
+            let yw = estimate_periodic_ar_coefficients(
+                season,
+                selected,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season_pop,
+            );
+            estimates.push(ArCoefficientEstimate {
+                hydro_id,
+                season_id: season,
+                coefficients: yw.coefficients,
+                residual_std_ratio: yw.residual_std_ratio,
+            });
+        }
+
+        // All seasons should select order 2 before reduction.
+        for est in &estimates {
+            assert_eq!(
+                est.coefficients.len(),
+                2,
+                "season {} should select order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+        }
+
+        let coeffs_before: Vec<Vec<f64>> =
+            estimates.iter().map(|e| e.coefficients.clone()).collect();
+
+        // Run iterative PACF reduction (should terminate without spurious reductions).
+        let reductions = iterative_pacf_reduction(
+            &mut estimates,
+            n_seasons,
+            &[hydro_id],
+            &group_obs,
+            &stats_map,
+            max_order,
+            z_alpha,
+            None,
+        );
+
+        // Stable PAR(2) should not be reduced (order remains 2).
+        for est in &estimates {
+            assert_eq!(
+                est.coefficients.len(),
+                2,
+                "stable PAR(2) season {} should remain order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+        }
+
+        // Verify coefficients match (unchanged or recomputed at new order).
+        for (est, before) in estimates.iter().zip(coeffs_before.iter()) {
+            if est.coefficients.len() == before.len() {
+                // No reduction: verify coefficients unchanged.
+                for (a, b) in est.coefficients.iter().zip(before.iter()) {
+                    assert!(
+                        (a - b).abs() < 1e-10,
+                        "season {} coefficient drift: {a} vs {b}",
+                        est.season_id
+                    );
+                }
+            } else {
+                // Reduction occurred: verify against direct YW solve.
+                let yw_direct = estimate_periodic_ar_coefficients(
+                    est.season_id,
+                    est.coefficients.len(),
+                    n_seasons,
+                    &obs_refs,
+                    &stats_by_season_pop,
+                );
+                for (a, b) in est.coefficients.iter().zip(yw_direct.coefficients.iter()) {
+                    assert!(
+                        (a - b).abs() < 1e-10,
+                        "season {} post-reduction coeff {a} vs YW {b}",
+                        est.season_id
+                    );
+                }
+            }
+        }
+
+        // No spurious reductions for stable model.
+        assert!(!reductions.contains_key(&hydro_id));
+    }
+
+    /// Roundtrip estimation test: verify AR(2) coefficient recovery.
+    /// Simulates 1000 years of 2-season stationary AR(2) data (phi_1=0.7,
+    /// phi_2=0.15). Runs full PACF order selection pipeline and verifies
+    /// recovered coefficients match true values within 0.15 tolerance.
+    #[test]
+    fn roundtrip_estimation_two_season_par2_recovers_coefficients() {
+        use chrono::NaiveDate;
+        use cobre_io::config::OrderSelectionMethod;
+
+        let hydro_id = EntityId(1);
+        let n_years = 1000_usize;
+        let true_phi1 = 0.7_f64;
+        let true_phi2 = 0.15_f64;
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(true_phi1, true_phi2, n_years, 42);
+
+        // Build 2 study stages, one per season.
+        // Season 0: Jan 1 – Jul 1 (any year); Season 1: Jul 1 – Jan 1.
+        // All observations will be mapped via the SeasonMap fallback.
+        let ref_year = 2000_i32;
+        let stages = vec![
+            make_two_season_stage(0, 0, 0, ref_year, true),
+            make_two_season_stage(1, 1, 1, ref_year, false),
+        ];
+
+        // Build seasonal stats (Bessel-corrected std to match estimate_seasonal_stats).
+        let n_f = n_years as f64;
+        let mu0 = obs_s0.iter().sum::<f64>() / n_f;
+        let mu1 = obs_s1.iter().sum::<f64>() / n_f;
+        let std0 = (obs_s0.iter().map(|x| (x - mu0).powi(2)).sum::<f64>() / (n_f - 1.0)).sqrt();
+        let std1 = (obs_s1.iter().map(|x| (x - mu1).powi(2)).sum::<f64>() / (n_f - 1.0)).sqrt();
+
+        let seasonal_stats = vec![
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 0, // matches stages[0].id
+                mean: mu0,
+                std: std0,
+            },
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 1, // matches stages[1].id
+                mean: mu1,
+                std: std1,
+            },
+        ];
+
+        // Build observations with dates: season 0 = Jan 1, season 1 = Jul 1.
+        // Using a fixed reference year does NOT matter because find_season_for_date
+        // falls back to the season_map when dates are outside the study stage ranges.
+        let season_map = two_season_map();
+        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
+        for y in 0..n_years {
+            let year = (1970 + y) as i32;
+            observations.push((
+                hydro_id,
+                NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                obs_s0[y],
+            ));
+            observations.push((
+                hydro_id,
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+                obs_s1[y],
+            ));
+        }
+
+        let method = OrderSelectionMethod::Pacf;
+        let (estimates, _report) = estimate_ar_coefficients_with_selection(
+            &observations,
+            &seasonal_stats,
+            &stages,
+            &[hydro_id],
+            &ArEstimationConfig {
+                max_order: 2,
+                max_coeff_magnitude: None,
+                method: &method,
+                season_map: Some(&season_map),
+            },
+        )
+        .expect("estimation must succeed");
+
+        // Collect per-season coefficients.
+        let est_s0 = estimates
+            .iter()
+            .find(|e| e.hydro_id == hydro_id && e.season_id == 0)
+            .expect("season 0 estimate must exist");
+        let est_s1 = estimates
+            .iter()
+            .find(|e| e.hydro_id == hydro_id && e.season_id == 1)
+            .expect("season 1 estimate must exist");
+
+        // With 1000 years the PACF threshold is 1.96/sqrt(1000) ≈ 0.062,
+        // well below PACF(2) ≈ 0.15 and well above PACF(3..4) ≈ 0.
+        // The pipeline should select order 2 and recover the true coefficients.
+        for est in [est_s0, est_s1] {
+            assert!(
+                est.coefficients.len() >= 2,
+                "season {} should select at least order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+            assert!(
+                (est.coefficients[0] - true_phi1).abs() < 0.15,
+                "season {} phi_1={:.4} should be within 0.15 of true {true_phi1:.4}",
+                est.season_id,
+                est.coefficients[0]
+            );
+            assert!(
+                (est.coefficients[1] - true_phi2).abs() < 0.15,
+                "season {} phi_2={:.4} should be within 0.15 of true {true_phi2:.4}",
+                est.season_id,
+                est.coefficients[1]
+            );
+            assert!(
+                est.residual_std_ratio.is_finite() && est.residual_std_ratio > 0.0,
+                "season {} residual_std_ratio={} should be positive finite",
+                est.season_id,
+                est.residual_std_ratio
+            );
+        }
+    }
 }

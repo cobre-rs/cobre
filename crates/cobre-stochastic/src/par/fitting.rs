@@ -1462,14 +1462,18 @@ pub fn periodic_autocorrelation(
 /// Build the periodic Yule-Walker matrix and right-hand side for a given
 /// season and AR order.
 ///
-/// The matrix has dimension `order x order`. Entry `R[i,j]` is the
-/// periodic autocorrelation `rho(season - i, |j - i|)`, where the reference
-/// month shifts per row. The matrix is symmetric but NOT Toeplitz because
-/// the autocorrelation function varies with the reference period.
+/// Solves the **forward prediction** problem: predict `z_m` from
+/// `{z_{m-1}, ..., z_{m-p}}`. The matrix uses rows 1..p of the extended
+/// `(order+1) x (order+1)` covariance matrix, and the RHS uses column 0.
 ///
-/// The right-hand side vector `rhs[i] = rho(season - i, order - i)` is
-/// extracted from the extended `(order+1) x (order+1)` matrix's last column,
-/// following NEWAVE's `_matriz_extendida` + `_resolve_yw` pattern.
+/// The matrix has dimension `order x order`. Entry `R[i,j]` is the
+/// periodic autocorrelation `rho(season - (i+1), |j - i|)`, where the
+/// reference month shifts per row (starting one step before `season`).
+/// The matrix is symmetric but NOT Toeplitz because the autocorrelation
+/// function varies with the reference period.
+///
+/// The right-hand side vector `rhs[i] = rho(season, i+1)` is anchored at
+/// the target season with lags 1..p (column 0 of the extended matrix).
 ///
 /// # Parameters
 ///
@@ -1502,11 +1506,12 @@ pub fn build_periodic_yw_matrix(
     let mut matrix = vec![0.0_f64; order * order];
     let mut rhs = vec![0.0_f64; order];
 
-    // Fill the matrix: R[i][j] = rho(season - i, |j - i|).
+    // Fill the matrix: R[i][j] = rho(season - (i+1), |j - i|).
     // Diagonal is always 1.0 (rho(m, 0) = 1 for any m).
+    // The inner `(i + 1) % n_seasons` prevents underflow when order > n_seasons.
     for i in 0..order {
         matrix[i * order + i] = 1.0;
-        let ref_month = (season + n_seasons - i % n_seasons) % n_seasons;
+        let ref_month = (season + n_seasons - (i + 1) % n_seasons) % n_seasons;
         for j in (i + 1)..order {
             let lag = j - i;
             let rho = periodic_autocorrelation(
@@ -1521,15 +1526,11 @@ pub fn build_periodic_yw_matrix(
         }
     }
 
-    // Fill the RHS: rhs[i] = rho(season - i, order - i).
-    // This comes from column `order` of the extended (order+1) x (order+1) matrix.
-    #[allow(clippy::needless_range_loop)]
+    // Fill the RHS: rhs[i] = rho(season, i+1).
     for i in 0..order {
-        let ref_month = (season + n_seasons - i % n_seasons) % n_seasons;
-        let lag = order - i;
         rhs[i] = periodic_autocorrelation(
-            ref_month,
-            lag,
+            season,
+            i + 1,
             n_seasons,
             observations_by_season,
             stats_by_season,
@@ -3514,15 +3515,127 @@ mod tests {
         let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats);
 
         // In a Toeplitz matrix, M[0,1] == M[1,2]. For the periodic matrix,
-        // row 0 uses ref_month = season = 0, row 1 uses ref_month = (0+2-1)%2 = 1.
-        // These reference different seasons, so M[0,1] (rho(0,1)) may differ
-        // from M[1,2] (rho(1,1)).
+        // row i uses ref_month = (season + n_seasons - (i+1)) % n_seasons.
+        // row 0 uses ref_month = (0+2-1)%2 = 1, row 1 uses ref_month = (0+2-2)%2 = 0.
+        // These reference different seasons, so M[0,1] (rho(1,1)) may differ
+        // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
         // We just verify both are valid; they may or may not differ depending
         // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
+    }
+
+    #[test]
+    fn build_periodic_yw_matrix_forward_prediction_two_season_ar2() {
+        // Verify that build_periodic_yw_matrix solves the FORWARD prediction
+        // problem for a 2-season AR(2) model, not the (buggy) backward variant.
+
+        let s0 = vec![3.0_f64, 5.0, 4.0, 6.0, 2.0];
+        let s1 = vec![1.0_f64, 2.0, 3.0, 4.0, 0.0];
+        let stats_0 = pop_mean_std(&s0);
+        let stats_1 = pop_mean_std(&s1);
+
+        assert!((stats_0.0 - 4.0).abs() < 1e-14);
+        assert!((stats_0.1 - 2.0_f64.sqrt()).abs() < 1e-14);
+        assert!((stats_1.0 - 2.0).abs() < 1e-14);
+        assert!((stats_1.1 - 2.0_f64.sqrt()).abs() < 1e-14);
+
+        let obs: &[&[f64]] = &[&s0, &s1];
+        let stats: &[(f64, f64)] = &[stats_0, stats_1];
+        let n_seasons = 2;
+        let season = 0;
+        let order = 2;
+
+        // Expected autocorrelations (computed analytically from data):
+        // rho(ref=1, lag=1) = 0.9 (matrix off-diagonal)
+        // rho(ref=0, lag=1) = -0.375 (RHS[0])
+        // rho(ref=0, lag=2) = -0.625 (RHS[1])
+        let expected_rho_m = 0.9_f64;
+        let expected_rhs0 = -0.375_f64;
+        let expected_rhs1 = -0.625_f64;
+
+        let (mat_orig, rhs_orig) = build_periodic_yw_matrix(season, order, n_seasons, obs, stats);
+
+        assert!(
+            (mat_orig[1] - expected_rho_m).abs() < 1e-14,
+            "M[0,1]={}, expected={}",
+            mat_orig[1],
+            expected_rho_m
+        );
+        assert!(
+            (mat_orig[2] - expected_rho_m).abs() < 1e-14,
+            "M[1,0]={}, expected={}",
+            mat_orig[2],
+            expected_rho_m
+        );
+        assert!(
+            (rhs_orig[0] - expected_rhs0).abs() < 1e-14,
+            "rhs[0]={}, expected={}",
+            rhs_orig[0],
+            expected_rhs0
+        );
+        assert!(
+            (rhs_orig[1] - expected_rhs1).abs() < 1e-14,
+            "rhs[1]={}, expected={}",
+            rhs_orig[1],
+            expected_rhs1
+        );
+
+        // Solve the forward YW system and verify round-trip and analytical solution.
+        let (mut mat, mut rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, stats);
+        let phi = solve_linear_system(&mut mat, &mut rhs, order)
+            .expect("forward YW system must not be singular");
+
+        // Verify linear algebra: R * phi = rhs_orig.
+        for i in 0..order {
+            let mut dot = 0.0_f64;
+            for j in 0..order {
+                dot += mat_orig[i * order + j] * phi[j];
+            }
+            assert!(
+                (dot - rhs_orig[i]).abs() < 1e-10,
+                "R*phi[{i}] = {dot:.15}, expected {:.15}",
+                rhs_orig[i]
+            );
+        }
+
+        // Verify analytical forward-prediction solution: det = 0.19,
+        // phi1 ≈ 0.987, phi2 ≈ -1.513.
+        let det = 1.0 - expected_rho_m * expected_rho_m;
+        let expected_phi1 = (expected_rhs0 - expected_rho_m * expected_rhs1) / det;
+        let expected_phi2 = (expected_rhs1 - expected_rho_m * expected_rhs0) / det;
+
+        assert!(
+            (phi[0] - expected_phi1).abs() < 1e-10,
+            "phi[0]={:.15}, expected {:.15}",
+            phi[0],
+            expected_phi1
+        );
+        assert!(
+            (phi[1] - expected_phi2).abs() < 1e-10,
+            "phi[1]={:.15}, expected {:.15}",
+            phi[1],
+            expected_phi2
+        );
+
+        // Verify sigma-squared: sigma2 = 1 - phi1*rho(0,1) - phi2*rho(0,2).
+        let sigma2 = 1.0 - phi[0] * rhs_orig[0] - phi[1] * rhs_orig[1];
+        let expected_sigma2 = 1.0 - expected_phi1 * expected_rhs0 - expected_phi2 * expected_rhs1;
+        assert!(
+            (sigma2 - expected_sigma2).abs() < 1e-10,
+            "sigma2={sigma2:.15}, expected {expected_sigma2:.15}"
+        );
+        assert!(sigma2 > 0.0, "sigma2 must be positive, got {sigma2}");
+
+        // Guard against backward-prediction regression: phi[1] must be negative.
+        // Backward prediction would yield phi[1] > 0.
+        assert!(
+            phi[1] < 0.0,
+            "phi[1]={:.6} must be negative (backward-pred regression check)",
+            phi[1]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3754,10 +3867,11 @@ mod tests {
 
     #[test]
     fn periodic_yw_matrix_rhs_matches_extended_matrix() {
-        // Verify RHS comes from the (order+1)-th column of the extended matrix.
+        // Verify RHS comes from column 0 of the extended matrix (forward prediction).
         // Build a 3-season model, order=2 at season=1.
-        // RHS[0] = rho(season=1, lag=order-0=2)
-        // RHS[1] = rho(season=1-1=0, lag=order-1=1)
+        // RHS[i] = rho(season=1, lag=i+1), reference month is always `season`.
+        // RHS[0] = rho(season=1, lag=1)
+        // RHS[1] = rho(season=1, lag=2)
         let s0: Vec<f64> = (0..30).map(|i| (i as f64).sin() * 3.0).collect();
         let s1: Vec<f64> = (0..30).map(|i| (i as f64).cos() * 2.0).collect();
         let s2: Vec<f64> = (0..30).map(|i| (i as f64 * 0.5).sin() * 4.0).collect();
@@ -3771,10 +3885,9 @@ mod tests {
         let season = 1;
         let (_, rhs) = build_periodic_yw_matrix(season, order, 3, &obs, &stats);
 
-        // Verify each RHS entry.
-        let expected_rhs0 = periodic_autocorrelation(season, order, 3, &obs, &stats);
-        let ref_month_1 = (season + 3 - 1) % 3;
-        let expected_rhs1 = periodic_autocorrelation(ref_month_1, order - 1, 3, &obs, &stats);
+        // Verify each RHS entry: rhs[i] = rho(season, i+1).
+        let expected_rhs0 = periodic_autocorrelation(season, 1, 3, &obs, &stats);
+        let expected_rhs1 = periodic_autocorrelation(season, 2, 3, &obs, &stats);
 
         assert!(
             (rhs[0] - expected_rhs0).abs() < 1e-10,
@@ -4019,6 +4132,123 @@ mod tests {
                 "sigma2[{k}] = {} not finite",
                 result.sigma2_per_order[k]
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PACF analytical verification for 2-season PAR(2) (ticket-003, F2-004)
+    // -----------------------------------------------------------------------
+
+    /// Generate 2-season PAR(2) observations using deterministic LCG (Box-Muller).
+    /// Model: `z_t = phi_1 * z_{t-1} + phi_2 * z_{t-2} + noise_t`.
+    #[allow(clippy::cast_precision_loss)]
+    fn simulate_two_season_par2(
+        phi_1: f64,
+        phi_2: f64,
+        n_years: usize,
+        seed: u64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n_total = n_years * 2;
+        let burnin = 200;
+        let n_generate = n_total + burnin;
+        let mut values = vec![0.0_f64; n_generate + 2];
+        let mut lcg_state: u64 = seed;
+
+        let lcg_next = |s: u64| -> u64 {
+            s.wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407)
+        };
+
+        for i in 2..n_generate + 2 {
+            lcg_state = lcg_next(lcg_state);
+            let u1 = (lcg_state >> 11) as f64 / (1u64 << 53) as f64;
+            lcg_state = lcg_next(lcg_state);
+            let u2 = (lcg_state >> 11) as f64 / (1u64 << 53) as f64;
+            let u1_safe = u1.max(1e-15);
+            let noise = (-2.0 * u1_safe.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+            values[i] = phi_1 * values[i - 1] + phi_2 * values[i - 2] + noise;
+        }
+
+        let start = burnin + 2;
+        let mut obs_s0 = Vec::with_capacity(n_years);
+        let mut obs_s1 = Vec::with_capacity(n_years);
+        for y in 0..n_years {
+            obs_s0.push(values[start + y * 2]);
+            obs_s1.push(values[start + y * 2 + 1]);
+        }
+        (obs_s0, obs_s1)
+    }
+
+    /// Verify that `periodic_pacf` returns analytically correct values for a
+    /// 2-season PAR(2) process (3 analytical identities):
+    /// 1. PACF(k) matches `estimate_periodic_ar_coefficients(order=k)[k-1]`.
+    /// 2. PACF(1) = rho(season, 1) exactly.
+    /// 3. PACF(1) > phi_1 when phi_2 > 0 (lag-1 autocorrelation effect).
+    /// Also verifies significance at orders 1 and 2 exceeds 95% threshold.
+    #[test]
+    fn periodic_pacf_two_season_par2_analytical_verification() {
+        let phi_1 = 0.7_f64;
+        let phi_2 = 0.15_f64;
+        let n_years = 200;
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(phi_1, phi_2, n_years, 42);
+
+        let stats_s0 = pop_mean_std(&obs_s0);
+        let stats_s1 = pop_mean_std(&obs_s1);
+        let obs: Vec<&[f64]> = vec![&obs_s0, &obs_s1];
+        let stats: Vec<(f64, f64)> = vec![stats_s0, stats_s1];
+
+        let max_order = 4;
+        let pacf_s0 = periodic_pacf(0, max_order, 2, &obs, &stats);
+
+        assert!(
+            pacf_s0.len() >= 2,
+            "PACF should compute at least 2 orders; got {}",
+            pacf_s0.len()
+        );
+
+        // Identity 1: PACF(k) == estimate_periodic_ar_coefficients(order=k)[k-1].
+        for k in 1..=pacf_s0.len() {
+            let yw_result = estimate_periodic_ar_coefficients(0, k, 2, &obs, &stats);
+            let expected = yw_result.coefficients[k - 1];
+            let actual = pacf_s0[k - 1];
+            assert!(
+                (actual - expected).abs() < 1e-10,
+                "PACF({k}) = {actual:.10} must match YW coeff[{idx}] = {expected:.10}",
+                idx = k - 1
+            );
+        }
+
+        // Identity 2: PACF(1) == rho(season=0, lag=1) exactly.
+        let rho1 = periodic_autocorrelation(0, 1, 2, &obs, &stats);
+        let pacf1 = pacf_s0[0];
+        assert!(
+            (pacf1 - rho1).abs() < 1e-10,
+            "PACF(1)={pacf1:.10} must equal rho(0,1)={rho1:.10}"
+        );
+
+        // Identity 3: PACF(1) > phi_1 for this PAR(2) process.
+        assert!(
+            pacf1 > phi_1,
+            "PACF(1)={pacf1:.4} should exceed phi_1={phi_1:.4}"
+        );
+
+        // Significance: PACF orders 1 and 2 above 95% threshold (1.96/sqrt(N)).
+        let threshold = 1.96_f64 / (n_years as f64).sqrt();
+        assert!(
+            pacf_s0[0].abs() > threshold,
+            "PACF(1)={:.4} above 95% threshold {threshold:.4}",
+            pacf_s0[0]
+        );
+        assert!(
+            pacf_s0[1].abs() > threshold,
+            "PACF(2)={:.4} above 95% threshold {threshold:.4}",
+            pacf_s0[1]
+        );
+
+        // All PACF values are finite.
+        for (k, &v) in pacf_s0.iter().enumerate() {
+            assert!(v.is_finite(), "PACF({}) = {v} not finite", k + 1);
         }
     }
 }

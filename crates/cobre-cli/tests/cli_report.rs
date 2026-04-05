@@ -1,19 +1,18 @@
 //! Integration tests for the `cobre report` subcommand.
 //!
 //! Tests run the compiled `cobre` binary against temporary directories
-//! containing minimal manifest JSON fixtures.
+//! containing minimal metadata JSON fixtures.
 //!
 //! # Coverage
 //!
-//! - AC-1: Results directory with `training/_manifest.json` and
-//!   `training/metadata.json` → exit 0, stdout is valid JSON with
-//!   a `training` key containing `iterations`.
-//! - AC-2: Results directory with both training and simulation manifests →
+//! - AC-1: Results directory with `training/metadata.json` → exit 0, stdout is
+//!   valid JSON with a `training` key containing `iterations`.
+//! - AC-2: Results directory with both training and simulation metadata →
 //!   exit 0, stdout JSON contains both `training` and `simulation` keys
 //!   (neither is null).
 //! - AC-3: Nonexistent results directory → exit 2, stderr contains error
 //!   message about the missing path.
-//! - AC-4: Valid results directory → `jq .status` would yield a valid
+//! - AC-4: Valid results directory → `jq .training.status` would yield a valid
 //!   status string (verified by parsing the `status` field from stdout).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -34,13 +33,29 @@ fn cobre() -> Command {
 
 // ── Fixture constants ─────────────────────────────────────────────────────────
 
-const TRAINING_MANIFEST_JSON: &str = r#"{
-    "version": "2.0.0",
-    "status": "complete",
+const TRAINING_METADATA_JSON: &str = r#"{
+    "cobre_version": "0.3.2",
+    "hostname": "test-host",
+    "solver": "highs",
     "started_at": "2026-01-17T08:00:00Z",
     "completed_at": "2026-01-17T12:30:00Z",
-    "iterations": {
+    "duration_seconds": 16200.0,
+    "status": "complete",
+    "configuration": {
+        "seed": 42,
         "max_iterations": 100,
+        "forward_passes": 192,
+        "stopping_mode": "any",
+        "policy_mode": "fresh"
+    },
+    "problem_dimensions": {
+        "num_stages": 12,
+        "num_hydros": 160,
+        "num_thermals": 200,
+        "num_buses": 5,
+        "num_lines": 8
+    },
+    "iterations": {
         "completed": 10,
         "converged_at": 10
     },
@@ -54,56 +69,19 @@ const TRAINING_MANIFEST_JSON: &str = r#"{
         "total_active": 980000,
         "peak_active": 1100000
     },
-    "checksum": null,
-    "mpi_info": { "world_size": 1, "ranks_participated": 1 }
+    "mpi": { "world_size": 1, "ranks_participated": 1 }
 }"#;
 
-const TRAINING_METADATA_JSON: &str = r#"{
-    "version": "2.0.0",
-    "run_info": {
-        "run_id": "not-implemented",
-        "started_at": "2026-01-17T08:00:00Z",
-        "completed_at": "2026-01-17T12:30:00Z",
-        "duration_seconds": 16200.0,
-        "cobre_version": "0.0.1",
-        "solver": "highs",
-        "solver_version": null,
-        "hostname": null,
-        "user": null
-    },
-    "configuration_snapshot": {
-        "seed": 42,
-        "forward_passes": 192,
-        "stopping_mode": "any",
-        "policy_mode": "fresh"
-    },
-    "problem_dimensions": {
-        "num_stages": 12,
-        "num_hydros": 160,
-        "num_thermals": 200,
-        "num_buses": 5,
-        "num_lines": 8
-    },
-    "performance_summary": null,
-    "data_integrity": null,
-    "environment": {
-        "mpi_implementation": null,
-        "mpi_version": null,
-        "num_ranks": null,
-        "cpus_per_rank": null,
-        "memory_per_rank_gb": null
-    }
-}"#;
-
-const SIMULATION_MANIFEST_JSON: &str = r#"{
-    "version": "2.0.0",
-    "status": "complete",
+const SIMULATION_METADATA_JSON: &str = r#"{
+    "cobre_version": "0.3.2",
+    "hostname": "test-host",
+    "solver": "highs",
     "started_at": "2026-01-17T13:00:00Z",
     "completed_at": "2026-01-17T13:15:00Z",
+    "duration_seconds": 900.0,
+    "status": "complete",
     "scenarios": { "total": 100, "completed": 100, "failed": 0 },
-    "partitions_written": [],
-    "checksum": null,
-    "mpi_info": { "world_size": 1, "ranks_participated": 1 }
+    "mpi": { "world_size": 1, "ranks_participated": 1 }
 }"#;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -116,24 +94,23 @@ fn write_file(root: &Path, relative: &str, content: &str) {
     fs::write(&full, content).unwrap();
 }
 
-/// Build a minimal results directory with only training manifests.
+/// Build a minimal results directory with only training metadata.
 fn make_training_only_results(dir: &TempDir) {
     let root = dir.path();
-    write_file(root, "training/_manifest.json", TRAINING_MANIFEST_JSON);
     write_file(root, "training/metadata.json", TRAINING_METADATA_JSON);
 }
 
-/// Build a results directory with both training and simulation manifests.
+/// Build a results directory with both training and simulation metadata.
 fn make_full_results(dir: &TempDir) {
     make_training_only_results(dir);
     write_file(
         dir.path(),
-        "simulation/_manifest.json",
-        SIMULATION_MANIFEST_JSON,
+        "simulation/metadata.json",
+        SIMULATION_METADATA_JSON,
     );
 }
 
-// ── AC-1: training manifest + metadata → exit 0, valid JSON with `iterations` ─
+// ── AC-1: training metadata → exit 0, valid JSON with `iterations` ────────────
 
 #[test]
 fn training_only_exits_0() {
@@ -192,7 +169,7 @@ fn training_only_simulation_key_is_null() {
 
     assert!(
         value["simulation"].is_null(),
-        "simulation must be null when only training manifests exist"
+        "simulation must be null when only training metadata exists"
     );
 }
 
@@ -225,11 +202,11 @@ fn full_results_both_training_and_simulation_present() {
 
     assert!(
         value["training"].is_object(),
-        "training must be an object when both manifests exist"
+        "training must be an object when both metadata files exist"
     );
     assert!(
         value["simulation"].is_object(),
-        "simulation must be an object (not null) when simulation manifest exists"
+        "simulation must be an object (not null) when simulation metadata exists"
     );
     assert_eq!(
         value["simulation"]["scenarios"]["total"].as_u64(),
@@ -259,7 +236,7 @@ fn nonexistent_directory_stderr_contains_error() {
         .stderr(predicate::str::contains("error"));
 }
 
-// ── AC-4: valid results → stdout .status is a non-empty string ───────────────
+// ── AC-4: valid results → training.status is a non-empty string ──────────────
 
 #[test]
 fn status_field_is_valid_string() {
@@ -275,15 +252,17 @@ fn status_field_is_valid_string() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    let status = value["status"].as_str().expect("status must be a string");
+    let status = value["training"]["status"]
+        .as_str()
+        .expect("training.status must be a string");
     assert!(
         !status.is_empty(),
-        "status must be a non-empty string, got empty"
+        "training.status must be a non-empty string, got empty"
     );
     // The fixture uses "complete"; verify it is forwarded correctly.
     assert_eq!(
         status, "complete",
-        "status must match the training manifest"
+        "training.status must match the training metadata"
     );
 }
 
@@ -313,54 +292,9 @@ fn output_directory_field_contains_absolute_path() {
 }
 
 #[test]
-fn metadata_key_present_when_metadata_json_exists() {
-    let dir = TempDir::new().unwrap();
-    make_training_only_results(&dir);
-
-    let output = cobre()
-        .args(["report", dir.path().to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-
-    assert!(
-        value["metadata"].is_object(),
-        "metadata must be an object when training/metadata.json exists"
-    );
-}
-
-#[test]
-fn metadata_key_null_when_metadata_json_absent() {
-    let dir = TempDir::new().unwrap();
-    // Write only the required training manifest, no metadata.json.
-    write_file(
-        dir.path(),
-        "training/_manifest.json",
-        TRAINING_MANIFEST_JSON,
-    );
-
-    let output = cobre()
-        .args(["report", dir.path().to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-
-    assert!(
-        value["metadata"].is_null(),
-        "metadata must be null when training/metadata.json is absent"
-    );
-}
-
-#[test]
 fn missing_training_manifest_exits_2() {
     let dir = TempDir::new().unwrap();
-    // Create the directory but do not write the required training manifest.
+    // Create the directory but do not write the required training metadata.
     fs::create_dir_all(dir.path().join("training")).unwrap();
 
     cobre()

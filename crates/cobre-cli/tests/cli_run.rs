@@ -7,8 +7,8 @@
 //! # Coverage
 //!
 //! - AC-1: Valid case directory → exit 0, `training/convergence.parquet` and
-//!   `training/_manifest.json` exist in the default output directory.
-//! - AC-2: `simulation.enabled: false` in config → exit 0, no `simulation/_manifest.json`.
+//!   `training/metadata.json` exist in the default output directory.
+//! - AC-2: `simulation.enabled: false` in config → exit 0, no `simulation/metadata.json`.
 //! - AC-3: `--output <custom_dir>` → output written to the specified directory.
 //! - AC-4: Invalid case directory (missing required files) → exit 1, stderr
 //!   contains a validation error message.
@@ -134,7 +134,7 @@ fn valid_case_exits_0() {
 }
 
 #[test]
-fn valid_case_creates_training_manifest() {
+fn valid_case_creates_training_metadata() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);
     let out = TempDir::new().unwrap();
@@ -150,7 +150,7 @@ fn valid_case_creates_training_manifest() {
         .assert()
         .success();
 
-    assert!(out.path().join("training/_manifest.json").is_file());
+    assert!(out.path().join("training/metadata.json").is_file());
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn disabled_simulation_does_not_produce_manifest() {
         .assert()
         .success();
 
-    assert!(!out.path().join("simulation/_manifest.json").exists());
+    assert!(!out.path().join("simulation/metadata.json").exists());
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn custom_output_dir_receives_training_artifacts() {
         .assert()
         .success();
 
-    assert!(custom_out.path().join("training/_manifest.json").is_file());
+    assert!(custom_out.path().join("training/metadata.json").is_file());
     assert!(!dir.path().join("output").exists());
 }
 

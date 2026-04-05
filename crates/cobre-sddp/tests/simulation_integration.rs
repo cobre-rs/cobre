@@ -659,7 +659,6 @@ fn train_simulate_write_cycle() {
         .collect();
 
     let policy_metadata = PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-08T00:00:00Z".to_string(),
         completed_iterations: result.result.iterations as u32,
@@ -667,8 +666,6 @@ fn train_simulate_write_cycle() {
         best_upper_bound: Some(result.result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: fx.n_stages as u32,
-        config_hash: "test-config-hash".to_string(),
-        system_hash: "test-system-hash".to_string(),
         max_iterations: 3,
         forward_passes: 1,
         warm_start_cuts: 0,
@@ -786,12 +783,21 @@ fn train_simulate_write_cycle() {
     let config = make_config();
     let output_dir = tmp.path();
 
+    let output_ctx = cobre_io::OutputContext {
+        hostname: "test-host".to_string(),
+        solver: "highs".to_string(),
+        started_at: "2026-01-17T08:00:00Z".to_string(),
+        completed_at: "2026-01-17T12:30:00Z".to_string(),
+        mpi_world_size: 1,
+        mpi_ranks_participated: 1,
+    };
     write_results(
         output_dir,
         &training_output,
         Some(&sim_output),
         &system,
         &config,
+        &output_ctx,
     )
     .expect("write_results must succeed");
 
@@ -816,21 +822,13 @@ fn train_simulate_write_cycle() {
             .is_file()
     );
 
-    let manifest_path = output_dir.join("training/_manifest.json");
-    assert!(manifest_path.is_file());
-    {
-        let content = std::fs::read_to_string(&manifest_path).unwrap();
-        let value: serde_json::Value =
-            serde_json::from_str(&content).expect("_manifest.json must be valid JSON");
-        assert_eq!(value["status"].as_str(), Some("complete"));
-    }
-
     let metadata_path = output_dir.join("training/metadata.json");
     assert!(metadata_path.is_file());
     {
         let content = std::fs::read_to_string(&metadata_path).unwrap();
         let value: serde_json::Value =
             serde_json::from_str(&content).expect("metadata.json must be valid JSON");
+        assert_eq!(value["status"].as_str(), Some("complete"));
         assert_eq!(value["problem_dimensions"]["num_hydros"].as_u64(), Some(1));
     }
 
@@ -844,8 +842,8 @@ fn train_simulate_write_cycle() {
             serde_json::from_str(&content).expect("codes.json must be valid JSON");
     }
 
-    let sim_manifest_path = output_dir.join("simulation/_manifest.json");
-    assert!(sim_manifest_path.is_file());
+    let sim_metadata_path = output_dir.join("simulation/metadata.json");
+    assert!(sim_metadata_path.is_file());
 
     assert!(output_dir.join("simulation/_SUCCESS").is_file());
 

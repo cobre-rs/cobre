@@ -132,7 +132,6 @@ fn simulation_only_fcf_round_trip() {
         build_stage_basis_records(fcf, &training_result, &basis_col_u8, &basis_row_u8);
 
     let metadata = cobre_io::PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-29T00:00:00Z".to_string(),
         completed_iterations: training_result.iterations as u32,
@@ -140,8 +139,6 @@ fn simulation_only_fcf_round_trip() {
         best_upper_bound: Some(training_result.final_ub),
         state_dimension: state_dim as u32,
         num_stages: n_stages as u32,
-        config_hash: String::new(),
-        system_hash: String::new(),
         max_iterations: setup.max_iterations() as u32,
         forward_passes: setup.forward_passes(),
         warm_start_cuts: 0,

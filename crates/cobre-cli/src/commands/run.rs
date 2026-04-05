@@ -228,9 +228,15 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         root_estimation_path,
     )?;
 
+    // Shared runtime context for metadata output files.
+    let hostname = cobre_io::get_hostname();
+    let mpi_world_size = ctx.comm.size() as u32;
+
     if training_enabled {
         apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
+        let training_started_at = cobre_io::now_iso8601();
         let training = run_training_phase(&ctx, &mut setup)?;
+        let training_completed_at = cobre_io::now_iso8601();
 
         // Write training outputs immediately (before simulation), so training
         // artifacts are persisted even if simulation fails.
@@ -238,6 +244,14 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
             let config = root_config.take().ok_or_else(|| CliError::Internal {
                 message: "root_config was None on rank 0 — internal invariant violated".to_string(),
             })?;
+            let training_ctx = cobre_io::OutputContext {
+                hostname: hostname.clone(),
+                solver: "highs".to_string(),
+                started_at: training_started_at,
+                completed_at: training_completed_at,
+                mpi_world_size,
+                mpi_ranks_participated: mpi_world_size,
+            };
             write_training_outputs(&WriteTrainingArgs {
                 output_dir: &ctx.output_dir,
                 system: &system,
@@ -245,6 +259,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                 training_output: &training.output,
                 setup: &setup,
                 training_result: &training.result,
+                output_ctx: &training_ctx,
                 quiet: ctx.quiet,
                 stderr: &ctx.stderr,
             })?;
@@ -273,13 +288,27 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         }
 
         if setup.n_scenarios() > 0 {
-            run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+            run_simulation_phase(
+                &ctx,
+                &system,
+                &mut setup,
+                &training.result,
+                &hostname,
+                mpi_world_size,
+            )?;
         }
     } else if setup.n_scenarios() > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(&ctx, &system, &mut setup, root_config.as_ref())?;
-        run_simulation_phase(&ctx, &system, &mut setup, &training_result)?;
+        run_simulation_phase(
+            &ctx,
+            &system,
+            &mut setup,
+            &training_result,
+            &hostname,
+            mpi_world_size,
+        )?;
     } else {
         // Both training and simulation disabled — nothing to do.
         if ctx.is_root && !ctx.quiet {
@@ -315,14 +344,8 @@ fn load_and_validate_checkpoint(
                 u32::try_from(setup.fcf().state_dimension).map_err(|e| CliError::Internal {
                     message: format!("state_dimension overflows u32: {e}"),
                 })?;
-            cobre_sddp::validate_policy_compatibility(
-                &checkpoint.metadata,
-                state_dim,
-                n_stages,
-                None,
-                None,
-            )
-            .map_err(CliError::from)?;
+            cobre_sddp::validate_policy_compatibility(&checkpoint.metadata, state_dim, n_stages)
+                .map_err(CliError::from)?;
         }
     }
 
@@ -954,6 +977,8 @@ fn run_simulation_phase(
     system: &System,
     setup: &mut StudySetup,
     training_result: &cobre_sddp::TrainingResult,
+    hostname: &str,
+    mpi_world_size: u32,
 ) -> Result<(), CliError> {
     let solver_factory = HighsSolver::new;
     let n_scenarios = setup.n_scenarios();
@@ -1004,6 +1029,7 @@ fn run_simulation_phase(
         (sim_writer, failed)
     });
 
+    let sim_started_at = cobre_io::now_iso8601();
     let sim_start = std::time::Instant::now();
 
     let sim_result = setup
@@ -1062,10 +1088,19 @@ fn run_simulation_phase(
     }
 
     if ctx.is_root {
+        let sim_ctx = cobre_io::OutputContext {
+            hostname: hostname.to_string(),
+            solver: "highs".to_string(),
+            started_at: sim_started_at,
+            completed_at: cobre_io::now_iso8601(),
+            mpi_world_size,
+            mpi_ranks_participated: mpi_world_size,
+        };
         write_simulation_outputs(&WriteSimulationArgs {
             output_dir: &ctx.output_dir,
             sim_output: &merged_sim_output,
             sim_solver_stats: &global_scenario_stats,
+            output_ctx: &sim_ctx,
             quiet: ctx.quiet,
             stderr: &ctx.stderr,
         })?;
@@ -1327,6 +1362,7 @@ struct WriteTrainingArgs<'a> {
     training_output: &'a cobre_io::TrainingOutput,
     setup: &'a StudySetup,
     training_result: &'a cobre_sddp::TrainingResult,
+    output_ctx: &'a cobre_io::OutputContext,
     quiet: bool,
     stderr: &'a Term,
 }
@@ -1360,6 +1396,7 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
         args.training_output,
         args.system,
         args.config,
+        args.output_ctx,
     )
     .map_err(CliError::from)?;
 
@@ -1401,6 +1438,7 @@ struct WriteSimulationArgs<'a> {
     output_dir: &'a Path,
     sim_output: &'a cobre_io::SimulationOutput,
     sim_solver_stats: &'a [(u32, cobre_sddp::SolverStatsDelta)],
+    output_ctx: &'a cobre_io::OutputContext,
     quiet: bool,
     stderr: &'a Term,
 }
@@ -1415,7 +1453,8 @@ fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliErr
     }
     let write_start = std::time::Instant::now();
 
-    cobre_io::write_simulation_results(args.output_dir, args.sim_output).map_err(CliError::from)?;
+    cobre_io::write_simulation_results(args.output_dir, args.sim_output, args.output_ctx)
+        .map_err(CliError::from)?;
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
     if !args.sim_solver_stats.is_empty() {

@@ -1014,7 +1014,6 @@ fn d12_checkpoint_round_trip() {
 
     let n_stages = fcf.pools.len();
     let policy_metadata = PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-16T00:00:00Z".to_string(),
         completed_iterations: result.iterations as u32,
@@ -1022,8 +1021,6 @@ fn d12_checkpoint_round_trip() {
         best_upper_bound: Some(result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: n_stages as u32,
-        config_hash: "d12-config-hash".to_string(),
-        system_hash: "d12-system-hash".to_string(),
         max_iterations: 100,
         forward_passes: 1,
         warm_start_cuts: 0,

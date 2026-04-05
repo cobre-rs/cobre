@@ -92,22 +92,14 @@ fn write_policy_checkpoint(
     let (basis_col_u8, basis_row_u8) = convert_basis_cache(training_result);
     let stage_bases = build_stage_basis_records(fcf, training_result, &basis_col_u8, &basis_row_u8);
 
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| format!("{}s-since-epoch", d.as_secs()))
-        .unwrap_or_else(|_| "unknown".to_string());
-
     let metadata = PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at,
+        created_at: cobre_io::now_iso8601(),
         completed_iterations: training_result.iterations as u32,
         final_lower_bound: training_result.final_lb,
         best_upper_bound: Some(training_result.final_ub),
         state_dimension: state_dimension as u32,
         num_stages: n_stages as u32,
-        config_hash: String::new(),
-        system_hash: String::new(),
         max_iterations: max_iterations as u32,
         forward_passes,
         warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
@@ -264,6 +256,7 @@ struct TrainingPhaseResult {
     result: cobre_sddp::TrainingResult,
     output: cobre_io::TrainingOutput,
     error: Option<cobre_sddp::SddpError>,
+    started_at: String,
 }
 
 /// Run the training phase: solver init, train, write outputs.
@@ -271,6 +264,7 @@ fn run_training_phase_py(
     setup: &mut StudySetup,
     n_threads: usize,
 ) -> Result<TrainingPhaseResult, String> {
+    let started_at = cobre_io::now_iso8601();
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
     let training_outcome = setup
@@ -292,6 +286,7 @@ fn run_training_phase_py(
         result: training_result,
         output: training_output,
         error: training_outcome.error,
+        started_at,
     })
 }
 
@@ -339,7 +334,15 @@ fn write_training_artifacts(
         .map_err(|e| format!("cut selection output: {e}"))?;
     }
 
-    cobre_io::write_training_results(output_dir, &training.output, system, config)
+    let training_ctx = cobre_io::OutputContext {
+        hostname: cobre_io::get_hostname(),
+        solver: "highs".to_string(),
+        started_at: training.started_at.clone(),
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size: 1,
+        mpi_ranks_participated: 1,
+    };
+    cobre_io::write_training_results(output_dir, &training.output, system, config, &training_ctx)
         .map_err(|e| format!("training results output: {e}"))?;
 
     Ok(())
@@ -353,6 +356,7 @@ fn run_simulation_phase_py(
     training_result: &cobre_sddp::TrainingResult,
     n_threads: usize,
 ) -> Result<SimSummary, String> {
+    let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
         .create_workspace_pool(n_threads, HighsSolver::new)
@@ -408,7 +412,15 @@ fn run_simulation_phase_py(
         n_scenarios: sim_out.n_scenarios,
         completed: sim_out.completed,
     };
-    cobre_io::write_simulation_results(output_dir, &sim_out)
+    let sim_ctx = cobre_io::OutputContext {
+        hostname: cobre_io::get_hostname(),
+        solver: "highs".to_string(),
+        started_at: sim_started_at,
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size: 1,
+        mpi_ranks_participated: 1,
+    };
+    cobre_io::write_simulation_results(output_dir, &sim_out, &sim_ctx)
         .map_err(|e| format!("simulation results output: {e}"))?;
 
     Ok(sim_summary)
@@ -506,8 +518,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }
@@ -541,8 +551,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }
@@ -621,8 +629,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }

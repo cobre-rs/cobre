@@ -146,16 +146,12 @@ pub struct StageStatesReadResult {
 /// may be edited by operators. The `serde::Serialize` derive enables
 /// `serde_json::to_string_pretty` in the checkpoint writer.
 ///
-/// Field names correspond to the `PolicyMetadata` table in SS3.1 of the policy
-/// schema specification.
-///
 /// # Examples
 ///
 /// ```
 /// use cobre_io::PolicyCheckpointMetadata;
 ///
 /// let meta = PolicyCheckpointMetadata {
-///     version: "1.0.0".to_string(),
 ///     cobre_version: env!("CARGO_PKG_VERSION").to_string(),
 ///     created_at: "2026-03-08T00:00:00Z".to_string(),
 ///     completed_iterations: 50,
@@ -163,8 +159,6 @@ pub struct StageStatesReadResult {
 ///     best_upper_bound: Some(1300.0),
 ///     state_dimension: 160,
 ///     num_stages: 60,
-///     config_hash: "abc123".to_string(),
-///     system_hash: "def456".to_string(),
 ///     max_iterations: 200,
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
@@ -176,8 +170,6 @@ pub struct StageStatesReadResult {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PolicyCheckpointMetadata {
-    /// Schema version string (e.g., `"1.0.0"`).
-    pub version: String,
     /// Cobre crate version that wrote this checkpoint.
     pub cobre_version: String,
     /// ISO 8601 timestamp when the checkpoint was written.
@@ -192,10 +184,6 @@ pub struct PolicyCheckpointMetadata {
     pub state_dimension: u32,
     /// Number of stages in the planning horizon.
     pub num_stages: u32,
-    /// Hash of the algorithm configuration, for compatibility checking on resume.
-    pub config_hash: String,
-    /// Hash of the system data, for compatibility checking on resume.
-    pub system_hash: String,
     /// Maximum number of iterations configured for the run.
     pub max_iterations: u32,
     /// Number of forward passes per iteration.
@@ -556,7 +544,6 @@ pub struct StageCutsPayload<'a> {
 ///     populated_count: 1,
 /// }];
 /// let metadata = PolicyCheckpointMetadata {
-///     version: "1.0.0".to_string(),
 ///     cobre_version: env!("CARGO_PKG_VERSION").to_string(),
 ///     created_at: "2026-03-08T00:00:00Z".to_string(),
 ///     completed_iterations: 1,
@@ -564,8 +551,6 @@ pub struct StageCutsPayload<'a> {
 ///     best_upper_bound: None,
 ///     state_dimension: 3,
 ///     num_stages: 1,
-///     config_hash: "abc".to_string(),
-///     system_hash: "def".to_string(),
 ///     max_iterations: 100,
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
@@ -1473,7 +1458,6 @@ mod tests {
     #[test]
     fn policy_checkpoint_metadata_serializes_to_json() {
         let meta = PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-03-08T00:00:00Z".to_string(),
             completed_iterations: 50,
@@ -1481,8 +1465,6 @@ mod tests {
             best_upper_bound: Some(1300.0),
             state_dimension: 160,
             num_stages: 60,
-            config_hash: "abc123".to_string(),
-            system_hash: "def456".to_string(),
             max_iterations: 200,
             forward_passes: 4,
             warm_start_cuts: 0,
@@ -1537,7 +1519,6 @@ mod tests {
     #[test]
     fn policy_checkpoint_metadata_none_upper_bound_serializes_to_null() {
         let meta = PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-03-08T00:00:00Z".to_string(),
             completed_iterations: 10,
@@ -1545,8 +1526,6 @@ mod tests {
             best_upper_bound: None,
             state_dimension: 1,
             num_stages: 1,
-            config_hash: String::new(),
-            system_hash: String::new(),
             max_iterations: 10,
             forward_passes: 1,
             warm_start_cuts: 0,
@@ -1570,7 +1549,6 @@ mod tests {
     /// Build a minimal [`PolicyCheckpointMetadata`] for use in checkpoint tests.
     fn make_metadata(num_stages: u32, state_dimension: u32) -> PolicyCheckpointMetadata {
         PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-03-08T00:00:00Z".to_string(),
             completed_iterations: 10,
@@ -1578,8 +1556,6 @@ mod tests {
             best_upper_bound: Some(1050.0),
             state_dimension,
             num_stages,
-            config_hash: "abc123".to_string(),
-            system_hash: "def456".to_string(),
             max_iterations: 100,
             forward_passes: 4,
             warm_start_cuts: 0,
@@ -1683,7 +1659,6 @@ mod tests {
             serde_json::from_str(&content).expect("metadata.json must be valid JSON");
 
         for key in &[
-            "version",
             "cobre_version",
             "created_at",
             "completed_iterations",
@@ -2219,7 +2194,6 @@ mod tests {
     #[test]
     fn policy_checkpoint_metadata_deserializes_from_json() {
         let meta = PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-03-08T00:00:00Z".to_string(),
             completed_iterations: 42,
@@ -2227,8 +2201,6 @@ mod tests {
             best_upper_bound: Some(10100.0),
             state_dimension: 5,
             num_stages: 3,
-            config_hash: "cfghash".to_string(),
-            system_hash: "syshash".to_string(),
             max_iterations: 100,
             forward_passes: 4,
             warm_start_cuts: 10,
@@ -2240,15 +2212,12 @@ mod tests {
         let back: PolicyCheckpointMetadata =
             serde_json::from_str(&json).expect("deserialize must succeed");
 
-        assert_eq!(back.version, meta.version);
         assert_eq!(back.cobre_version, meta.cobre_version);
         assert_eq!(back.completed_iterations, meta.completed_iterations);
         assert_eq!(back.final_lower_bound, meta.final_lower_bound);
         assert_eq!(back.best_upper_bound, meta.best_upper_bound);
         assert_eq!(back.state_dimension, meta.state_dimension);
         assert_eq!(back.num_stages, meta.num_stages);
-        assert_eq!(back.config_hash, meta.config_hash);
-        assert_eq!(back.system_hash, meta.system_hash);
         assert_eq!(back.max_iterations, meta.max_iterations);
         assert_eq!(back.forward_passes, meta.forward_passes);
         assert_eq!(back.warm_start_cuts, meta.warm_start_cuts);
@@ -2258,7 +2227,6 @@ mod tests {
     #[test]
     fn policy_checkpoint_metadata_deserializes_none_upper_bound() {
         let meta = PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-03-08T00:00:00Z".to_string(),
             completed_iterations: 1,
@@ -2266,8 +2234,6 @@ mod tests {
             best_upper_bound: None,
             state_dimension: 1,
             num_stages: 1,
-            config_hash: String::new(),
-            system_hash: String::new(),
             max_iterations: 10,
             forward_passes: 1,
             warm_start_cuts: 0,
@@ -2436,7 +2402,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let meta_in = PolicyCheckpointMetadata {
-            version: "1.0.0".to_string(),
             cobre_version: "0.0.1".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             completed_iterations: 77,
@@ -2444,8 +2409,6 @@ mod tests {
             best_upper_bound: Some(13000.0),
             state_dimension: 8,
             num_stages: 4,
-            config_hash: "cfghash123".to_string(),
-            system_hash: "syshash456".to_string(),
             max_iterations: 500,
             forward_passes: 8,
             warm_start_cuts: 20,
@@ -2460,14 +2423,11 @@ mod tests {
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
         let m = &checkpoint.metadata;
 
-        assert_eq!(m.version, "1.0.0");
         assert_eq!(m.completed_iterations, 77);
         assert_eq!(m.final_lower_bound, 12345.678);
         assert_eq!(m.best_upper_bound, Some(13000.0));
         assert_eq!(m.state_dimension, 8);
         assert_eq!(m.num_stages, 4);
-        assert_eq!(m.config_hash, "cfghash123");
-        assert_eq!(m.system_hash, "syshash456");
         assert_eq!(m.max_iterations, 500);
         assert_eq!(m.forward_passes, 8);
         assert_eq!(m.warm_start_cuts, 20);

@@ -167,6 +167,8 @@ struct LoadBroadcastResult {
     root_config: Option<cobre_io::Config>,
     /// Root-only estimation report for summaries (None on non-root ranks).
     root_estimation_report: Option<EstimationReport>,
+    /// Root-only estimation path from stochastic preprocessing (None on non-root ranks).
+    root_estimation_path: Option<cobre_sddp::EstimationPath>,
     /// Whether the training phase is enabled (broadcast from rank 0).
     training_enabled: bool,
     /// Policy initialization mode (broadcast from rank 0).
@@ -211,6 +213,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         mut setup,
         mut root_config,
         root_estimation_report,
+        root_estimation_path,
         training_enabled,
         policy_mode,
     } = broadcast_and_build_setup(&ctx, args)?;
@@ -522,6 +525,7 @@ fn broadcast_and_build_setup(
         mut root_config,
         root_stochastic,
         root_estimation_report,
+        root_estimation_path,
         raw_bcast_tree,
         root_hydro_models,
         load_err,
@@ -544,6 +548,7 @@ fn broadcast_and_build_setup(
                     system,
                     stochastic,
                     estimation_report,
+                    estimation_path,
                 } = prepared;
                 (
                     Some(system),
@@ -551,17 +556,19 @@ fn broadcast_and_build_setup(
                     Some(config),
                     Some(stochastic),
                     estimation_report,
+                    Some(estimation_path),
                     Some(bcast_tree),
                     Some(hydro_models),
                     None,
                 )
             }
-            Err(e) => (None, None, None, None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None, None)
     };
     let root_estimation_report: Option<EstimationReport> = root_estimation_report;
+    let root_estimation_path: Option<cobre_sddp::EstimationPath> = root_estimation_path;
 
     let system_result = broadcast_value(raw_system, &ctx.comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &ctx.comm);
@@ -658,6 +665,7 @@ fn broadcast_and_build_setup(
         setup,
         root_config: root_config.take(),
         root_estimation_report,
+        root_estimation_path,
         training_enabled,
         policy_mode,
     })

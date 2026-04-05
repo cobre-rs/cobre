@@ -1546,6 +1546,8 @@ pub struct PrepareStochasticResult {
     /// Estimation report (`Some` if `inflow_history.parquet` was present and
     /// `inflow_seasonal_stats.parquet` was absent, triggering auto-estimation).
     pub estimation_report: Option<crate::EstimationReport>,
+    /// Which of the 7 estimation path rows was taken during preprocessing.
+    pub estimation_path: crate::EstimationPath,
 }
 
 /// Load, validate, and assemble a user-supplied opening tree from the case directory.
@@ -1718,7 +1720,7 @@ pub fn prepare_stochastic(
     config: &cobre_io::Config,
     seed: u64,
 ) -> Result<PrepareStochasticResult, SddpError> {
-    let (system, estimation_report, _estimation_path) =
+    let (system, estimation_report, estimation_path) =
         crate::estimation::estimate_from_history(system, case_dir, config)?;
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
@@ -1778,6 +1780,7 @@ pub fn prepare_stochastic(
         system,
         stochastic,
         estimation_report,
+        estimation_path,
     })
 }
 

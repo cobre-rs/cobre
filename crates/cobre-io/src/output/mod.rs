@@ -14,6 +14,7 @@ pub mod hydro_models;
 pub mod manifest;
 pub mod parquet_config;
 pub mod policy;
+pub mod provenance;
 pub mod results_writer;
 pub mod scaling_report;
 pub(crate) mod schemas;
@@ -34,6 +35,7 @@ pub use manifest::{
     write_metadata, write_simulation_manifest, write_training_manifest,
 };
 pub use parquet_config::ParquetWriterConfig;
+pub use provenance::write_provenance_report;
 pub use results_writer::{write_results, write_simulation_results, write_training_results};
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;

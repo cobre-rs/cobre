@@ -30,9 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
-    build_hydro_model_summary, build_stochastic_summary, prepare_hydro_models, prepare_stochastic,
-    ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary, SolverStatsDelta,
-    StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
+    build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
+    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
+    StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -48,6 +49,7 @@ struct RunSummary {
     simulation: Option<SimSummary>,
     stochastic: Option<StochasticSummary>,
     hydro_models: Option<HydroModelSummary>,
+    provenance: Option<ModelProvenanceReport>,
 }
 
 struct SimSummary {
@@ -437,6 +439,7 @@ fn run_inner(
         .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
     let system = result.system;
     let estimation_report = result.estimation_report;
+    let estimation_path = result.estimation_path;
 
     let hydro_models_result = prepare_hydro_models(&system, case_dir)
         .map_err(|e| format!("hydro model preprocessing error: {e}"))?;
@@ -444,6 +447,13 @@ fn run_inner(
     let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
         .map_err(|e| e.to_string())?;
     setup.set_export_states(config.exports.states);
+
+    let provenance_report = build_provenance_report(
+        estimation_path,
+        estimation_report.as_ref(),
+        setup.stochastic().provenance(),
+        system.hydros().len(),
+    );
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(
@@ -457,6 +467,11 @@ fn run_inner(
     let scaling_path = output_dir.join("training/scaling_report.json");
     cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
+
+    let provenance_path = output_dir.join("training/model_provenance.json");
+    if let Err(e) = cobre_io::write_provenance_report(&provenance_path, &provenance_report) {
+        eprintln!("cobre-python: provenance output warning: {e}");
+    }
 
     let stochastic_summary = build_stochastic_summary(
         &system,
@@ -579,6 +594,7 @@ fn run_inner(
             simulation,
             stochastic: Some(stochastic_summary),
             hydro_models: hydro_models_summary,
+            provenance: Some(provenance_report),
         })
     } else {
         // Training disabled: check if simulation is requested.
@@ -659,6 +675,7 @@ fn run_inner(
                 simulation,
                 stochastic: Some(stochastic_summary),
                 hydro_models: hydro_models_summary,
+                provenance: Some(provenance_report),
             });
         }
 
@@ -674,6 +691,7 @@ fn run_inner(
             simulation: None,
             stochastic: Some(stochastic_summary),
             hydro_models: hydro_models_summary,
+            provenance: Some(provenance_report),
         })
     }
 }
@@ -749,11 +767,41 @@ fn stochastic_summary_to_dict<'py>(
     Ok(dict)
 }
 
+/// Convert a [`ModelProvenanceReport`] to a Python dict.
+fn provenance_to_dict<'py>(
+    py: Python<'py>,
+    report: &ModelProvenanceReport,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("estimation_path", &report.estimation_path)?;
+    dict.set_item(
+        "seasonal_stats_source",
+        report.seasonal_stats_source.to_string(),
+    )?;
+    dict.set_item(
+        "ar_coefficients_source",
+        report.ar_coefficients_source.to_string(),
+    )?;
+    dict.set_item("correlation_source", report.correlation_source.to_string())?;
+    dict.set_item(
+        "opening_tree_source",
+        report.opening_tree_source.to_string(),
+    )?;
+    dict.set_item("n_hydros", report.n_hydros)?;
+    dict.set_item("ar_method", report.ar_method.as_deref())?;
+    dict.set_item("ar_max_order", report.ar_max_order)?;
+    dict.set_item(
+        "white_noise_fallbacks",
+        report.white_noise_fallbacks.clone(),
+    )?;
+    Ok(dict)
+}
+
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
 /// Returns a dict with keys: `"converged"`, `"iterations"`, `"lower_bound"`, `"upper_bound"`,
 /// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`,
-/// `"hydro_models"`.
+/// `"hydro_models"`, `"provenance"`.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -813,6 +861,13 @@ pub fn run(
                 py.None()
             };
             dict.set_item("hydro_models", hydro_val)?;
+
+            let provenance_val = if let Some(prov) = &summary.provenance {
+                provenance_to_dict(py, prov)?.into()
+            } else {
+                py.None()
+            };
+            dict.set_item("provenance", provenance_val)?;
 
             Ok(dict.into())
         }

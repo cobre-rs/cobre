@@ -13,7 +13,10 @@
 // ArOrderSummary is not referenced directly in non-test code here (only via StochasticSummary
 // fields), so suppress the false-positive unused-import warning on the pub use.
 #[allow(unused_imports)]
-pub use cobre_sddp::{ArOrderSummary, HydroModelSummary, StochasticSource, StochasticSummary};
+pub use cobre_sddp::{
+    ArOrderSummary, HydroModelSummary, ModelProvenanceReport, ProvenanceSource, StochasticSource,
+    StochasticSummary,
+};
 use console::Term;
 
 fn source_label(source: &StochasticSource) -> &'static str {
@@ -266,6 +269,70 @@ pub fn format_stochastic_summary_string(summary: &StochasticSummary) -> String {
         summary.n_load_buses
     ));
 
+    lines.join("\n")
+}
+
+/// Format the AR detail parenthetical for the provenance summary line.
+///
+/// Returns `" (method, max order N)"` when AR method is known, or an empty
+/// string when AR is `NotApplicable` (no parenthetical shown).
+fn provenance_ar_detail(report: &ModelProvenanceReport) -> String {
+    match (&report.ar_method, report.ar_max_order) {
+        (Some(method), Some(max_order)) => format!(" ({method}, max order {max_order})"),
+        _ => String::new(),
+    }
+}
+
+/// Print the model provenance summary to `stderr`.
+///
+/// Renders a bold header followed by indented lines covering the estimation
+/// path, seasonal stats source, AR coefficients source, correlation source,
+/// and opening tree source.
+///
+/// The AR line includes a parenthetical detail (`(method, max order N)`) when
+/// `ar_method` is `Some`; this detail is omitted when AR is `NotApplicable`.
+/// Write errors are silently ignored (fire-and-forget).
+pub fn print_provenance_summary(stderr: &Term, report: &ModelProvenanceReport) {
+    let _ = stderr.write_line(&format!("{}", console::style("Model provenance").bold()));
+    let _ = stderr.write_line(&format!("  Estimation path: {}", report.estimation_path));
+    let _ = stderr.write_line(&format!(
+        "  Seasonal stats:  {}",
+        report.seasonal_stats_source
+    ));
+    let ar_detail = provenance_ar_detail(report);
+    let _ = stderr.write_line(&format!(
+        "  AR coefficients: {}{}",
+        report.ar_coefficients_source, ar_detail
+    ));
+    let _ = stderr.write_line(&format!("  Correlation:     {}", report.correlation_source));
+    let _ = stderr.write_line(&format!(
+        "  Opening tree:    {}",
+        report.opening_tree_source
+    ));
+}
+
+/// Render the model provenance summary as a plain-text `String`.
+///
+/// The returned string contains no ANSI escape sequences. Color and styling
+/// are applied by [`print_provenance_summary`] when writing to the terminal.
+/// This function exists to allow unit tests to assert on summary content
+/// without requiring a real terminal.
+#[cfg(test)]
+pub fn format_provenance_summary_string(report: &ModelProvenanceReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Model provenance".to_string());
+    lines.push(format!("  Estimation path: {}", report.estimation_path));
+    lines.push(format!(
+        "  Seasonal stats:  {}",
+        report.seasonal_stats_source
+    ));
+    let ar_detail = provenance_ar_detail(report);
+    lines.push(format!(
+        "  AR coefficients: {}{}",
+        report.ar_coefficients_source, ar_detail
+    ));
+    lines.push(format!("  Correlation:     {}", report.correlation_source));
+    lines.push(format!("  Opening tree:    {}", report.opening_tree_source));
     lines.join("\n")
 }
 
@@ -1637,6 +1704,140 @@ mod tests {
         assert!(
             s.contains("0 hydros linearized"),
             "zero-evaporation must contain '0 hydros linearized', got: {s}"
+        );
+    }
+
+    // ── ModelProvenanceReport tests ───────────────────────────────────────────
+
+    use super::{
+        ModelProvenanceReport, ProvenanceSource, format_provenance_summary_string,
+        print_provenance_summary,
+    };
+
+    fn make_provenance_report_full_estimation() -> ModelProvenanceReport {
+        ModelProvenanceReport {
+            estimation_path: "full_estimation".to_string(),
+            seasonal_stats_source: ProvenanceSource::Estimated,
+            ar_coefficients_source: ProvenanceSource::Estimated,
+            correlation_source: ProvenanceSource::Estimated,
+            opening_tree_source: ProvenanceSource::Estimated,
+            n_hydros: 3,
+            ar_method: Some("PACF".to_string()),
+            ar_max_order: Some(6),
+            white_noise_fallbacks: vec![],
+        }
+    }
+
+    fn make_provenance_report_deterministic() -> ModelProvenanceReport {
+        ModelProvenanceReport {
+            estimation_path: "deterministic".to_string(),
+            seasonal_stats_source: ProvenanceSource::NotApplicable,
+            ar_coefficients_source: ProvenanceSource::NotApplicable,
+            correlation_source: ProvenanceSource::NotApplicable,
+            opening_tree_source: ProvenanceSource::NotApplicable,
+            n_hydros: 0,
+            ar_method: None,
+            ar_max_order: None,
+            white_noise_fallbacks: vec![],
+        }
+    }
+
+    #[test]
+    fn print_provenance_summary_does_not_panic() {
+        let report = make_provenance_report_full_estimation();
+        print_provenance_summary(&Term::buffered_stderr(), &report);
+    }
+
+    #[test]
+    fn print_provenance_summary_deterministic_does_not_panic() {
+        let report = make_provenance_report_deterministic();
+        print_provenance_summary(&Term::buffered_stderr(), &report);
+    }
+
+    #[test]
+    fn format_provenance_summary_contains_all_section_keys() {
+        let report = make_provenance_report_full_estimation();
+        let s = format_provenance_summary_string(&report);
+        assert!(
+            s.contains("Model provenance"),
+            "output must contain header 'Model provenance', got: {s}"
+        );
+        assert!(
+            s.contains("Estimation path:"),
+            "output must contain 'Estimation path:' line, got: {s}"
+        );
+        assert!(
+            s.contains("Seasonal stats:"),
+            "output must contain 'Seasonal stats:' line, got: {s}"
+        );
+        assert!(
+            s.contains("AR coefficients:"),
+            "output must contain 'AR coefficients:' line, got: {s}"
+        );
+        assert!(
+            s.contains("Correlation:"),
+            "output must contain 'Correlation:' line, got: {s}"
+        );
+        assert!(
+            s.contains("Opening tree:"),
+            "output must contain 'Opening tree:' line, got: {s}"
+        );
+    }
+
+    #[test]
+    fn format_provenance_summary_full_estimation_includes_ar_detail() {
+        let report = make_provenance_report_full_estimation();
+        let s = format_provenance_summary_string(&report);
+        assert!(
+            s.contains("full_estimation"),
+            "output must contain 'full_estimation' estimation path, got: {s}"
+        );
+        assert!(
+            s.contains("(PACF, max order 6)"),
+            "output must include AR method and max order parenthetical, got: {s}"
+        );
+    }
+
+    #[test]
+    fn format_provenance_summary_deterministic_no_ar_detail() {
+        let report = make_provenance_report_deterministic();
+        let s = format_provenance_summary_string(&report);
+        assert!(
+            s.contains("deterministic"),
+            "output must contain 'deterministic' estimation path, got: {s}"
+        );
+        assert!(
+            s.contains("n/a"),
+            "output must contain 'n/a' for NotApplicable sources, got: {s}"
+        );
+        // No parenthetical when AR is NotApplicable.
+        assert!(
+            !s.contains("max order"),
+            "output must NOT contain 'max order' for deterministic case, got: {s}"
+        );
+    }
+
+    #[test]
+    fn format_provenance_summary_user_file_source() {
+        let report = ModelProvenanceReport {
+            estimation_path: "user_provided_no_history".to_string(),
+            seasonal_stats_source: ProvenanceSource::UserFile,
+            ar_coefficients_source: ProvenanceSource::UserFile,
+            correlation_source: ProvenanceSource::Estimated,
+            opening_tree_source: ProvenanceSource::Estimated,
+            n_hydros: 2,
+            ar_method: None,
+            ar_max_order: None,
+            white_noise_fallbacks: vec![],
+        };
+        let s = format_provenance_summary_string(&report);
+        assert!(
+            s.contains("user_file"),
+            "output must contain 'user_file' for UserFile source, got: {s}"
+        );
+        assert!(
+            !s.contains("max order"),
+            "output must NOT contain 'max order' when ar_method is None, got: {s}"
         );
     }
 }

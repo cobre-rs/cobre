@@ -31,13 +31,13 @@ use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_io::{
-    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
 };
 use cobre_sddp::{
-    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
+    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
-use cobre_solver::highs::HighsSolver;
 use cobre_solver::SolverInterface;
+use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;

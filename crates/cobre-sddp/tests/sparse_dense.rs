@@ -15,9 +15,9 @@
     clippy::doc_markdown
 )]
 
+use cobre_sddp::StageIndexer;
 use cobre_sddp::cut::fcf::FutureCostFunction;
 use cobre_sddp::forward::build_cut_row_batch_into;
-use cobre_sddp::StageIndexer;
 use cobre_solver::RowBatch;
 
 /// Build a `RowBatch` with cuts from `fcf` at `stage` using the given `indexer`.

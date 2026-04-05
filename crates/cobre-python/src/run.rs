@@ -827,3 +827,33 @@ pub fn run(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use cobre_sddp::setup::prepare_stochastic;
+
+    #[test]
+    fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
+        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cobre-python parent")
+            .parent()
+            .expect("crates parent")
+            .join("examples/deterministic/d01-thermal-dispatch");
+
+        let system = cobre_io::load_case(&case_dir).expect("load_case must succeed for D01");
+        let config = cobre_io::parse_config(&case_dir.join("config.json"))
+            .expect("parse_config must succeed for D01");
+
+        let seed = config.training.tree_seed.map_or(42_u64, i64::unsigned_abs);
+
+        let result = prepare_stochastic(system, &case_dir, &config, seed);
+        assert!(
+            result.is_ok(),
+            "prepare_stochastic failed for D01 via Python path: {:?}",
+            result.err()
+        );
+    }
+}

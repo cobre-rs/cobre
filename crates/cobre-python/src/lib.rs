@@ -25,6 +25,8 @@
 //!
 //! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 use pyo3::prelude::*;
 
 mod io;

@@ -272,6 +272,7 @@ pub fn sync_forward<C: Communicator>(
 ///
 /// Shared by the sparse and dense paths in [`build_cut_row_batch_into`] to
 /// prevent the two branches from drifting apart during maintenance.
+#[allow(clippy::empty_line_after_doc_comments)]
 #[inline]
 fn push_scaled_coefficient(batch: &mut RowBatch, j: usize, coeff: f64, col_scale: &[f64]) {
     debug_assert!(

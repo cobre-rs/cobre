@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
@@ -28,11 +28,11 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
     inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
     prepare_stochastic,
     setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -43,8 +43,8 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -226,6 +226,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         &setup,
         root_config.as_ref(),
         root_estimation_report.as_ref(),
+        root_estimation_path,
     )?;
 
     if training_enabled {
@@ -710,6 +711,7 @@ fn run_pre_training(
     setup: &StudySetup,
     root_config: Option<&cobre_io::Config>,
     root_estimation_report: Option<&EstimationReport>,
+    root_estimation_path: Option<cobre_sddp::EstimationPath>,
 ) -> Result<(), CliError> {
     if !ctx.quiet && ctx.is_root {
         let stochastic_summary = build_stochastic_summary(
@@ -721,6 +723,27 @@ fn run_pre_training(
         crate::summary::print_stochastic_summary(&ctx.stderr, &stochastic_summary);
         let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
         crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
+    }
+
+    // Build and emit provenance report.
+    if ctx.is_root {
+        if let Some(path) = root_estimation_path {
+            let provenance = cobre_sddp::build_provenance_report(
+                path,
+                root_estimation_report,
+                setup.stochastic().provenance(),
+                system.hydros().len(),
+            );
+            if !ctx.quiet {
+                crate::summary::print_provenance_summary(&ctx.stderr, &provenance);
+            }
+            let provenance_path = ctx.output_dir.join("training/model_provenance.json");
+            cobre_io::write_provenance_report(&provenance_path, &provenance).map_err(|e| {
+                CliError::Internal {
+                    message: format!("failed to write provenance report: {e}"),
+                }
+            })?;
+        }
     }
 
     if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {

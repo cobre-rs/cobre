@@ -32,8 +32,10 @@ for deterministic noise generation.
 | `tree::qmc_halton`        | Halton QMC sequence generation with Owen-style digit scrambling and prime sieve                                                                                                     |
 | `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
 | `sampling::out_of_sample` | Out-of-sample fresh noise generation dispatching over `NoiseMethod`                                                                                                                 |
-| `sampling::historical`    | Historical replay stub (not yet implemented)                                                                                                                                        |
-| `sampling::external`      | External scenario file stub (not yet implemented)                                                                                                                                   |
+| `sampling::historical`    | Historical inflow replay: `HistoricalScenarioLibrary` construction, window discovery, eta standardization, lag seeding, and forward-pass window selection                           |
+| `sampling::external`      | External scenario sources: `ExternalScenarioLibrary` construction, per-class standardization (PAR inversion for inflow, mean/std for load and NCS), and forward-pass scenario lookup |
+| `sampling::class_sampler` | Per-class noise source enum (`ClassSampler`): InSample tree segment copy, OutOfSample fresh noise, Historical window replay, and External library lookup                         |
+| `sampling::window`        | Historical window discovery: `discover_historical_windows` finds contiguous year spans covering the study period in `inflow_history.parquet`                                     |
 | `context`                 | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                                                                            |
 | `error`                   | `StochasticError` with nine variants covering six failure domains of the stochastic layer                                                                                           |
 

@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.0] - Unreleased
+
+### Added
+
+- **Per-class scenario sampling** -- Each entity class (inflow, load, NCS)
+  can independently use `InSample`, `OutOfSample`, `Historical`, or `External`
+  sampling schemes via per-class sub-objects in `scenario_source` in
+  `stages.json`.
+- **Historical inflow sampling** -- Replays standardized noise drawn from
+  historical observation windows discovered in `inflow_history.parquet`.
+  The window pool is controlled by the new `historical_years` field in
+  `stages.json`, which accepts a list of years or a `{from, to}` range.
+- **External scenario sources** -- Reads pre-generated scenario realizations
+  from per-class Parquet files: `external_inflow_scenarios.parquet`,
+  `external_load_scenarios.parquet`, and `external_ncs_scenarios.parquet`.
+  Replaces the old single `external_scenarios.parquet`.
+- **`HistoricalScenarioLibrary` and `ExternalScenarioLibrary`** -- New types
+  in `cobre-stochastic` for pre-computed scenario storage shared across
+  forward-pass iterations.
+- **`ClassSampler` enum** -- Per-class noise dispatch type in
+  `cobre-stochastic` routing each entity class to its configured sampling
+  scheme during the forward pass.
+- **Composite `ForwardSampler` architecture** -- Holds per-class
+  `ClassSampler` instances and applies inter-class correlation after
+  per-class noise generation, replacing the previous monolithic sampler.
+- **`historical_years` config** -- New field in `stages.json`
+  `scenario_source` sub-objects for specifying which historical years are
+  eligible as replay windows. Accepts a list (`[2010, 2015, 2020]`) or a
+  range (`{from: 2010, to: 2023}`).
+- **Same-type enforcement for correlation groups** -- All entities in a
+  correlation group must share the same `entity_type`. Mixed-type groups
+  are rejected at parse time with a descriptive error.
+- **`LoadModel` and `NcsModel` types** -- New types in `cobre-core` for
+  per-class external standardization, mirroring the existing `InflowModel`.
+- **Window discovery algorithm** -- Historical sampling uses an automatic
+  window discovery pass over `inflow_history.parquet` to build the eligible
+  replay pool before the first forward iteration.
+
+### Changed
+
+- **`training.seed` renamed to `training.tree_seed`** -- The `config.json`
+  field controlling the scenario-tree random seed is now `tree_seed`. No
+  backward-compatible alias is provided; old configs must be updated.
+- **`scenario_source` per-class format** -- The `stages.json`
+  `scenario_source` object changed from a flat `sampling_scheme` string to
+  per-class sub-objects with `inflow`, `load`, and `ncs` keys, each
+  carrying its own `scheme` and optional `historical_years` or `file` field.
+  The old flat format is detected at parse time and produces a clear error.
+- **`InflowHistoryRow` and `ExternalScenarioRow` relocated** -- These row
+  types moved from `cobre-io` to `cobre-core::scenario` so that
+  `cobre-stochastic` can reference them without depending on `cobre-io`.
+- **Per-class external files** -- `external_scenarios.parquet` is replaced
+  by three separate files (`external_inflow_scenarios.parquet`,
+  `external_load_scenarios.parquet`, `external_ncs_scenarios.parquet`),
+  one per entity class.
+- **Correlation `entity_type` expanded** -- Correlation groups previously
+  accepted only `"inflow"` as the entity type. The field now accepts
+  `"inflow"`, `"load"`, and `"ncs"`.
+
+### Removed
+
+- **`ExternalSelectionMode` type** -- Sequential and random selection modes
+  for external scenarios have been removed. External scenarios are now
+  selected by scenario index, consistent with the other sampling schemes.
+- **`selection_mode` field** -- Removed from `scenario_source`; no
+  replacement.
+- **`seed` alias in `config.json`** -- The deprecated `seed` alias for
+  `tree_seed` has been removed. Use `training.tree_seed` directly.
+- **Flat `sampling_scheme` field** -- The old top-level `sampling_scheme`
+  string in `scenario_source` is gone. Configs using the flat format
+  receive a descriptive parse-time error directing them to the per-class
+  format.
+
+
+
 ## [0.3.2] - 2026-03-30
 
 ### Added

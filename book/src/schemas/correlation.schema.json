@@ -1,10 +1,10 @@
 {
   "$defs": {
     "RawCorrelationGroup": {
-      "description": "A named group of correlated entities with an associated correlation matrix.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and have\nall off-diagonal entries in [-1.0, 1.0]. The number of rows (and columns)\nmust equal the number of `entities`.",
+      "description": "A named group of correlated entities with an associated correlation matrix.\n\nAll entities in a group must share the same `entity_type` (same-type constraint, v0.4.0). Mixing entity types (e.g. inflow and load in the same group) produces a runtime validation error.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and have\nall off-diagonal entries in [-1.0, 1.0]. The number of rows (and columns)\nmust equal the number of `entities`.",
       "properties": {
         "entities": {
-          "description": "Ordered list of entity references. The matrix row/column order matches this list.",
+          "description": "Ordered list of entity references. The matrix row/column order matches this list. All entities must have the same `type` value; mixing entity types in one group produces a runtime validation error.",
           "items": {
             "$ref": "#/$defs/RawEntity"
           },
@@ -38,7 +38,7 @@
           "type": "integer"
         },
         "type": {
-          "description": "Entity type tag. Currently `\"inflow\"` for hydro inflow series.",
+          "description": "Entity type tag. Valid values: `\"inflow\"` (hydro inflow series), `\"load\"` (bus load), `\"ncs\"` (non-controllable source availability).",
           "type": "string"
         }
       },

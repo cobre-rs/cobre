@@ -35,7 +35,12 @@ my_study/
     load_seasonal_stats.parquet
     inflow_ar_coefficients.parquet    (when PAR model order > 0)
     inflow_history.parquet            (alternative to pre-computed stats)
-    non_controllable_stats.parquet   (stochastic NCS availability)
+    non_controllable_stats.parquet    (stochastic NCS availability)
+    external_inflow_scenarios.parquet (per-class external inflow)
+    external_load_scenarios.parquet   (per-class external load)
+    external_ncs_scenarios.parquet    (per-class external NCS)
+    correlation.json
+    noise_openings.parquet            (user-supplied opening tree, optional)
 ```
 
 The directory is optional. When it is absent, Cobre generates independent
@@ -251,18 +256,19 @@ parameters.
 Hydro plants that share a watershed tend to have correlated inflows: when
 the upstream basin receives heavy rainfall, all plants along the river
 benefit simultaneously. Ignoring this correlation can cause the optimizer to
-underestimate the risk of a system-wide dry spell.
+underestimate the risk of a system-wide dry spell. Correlation can also be
+configured between load buses and between NCS entities.
 
 ### Default behavior: independent noise
 
-When no correlation configuration is provided, Cobre treats each hydro
-plant's inflow as independent of all others. Each plant draws its own
-noise realization at each stage without any coupling. This is the correct
-setting for the `1dtoy` example, which has only one hydro plant.
+When no correlation configuration is provided, Cobre treats each entity's
+noise as independent of all others. Each entity draws its own noise
+realization at each stage without any coupling. This is the correct setting
+for the `1dtoy` example, which has only one hydro plant.
 
 ### Configuring spatial correlation
 
-For multi-plant systems, Cobre supports Cholesky-based spatial correlation.
+For multi-entity systems, Cobre supports Cholesky-based spatial correlation.
 A correlation model is specified in `correlation.json` in the case directory
 and defines named correlation groups, each with a symmetric positive-definite
 correlation matrix.
@@ -289,6 +295,24 @@ correlation matrix.
   }
 }
 ```
+
+### Valid entity types
+
+The `"type"` field in each entity reference must be one of:
+
+- `"inflow"` — hydro inflow series (entity `id` matches `id` in `hydros.json`)
+- `"load"` — stochastic load demand (entity `id` matches `id` in `buses.json`)
+- `"ncs"` — non-controllable source availability (entity `id` matches `id` in
+  `non_controllable_sources.json`)
+
+### Same-type enforcement
+
+All entities within a single correlation group must share the same entity
+type. Mixing entity types — for example, placing an `"inflow"` entity and a
+`"load"` entity in the same group — is not supported and produces a
+`StochasticError::InvalidCorrelation` error at case load time. If you want to
+correlate inflow with load, define separate groups with the same correlation
+structure for each class.
 
 Entities not listed in any group retain independent noise. Multiple profiles
 can be defined and scheduled to activate for specific stages (for example,
@@ -407,10 +431,10 @@ opening tree is bitwise identical across runs, regardless of the number of MPI
 ranks.
 
 **`scenario_source.seed` in `stages.json`** — the forward seed used when the
-sampling scheme is `out_of_sample`. This seed controls the fresh noise
-generated on-the-fly during each forward pass. It is completely independent of
-`tree_seed`: changing it does not affect the backward-pass tree, and changing
-`tree_seed` does not affect the out-of-sample forward pass.
+sampling scheme is `out_of_sample`, `historical`, or `external`. This seed
+controls the noise generated on-the-fly during each forward pass. It is
+completely independent of `tree_seed`: changing it does not affect the
+backward-pass tree, and changing `tree_seed` does not affect the forward pass.
 
 Both seeds are optional. When omitted, Cobre derives the seed from OS entropy
 at startup, producing a non-reproducible run. To make a run fully reproducible,
@@ -432,8 +456,10 @@ specify both seeds explicitly:
 {
   "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.12 },
   "scenario_source": {
-    "sampling_scheme": "out_of_sample",
-    "seed": 99
+    "seed": 99,
+    "inflow": { "scheme": "out_of_sample" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" }
   },
   "stages": [
     {
@@ -611,31 +637,40 @@ independently when building the opening tree.
 
 The sampling scheme controls where the forward-pass noise comes from. This
 is a different concept from the noise method: the noise method controls the
-algorithm used to generate noise vectors, while the sampling scheme controls
-whether the forward pass reuses the pre-generated opening tree or generates
-fresh noise on-the-fly.
+algorithm used to generate noise vectors for the opening tree, while the
+sampling scheme controls whether the forward pass reuses the pre-generated
+tree, generates fresh noise on-the-fly, replays historical observations, or
+reads from an externally supplied file.
 
-The sampling scheme is configured in `stages.json` under the top-level
-`scenario_source` object:
+Each entity class — inflow, load, and NCS — independently specifies its
+forward-pass noise source. The sampling scheme is configured in `stages.json`
+under the top-level `scenario_source` object using a per-class format:
 
 ```json
+// stages.json
 {
   "scenario_source": {
-    "sampling_scheme": "in_sample",
-    "seed": 42
+    "seed": 42,
+    "inflow": { "scheme": "in_sample" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" }
   }
 }
 ```
 
+All three class keys (`"inflow"`, `"load"`, `"ncs"`) default to
+`"in_sample"` when absent. The `"seed"` field is shared across all classes
+and is required when any class uses `"out_of_sample"`, `"historical"`, or
+`"external"`.
+
 ### InSample (default)
 
-With `"sampling_scheme": "in_sample"`, the forward pass reuses the
-pre-generated opening tree. At each `(iteration, scenario, stage)` triple,
-the solver selects one opening from the tree using a deterministic
-per-iteration hash derived from `tree_seed`. The backward pass and the forward
-pass see the same set of noise realizations: the same scenarios that were used
-to build cuts are the scenarios against which the forward trajectories are
-evaluated.
+With `"scheme": "in_sample"`, the forward pass reuses the pre-generated
+opening tree. At each `(iteration, scenario, stage)` triple, the solver
+selects one opening from the tree using a deterministic per-iteration hash
+derived from `tree_seed`. The backward pass and the forward pass see the
+same set of noise realizations: the same scenarios that were used to build
+cuts are the scenarios against which the forward trajectories are evaluated.
 
 InSample is the default when `scenario_source` is absent from `stages.json`.
 It is simple to configure, requires no additional seed, and is appropriate for
@@ -645,23 +680,24 @@ optimistic bias when the branching factor is small.
 
 ### OutOfSample
 
-With `"sampling_scheme": "out_of_sample"`, the forward pass generates fresh
-noise on-the-fly at each `(iteration, scenario, stage)` triple. The fresh
-noise is drawn from the same distribution as the opening tree but is
-independent of it — the forward pass never looks at the tree. Each call
-derives a unique noise vector from `scenario_source.seed`, the iteration
-index, the scenario index, and the stage ID. The per-stage `sampling_method`
-controls which algorithm (SAA, LHS, QMC-Sobol, or QMC-Halton) is used to
-generate the fresh noise.
+With `"scheme": "out_of_sample"`, the forward pass generates fresh noise
+on-the-fly at each `(iteration, scenario, stage)` triple. The fresh noise is
+drawn from the same distribution as the opening tree but is independent of it
+— the forward pass never looks at the tree. Each call derives a unique noise
+vector from `scenario_source.seed`, the iteration index, the scenario index,
+and the stage ID. The per-stage `sampling_method` controls which algorithm
+(SAA, LHS, QMC-Sobol, or QMC-Halton) is used to generate the fresh noise.
 
-OutOfSample requires `scenario_source.seed` to be set. If it is absent,
-Cobre returns an error. Configure it as follows:
+OutOfSample requires `scenario_source.seed` to be set. Configure it as follows:
 
 ```json
+// stages.json
 {
   "scenario_source": {
-    "sampling_scheme": "out_of_sample",
-    "seed": 99
+    "seed": 99,
+    "inflow": { "scheme": "out_of_sample" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" }
   }
 }
 ```
@@ -673,18 +709,166 @@ policy has effectively "seen" all the noise realizations during training.
 OutOfSample is especially useful during simulation, where you want an unbiased
 estimate of the policy's expected cost on new scenarios.
 
-### Historical and External (Not Implemented)
+### Historical
 
-The `"historical"` and `"external"` sampling schemes are reserved for future
-use. Configuring either of these will cause Cobre to return an error. They
-are documented here for completeness:
+With `"scheme": "historical"`, the forward pass replays standardized noise
+derived from historical inflow observations stored in `inflow_history.parquet`.
+This allows you to evaluate the policy against actual historical sequences —
+what would the policy have done during the drought of 1953 or the wet year of
+1974?
 
-- **Historical** — replay noise from a historical observation file, allowing
-  you to evaluate the policy against the actual historical sequence.
-- **External** — read scenario realizations from a user-supplied file,
-  allowing integration with external scenario generation tools.
+Historical sampling applies only to the inflow class. The load and NCS classes
+configure their own schemes independently and are unaffected by the inflow
+class using Historical.
 
-Both schemes will be implemented in a future release.
+#### Window discovery
+
+A "window" is a starting year `y` for which every hydro plant in the study has
+a complete sequence of historical observations covering the entire study period
+(plus the PAR model lag order of pre-study seasons needed to seed the AR
+state). Cobre discovers valid windows by scanning `inflow_history.parquet` and
+checking completeness for every candidate starting year.
+
+When `historical_years` is absent from `scenario_source`, Cobre auto-discovers
+all valid windows from the history file. If the history file covers years 1940
+through 2010 and the study spans 12 monthly stages, then every year for which
+the history is complete (accounting for the required pre-window lag seasons)
+becomes a valid window.
+
+#### Configuring `historical_years`
+
+To restrict the pool of candidate windows, set `historical_years` in
+`scenario_source`. Two forms are supported:
+
+**Explicit list** — specify the exact starting years to use:
+
+```json
+// stages.json
+{
+  "scenario_source": {
+    "seed": 7,
+    "inflow": { "scheme": "historical" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" },
+    "historical_years": [1940, 1953]
+  }
+}
+```
+
+**Inclusive range** — specify a contiguous span of starting years:
+
+```json
+// stages.json
+{
+  "scenario_source": {
+    "seed": 7,
+    "inflow": { "scheme": "historical" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" },
+    "historical_years": { "from": 1940, "to": 2010 }
+  }
+}
+```
+
+In both forms, Cobre validates each candidate year against the history file
+and silently discards years for which the data is incomplete. If no valid
+windows remain after filtering, Cobre returns a `StochasticError::InsufficientData`
+error. When the number of valid windows is smaller than `forward_passes`, a
+diagnostic warning is emitted and windows are repeated across forward passes.
+
+#### Lag seeding (`apply_initial_state`)
+
+For PAR models with order > 0, the first stage of each forward pass requires
+historical inflow values from the stages immediately before the window's start
+year — the "pre-study" lags. Historical sampling uses the raw historical
+observations at those pre-window stages directly as the PAR state vector. This
+means the AR dynamics of the first forward stage are initialized from the real
+historical record rather than from a generated value, preserving the continuity
+invariant between pre-window history and the replayed scenario.
+
+#### How the HistoricalScenarioLibrary is used
+
+At case load time, Cobre constructs a `HistoricalScenarioLibrary` by inverting
+the PAR(p) model for every valid (window, stage) pair: it computes the
+standardized noise value `η = (obs − deterministic_base − Σ ψ[ℓ]·lag[ℓ]) / σ`
+using the raw historical inflow as lags. The resulting eta values are stored in
+a flat buffer indexed by `(window, stage, hydro)`. During the forward pass, the
+`ClassSampler::Historical` variant selects a window deterministically from the
+seed and iteration/scenario indices, then retrieves the pre-computed eta slice
+for each stage without any per-step recomputation.
+
+### External
+
+With `"scheme": "external"`, the forward pass reads pre-generated scenario
+realizations from per-class Parquet files in the `scenarios/` directory. This
+enables integration with external scenario generation tools — for example, a
+climate model, a market forecast engine, or a bespoke sampling framework — and
+injects their output directly into the Cobre forward pass.
+
+Each entity class that uses External sampling requires its own file. The three
+files and their schemas are:
+
+#### `external_inflow_scenarios.parquet`
+
+| Column        | Type   | Nullable | Description                                                  |
+| ------------- | ------ | -------- | ------------------------------------------------------------ |
+| `stage_id`    | INT32  | No       | Stage identifier (matches `id` in `stages.json`)             |
+| `scenario_id` | INT32  | No       | Zero-based scenario index (0 to n_scenarios − 1)             |
+| `hydro_id`    | INT32  | No       | Hydro plant ID (matches `id` in `hydros.json`)               |
+| `value_m3s`   | DOUBLE | No       | Inflow realization in m³/s for this (stage, scenario, hydro) |
+
+#### `external_load_scenarios.parquet`
+
+| Column        | Type   | Nullable | Description                                            |
+| ------------- | ------ | -------- | ------------------------------------------------------ |
+| `stage_id`    | INT32  | No       | Stage identifier (matches `id` in `stages.json`)       |
+| `scenario_id` | INT32  | No       | Zero-based scenario index (0 to n_scenarios − 1)       |
+| `bus_id`      | INT32  | No       | Bus ID (matches `id` in `buses.json`)                  |
+| `value_mw`    | DOUBLE | No       | Load realization in MW for this (stage, scenario, bus) |
+
+#### `external_ncs_scenarios.parquet`
+
+| Column        | Type   | Nullable | Description                                                     |
+| ------------- | ------ | -------- | --------------------------------------------------------------- |
+| `stage_id`    | INT32  | No       | Stage identifier (matches `id` in `stages.json`)                |
+| `scenario_id` | INT32  | No       | Zero-based scenario index (0 to n_scenarios − 1)                |
+| `ncs_id`      | INT32  | No       | NCS entity ID (matches `id` in `non_controllable_sources.json`) |
+| `value`       | DOUBLE | No       | Availability realization for this (stage, scenario, NCS)        |
+
+#### External standardization
+
+Cobre does not use the raw values from external files directly. Before the
+forward pass can use them, each value is converted to the same standardized
+noise space (eta) that the PAR model and the opening tree use internally:
+
+- **Inflow** — full PAR(p) inversion via `solve_par_noise`: the observed
+  value is converted to `η = (obs − deterministic_base − Σ ψ[ℓ]·lag[ℓ]) / σ`
+  using the fitted PAR model coefficients and seasonal statistics.
+- **Load** — simple z-score normalization: `η = (value − mean) / std` using
+  the `mean_mw` and `std_mw` from `load_seasonal_stats.parquet`.
+- **NCS** — simple z-score normalization: `η = (value − mean) / std` using
+  the `mean` and `std` from `non_controllable_stats.parquet`.
+
+The resulting eta values are stored in an `ExternalScenarioLibrary` — one
+per class — and the `ClassSampler::External` variant retrieves them by
+`(stage, scenario)` index during the forward pass.
+
+#### Configuring External sampling
+
+```json
+// stages.json
+{
+  "scenario_source": {
+    "seed": 1,
+    "inflow": { "scheme": "external" },
+    "load": { "scheme": "external" },
+    "ncs": { "scheme": "in_sample" }
+  }
+}
+```
+
+Each class is configured independently. In the example above, inflow and load
+use external files while NCS uses the in-sample opening tree.
 
 ---
 

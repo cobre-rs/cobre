@@ -5,7 +5,7 @@
     "annual_discount_rate": 0.12
   },
   "scenario_source": {
-    "tree_seed": 42,
+    "seed": 42,
     "inflow": { "scheme": "in_sample" },
     "load": { "scheme": "in_sample" },
     "ncs": { "scheme": "in_sample" }

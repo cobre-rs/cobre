@@ -19,11 +19,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "id",
-        "name",
-        "hours"
-      ],
+      "required": ["id", "name", "hours"],
       "type": "object"
     },
     "RawCVarParams": {
@@ -40,11 +36,46 @@
           "type": "number"
         }
       },
-      "required": [
-        "alpha",
-        "lambda"
-      ],
+      "required": ["alpha", "lambda"],
       "type": "object"
+    },
+    "RawClassConfig": {
+      "description": "Per-class scenario configuration. Each entity class (inflow, load, NCS) can have its own sampling scheme.",
+      "properties": {
+        "scheme": {
+          "description": "Sampling scheme: `\"in_sample\"`, `\"out_of_sample\"`, `\"external\"`, or `\"historical\"`.",
+          "type": "string"
+        }
+      },
+      "required": ["scheme"],
+      "type": "object"
+    },
+    "RawHistoricalYears": {
+      "description": "Historical year pool for Historical inflow sampling. Supports two JSON representations: an explicit list of year integers, or an inclusive range object.",
+      "oneOf": [
+        {
+          "description": "Explicit list of year integers.",
+          "items": { "format": "int32", "type": "integer" },
+          "type": "array"
+        },
+        {
+          "description": "Inclusive range shorthand: `{\"from\": 1940, \"to\": 2010}`.",
+          "properties": {
+            "from": {
+              "description": "First year (inclusive).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "to": {
+              "description": "Last year (inclusive).",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": ["from", "to"],
+          "type": "object"
+        }
+      ]
     },
     "RawPolicyGraph": {
       "description": "Intermediate type for the `policy_graph` sub-object.",
@@ -66,10 +97,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "type",
-        "annual_discount_rate"
-      ],
+      "required": ["type", "annual_discount_rate"],
       "type": "object"
     },
     "RawPreStudyStage": {
@@ -89,21 +117,14 @@
           "description": "Optional season index.",
           "format": "uint",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "start_date": {
           "description": "Start date as ISO 8601 string.",
           "type": "string"
         }
       },
-      "required": [
-        "id",
-        "start_date",
-        "end_date"
-      ],
+      "required": ["id", "start_date", "end_date"],
       "type": "object"
     },
     "RawRiskMeasure": {
@@ -120,42 +141,45 @@
               "description": "Inner `CVaR` parameters object."
             }
           },
-          "required": [
-            "cvar"
-          ],
+          "required": ["cvar"],
           "type": "object"
         }
       ],
       "description": "Intermediate untagged union for the `risk_measure` field.\n\nThe JSON value can be:\n- A string: `\"expectation\"`\n- An object: `{\"cvar\": {\"alpha\": 0.95, \"lambda\": 0.5}}`\n\n`#[serde(untagged)]` tries each variant in declaration order.\nThe `Expectation` string variant must come first so it is tried before\nthe `CVaR` object variant.\n\nThe inner string of `Expectation` is not read after deserialization;\npresence of the variant alone signals `StageRiskConfig::Expectation`."
     },
     "RawScenarioSource": {
-      "description": "Intermediate type for the `scenario_source` sub-object.",
+      "description": "Per-class scenario source configuration (v0.4.0). Each entity class can independently use in_sample, out_of_sample, external, or historical sampling. The old flat `sampling_scheme` field is no longer accepted; its presence triggers a backward-incompatibility error at load time.",
       "properties": {
-        "sampling_scheme": {
-          "description": "Noise source: `\"in_sample\"`, `\"external\"`, or `\"historical\"`.",
-          "type": "string"
-        },
         "seed": {
           "default": null,
-          "description": "Optional random seed.",
+          "description": "Optional random seed for forward-pass noise generation (out-of-sample scheme).",
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
-        "selection_mode": {
+        "historical_years": {
+          "anyOf": [
+            { "$ref": "#/$defs/RawHistoricalYears" },
+            { "type": "null" }
+          ],
           "default": null,
-          "description": "Selection mode for external scenarios: `\"random\"` or `\"sequential\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Historical year pool for Historical inflow sampling. Absent means auto-discover all valid windows."
+        },
+        "inflow": {
+          "anyOf": [{ "$ref": "#/$defs/RawClassConfig" }, { "type": "null" }],
+          "default": null,
+          "description": "Inflow class config. Absent defaults to in_sample."
+        },
+        "load": {
+          "anyOf": [{ "$ref": "#/$defs/RawClassConfig" }, { "type": "null" }],
+          "default": null,
+          "description": "Load class config. Absent defaults to in_sample."
+        },
+        "ncs": {
+          "anyOf": [{ "$ref": "#/$defs/RawClassConfig" }, { "type": "null" }],
+          "default": null,
+          "description": "NCS class config. Absent defaults to in_sample."
         }
       },
-      "required": [
-        "sampling_scheme"
-      ],
       "type": "object"
     },
     "RawSeasonDefinitions": {
@@ -173,10 +197,7 @@
           "type": "array"
         }
       },
-      "required": [
-        "cycle_type",
-        "seasons"
-      ],
+      "required": ["cycle_type", "seasons"],
       "type": "object"
     },
     "RawSeasonEntry": {
@@ -187,20 +208,14 @@
           "description": "Calendar day where the season ends (1-31). Only for `custom` cycle.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "day_start": {
           "default": null,
           "description": "Calendar day where the season starts (1-31). Only for `custom` cycle.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "id": {
           "description": "Season index (0-based).",
@@ -217,10 +232,7 @@
           "description": "Calendar month where the season ends (1-12). Only for `custom` cycle.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "month_start": {
           "description": "Calendar month where the season starts (1-12).",
@@ -229,11 +241,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "id",
-        "label",
-        "month_start"
-      ],
+      "required": ["id", "label", "month_start"],
       "type": "object"
     },
     "RawStage": {
@@ -280,10 +288,7 @@
           "description": "Optional season index.",
           "format": "uint",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "start_date": {
           "description": "Start date as ISO 8601 string.",
@@ -301,13 +306,7 @@
           "description": "State variable flags."
         }
       },
-      "required": [
-        "id",
-        "start_date",
-        "end_date",
-        "blocks",
-        "num_scenarios"
-      ],
+      "required": ["id", "start_date", "end_date", "blocks", "num_scenarios"],
       "type": "object"
     },
     "RawStateVariables": {
@@ -333,10 +332,7 @@
           "default": null,
           "description": "Optional per-transition discount rate override.",
           "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "probability": {
           "description": "Transition probability.",
@@ -354,11 +350,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "source_id",
-        "target_id",
-        "probability"
-      ],
+      "required": ["source_id", "target_id", "probability"],
       "type": "object"
     }
   },
@@ -367,10 +359,7 @@
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "policy_graph": {
       "$ref": "#/$defs/RawPolicyGraph",
@@ -413,10 +402,7 @@
       "type": "array"
     }
   },
-  "required": [
-    "policy_graph",
-    "stages"
-  ],
+  "required": ["policy_graph", "stages"],
   "title": "RawStagesFile",
   "type": "object"
 }

@@ -20,10 +20,10 @@ with all foreign keys resolved and all domain rules verified.
 | `config`             | `Config` struct and `parse_config` — reads `config.json`                                                                            |
 | `system`             | Entity parsers for buses, lines, hydros, thermals, and stub types                                                                   |
 | `extensions`         | Hydro production model extensions — FPHA hyperplane loading, production model configuration parsing, and hydro geometry parsing     |
-| `scenarios`          | Inflow and load statistical model loading, assembly, and history-based estimation                                                   |
+| `scenarios`          | Inflow and load statistical model loading, assembly, history-based estimation, and per-class external scenario loading (`external_inflow_scenarios.parquet`, `external_load_scenarios.parquet`, `external_ncs_scenarios.parquet`) |
 | `constraints`        | Stage-varying bound and penalty override loading from Parquet                                                                       |
 | `penalties`          | Global penalty defaults parser (`penalties.json`)                                                                                   |
-| `stages`             | Stage sequence and policy graph loading (`stages.json`)                                                                             |
+| `stages`             | Stage sequence and policy graph loading (`stages.json`), per-class scenario source parsing (`ScenarioSource`), and backward-incompatibility detection for removed fields           |
 | `initial_conditions` | Reservoir initial storage loading                                                                                                   |
 | `validation`         | Five-layer validation pipeline and `ValidationContext`                                                                              |
 | `resolution`         | Three-tier penalty and bound resolution into O(1) lookup tables                                                                     |
@@ -132,7 +132,9 @@ my_case/
 │   ├── load_seasonal_stats.parquet      # Load model seasonal statistics (optional)
 │   ├── load_factors.json                # Load scaling factors (optional)
 │   ├── correlation.json                 # Cross-series correlation model (optional)
-│   └── external_scenarios.parquet       # Pre-generated external scenarios (optional)
+│   ├── external_inflow_scenarios.parquet    # External inflow scenarios (optional)
+│   ├── external_load_scenarios.parquet      # External load scenarios (optional)
+│   └── external_ncs_scenarios.parquet       # External NCS scenarios (optional)
 └── constraints/
     ├── hydro_bounds.parquet             # Stage-varying hydro bounds (optional)
     ├── thermal_bounds.parquet           # Stage-varying thermal bounds (optional)

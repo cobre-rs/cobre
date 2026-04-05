@@ -465,9 +465,9 @@
           "minimum": 0,
           "type": ["integer", "null"]
         },
-        "seed": {
+        "tree_seed": {
           "default": null,
-          "description": "Random seed for reproducible scenario generation.",
+          "description": "Random seed for the opening scenario tree (reproducible training). When null, the seed is derived from OS entropy at startup.",
           "format": "int64",
           "type": ["integer", "null"]
         },

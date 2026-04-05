@@ -24,7 +24,7 @@ conditions, generic constraints, and pre-resolved penalty/bound tables.
 | `initial_conditions` | Reservoir storage levels at study start                      |
 | `penalty`            | Global defaults, entity overrides, and resolution functions  |
 | `resolved`           | Pre-resolved penalty/bound tables with O(1) lookup           |
-| `scenario`           | PAR model parameters, load statistics, and correlation model |
+| `scenario`           | PAR model parameters, load and NCS statistics, correlation model, sampling scheme enum (`SamplingScheme` with InSample, OutOfSample, Historical, External variants), per-class scenario source config (`ScenarioSource`), historical years pool (`HistoricalYears`), and external scenario row types (`ExternalLoadRow`, `ExternalNcsRow`) |
 | `system`             | `System` container and `SystemBuilder`                       |
 | `temporal`           | Stages, blocks, seasons, and the policy graph                |
 | `topology`           | `CascadeTopology` and `NetworkTopology` derived structures   |

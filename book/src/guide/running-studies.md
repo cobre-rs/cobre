@@ -29,9 +29,17 @@ All eight files are required. Before running, validate the input:
 cobre validate /path/to/my_study
 ```
 
-Successful validation prints entity counts and exits with code 0. Fix any reported
-errors before proceeding. See [Case Directory Format](../reference/case-format.md)
-for the full schema.
+Successful validation prints entity counts and exits with code 0:
+
+![Validation Demo](../images/validation.gif)
+
+When validation detects errors — such as missing required fields or constraint
+violations — it reports them with severity labels and exits with code 1:
+
+![Validation Error Demo](../images/validation-error.gif)
+
+Fix any reported errors before proceeding. See
+[Case Directory Format](../reference/case-format.md) for the full schema.
 
 ---
 
@@ -123,6 +131,21 @@ To evaluate a previously trained policy without re-training:
 Cobre loads the policy cuts, skips training entirely, and runs simulation.
 See [Policy Management](./policy-management.md) for details on warm-start
 and resume modes.
+
+### Multi-threading
+
+Use `--threads` to accelerate training and simulation with intra-rank
+parallelism:
+
+```bash
+cobre run /path/to/my_study --threads 4
+```
+
+![Multi-threading Speedup](../images/multithreading.gif)
+
+The thread pool is used for forward-pass batching and simulation scenario
+evaluation. Speedup depends on the number of forward passes and simulation
+scenarios configured.
 
 ### Quiet Mode for Scripts
 

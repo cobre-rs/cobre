@@ -119,6 +119,7 @@ sections are optional and fall back to documented defaults when absent.
 | `$schema`                | string | `null`       | JSON Schema URI for editor validation (ignored during processing) |
 | `modeling`               | object | `{}`         | Inflow non-negativity treatment                                   |
 | `training`               | object | **required** | Iteration count, stopping rules, cut selection                    |
+| `estimation`             | object | `{}`         | PAR(p) model estimation settings (max order, selection criterion) |
 | `upper_bound_evaluation` | object | `{}`         | Inner approximation upper-bound settings                          |
 | `policy`                 | object | fresh mode   | Policy directory path and warm-start mode                         |
 | `simulation`             | object | disabled     | Post-training simulation settings                                 |
@@ -139,7 +140,7 @@ sections are optional and fall back to documented defaults when absent.
 | `training.stopping_rules`  | array           | **required** | At least one stopping rule entry; must include an `iteration_limit` rule                        |
 | `training.stopping_mode`   | string          | `"any"`      | How multiple rules combine: `"any"` (stop when any triggers) or `"all"` (stop when all trigger) |
 | `training.enabled`         | boolean         | `true`       | When `false`, skip training and proceed directly to simulation                                  |
-| `training.seed`            | integer or null | `null`       | Random seed for reproducible noise generation (see [Seed resolution](#seed-resolution))         |
+| `training.tree_seed`       | integer or null | `null`       | Random seed for reproducible noise generation (see [Seed resolution](#seed-resolution))         |
 | `training.cut_formulation` | string or null  | `null`       | Cut type: `"single"` or `"multi"`                                                               |
 | `training.scenario_source` | object or null  | `null`       | Per-class sampling scheme for the training forward pass (see below)                             |
 
@@ -241,7 +242,7 @@ Each entry has a `"type"` discriminator. Valid types:
 | ----------------- | -------------- | ------- | ------------------------------------------------------------------ |
 | `training`        | boolean        | `true`  | Export training summary metrics                                    |
 | `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)                              |
-| `states`          | boolean        | `true`  | Export visited states                                              |
+| `states`          | boolean        | `false` | Export visited states                                              |
 | `vertices`        | boolean        | `true`  | Export inner approximation vertices                                |
 | `simulation`      | boolean        | `true`  | Export simulation results                                          |
 | `forward_detail`  | boolean        | `false` | Export per-scenario forward-pass detail                            |
@@ -325,7 +326,7 @@ have `depth_mw: null` (unbounded).
 ### `stages.json`
 
 Defines the temporal structure of the study: stage sequence, block decomposition,
-policy graph horizon type, and scenario source configuration.
+and policy graph horizon type.
 
 **Top-level fields:**
 

@@ -446,9 +446,11 @@ seed controls the noise generated on-the-fly during each forward pass. It is
 completely independent of `tree_seed`: changing it does not affect the
 backward-pass tree, and changing `tree_seed` does not affect the forward pass.
 
-Both seeds are optional. When omitted, Cobre derives the seed from OS entropy
-at startup, producing a non-reproducible run. To make a run fully reproducible,
-specify both seeds explicitly:
+`tree_seed` is optional: when omitted, Cobre uses a default seed of 42
+(deterministic but arbitrary). `scenario_source.seed` is required when any
+class uses `out_of_sample`, `historical`, or `external`; it is unused (and
+may be omitted) when all classes use `in_sample`. To make a run fully
+reproducible, specify both seeds explicitly:
 
 ```json
 // config.json
@@ -467,10 +469,12 @@ specify both seeds explicitly:
 }
 ```
 
-When `tree_seed` is set to `null` in `config.json`, Cobre derives the base
-seed from OS entropy at startup, producing a different opening tree each run.
-The same applies to `training.scenario_source.seed`: a `null` value means the
-forward-pass noise is non-reproducible even if `tree_seed` is fixed.
+When `tree_seed` is set to `null` in `config.json`, Cobre uses a default
+seed of 42, producing a deterministic opening tree. Set `tree_seed`
+explicitly to make the choice intentional. For `scenario_source.seed`, a
+`null` value is only valid when all classes use `in_sample` (where no
+forward-pass noise is generated); omitting it with any other scheme
+triggers a validation error.
 
 ---
 

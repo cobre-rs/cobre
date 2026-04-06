@@ -110,17 +110,19 @@ of the generation shortfall.
 | `depth_mw` | number or null | MW of deficit covered by this segment. `null` for the final unbounded segment.                                   |
 | `cost`     | number         | Penalty cost per MWh of deficit in this segment [$/MWh]. Must be positive. Segments should be in ascending cost. |
 
-### Three-Tier Penalty Resolution
+### Two-Tier Penalty Resolution
 
-Deficit segment values are resolved from the most specific to the most general source:
+Deficit segment costs are resolved from the most specific to the most general source:
 
-1. **Stage-level override** — penalty files for individual stages, when present
-2. **Bus-level override** — the `deficit_segments` array inside the bus's JSON object
-3. **Global default** — the `bus.deficit_segments` section of `penalties.json`
+1. **Bus-level override** — the `deficit_segments` array inside the bus's JSON object
+2. **Global default** — the `bus.deficit_segments` section of `penalties.json`
 
 When `deficit_segments` is omitted from a bus definition, Cobre uses the global
 default from `penalties.json`. This makes it easy to set a system-wide VoLL and
 then override it for specific buses with different reliability requirements.
+
+> **Note:** Deficit segment costs are not stage-varying. Only `excess_cost` supports
+> per-stage overrides via penalty override files.
 
 ### Choosing Deficit Costs
 

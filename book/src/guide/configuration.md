@@ -33,11 +33,11 @@ Controls the SDDP training phase.
 
 ### Optional Fields
 
-| Field           | Type               | Default | Description                                                                                                                                                                             |
-| --------------- | ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                                                                     |
-| `tree_seed`     | integer            | `null`  | Random seed for the opening scenario tree. When `null`, derived from OS entropy (non-reproducible). See [Stochastic Modeling](./stochastic-modeling.md) for the dual-seed architecture. |
-| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously.                                         |
+| Field           | Type               | Default | Description                                                                                                                                                                                             |
+| --------------- | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                                                                                     |
+| `tree_seed`     | integer            | `null`  | Random seed for the opening scenario tree. When `null`, a default seed of 42 is used (deterministic but arbitrary). See [Stochastic Modeling](./stochastic-modeling.md) for the dual-seed architecture. |
+| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously.                                                         |
 
 For the per-class `scenario_source` configuration, see the
 [`scenario_source` sub-section](#scenario_source) below and
@@ -450,7 +450,7 @@ for advanced use cases and may change between releases:
 | `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)           |
 | `training.forward_pass.pass_type` | Forward pass strategy selection                             |
 | `training.solver`                 | LP solver retry budget and attempt limits                   |
-| `simulation.sampling_scheme`      | Simulation scenario sampling strategy                       |
+| `simulation.scenario_source`      | Simulation per-class scenario sampling configuration        |
 | `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing |
 
 All fields have defaults and can be omitted. For the complete list of fields

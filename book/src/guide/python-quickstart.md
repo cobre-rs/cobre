@@ -19,13 +19,29 @@ result = cobre.run.run("path/to/case")
 ```
 
 The `cobre.run.run()` function loads the case, trains an SDDP policy, optionally
-runs simulation, and writes output files. It returns a dictionary with:
+runs simulation, and writes output files. It returns a dictionary with the
+following keys:
+
+| Key             | Type              | Description                                     |
+| --------------- | ----------------- | ----------------------------------------------- |
+| `converged`     | `bool`            | Whether training converged                      |
+| `iterations`    | `int`             | Number of training iterations completed         |
+| `lower_bound`   | `float`           | Final lower bound                               |
+| `upper_bound`   | `float` or `None` | Final upper bound (None if no simulation)       |
+| `gap_percent`   | `float` or `None` | Optimality gap percentage (None if unavailable) |
+| `total_time_ms` | `int`             | Total wall-clock time in milliseconds           |
+| `output_dir`    | `str`             | Path to the output directory                    |
+| `simulation`    | `dict` or `None`  | Simulation summary (if enabled)                 |
+| `stochastic`    | `dict` or `None`  | Stochastic preprocessing summary                |
+| `hydro_models`  | `dict` or `None`  | Hydro model summary                             |
+| `provenance`    | `dict`            | Build version and environment metadata          |
 
 ```python
 print(f"Converged: {result['converged']}")
 print(f"Iterations: {result['iterations']}")
 print(f"Lower bound: {result['lower_bound']:.2f}")
-print(f"Gap: {result['gap_percent']:.2f}%")
+if result['gap_percent'] is not None:
+    print(f"Gap: {result['gap_percent']:.2f}%")
 print(f"Output dir: {result['output_dir']}")
 ```
 

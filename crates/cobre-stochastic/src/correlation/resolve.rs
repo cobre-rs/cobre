@@ -1,10 +1,11 @@
-//! Cholesky decomposition and runtime application of spatial correlation.
+//! Spectral decomposition and runtime application of spatial correlation.
 //!
-//! Decomposes each correlation profile's groups into lower-triangular Cholesky
-//! factors and builds a stage-to-profile schedule for runtime lookup.
-//! At runtime, [`DecomposedCorrelation::apply_correlation`] selects the active
-//! profile for the given stage and transforms independent standard-normal noise
-//! into spatially correlated noise using the Cholesky factor.
+//! Decomposes each correlation profile's groups into symmetric matrix square
+//! root factors (spectral factors) and builds a stage-to-profile schedule for
+//! runtime lookup. At runtime, [`DecomposedCorrelation::apply_correlation`]
+//! selects the active profile for the given stage and transforms independent
+//! standard-normal noise into spatially correlated noise using the spectral
+//! factor.
 //!
 //! Entity position pre-computation via [`DecomposedCorrelation::resolve_positions`]
 //! eliminates the per-call O(n·m) linear scan, replacing it with O(1) indexed
@@ -12,28 +13,27 @@
 //! heap-allocated fallback for larger groups.
 //!
 //! Returns [`StochasticError::InvalidCorrelation`] when validation fails
-//! (mixed entity types, non-square matrix, duplicate entity IDs across groups).
-//! Returns [`StochasticError::CholeskyDecompositionFailed`] for non-positive-definite
-//! matrices.
+//! (mixed entity types, non-square matrix, non-symmetric matrix, or duplicate
+//! entity IDs across groups). Non-positive-definite matrices are handled
+//! gracefully by clipping negative eigenvalues to 0.0 (nearest PSD approximation).
 //!
 //! [`StochasticError::InvalidCorrelation`]: crate::StochasticError::InvalidCorrelation
-//! [`StochasticError::CholeskyDecompositionFailed`]: crate::StochasticError::CholeskyDecompositionFailed
 
 use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{CorrelationModel, EntityId};
 
-use crate::{StochasticError, correlation::cholesky::CholeskyFactor};
+use crate::{StochasticError, correlation::spectral::SpectralFactor};
 
 /// Maximum group dimension for stack-allocated buffers in `apply_correlation`.
 /// Groups with more entities than this threshold use heap-allocated buffers.
 const MAX_STACK_DIM: usize = 64;
 
-/// A single correlation group's Cholesky factor with entity ID mapping.
+/// A single correlation group's spectral factor with entity ID mapping.
 #[derive(Debug)]
 pub struct GroupFactor {
-    /// The Cholesky factor for this group.
-    pub factor: CholeskyFactor,
+    /// The spectral factor for this group.
+    pub factor: SpectralFactor,
     /// Entity IDs in this group, in the order matching the factor rows/columns.
     pub entity_ids: Vec<EntityId>,
     /// Entity type shared by all entities in this group (e.g., `"inflow"`, `"load"`,
@@ -54,10 +54,10 @@ pub struct GroupFactor {
 ///
 /// Built once during initialization. At runtime, the noise generator looks up
 /// the active profile for the current stage via `profile_for_stage()` and
-/// applies the Cholesky transform using the cached factor.
+/// applies the spectral transform using the cached factor.
 #[derive(Debug)]
 pub struct DecomposedCorrelation {
-    /// Cholesky factors keyed by profile name.
+    /// Spectral factors keyed by profile name.
     /// `BTreeMap` preserves deterministic iteration order.
     factors: BTreeMap<String, Vec<GroupFactor>>,
 
@@ -90,7 +90,7 @@ impl DecomposedCorrelation {
 
     /// Builds a `DecomposedCorrelation` from a [`CorrelationModel`].
     ///
-    /// Decomposes each profile's correlation groups into Cholesky factors and
+    /// Decomposes each profile's correlation groups into spectral factors and
     /// builds the stage-to-profile schedule. Validates that a `"default"`
     /// profile exists, or that exactly one profile exists (which then serves
     /// as the default).
@@ -102,8 +102,9 @@ impl DecomposedCorrelation {
     /// - [`StochasticError::InvalidCorrelation`] if the model has no profiles.
     /// - [`StochasticError::InvalidCorrelation`] if a correlation matrix is not
     ///   square or not symmetric.
-    /// - [`StochasticError::CholeskyDecompositionFailed`] if a matrix is not
-    ///   positive-definite.
+    ///
+    /// Non-positive-definite matrices do not cause an error; negative eigenvalues
+    /// are clipped to 0.0 to produce the nearest positive-semidefinite approximation.
     ///
     /// # Examples
     ///
@@ -125,7 +126,7 @@ impl DecomposedCorrelation {
     ///         matrix: vec![vec![1.0, 0.8], vec![0.8, 1.0]],
     ///     }],
     /// });
-    /// let model = CorrelationModel { method: "cholesky".to_string(), profiles, schedule: vec![] };
+    /// let model = CorrelationModel { method: "spectral".to_string(), profiles, schedule: vec![] };
     /// let dc = DecomposedCorrelation::build(&model).unwrap();
     /// ```
     pub fn build(model: &CorrelationModel) -> Result<Self, StochasticError> {
@@ -199,16 +200,15 @@ impl DecomposedCorrelation {
 
             let mut group_factors: Vec<GroupFactor> = Vec::with_capacity(profile.groups.len());
             for group in &profile.groups {
-                let factor =
-                    CholeskyFactor::decompose_or_nearest(&group.matrix).map_err(|e| match e {
-                        StochasticError::InvalidCorrelation { reason, .. } => {
-                            StochasticError::InvalidCorrelation {
-                                profile_name: profile_name.clone(),
-                                reason,
-                            }
+                let factor = SpectralFactor::decompose(&group.matrix).map_err(|e| match e {
+                    StochasticError::InvalidCorrelation { reason, .. } => {
+                        StochasticError::InvalidCorrelation {
+                            profile_name: profile_name.clone(),
+                            reason,
                         }
-                        other => other,
-                    })?;
+                    }
+                    other => other,
+                })?;
 
                 let entity_ids: Vec<EntityId> = group.entities.iter().map(|e| e.id).collect();
                 let entity_type = group
@@ -329,7 +329,7 @@ impl DecomposedCorrelation {
     ///
     /// 1. Finds the positions of the group's entity IDs within `entity_order`.
     /// 2. Gathers the independent noise values for those positions.
-    /// 3. Applies the group's Cholesky factor in-place.
+    /// 3. Applies the group's spectral factor in-place.
     /// 4. Scatters the correlated values back to the matching positions.
     ///
     /// Entities that do not appear in any correlation group retain their
@@ -415,7 +415,7 @@ impl DecomposedCorrelation {
     }
 
     /// Fast path: positions are pre-computed. Uses stack buffers for groups ≤ 64.
-    fn apply_group_precomputed(factor: &CholeskyFactor, positions: &[usize], noise: &mut [f64]) {
+    fn apply_group_precomputed(factor: &SpectralFactor, positions: &[usize], noise: &mut [f64]) {
         let n = positions.len();
         if n == 0 || n != factor.dim() {
             return;
@@ -447,7 +447,7 @@ impl DecomposedCorrelation {
     /// (positions, gathered noise, correlated noise) are stack-allocated to
     /// avoid heap allocation on this hot path.
     fn apply_group_scan(
-        factor: &CholeskyFactor,
+        factor: &SpectralFactor,
         entity_ids: &[EntityId],
         noise: &mut [f64],
         entity_order: &[EntityId],
@@ -585,7 +585,7 @@ mod tests {
         let mut profiles = BTreeMap::new();
         profiles.insert(profile_name.to_string(), CorrelationProfile { groups });
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn build_fails_with_no_profiles() {
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: vec![],
         };
@@ -641,7 +641,7 @@ mod tests {
             },
         );
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -669,7 +669,7 @@ mod tests {
             },
         );
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![CorrelationScheduleEntry {
                 stage_id: 0,
@@ -703,8 +703,12 @@ mod tests {
 
     #[test]
     fn apply_correlation_with_known_factor() {
-        // Use [[1, 0.8],[0.8, 1]] => L[1][0]=0.8, L[1][1]=0.6.
-        // z=[1.0, 0.0] => eta=[1.0, 0.8].
+        // Use [[1, 0.8],[0.8, 1]]. Eigenvalues: lambda_1=1.8, lambda_2=0.2.
+        // Eigenvectors: v1=[1,1]/sqrt(2), v2=[1,-1]/sqrt(2).
+        // D = V * diag(sqrt(1.8), sqrt(0.2)) * V^T:
+        //   D[0][0] = D[1][1] = (sqrt(1.8) + sqrt(0.2)) / 2 ~= 0.894427190999916
+        //   D[0][1] = D[1][0] = (sqrt(1.8) - sqrt(0.2)) / 2 ~= 0.447213595499958
+        // z=[1.0, 0.0] => result = [D[0][0], D[1][0]] ~= [0.894427, 0.447214].
         let group = CorrelationGroup {
             name: "g1".to_string(),
             entities: vec![make_entity(1), make_entity(2)],
@@ -717,8 +721,10 @@ mod tests {
         let mut noise = [1.0_f64, 0.0];
         dc.apply_correlation(0, &mut noise, &entity_order);
 
-        assert!((noise[0] - 1.0).abs() < 1e-12, "noise[0]={}", noise[0]);
-        assert!((noise[1] - 0.8).abs() < 1e-12, "noise[1]={}", noise[1]);
+        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
+        assert!((noise[0] - d00).abs() < 1e-8, "noise[0]={}", noise[0]);
+        assert!((noise[1] - d10).abs() < 1e-8, "noise[1]={}", noise[1]);
     }
 
     #[test]
@@ -747,10 +753,11 @@ mod tests {
         //   entity 1 is at position 1 in entity_order
         //   entity 2 is at position 0 in entity_order
         // gathered = [noise[pos(1)]=noise[1]=1.0, noise[pos(2)]=noise[0]=0.5]
-        // correlated = L * [1.0, 0.5]:
-        //   correlated[0] = 1.0 * 1.0 = 1.0
-        //   correlated[1] = 0.8 * 1.0 + 0.6 * 0.5 = 1.1
-        // scattered: noise[1] = 1.0, noise[0] = 1.1
+        // Spectral factor: D[0][0]=D[1][1]=(sqrt(1.8)+sqrt(0.2))/2, D[0][1]=D[1][0]=(sqrt(1.8)-sqrt(0.2))/2
+        // correlated = D * [1.0, 0.5]:
+        //   correlated[0] = D[0][0]*1.0 + D[0][1]*0.5 ~= 1.118033988749895
+        //   correlated[1] = D[1][0]*1.0 + D[1][1]*0.5 ~= 0.894427190999916
+        // scattered: noise[1] = correlated[0] ~= 1.118034, noise[0] = correlated[1] ~= 0.894427
         let group = CorrelationGroup {
             name: "g1".to_string(),
             entities: vec![make_entity(1), make_entity(2)],
@@ -764,10 +771,24 @@ mod tests {
         let mut noise = [0.5_f64, 1.0]; // noise[0]=entity2, noise[1]=entity1
         dc.apply_correlation(0, &mut noise, &entity_order);
 
-        // entity 1 at position 1: correlated[0]=1.0
-        assert!((noise[1] - 1.0).abs() < 1e-12, "noise[1]={}", noise[1]);
-        // entity 2 at position 0: correlated[1]=0.8*1.0+0.6*0.5=1.1
-        assert!((noise[0] - 1.1).abs() < 1e-12, "noise[0]={}", noise[0]);
+        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d01 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
+        // correlated[0] = D[0][0]*1.0 + D[0][1]*0.5; scattered to noise[1]
+        let expected_noise1 = d00 * 1.0 + d01 * 0.5;
+        // correlated[1] = D[1][0]*1.0 + D[1][1]*0.5; scattered to noise[0]
+        let expected_noise0 = d01 * 1.0 + d00 * 0.5;
+        assert!(
+            (noise[1] - expected_noise1).abs() < 1e-8,
+            "noise[1]={} expected {}",
+            noise[1],
+            expected_noise1
+        );
+        assert!(
+            (noise[0] - expected_noise0).abs() < 1e-8,
+            "noise[0]={} expected {}",
+            noise[0],
+            expected_noise0
+        );
     }
 
     #[test]
@@ -787,7 +808,7 @@ mod tests {
             },
         );
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![CorrelationScheduleEntry {
                 stage_id: 0,
@@ -798,16 +819,19 @@ mod tests {
 
         let entity_order = [EntityId(1), EntityId(2)];
 
-        // Stage 0 uses "wet": z=[1,0] -> [1.0, 0.8].
+        // Stage 0 uses "wet": z=[1,0] -> spectral D*[1,0]=[D[0][0], D[1][0]].
+        // For [[1,0.8],[0.8,1]]: D[0][0]=(sqrt(1.8)+sqrt(0.2))/2, D[1][0]=(sqrt(1.8)-sqrt(0.2))/2.
+        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         let mut noise0 = [1.0_f64, 0.0];
         dc.apply_correlation(0, &mut noise0, &entity_order);
         assert!(
-            (noise0[0] - 1.0).abs() < 1e-12,
+            (noise0[0] - d00).abs() < 1e-8,
             "stage0 noise0[0]={}",
             noise0[0]
         );
         assert!(
-            (noise0[1] - 0.8).abs() < 1e-12,
+            (noise0[1] - d10).abs() < 1e-8,
             "stage0 noise0[1]={}",
             noise0[1]
         );
@@ -914,8 +938,10 @@ mod tests {
     fn test_apply_correlation_for_class_inflow_only() {
         // Inflow group [EntityId(1), EntityId(2)] with rho=0.8 and a single-entity
         // load group [EntityId(3)].
-        // Cholesky of [[1,0.8],[0.8,1]]: L = [[1,0],[0.8,0.6]].
-        // z=[1.0, 0.0] => eta=[1.0, 0.8].
+        // Spectral factor of [[1,0.8],[0.8,1]]:
+        //   D[0][0] = D[1][1] = (sqrt(1.8) + sqrt(0.2)) / 2 ~= 0.894427
+        //   D[0][1] = D[1][0] = (sqrt(1.8) - sqrt(0.2)) / 2 ~= 0.447214
+        // z=[1.0, 0.0] => result=[D[0][0], D[1][0]] ~= [0.894427, 0.447214].
         let inflow_group = make_group_with_type("inflow_g", &[1, 2], 0.8, "inflow");
         let load_group = make_group_with_type("load_g", &[3], 0.0, "load");
         let model = single_profile_model("default", vec![inflow_group, load_group]);
@@ -925,14 +951,16 @@ mod tests {
         let mut inflow_noise = [1.0_f64, 0.0];
         dc.apply_correlation_for_class(0, &mut inflow_noise, &class_order, "inflow");
 
+        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         assert!(
-            (inflow_noise[0] - 1.0).abs() < 1e-12,
-            "inflow_noise[0]={} (expected 1.0)",
+            (inflow_noise[0] - d00).abs() < 1e-8,
+            "inflow_noise[0]={} (expected {d00})",
             inflow_noise[0]
         );
         assert!(
-            (inflow_noise[1] - 0.8).abs() < 1e-12,
-            "inflow_noise[1]={} (expected 0.8)",
+            (inflow_noise[1] - d10).abs() < 1e-8,
+            "inflow_noise[1]={} (expected {d10})",
             inflow_noise[1]
         );
     }

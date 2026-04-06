@@ -5,7 +5,7 @@ Stochastic process models for the [Cobre](https://github.com/cobre-rs/cobre) pow
 This crate provides the probabilistic building blocks used in scenario-based stochastic
 optimization of power systems. It implements Periodic Autoregressive (PAR(p)) models
 for inflow time series following the methodology used in the Brazilian power sector,
-Cholesky-based spatial correlation for multi-variate scenario generation, and
+spectral-based spatial correlation for multi-variate scenario generation, and
 deterministic communication-free noise generation via SipHash-1-3 seed derivation.
 The `StochasticContext` bundles all precomputed parameters and the opening tree into
 a single value ready for iterative optimization algorithms.
@@ -27,7 +27,7 @@ and carries no dependency on LP or MIP solvers.
 - **`ExternalScenarioLibrary`** — Pre-standardized external scenarios for inflow, load, or NCS classes
 - **`PrecomputedPar`** — Precomputed PAR(p) seasonal statistics and AR coefficients ready for fast evaluation
 - **`OpeningTree`** — Scenario tree structure defining which openings are sampled at each stage
-- **`CholeskyFactor`** — Lower-triangular Cholesky decomposition used to apply spatial correlation to noise draws
+- **`SpectralFactor`** — Symmetric matrix square root via eigendecomposition used to apply spatial correlation to noise draws
 - **`build_forward_sampler`** — Factory function that constructs a `ForwardSampler` from a `ForwardSamplerConfig`
 
 ## Links

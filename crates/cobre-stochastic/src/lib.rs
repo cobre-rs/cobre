@@ -23,7 +23,7 @@ pub mod sampling;
 pub mod tree;
 
 pub use context::{ClassSchemes, StochasticContext, build_stochastic_context};
-pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
+pub use correlation::{DecomposedCorrelation, GroupFactor, SpectralFactor};
 pub use error::StochasticError;
 pub use noise::quantile::norm_quantile;
 pub use noise::rng::rng_from_seed;
@@ -61,8 +61,8 @@ mod tests {
     #[test]
     fn all_public_modules_accessible() {
         use crate::context as _;
-        use crate::correlation::cholesky as _;
         use crate::correlation::resolve as _;
+        use crate::correlation::spectral as _;
         use crate::noise::quantile as _;
         use crate::noise::rng as _;
         use crate::noise::seed as _;

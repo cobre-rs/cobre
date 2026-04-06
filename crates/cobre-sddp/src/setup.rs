@@ -1712,7 +1712,7 @@ pub fn load_load_factors_for_stochastic(
 ///
 /// - [`SddpError::Io`] — file read, parse, or validation failure from either
 ///   `estimate_from_history` or opening tree loading.
-/// - [`SddpError::Stochastic`] — PAR parameter validation or Cholesky
+/// - [`SddpError::Stochastic`] — PAR parameter validation or spectral
 ///   decomposition failure from `build_stochastic_context` or estimation.
 pub fn prepare_stochastic(
     system: System,

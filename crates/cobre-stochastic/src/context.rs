@@ -11,7 +11,7 @@
 //!
 //! 1. Validate PAR model parameters (fatal errors stop the pipeline).
 //! 2. Build the [`PrecomputedPar`] coefficient cache.
-//! 3. Decompose the spatial correlation matrix via Cholesky.
+//! 3. Decompose the spatial correlation matrix via spectral factorisation.
 //! 4. Generate the opening scenario tree.
 //! 5. Build the [`PrecomputedNormal`] cache for stochastic load buses.
 //!
@@ -152,7 +152,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 /// #             matrix,
 /// #         }],
 /// #     });
-/// #     CorrelationModel { method: "cholesky".to_string(), profiles, schedule: vec![] }
+/// #     CorrelationModel { method: "spectral".to_string(), profiles, schedule: vec![] }
 /// # }
 /// let hydros = vec![make_hydro(1), make_hydro(2)];
 /// let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3), make_stage(2, 2, 3)];
@@ -342,7 +342,7 @@ impl StochasticContext {
 ///   with zero standard deviation.
 /// - [`StochasticError::InvalidCorrelation`]: the correlation model is empty,
 ///   ambiguous, or contains an invalid matrix.
-/// - [`StochasticError::CholeskyDecompositionFailed`]: a correlation matrix
+/// - [`StochasticError::SpectralDecompositionFailed`]: a correlation matrix
 ///   is not positive-definite.
 ///
 /// [`LoadModel`]: cobre_core::scenario::LoadModel
@@ -653,7 +653,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -884,9 +884,9 @@ mod tests {
         );
     }
 
-    /// AC: non-positive-definite correlation matrix returns `CholeskyDecompositionFailed`.
+    /// AC: non-positive-definite correlation matrix succeeds with spectral decomposition.
     #[test]
-    fn build_fails_on_invalid_correlation() {
+    fn build_succeeds_on_non_pd_correlation() {
         let hydros = vec![make_hydro(1), make_hydro(2)];
         let stages = vec![make_stage(0, 0, 3)];
         let inflow_models = vec![
@@ -921,7 +921,7 @@ mod tests {
             },
         );
         let bad_correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -949,11 +949,11 @@ mod tests {
             },
         );
 
-        // With decompose_or_nearest, the modified Cholesky clamps non-positive
-        // diagonals instead of failing. The build should succeed.
+        // With spectral decomposition, negative eigenvalues are clipped to
+        // zero instead of failing. The build should succeed.
         assert!(
             result.is_ok(),
-            "modified Cholesky should handle non-PD matrix, got: {result:?}"
+            "spectral decomposition should handle non-PD matrix, got: {result:?}"
         );
     }
 

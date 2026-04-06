@@ -549,14 +549,13 @@ pub fn estimate_ar_coefficients_with_season_map(
 /// ## Output structure
 ///
 /// Returns a [`CorrelationModel`] with:
-/// - `method: "cholesky"`
+/// - `method: "spectral"`
 /// - A single profile named `"default"` with a single group containing all
 ///   entities in canonical `hydro_ids` order and the estimated correlation matrix.
 /// - An empty `schedule` (the single profile applies to all stages).
 ///
-/// The function does **not** enforce positive-semidefiniteness; if the
-/// estimated matrix is not PSD, the downstream Cholesky decomposition will
-/// detect and report it.
+/// The function does **not** enforce positive-semidefiniteness. The downstream
+/// spectral decomposition handles rank-deficient and non-PD matrices naturally.
 ///
 /// # Parameters
 ///
@@ -632,17 +631,6 @@ pub fn estimate_correlation(
 /// (all-season) matrix via the "default" profile.
 const MIN_CORRELATION_PAIRS: usize = 30;
 
-/// Maximum fraction of negative observations allowed for a hydro in a given
-/// season before it is excluded from per-season correlation estimation. Hydros
-/// with more than this fraction of negative values are treated as degenerate
-/// (common for incremental inflow series with net-negative flow).
-const MAX_NEGATIVE_FRACTION: f64 = 0.5;
-
-/// Minimum residual standard deviation for a hydro to participate in per-season
-/// correlation estimation. Hydros whose residuals have std below this threshold
-/// are treated as degenerate (constant or near-constant series).
-const MIN_RESIDUAL_STD: f64 = 1e-8;
-
 /// Estimate correlation with an optional [`SeasonMap`] fallback.
 ///
 /// # Errors
@@ -665,7 +653,7 @@ pub fn estimate_correlation_with_season_map(
             CorrelationProfile { groups: Vec::new() },
         );
         return Ok(CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: Vec::new(),
         });
@@ -687,15 +675,14 @@ pub fn estimate_correlation_with_season_map(
         .collect();
 
     let per_season_residuals = compute_hydro_residuals(&lookups, &ar_lookup, hydro_ids, season_map);
-    let degenerate = classify_degenerate_hydros(&lookups, hydro_ids, &per_season_residuals);
+
+    // Warn about potentially degenerate hydros (informational only; spectral
+    // decomposition handles near-zero eigenvalues naturally).
+    warn_degenerate_hydros(&lookups, hydro_ids, &per_season_residuals);
+
     let pooled_residuals = flatten_residuals(&per_season_residuals);
     let pooled_matrix = compute_pearson_correlation_matrix(&pooled_residuals);
-    let seasonal_matrices = compute_seasonal_matrices(
-        &per_season_residuals,
-        lookups.n_seasons,
-        hydro_ids,
-        &degenerate,
-    );
+    let seasonal_matrices = compute_seasonal_matrices(&per_season_residuals, lookups.n_seasons);
 
     Ok(assemble_seasonal_correlation_model(
         hydro_ids,
@@ -816,37 +803,16 @@ fn flatten_residuals(
         .collect()
 }
 
-/// Compute per-season Pearson correlation matrices.
-///
-/// For each season, extracts the residuals belonging to that season from each
-/// hydro and computes the Pearson correlation matrix. Seasons where the minimum
-/// number of paired observations across all hydro pairs is below
-/// [`MIN_CORRELATION_PAIRS`] are excluded from the result.
-///
-/// When there is only a single hydro (no pairs to check), the total residual
-/// count for that hydro is used as the sample size.
-/// Classify hydros as degenerate per season based on raw observation data.
-///
-/// A hydro is degenerate in a given season if any of these hold:
-/// - More than [`MAX_NEGATIVE_FRACTION`] of its observations are negative
-/// - All observations are constant (zero variance)
-/// - Near-zero residual standard deviation (< [`MIN_RESIDUAL_STD`])
-///
-/// Returns a set of `(hydro_index, season_id)` pairs that should be excluded
-/// from per-season correlation estimation.
-fn classify_degenerate_hydros(
+/// Emit diagnostic warnings for hydros that exhibit degenerate statistical
+/// properties. These are informational only — the spectral decomposition handles
+/// near-zero eigenvalues naturally and no hydros are excluded.
+fn warn_degenerate_hydros(
     lookups: &SeasonLookups<'_>,
     hydro_ids: &[EntityId],
     per_season_residuals: &[HashMap<usize, HashMap<NaiveDate, f64>>],
-) -> HashSet<(usize, usize)> {
-    let mut degenerate = HashSet::new();
-
+) {
     for (hidx, &hydro_id) in hydro_ids.iter().enumerate() {
         let Some(all_obs) = lookups.entity_obs.get(&hydro_id) else {
-            // No observations at all — degenerate in every season.
-            for s in 0..lookups.n_seasons {
-                degenerate.insert((hidx, s));
-            }
             continue;
         };
 
@@ -859,48 +825,43 @@ fn classify_degenerate_hydros(
         }
 
         for season_id in 0..lookups.n_seasons {
-            let vals = obs_by_season.get(&season_id);
-
-            // Check 1: no observations.
-            let Some(vals) = vals else {
-                degenerate.insert((hidx, season_id));
+            let Some(vals) = obs_by_season.get(&season_id) else {
                 continue;
             };
             if vals.len() < 2 {
-                degenerate.insert((hidx, season_id));
                 continue;
             }
 
-            // Check 2: >50% negative observations.
+            // Warn: >50% negative observations.
             let neg_count = vals.iter().filter(|&&v| v < 0.0).count();
             #[allow(clippy::cast_precision_loss)]
             let neg_frac = neg_count as f64 / vals.len() as f64;
-            if neg_frac > MAX_NEGATIVE_FRACTION {
+            if neg_frac > 0.5 {
                 tracing::warn!(
                     hydro_id = hydro_id.0,
                     season = season_id,
                     negative_fraction = neg_frac,
-                    "hydro excluded from per-season correlation: \
-                     majority negative observations"
+                    "hydro has majority negative observations in season \
+                     (included in correlation; spectral decomposition handles this)"
                 );
-                degenerate.insert((hidx, season_id));
-                continue;
             }
 
-            // Check 3: constant series (all values identical).
+            // Warn: constant series (all values identical).
             let first = vals[0];
             if vals.iter().all(|&v| (v - first).abs() < f64::EPSILON) {
                 tracing::warn!(
                     hydro_id = hydro_id.0,
                     season = season_id,
                     value = first,
-                    "hydro excluded from per-season correlation: constant series"
+                    "hydro has constant series in season \
+                     (included in correlation; near-zero eigenvalue expected)"
                 );
-                degenerate.insert((hidx, season_id));
+                // Near-zero residual variance is implied by a constant series;
+                // skip the residual check for this season.
                 continue;
             }
 
-            // Check 4: near-zero residual variance.
+            // Warn: near-zero residual variance.
             if let Some(residuals) = per_season_residuals
                 .get(hidx)
                 .and_then(|m| m.get(&season_id))
@@ -912,67 +873,53 @@ fn classify_degenerate_hydros(
                     #[allow(clippy::cast_precision_loss)]
                     let r_var = r_vals.iter().map(|v| (v - r_mean).powi(2)).sum::<f64>()
                         / (r_vals.len() - 1) as f64;
-                    if r_var.sqrt() < MIN_RESIDUAL_STD {
+                    let r_std = r_var.sqrt();
+                    if r_std < 1e-8 {
                         tracing::warn!(
                             hydro_id = hydro_id.0,
                             season = season_id,
-                            residual_std = r_var.sqrt(),
-                            "hydro excluded from per-season correlation: \
-                             near-zero residual variance"
+                            residual_std = r_std,
+                            "hydro has near-zero residual variance in season \
+                             (included in correlation; near-zero eigenvalue expected)"
                         );
-                        degenerate.insert((hidx, season_id));
                     }
                 }
             }
         }
     }
-
-    degenerate
 }
 
+/// Compute per-season Pearson correlation matrices.
+///
+/// For each season, extracts the residuals belonging to that season from each
+/// hydro and computes the Pearson correlation matrix. Seasons where the minimum
+/// number of paired observations across all hydro pairs is below
+/// [`MIN_CORRELATION_PAIRS`] are excluded from the result and fall back to the
+/// pooled (all-season) matrix via the `"default"` profile.
+///
+/// All hydros participate regardless of degenerate status. Rank-deficient
+/// matrices (more hydros than observations) are acceptable because the downstream
+/// spectral decomposition handles them naturally.
 fn compute_seasonal_matrices(
     per_season_residuals: &[HashMap<usize, HashMap<NaiveDate, f64>>],
     n_seasons: usize,
-    hydro_ids: &[EntityId],
-    degenerate: &HashSet<(usize, usize)>,
 ) -> HashMap<usize, Vec<Vec<f64>>> {
     let mut result = HashMap::new();
     let n_hydros = per_season_residuals.len();
 
     for season_id in 0..n_seasons {
-        // Extract per-hydro residuals for this season.
-        // Degenerate hydros get an empty map (-> correlation 0 with everyone).
+        // Extract per-hydro residuals for this season (all hydros, no exclusions).
         let season_residuals: Vec<HashMap<NaiveDate, f64>> = per_season_residuals
             .iter()
-            .enumerate()
-            .map(|(hidx, hydro_seasons)| {
-                if degenerate.contains(&(hidx, season_id)) {
-                    HashMap::new()
-                } else {
-                    hydro_seasons.get(&season_id).cloned().unwrap_or_default()
-                }
-            })
+            .map(|hydro_seasons| hydro_seasons.get(&season_id).cloned().unwrap_or_default())
             .collect();
 
-        // Count healthy (non-degenerate) hydros for this season.
-        let healthy_count = (0..n_hydros)
-            .filter(|&h| !degenerate.contains(&(h, season_id)))
-            .count();
-
-        // Determine minimum paired observation count among healthy hydros.
-        let min_pairs = if healthy_count <= 1 {
-            season_residuals
-                .iter()
-                .find(|r| !r.is_empty())
-                .map_or(0, HashMap::len)
+        // Determine minimum paired observation count across all hydro pairs.
+        let min_pairs = if n_hydros <= 1 {
+            season_residuals.first().map_or(0, HashMap::len)
         } else {
             (0..n_hydros)
-                .filter(|h| !degenerate.contains(&(*h, season_id)))
-                .flat_map(|i| {
-                    (0..n_hydros)
-                        .filter(move |j| *j > i && !degenerate.contains(&(*j, season_id)))
-                        .map(move |j| (i, j))
-                })
+                .flat_map(|i| (i + 1..n_hydros).map(move |j| (i, j)))
                 .map(|(i, j)| {
                     season_residuals[i]
                         .keys()
@@ -984,20 +931,6 @@ fn compute_seasonal_matrices(
         };
 
         if min_pairs < MIN_CORRELATION_PAIRS {
-            continue;
-        }
-
-        // Rank sufficiency: with N paired observations, the Pearson matrix has
-        // rank at most N. If the number of healthy hydros exceeds min_pairs,
-        // the matrix is guaranteed singular -> fall back to pooled.
-        if healthy_count > min_pairs {
-            tracing::info!(
-                season = season_id,
-                healthy_hydros = healthy_count,
-                paired_observations = min_pairs,
-                "per-season correlation skipped: more hydros than observations \
-                 (matrix would be rank-deficient)"
-            );
             continue;
         }
 
@@ -1118,7 +1051,7 @@ fn assemble_seasonal_correlation_model(
     // Single-season: return early with no per-season profiles and empty schedule.
     if n_seasons <= 1 {
         return CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: Vec::new(),
         };
@@ -1159,7 +1092,7 @@ fn assemble_seasonal_correlation_model(
     schedule.sort_by_key(|e| e.stage_id);
 
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule,
     }

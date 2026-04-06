@@ -1,17 +1,17 @@
-//! Correlation matrix construction and factorisation.
+//! Correlation matrix construction and spectral factorisation.
 //!
 //! This module handles the two steps needed to apply spatial correlation
 //! between inflow series during scenario generation:
 //!
 //! 1. **Resolution** ([`resolve`]) — maps per-profile correlation data
 //!    from the input case to dense matrices indexed by internal hydro IDs.
-//! 2. **Cholesky factorisation** ([`cholesky`]) — decomposes a resolved
-//!    correlation matrix into its lower-triangular Cholesky factor, which
-//!    is used to transform independent standard-normal draws into
+//! 2. **Spectral factorisation** ([`spectral`]) — eigendecomposes a resolved
+//!    correlation matrix to produce the symmetric matrix square root,
+//!    which is used to transform independent standard-normal draws into
 //!    spatially correlated noise vectors.
 
-pub mod cholesky;
 pub mod resolve;
+pub mod spectral;
 
-pub use cholesky::CholeskyFactor;
 pub use resolve::{DecomposedCorrelation, GroupFactor};
+pub use spectral::SpectralFactor;

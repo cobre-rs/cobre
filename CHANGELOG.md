@@ -13,12 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Per-class scenario sampling** -- Each entity class (inflow, load, NCS)
   can independently use `InSample`, `OutOfSample`, `Historical`, or `External`
-  sampling schemes via per-class sub-objects in `scenario_source` in
-  `stages.json`.
+  sampling schemes via per-class sub-objects in `training.scenario_source`
+  (or `simulation.scenario_source`) in `config.json`.
 - **Historical inflow sampling** -- Replays standardized noise drawn from
   historical observation windows discovered in `inflow_history.parquet`.
-  The window pool is controlled by the new `historical_years` field in
-  `stages.json`, which accepts a list of years or a `{from, to}` range.
+  The window pool is controlled by the `historical_years` field in
+  `training.scenario_source` in `config.json`, which accepts a list of
+  years or a `{from, to}` range.
 - **External scenario sources** -- Reads pre-generated scenario realizations
   from per-class Parquet files: `external_inflow_scenarios.parquet`,
   `external_load_scenarios.parquet`, and `external_ncs_scenarios.parquet`.
@@ -32,10 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Composite `ForwardSampler` architecture** -- Holds per-class
   `ClassSampler` instances and applies inter-class correlation after
   per-class noise generation, replacing the previous monolithic sampler.
-- **`historical_years` config** -- New field in the `stages.json`
-  `scenario_source` object for specifying which historical years are
-  eligible as inflow replay windows. Accepts a list (`[2010, 2015, 2020]`) or a
-  range (`{from: 2010, to: 2023}`).
+- **`historical_years` config** -- New field in `training.scenario_source`
+  (or `simulation.scenario_source`) in `config.json` for specifying which
+  historical years are eligible as inflow replay windows. Accepts a list
+  (`[2010, 2015, 2020]`) or a range (`{from: 2010, to: 2023}`).
 - **Same-type enforcement for correlation groups** -- All entities in a
   correlation group must share the same `entity_type`. Mixed-type groups
   are rejected at parse time with a descriptive error.
@@ -81,12 +82,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`training.seed` renamed to `training.tree_seed`** -- The `config.json`
   field controlling the scenario-tree random seed is now `tree_seed`. No
   backward-compatible alias is provided; old configs must be updated.
-- **`scenario_source` per-class format** -- The `stages.json`
-  `scenario_source` object changed from a flat `sampling_scheme` string to
-  per-class sub-objects with `inflow`, `load`, and `ncs` keys, each
+- **`scenario_source` moved from `stages.json` to `config.json`** -- The
+  `scenario_source` configuration now lives under `training.scenario_source`
+  and `simulation.scenario_source` in `config.json`, enabling independent
+  per-phase sampling scheme selection. Training and simulation can use
+  different sampling schemes (e.g., InSample for training, OutOfSample for
+  simulation). When `simulation.scenario_source` is absent, it falls back to
+  `training.scenario_source`. The `stages.json` parser rejects the old
+  location with a migration error.
+- **`scenario_source` per-class format** -- The `scenario_source` object
+  uses per-class sub-objects with `inflow`, `load`, and `ncs` keys, each
   carrying its own `scheme` field. The `historical_years` field is at the
   top-level `scenario_source` object, not per-class.
-  The old flat format is detected at parse time and produces a clear error.
 - **`InflowHistoryRow` and `ExternalScenarioRow` relocated** -- These row
   types moved from `cobre-io` to `cobre-core::scenario` so that
   `cobre-stochastic` can reference them without depending on `cobre-io`.
@@ -111,6 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string in `scenario_source` is gone. Configs using the flat format
   receive a descriptive parse-time error directing them to the per-class
   format.
+- **`simulation.sampling_scheme` in `config.json`** -- The dead
+  `sampling_scheme` field in the simulation config section has been removed.
+  Simulation sampling is now controlled by `simulation.scenario_source`.
 - **`classify_degenerate_hydros` function** -- Removed from `fitting.rs`
   along with `MAX_NEGATIVE_FRACTION` and `MIN_RESIDUAL_STD` constants.
   Spectral decomposition handles degenerate series naturally.

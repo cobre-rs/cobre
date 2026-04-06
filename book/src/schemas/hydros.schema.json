@@ -450,6 +450,14 @@
             "null"
           ]
         },
+        "inflow_nonnegativity_cost": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "outflow_violation_above_cost": {
           "default": null,
           "format": "double",

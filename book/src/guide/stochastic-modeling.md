@@ -436,9 +436,9 @@ scenario selection. When the same case is run with the same `tree_seed`, the
 opening tree is bitwise identical across runs, regardless of the number of MPI
 ranks.
 
-**`scenario_source.seed` in `stages.json`** — the forward seed used when the
-sampling scheme is `out_of_sample`, `historical`, or `external`. This seed
-controls the noise generated on-the-fly during each forward pass. It is
+**`training.scenario_source.seed` in `config.json`** — the forward seed used
+when the sampling scheme is `out_of_sample`, `historical`, or `external`. This
+seed controls the noise generated on-the-fly during each forward pass. It is
 completely independent of `tree_seed`: changing it does not affect the
 backward-pass tree, and changing `tree_seed` does not affect the forward pass.
 
@@ -452,37 +452,20 @@ specify both seeds explicitly:
   "training": {
     "tree_seed": 42,
     "forward_passes": 50,
-    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]
-  }
-}
-```
-
-```json
-// stages.json
-{
-  "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.12 },
-  "scenario_source": {
-    "seed": 99,
-    "inflow": { "scheme": "out_of_sample" },
-    "load": { "scheme": "in_sample" },
-    "ncs": { "scheme": "in_sample" }
-  },
-  "stages": [
-    {
-      "id": 0,
-      "start_date": "2024-01-01",
-      "end_date": "2024-02-01",
-      "blocks": [{ "id": 0, "name": "SINGLE", "hours": 744 }],
-      "num_scenarios": 100,
-      "sampling_method": "lhs"
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 99,
+      "inflow": { "scheme": "out_of_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
     }
-  ]
+  }
 }
 ```
 
 When `tree_seed` is set to `null` in `config.json`, Cobre derives the base
 seed from OS entropy at startup, producing a different opening tree each run.
-The same applies to `scenario_source.seed`: a `null` value means the
+The same applies to `training.scenario_source.seed`: a `null` value means the
 forward-pass noise is non-reproducible even if `tree_seed` is fixed.
 
 ---
@@ -649,17 +632,21 @@ tree, generates fresh noise on-the-fly, replays historical observations, or
 reads from an externally supplied file.
 
 Each entity class — inflow, load, and NCS — independently specifies its
-forward-pass noise source. The sampling scheme is configured in `stages.json`
-under the top-level `scenario_source` object using a per-class format:
+forward-pass noise source. The sampling scheme is configured in `config.json`
+under `training.scenario_source` using a per-class format:
 
 ```json
-// stages.json
+// config.json
 {
-  "scenario_source": {
-    "seed": 42,
-    "inflow": { "scheme": "in_sample" },
-    "load": { "scheme": "in_sample" },
-    "ncs": { "scheme": "in_sample" }
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
   }
 }
 ```
@@ -668,6 +655,13 @@ All three class keys (`"inflow"`, `"load"`, `"ncs"`) default to
 `"in_sample"` when absent. The `"seed"` field is shared across all classes
 and is required when any class uses `"out_of_sample"`, `"historical"`, or
 `"external"`.
+
+> **Independent simulation sampling:** `simulation.scenario_source` in
+> `config.json` can be set independently of `training.scenario_source`. When
+> `simulation.scenario_source` is absent, the simulation phase falls back to
+> the scheme configured under `training.scenario_source`. This lets you train
+> with in-sample noise and simulate with out-of-sample or historical noise
+> without changing the training configuration.
 
 ### InSample (default)
 
@@ -678,7 +672,7 @@ derived from `tree_seed`. The backward pass and the forward pass see the
 same set of noise realizations: the same scenarios that were used to build
 cuts are the scenarios against which the forward trajectories are evaluated.
 
-InSample is the default when `scenario_source` is absent from `stages.json`.
+InSample is the default when `training.scenario_source` is absent from `config.json`.
 It is simple to configure, requires no additional seed, and is appropriate for
 most studies. The main limitation is that the forward pass cannot evaluate the
 policy on noise realizations outside the opening tree, which can lead to an
@@ -690,20 +684,25 @@ With `"scheme": "out_of_sample"`, the forward pass generates fresh noise
 on-the-fly at each `(iteration, scenario, stage)` triple. The fresh noise is
 drawn from the same distribution as the opening tree but is independent of it
 — the forward pass never looks at the tree. Each call derives a unique noise
-vector from `scenario_source.seed`, the iteration index, the scenario index,
-and the stage ID. The per-stage `sampling_method` controls which algorithm
-(SAA, LHS, QMC-Sobol, or QMC-Halton) is used to generate the fresh noise.
+vector from `training.scenario_source.seed`, the iteration index, the scenario
+index, and the stage ID. The per-stage `sampling_method` controls which
+algorithm (SAA, LHS, QMC-Sobol, or QMC-Halton) is used to generate the fresh
+noise.
 
-OutOfSample requires `scenario_source.seed` to be set. Configure it as follows:
+OutOfSample requires `training.scenario_source.seed` to be set. Configure it as follows:
 
 ```json
-// stages.json
+// config.json
 {
-  "scenario_source": {
-    "seed": 99,
-    "inflow": { "scheme": "out_of_sample" },
-    "load": { "scheme": "in_sample" },
-    "ncs": { "scheme": "in_sample" }
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 99,
+      "inflow": { "scheme": "out_of_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
   }
 }
 ```
@@ -735,8 +734,8 @@ a complete sequence of historical observations covering the entire study period
 state). Cobre discovers valid windows by scanning `inflow_history.parquet` and
 checking completeness for every candidate starting year.
 
-When `historical_years` is absent from `scenario_source`, Cobre auto-discovers
-all valid windows from the history file. If the history file covers years 1940
+When `historical_years` is absent from `training.scenario_source`, Cobre
+auto-discovers all valid windows from the history file. If the history file covers years 1940
 through 2010 and the study spans 12 monthly stages, then every year for which
 the history is complete (accounting for the required pre-window lag seasons)
 becomes a valid window.
@@ -749,14 +748,18 @@ To restrict the pool of candidate windows, set `historical_years` in
 **Explicit list** — specify the exact starting years to use:
 
 ```json
-// stages.json
+// config.json
 {
-  "scenario_source": {
-    "seed": 7,
-    "inflow": { "scheme": "historical" },
-    "load": { "scheme": "in_sample" },
-    "ncs": { "scheme": "in_sample" },
-    "historical_years": [1940, 1953]
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 7,
+      "inflow": { "scheme": "historical" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" },
+      "historical_years": [1940, 1953]
+    }
   }
 }
 ```
@@ -764,14 +767,18 @@ To restrict the pool of candidate windows, set `historical_years` in
 **Inclusive range** — specify a contiguous span of starting years:
 
 ```json
-// stages.json
+// config.json
 {
-  "scenario_source": {
-    "seed": 7,
-    "inflow": { "scheme": "historical" },
-    "load": { "scheme": "in_sample" },
-    "ncs": { "scheme": "in_sample" },
-    "historical_years": { "from": 1940, "to": 2010 }
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 7,
+      "inflow": { "scheme": "historical" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" },
+      "historical_years": { "from": 1940, "to": 2010 }
+    }
   }
 }
 ```
@@ -862,13 +869,17 @@ per class — and the `ClassSampler::External` variant retrieves them by
 #### Configuring External sampling
 
 ```json
-// stages.json
+// config.json
 {
-  "scenario_source": {
-    "seed": 1,
-    "inflow": { "scheme": "external" },
-    "load": { "scheme": "external" },
-    "ncs": { "scheme": "in_sample" }
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 1,
+      "inflow": { "scheme": "external" },
+      "load": { "scheme": "external" },
+      "ncs": { "scheme": "in_sample" }
+    }
   }
 }
 ```

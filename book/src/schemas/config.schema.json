@@ -6,31 +6,46 @@
         "compress": {
           "default": null,
           "description": "Compress checkpoint files.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "enabled": {
           "default": null,
           "description": "Enable periodic checkpointing.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "initial_iteration": {
           "default": null,
           "description": "First iteration to write a checkpoint.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "interval_iterations": {
           "default": null,
           "description": "Iterations between checkpoints.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "store_basis": {
           "default": null,
           "description": "Include LP basis in checkpoints for warm-start.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -43,30 +58,45 @@
           "description": "Iterations between pruning checks.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "cut_activity_tolerance": {
           "default": null,
           "description": "Minimum dual multiplier for a cut to count as binding.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "enabled": {
           "default": null,
           "description": "Enable cut pruning.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "method": {
           "default": null,
           "description": "Method: `\"level1\"`, `\"lml1\"`, or `\"domination\"`.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threshold": {
           "default": null,
           "description": "Minimum iterations before first pruning pass.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -74,6 +104,15 @@
     "EstimationConfig": {
       "description": "Time series estimation settings (`config.json → estimation`).\n\nControls automatic parameter estimation when historical inflow data is\nprovided without explicit model statistics or coefficients.",
       "properties": {
+        "max_coefficient_magnitude": {
+          "default": null,
+          "description": "Maximum allowed absolute magnitude for any AR coefficient.\n\nWhen set, any (entity, season) pair with `|coefficient| > threshold`\nis immediately reduced to order 0 before the contribution analysis\nruns. This acts as a fast-path safety net for the most extreme\nexplosive models. Defaults to `None` (disabled; contribution analysis\nis the primary guard).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "max_order": {
           "default": 6,
           "description": "Maximum lag order considered during autoregressive model fitting.",
@@ -91,7 +130,7 @@
         "order_selection": {
           "$ref": "#/$defs/OrderSelectionMethod",
           "default": "pacf",
-          "description": "Order selection criterion: fixed maximum or periodic PACF significance testing."
+          "description": "Order selection criterion: fixed maximum or information-criterion-based."
         }
       },
       "type": "object"
@@ -107,7 +146,10 @@
         "compression": {
           "default": null,
           "description": "Compression algorithm for output files: `\"zstd\"`, `\"lz4\"`, or `\"none\"`.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "cuts": {
           "default": true,
@@ -155,7 +197,9 @@
           "type": "string"
         }
       },
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "type": "object"
     },
     "InflowNonNegativityConfig": {
@@ -163,12 +207,12 @@
       "properties": {
         "method": {
           "default": "penalty",
-          "description": "Method: `\"none\"`, `\"penalty\"`, `\"truncation\"`, or `\"truncation_with_penalty\"`.",
-          "enum": ["none", "penalty", "truncation", "truncation_with_penalty"]
+          "description": "Method: `\"none\"`, `\"penalty\"`, or `\"truncation\"`.",
+          "type": "string"
         },
         "penalty_cost": {
           "default": 1000.0,
-          "description": "Penalty coefficient $c^{inf}$ applied when `method` is `\"penalty\"`.",
+          "description": "Penalty coefficient $c^{inf}$ applied when `method` is `\"penalty\"`.\n\n**Deprecated:** Use `penalties.json` -> `hydro.inflow_nonnegativity_cost`\ninstead. When both are specified, the penalty cascade takes precedence.\nThis field is retained for backward compatibility with existing cases\nthat do not yet have `inflow_nonnegativity_cost` in their `penalties.json`.",
           "format": "double",
           "type": "number"
         }
@@ -182,18 +226,27 @@
           "default": null,
           "description": "Fallback value when automatic computation fails.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "mode": {
           "default": null,
           "description": "Computation mode: `\"auto\"`.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "scale_factor": {
           "default": null,
           "description": "Multiplicative safety margin applied to computed Lipschitz constants.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -213,16 +266,11 @@
       "type": "object"
     },
     "OrderSelectionMethod": {
-      "description": "Order selection criterion for autoregressive model fitting.\n\nControls how the lag order is chosen when fitting a time series model.",
+      "description": "Order selection criterion for autoregressive model fitting.\n\nControls how the lag order is chosen when fitting a time series model.\n\nThe `\"fixed\"` JSON value is deprecated; it is accepted for backwards\ncompatibility but mapped to `Pacf` at parse time with a warning.",
       "oneOf": [
         {
-          "const": "fixed",
-          "description": "Use a fixed maximum lag order specified by `max_order`.",
-          "type": "string"
-        },
-        {
           "const": "pacf",
-          "description": "Select the lag order using periodic PACF significance testing.",
+          "description": "Periodic Yule-Walker partial autocorrelation method (PACF).",
           "type": "string"
         }
       ]
@@ -242,9 +290,9 @@
           "description": "Checkpoint settings."
         },
         "mode": {
+          "$ref": "#/$defs/PolicyMode",
           "default": "fresh",
-          "description": "Initialization mode: `\"fresh\"`, `\"warm_start\"`, or `\"resume\"`.",
-          "enum": ["fresh", "warm_start", "resume"]
+          "description": "Initialization mode: `\"fresh\"`, `\"warm_start\"`, or `\"resume\"`."
         },
         "path": {
           "default": "./policy",
@@ -255,6 +303,136 @@
           "default": true,
           "description": "Verify state dimension and entity compatibility when loading.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "PolicyMode": {
+      "description": "Policy initialization mode (`config.json → policy.mode`).\n\nControls whether the training phase starts from scratch, warm-starts from\na prior policy's cuts, or resumes a checkpointed training run.",
+      "oneOf": [
+        {
+          "const": "fresh",
+          "description": "Start training from an empty future-cost function.",
+          "type": "string"
+        },
+        {
+          "const": "warm_start",
+          "description": "Load cuts from a prior policy checkpoint and continue training.",
+          "type": "string"
+        },
+        {
+          "const": "resume",
+          "description": "Resume a previously interrupted training run from its checkpoint.",
+          "type": "string"
+        }
+      ]
+    },
+    "RawClassConfigEntry": {
+      "additionalProperties": false,
+      "description": "Intermediate serde type for a single per-class scenario scheme in `config.json`.",
+      "properties": {
+        "scheme": {
+          "description": "Scheme string: `\"in_sample\"`, `\"out_of_sample\"`, `\"external\"`, or `\"historical\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme"
+      ],
+      "type": "object"
+    },
+    "RawHistoricalYearsConfig": {
+      "anyOf": [
+        {
+          "description": "Explicit list of year integers.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "description": "Inclusive range shorthand.",
+          "properties": {
+            "from": {
+              "description": "First year (inclusive).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "to": {
+              "description": "Last year (inclusive).",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Intermediate serde type for `historical_years` in `config.json`.\n\nHandles two JSON representations via `#[serde(untagged)]`:\n- Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]\n- Object: `{\"from\": 1940, \"to\": 2010}` → [`RawHistoricalYearsConfig::Range`]\n\nThe `List` variant must be declared first so serde tries it before `Range`\n(an integer array is tried before an object)."
+    },
+    "RawScenarioSourceConfig": {
+      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nStructurally identical to `RawScenarioSource` in `stages.rs` but scoped to\n`config.json` fields (`training.scenario_source` / `simulation.scenario_source`).\nThe two types are kept separate during the transition to per-phase sampling config\n(Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.",
+      "properties": {
+        "historical_years": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawHistoricalYearsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Historical year pool. Absent means `None` (auto-discover at validation time)."
+        },
+        "inflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawClassConfigEntry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Inflow class scenario config. Absent defaults to `in_sample`."
+        },
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawClassConfigEntry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Load class scenario config. Absent defaults to `in_sample`."
+        },
+        "ncs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawClassConfigEntry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "NCS class scenario config. Absent defaults to `in_sample`."
+        },
+        "seed": {
+          "default": null,
+          "description": "Optional random seed for reproducible scenario generation.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -284,35 +462,35 @@
         "output_mode": {
           "default": null,
           "description": "Output mode: `\"streaming\"` or `\"batched\"`.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "output_path": {
           "default": null,
           "description": "Directory for simulation output files.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "policy_type": {
           "default": "outer",
           "description": "Policy representation: `\"outer\"` (cuts) or `\"inner\"` (vertices).",
           "type": "string"
         },
-        "sampling_scheme": {
-          "$ref": "#/$defs/SimulationSamplingConfig",
-          "default": {
-            "type": "in_sample"
-          },
-          "description": "Sampling scheme for simulation scenarios."
-        }
-      },
-      "type": "object"
-    },
-    "SimulationSamplingConfig": {
-      "description": "Sampling scheme for the post-training simulation.",
-      "properties": {
-        "type": {
-          "default": "in_sample",
-          "description": "Scheme type: `\"in_sample\"`, `\"out_of_sample\"`, or `\"external\"`.",
-          "type": "string"
+        "scenario_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawScenarioSourceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Scenario source configuration for the post-training simulation forward pass.\nWhen absent, falls back to the training scenario source."
         }
       },
       "type": "object"
@@ -334,7 +512,10 @@
               "type": "string"
             }
           },
-          "required": ["type", "limit"],
+          "required": [
+            "type",
+            "limit"
+          ],
           "type": "object"
         },
         {
@@ -350,7 +531,10 @@
               "type": "string"
             }
           },
-          "required": ["type", "seconds"],
+          "required": [
+            "type",
+            "seconds"
+          ],
           "type": "object"
         },
         {
@@ -372,7 +556,11 @@
               "type": "string"
             }
           },
-          "required": ["type", "iterations", "tolerance"],
+          "required": [
+            "type",
+            "iterations",
+            "tolerance"
+          ],
           "type": "object"
         },
         {
@@ -429,7 +617,10 @@
         "cut_formulation": {
           "default": null,
           "description": "Cut formulation: `\"single\"` or `\"multi\"`.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
@@ -463,13 +654,22 @@
           "description": "Number of forward-pass scenario trajectories $M$ per iteration.\n\n**Mandatory** — no default. The loader rejects any config that omits this field.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
-        "tree_seed": {
+        "scenario_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawScenarioSourceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null,
-          "description": "Random seed for the opening scenario tree (reproducible training). When null, the seed is derived from OS entropy at startup.",
-          "format": "int64",
-          "type": ["integer", "null"]
+          "description": "Scenario source configuration for the training forward pass.\nWhen absent, all classes default to `in_sample`."
         },
         "solver": {
           "$ref": "#/$defs/TrainingSolverConfig",
@@ -489,7 +689,19 @@
           "items": {
             "$ref": "#/$defs/StoppingRuleConfig"
           },
-          "type": ["array", "null"]
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tree_seed": {
+          "default": null,
+          "description": "Random seed for the opening scenario tree (reproducible training).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -519,21 +731,30 @@
         "enabled": {
           "default": null,
           "description": "Enable vertex-based inner approximation for upper bound computation.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "initial_iteration": {
           "default": null,
           "description": "First iteration to compute the upper bound.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "interval_iterations": {
           "default": null,
           "description": "Iterations between upper-bound evaluations.",
           "format": "uint32",
           "minimum": 0,
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "lipschitz": {
           "$ref": "#/$defs/LipschitzConfig",
@@ -553,11 +774,15 @@
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "estimation": {
       "$ref": "#/$defs/EstimationConfig",
       "default": {
+        "max_coefficient_magnitude": null,
         "max_order": 6,
         "min_observations_per_season": 30,
         "order_selection": "pacf"
@@ -614,9 +839,7 @@
         "output_mode": null,
         "output_path": null,
         "policy_type": "outer",
-        "sampling_scheme": {
-          "type": "in_sample"
-        }
+        "scenario_source": null
       },
       "description": "Post-training simulation settings."
     },
@@ -639,7 +862,9 @@
       "description": "Upper-bound evaluation via inner approximation."
     }
   },
-  "required": ["training"],
+  "required": [
+    "training"
+  ],
   "title": "Config",
   "type": "object"
 }
